@@ -34,6 +34,7 @@ class LiveNotificationsTest {
         var reads = 0
         var writes = 0
         override fun read(): String? = raw.also { reads++ }
+        override fun readV2(): String? = null
         override fun readLegacy(): Set<String>? = null
         override fun write(encoded: String) {
             raw = encoded
@@ -47,6 +48,9 @@ class LiveNotificationsTest {
 
     private val hour = 3_600_000L
     private val t0 = 1_800_000_000_000L
+
+    /** The computer whose listings these are (the log is kept per computer; see SeenLogTest). */
+    private val computer = "host-a"
 
     private fun ev(
         id: String,
@@ -119,15 +123,15 @@ class LiveNotificationsTest {
         val onScreen = OnScreen(nodes = setOf("open"))
         val feed = listOf(held("h", "open"), ev("keyed", "open"))
         // Notifications off: the prompt in the pane is recorded, the held approval is not spent.
-        assertEquals(emptyList(), log.claimLive(feed, onScreen, notify = false))
-        assertTrue(log.isSeen("keyed"))
-        assertFalse(log.isSeen("h"), "a held approval nobody could see was recorded as seen")
+        assertEquals(emptyList(), log.claimLive(computer, feed, onScreen, notify = false))
+        assertTrue(log.isSeen(computer, "keyed"))
+        assertFalse(log.isSeen(computer, "h"), "a held approval nobody could see was recorded as seen")
         // Notifications on: announced once, whether the terminal is still open or the user left it.
         clock.now += 8_000
-        assertEquals(listOf("h"), ids(log.claimLive(feed, onScreen, notify = true)))
+        assertEquals(listOf("h"), ids(log.claimLive(computer, feed, onScreen, notify = true)))
         clock.now += 8_000
-        assertEquals(emptyList(), log.claimLive(feed, onScreen, notify = true))
-        assertEquals(emptyList(), log.claimAnnounceable(feed))
+        assertEquals(emptyList(), log.claimLive(computer, feed, onScreen, notify = true))
+        assertEquals(emptyList(), log.claimAnnounceable(computer, feed))
     }
 
     @Test
@@ -141,11 +145,11 @@ class LiveNotificationsTest {
         assertEquals(listOf("q"), ids(split.waiting))
         assertEquals(listOf("h", "other"), ids(split.offScreen), "a held approval is not in the pane about to show")
         assertEquals(emptyList(), split.shown)
-        assertEquals(listOf("h", "other"), ids(log.claimLive(feed, opening, notify = true)))
-        assertFalse(log.isSeen("q"), "a pane that never showed was recorded as seen")
+        assertEquals(listOf("h", "other"), ids(log.claimLive(computer, feed, opening, notify = true)))
+        assertFalse(log.isSeen(computer, "q"), "a pane that never showed was recorded as seen")
         // The attach failed and an overlay covers the pane: the next listing announces it.
         clock.now += 8_000
-        assertEquals(listOf("q"), ids(log.claimLive(feed, OnScreen.NOTHING, notify = true)))
+        assertEquals(listOf("q"), ids(log.claimLive(computer, feed, OnScreen.NOTHING, notify = true)))
     }
 
     @Test
@@ -153,14 +157,14 @@ class LiveNotificationsTest {
         val clock = Clock(t0)
         val log = SeenLog(MemStorage(), clock)
         val feed = listOf(ev("d", "open", kind = InboxKind.DONE), held("h", "open"))
-        assertEquals(listOf("h"), ids(log.claimLive(feed, OnScreen(opening = setOf("open")), notify = true)))
+        assertEquals(listOf("h"), ids(log.claimLive(computer, feed, OnScreen(opening = setOf("open")), notify = true)))
         // HostSession.notePaneShown, on the attach: records what the pane shows, announces nothing.
-        assertEquals(emptyList(), log.claimLive(feed, OnScreen(nodes = setOf("open")), notify = false))
-        assertTrue(log.isSeen("d"))
+        assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen(nodes = setOf("open")), notify = false))
+        assertTrue(log.isSeen(computer, "d"))
         // The user looked and left before the next refresh: nothing about it afterwards.
         clock.now += 3_000
-        assertEquals(emptyList(), log.claimLive(feed, OnScreen.NOTHING, notify = true))
-        assertEquals(emptyList(), log.claimAnnounceable(feed))
+        assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen.NOTHING, notify = true))
+        assertEquals(emptyList(), log.claimAnnounceable(computer, feed))
     }
 
     // --- One check of a fresh listing -----------------------------------------------------------
@@ -175,8 +179,8 @@ class LiveNotificationsTest {
         )
         val live = SeenLog(MemStorage(), Clock(t0))
         val background = SeenLog(MemStorage(), Clock(t0))
-        assertEquals(ids(background.claimAnnounceable(feed)), ids(live.claimLive(feed, OnScreen.NOTHING, notify = true)))
-        assertEquals(listOf("a", "b"), ids(SeenLog(MemStorage(), Clock(t0)).claimLive(feed, OnScreen.NOTHING, notify = true)))
+        assertEquals(ids(background.claimAnnounceable(computer, feed)), ids(live.claimLive(computer, feed, OnScreen.NOTHING, notify = true)))
+        assertEquals(listOf("a", "b"), ids(SeenLog(MemStorage(), Clock(t0)).claimLive(computer, feed, OnScreen.NOTHING, notify = true)))
     }
 
     @Test
@@ -184,15 +188,15 @@ class LiveNotificationsTest {
         val clock = Clock(t0)
         val log = SeenLog(MemStorage(), clock)
         val feed = listOf(ev("a", "n1"), ev("d", "n2", kind = InboxKind.DONE))
-        assertEquals(emptyList(), log.claimLive(feed, OnScreen(inbox = true), notify = true))
+        assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen(inbox = true), notify = true))
         // The user left the tab (or the app): the next refresh and the background check stay quiet.
         clock.now += 60_000
-        assertEquals(emptyList(), log.claimLive(feed, OnScreen.NOTHING, notify = true))
-        assertEquals(emptyList(), log.claimAnnounceable(feed))
+        assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen.NOTHING, notify = true))
+        assertEquals(emptyList(), log.claimAnnounceable(computer, feed))
         // Something new after that is announced, once.
         val next = feed + ev("b", "n1", ts = clock.now)
-        assertEquals(listOf("b"), ids(log.claimLive(next, OnScreen.NOTHING, notify = true)))
-        assertEquals(emptyList(), log.claimLive(next, OnScreen.NOTHING, notify = true))
+        assertEquals(listOf("b"), ids(log.claimLive(computer, next, OnScreen.NOTHING, notify = true)))
+        assertEquals(emptyList(), log.claimLive(computer, next, OnScreen.NOTHING, notify = true))
     }
 
     @Test
@@ -201,23 +205,23 @@ class LiveNotificationsTest {
         val log = SeenLog(MemStorage(), clock)
         val onScreen = OnScreen(nodes = setOf("open"))
         val feed = listOf(ev("mine", "open"), ev("theirs", "other"))
-        assertEquals(listOf("theirs"), ids(log.claimLive(feed, onScreen, notify = true)))
+        assertEquals(listOf("theirs"), ids(log.claimLive(computer, feed, onScreen, notify = true)))
         clock.now += 8_000
-        assertEquals(emptyList(), log.claimLive(feed, onScreen, notify = true))
+        assertEquals(emptyList(), log.claimLive(computer, feed, onScreen, notify = true))
         // Back from the terminal: what it showed was seen there.
-        assertEquals(emptyList(), log.claimAnnounceable(feed))
-        assertTrue(log.isSeen("mine"))
+        assertEquals(emptyList(), log.claimAnnounceable(computer, feed))
+        assertTrue(log.isSeen(computer, "mine"))
     }
 
     @Test
     fun `with notifications off nothing is claimed, but what is on screen is still recorded`() {
         val log = SeenLog(MemStorage(), Clock(t0))
         val feed = listOf(ev("shown", "open"), ev("offscreen", "other"))
-        assertEquals(emptyList(), log.claimLive(feed, OnScreen(nodes = setOf("open")), notify = false))
-        assertTrue(log.isSeen("shown"))
-        assertFalse(log.isSeen("offscreen"), "an event nobody saw was spent while notifications were off")
+        assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen(nodes = setOf("open")), notify = false))
+        assertTrue(log.isSeen(computer, "shown"))
+        assertFalse(log.isSeen(computer, "offscreen"), "an event nobody saw was spent while notifications were off")
         // Turned on later: only what the user never looked at is announced.
-        assertEquals(listOf("offscreen"), ids(log.claimLive(feed, OnScreen.NOTHING, notify = true)))
+        assertEquals(listOf("offscreen"), ids(log.claimLive(computer, feed, OnScreen.NOTHING, notify = true)))
     }
 
     @Test
@@ -230,19 +234,19 @@ class LiveNotificationsTest {
             ev("resolved", "n1", resolved = true),
             ev("old", "n1", ts = t0 - SeenLog.ANNOUNCE_WINDOW_MS)
         )
-        assertEquals(emptyList(), log.claimLive(feed, OnScreen(inbox = true), notify = true))
+        assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen(inbox = true), notify = true))
         assertEquals(1, storage.writes)
-        assertEquals(setOf("a"), SeenLog.decode(storage.raw!!, clock.now).keys)
+        assertEquals(setOf("a"), SeenLog.decode(storage.raw!!, clock.now).ids(computer))
         // The same tab, ten refreshes later: nothing new, nothing written, the anchor unmoved.
         repeat(10) {
             clock.now += 8_000
-            log.claimLive(feed, OnScreen(inbox = true), notify = true)
+            log.claimLive(computer, feed, OnScreen(inbox = true), notify = true)
         }
         assertEquals(1, storage.writes)
-        assertEquals(t0, SeenLog.decode(storage.raw!!, clock.now)["a"])
+        assertEquals(t0, SeenLog.decode(storage.raw!!, clock.now).hosts[computer]?.get("a"))
         // A feed with nothing announceable in it is not even read back.
         val reads = storage.reads
-        assertEquals(emptyList(), log.claimLive(listOf(feed[1], feed[2]), OnScreen.NOTHING, notify = true))
+        assertEquals(emptyList(), log.claimLive(computer, listOf(feed[1], feed[2]), OnScreen.NOTHING, notify = true))
         assertEquals(reads, storage.reads)
         assertEquals(1, storage.writes)
     }
@@ -351,7 +355,7 @@ class LiveNotificationsTest {
         AppSourcePins.assertInOrder(
             announce,
             "val notify = graph.hosts.notificationsEnabled && canPost(context) && permitted",
-            "graph.hosts.claimLive(snapshot.status?.inbox?.events.orEmpty(), onScreen, notify)",
+            "graph.hosts.claimLive(host.id, snapshot.status?.inbox?.events.orEmpty(), onScreen, notify)",
             "nm.notify("
         )
         // An early return on the switch would skip recording what is on screen.
@@ -401,7 +405,7 @@ class LiveNotificationsTest {
         AppSourcePins.assertInOrder(
             AppSourcePins.blockAfter(connections, "fun notePaneShown(nodeId: String)"),
             "_snapshot.value.status?.inbox?.events",
-            "graph.hosts.claimLive(events, OnScreen(nodes = setOf(nodeId)), notify = false)"
+            "graph.hosts.claimLive(hostId, events, OnScreen(nodes = setOf(nodeId)), notify = false)"
         )
     }
 

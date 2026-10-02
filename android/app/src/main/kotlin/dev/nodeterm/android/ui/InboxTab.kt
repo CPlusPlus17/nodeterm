@@ -108,7 +108,10 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
     // Saveable, so an open archive stays open after a terminal opened from it (audit A43).
     var showArchive by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(feed.actionable.map { it.key }) { graph.hosts.markSeen(feed.actionable.map { it.event }) }
+    // Each card under ITS computer: a merged feed holds several, and two can mint the same event id.
+    LaunchedEffect(feed.actionable.map { it.key }) {
+        feed.actionable.groupBy({ it.hostId }, { it.event }).forEach { (hostId, events) -> graph.hosts.markSeen(hostId, events) }
+    }
 
     fun openOn(from: ComputerListing, nodeId: String) =
         nav.push(Route.Terminal(from.computer.hostId, nodeId, feedTitle(from.snapshot, nodeId)))

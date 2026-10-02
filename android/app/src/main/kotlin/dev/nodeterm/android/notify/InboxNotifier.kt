@@ -116,8 +116,9 @@ object InboxNotifier {
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         val notify = graph.hosts.notificationsEnabled && canPost(context) && permitted
         // Decided and recorded in one locked step (SeenLog, audits A48/A73): unresolved, younger than
-        // the announce window, not on screen, and never announced, read or shown on this phone.
-        val fresh = graph.hosts.claimLive(snapshot.status?.inbox?.events.orEmpty(), onScreen, notify)
+        // the announce window, not on screen, and never announced, read or shown on this phone FOR
+        // THIS COMPUTER — two computers can mint the same event id, so the log is kept per computer.
+        val fresh = graph.hosts.claimLive(host.id, snapshot.status?.inbox?.events.orEmpty(), onScreen, notify)
         if (fresh.isEmpty()) return 0
         val nm = NotificationManagerCompat.from(context)
         val showDetails = graph.hosts.notificationDetails

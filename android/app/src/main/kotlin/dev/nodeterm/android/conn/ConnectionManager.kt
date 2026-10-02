@@ -523,7 +523,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      */
     fun notePaneShown(nodeId: String) {
         val events = _snapshot.value.status?.inbox?.events ?: return
-        runCatching { graph.hosts.claimLive(events, OnScreen(nodes = setOf(nodeId)), notify = false) }
+        runCatching { graph.hosts.claimLive(hostId, events, OnScreen(nodes = setOf(nodeId)), notify = false) }
     }
 
     /**

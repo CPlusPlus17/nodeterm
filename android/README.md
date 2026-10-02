@@ -153,9 +153,9 @@ its request was settled and dropped from the computer's list (after 6 hours, or 
 types nothing into whatever prompt the session shows by then: it says to answer in the session.
 
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
-and the phone remembers the ones it has announced, you have read or you had on screen for a day
-after it last saw them (longer when the computer's clock runs ahead), so nothing still eligible is
-forgotten.
+and the phone remembers, for each computer, the ones it has announced, you have read or you had on
+screen for a day after it last saw them (longer when the computer's clock runs ahead), so nothing
+still eligible is forgotten. Forgetting a computer forgets that too; pairing it again keeps it.
 
 A notification names the session, the computer and the kind of event ("Needs you — build-bot",
 "Needs approval"), but not the event's own text: the command, file or question, or the agent's last

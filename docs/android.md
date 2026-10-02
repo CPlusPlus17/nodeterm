@@ -610,6 +610,22 @@ seen-log only when something is new. The decision and the screen bookkeeping are
 wiring into the refresh, the worker and the two screens is pinned in the source, and whether a
 notification appears on a phone is a device check.
 
+`SeenLogTest` covers the seen-log itself (`A48`, and its per-computer follow-up). It keeps each event
+id with the time the phone last saw it (or the event's own time, when the computer's clock runs
+ahead), and drops an entry a day after that, past the 6 h announce window, never by count (bar a
+memory backstop no real Inbox reaches), so nothing still eligible is forgotten. It is kept PER COMPUTER: a desktop's
+event id is `<ts>-<seq>` with a counter that restarts with each app run, so two computers can mint
+the same id in the same millisecond, and with one phone-wide log the first computer's event would
+have silenced the second one's notification. Every entry is filed under the pairing id of the
+computer whose listing it came from. Forgetting a computer drops its entries; pairing the same
+computer again (a new pairing id) carries them over, since its ids continue, so pairing again
+announces nothing a second time; and nothing is recorded for a computer no longer paired. The
+phone-wide log of the previous build (and the older bare id set) migrates on first use as seen for
+EVERY computer, because it never said which computer an entry came from; those entries age out a day
+after they were last seen and nothing new is added to them, so an upgrade announces nothing again
+and the old phone-wide behaviour lasts only that day, for those ids alone. The log's rules are
+unit-tested; which computer each caller names is pinned in the source.
+
 `NotificationActionsTest` covers answering from a notification, and where its tap goes (`A25`, the
 in-app part). A notification had no actions, and its tap opened only the computer's Inbox. Now an
 approval carries Approve and Deny and a single-select question its options, and the tap opens that

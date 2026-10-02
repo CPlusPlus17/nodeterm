@@ -166,7 +166,8 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                 previous?.let {
                                     graph.connections.forget(it.id)
                                     if (it.id != host.id) graph.secure.remove(SecureStore.relayTokenKey(it.id))
-                                    graph.hosts.remove(it.id)
+                                    // The same computer, paired again: what this phone saw of it carries over.
+                                    graph.hosts.remove(it.id, successor = host.id)
                                 }
                                 graph.hosts.upsert(host)
                                 // Also with no relay leg yet (A07-late): the computer approves this phone's

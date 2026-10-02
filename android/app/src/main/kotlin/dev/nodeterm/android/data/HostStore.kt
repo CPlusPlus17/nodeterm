@@ -42,10 +42,16 @@ class HostStore(context: Context) {
 
     fun get(id: String): PairedHost? = _hosts.value.firstOrNull { it.id == id }
 
-    /** Re-pairing the same computer (same host + user) replaces the old record. */
+    /**
+     * Re-pairing the same computer (same host + user) replaces the old record. What the phone saw of
+     * a replaced record's computer carries over to [host] ([SeenLog.moveHost]): it is the same
+     * computer, whose event ids continue.
+     */
     @Synchronized
     fun upsert(host: PairedHost) {
-        save(_hosts.value.filterNot { it.id == host.id || (it.host == host.host && it.user == host.user && it.name == host.name) } + host)
+        val replaced = _hosts.value.filter { it.id != host.id && it.host == host.host && it.user == host.user && it.name == host.name }
+        save(_hosts.value.filterNot { it.id == host.id || it in replaced } + host)
+        for (old in replaced) seenLog.moveHost(old.id, host.id)
     }
 
     /**
@@ -69,10 +75,20 @@ class HostStore(context: Context) {
         save(_hosts.value.map { if (it.id == id) change(it) else it })
     }
 
+    /**
+     * Forget the computer [id]. Its notification seen log goes with it ([SeenLog.forgetHost]), unless
+     * the same computer was just paired again as [successor]: then that record keeps what the phone
+     * saw of it ([SeenLog.moveHost]), so pairing again does not announce it all a second time.
+     */
     @Synchronized
-    fun remove(id: String) {
+    fun remove(id: String, successor: String? = null) {
         save(_hosts.value.filterNot { it.id == id })
         prefs.edit().remove("route.$id").remove("relayApproved.$id").apply()
+        when (successor) {
+            null -> seenLog.forgetHost(id)
+            id -> Unit
+            else -> seenLog.moveHost(id, successor)
+        }
     }
 
     /**
@@ -163,31 +179,47 @@ class HostStore(context: Context) {
         }
 
     /**
-     * Inbox events this phone has announced, read or had on screen (phone-local, like iOS), trimmed
-     * by age and locked across each update — see [SeenLog] (audit A48). The pre-A48 build kept a bare
-     * id set under `seenEvents`; [SeenLog] migrates it on first use and the same edit removes it.
+     * Inbox events this phone has announced, read or had on screen (phone-local, like iOS), per
+     * computer, trimmed by age and locked across each update — see [SeenLog] (audit A48 and its
+     * per-computer follow-up). Two older formats migrate on first use, and the same edit removes
+     * them: the phone-wide id → time map under `seenEvents.v2`, and the pre-A48 bare id set under
+     * `seenEvents`.
      */
-    private val seenLog = SeenLog(object : SeenLog.Storage {
+    private val seenLog: SeenLog = SeenLog(object : SeenLog.Storage {
         override fun read(): String? = prefs.getString(SEEN_LOG_KEY, null)
+        override fun readV2(): String? = prefs.getString(V2_SEEN_KEY, null)
         override fun readLegacy(): Set<String>? = prefs.getStringSet(LEGACY_SEEN_KEY, null)
         override fun write(encoded: String) {
             // apply() publishes to the in-memory map before it returns; SeenLog holds the lock.
-            prefs.edit().putString(SEEN_LOG_KEY, encoded).remove(LEGACY_SEEN_KEY).apply()
+            prefs.edit().putString(SEEN_LOG_KEY, encoded).remove(V2_SEEN_KEY).remove(LEGACY_SEEN_KEY).apply()
         }
     })
 
-    /** The phone has seen [events]: the user read them here. */
-    fun markSeen(events: Collection<InboxEvent>) = seenLog.markSeen(events)
+    /**
+     * The phone has seen [events] of the computer [hostId]: the user read them here. Nothing is
+     * recorded for a computer no longer paired, so a screen still open on a computer just forgotten
+     * cannot bring back the entries [remove] dropped.
+     */
+    @Synchronized
+    fun markSeen(hostId: String, events: Collection<InboxEvent>) {
+        if (get(hostId) == null) return
+        seenLog.markSeen(hostId, events)
+    }
 
     /**
-     * The events of a fresh listing to notify about now, recorded as announced in the same locked
-     * step; what [onScreen] shows is recorded as seen instead (audit A73) — see [SeenLog.claimLive].
+     * The events of a fresh listing of the computer [hostId] to notify about now, recorded as
+     * announced in the same locked step; what [onScreen] shows is recorded as seen instead (audit
+     * A73) — see [SeenLog.claimLive]. Nothing, and nothing recorded, for a computer no longer paired.
      */
-    fun claimLive(events: List<InboxEvent>, onScreen: OnScreen, notify: Boolean): List<InboxEvent> =
-        seenLog.claimLive(events, onScreen, notify)
+    @Synchronized
+    fun claimLive(hostId: String, events: List<InboxEvent>, onScreen: OnScreen, notify: Boolean): List<InboxEvent> {
+        if (get(hostId) == null) return emptyList()
+        return seenLog.claimLive(hostId, events, onScreen, notify)
+    }
 
     private companion object {
-        const val SEEN_LOG_KEY = "seenEvents.v2"
+        const val SEEN_LOG_KEY = "seenEvents.v3"
+        const val V2_SEEN_KEY = "seenEvents.v2"
         const val LEGACY_SEEN_KEY = "seenEvents"
     }
 }
