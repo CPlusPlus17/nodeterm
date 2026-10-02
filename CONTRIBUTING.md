@@ -93,6 +93,26 @@ verify and stop any remaining host. Never recommend **End session** (it deletes 
 resume depends on supported, saved conversation history; it does not preserve running tasks.
 See `docs/windows-session-host.md` for the user-controlled preparation/recovery steps and limits.
 
+**Prepare for update** (#829 step 2, Windows only): ⌘K / the update card run
+`components/PrepareUpdateDialog.tsx` over the pure `lib/updatePrep.ts` plan. It refuses while any
+session's agent is working or waiting on the user (renderer store OR core mirror — unmounted nodes
+have no renderer state), asks idle mounted agents to `/exit` through `registerAgentUpdateExit`,
+confirms what still stops (Cancel focused), then sends the host's `shutdown` command and quits only
+once the host process is confirmed gone. `shutdown` is a negotiated hello feature: never send it to
+a host that did not advertise it, and never add a taskkill/name-kill fallback — an older host gets
+the manual steps. The flow never deletes a node. Server Edition: degraded stub (`unsupported`).
+
+Staged host runtime (#829 step 3): a packaged Windows build launches the host from a private
+copy, `%LOCALAPPDATA%\nodeterm\session-host\<version>-<fingerprint>\nodeterm-sessionhost-v2.exe`
+(`src/core/session-host-runtime.ts`), so it maps no installed file and no longer blocks updates.
+Rules: a copy is launched only after it was published by one rename of a hash-verified,
+smoke-tested temp dir (marker written last); the image name must stay unlike `nodeterm.exe` /
+`nodeterm-session-host.exe` (old uninstallers match those by name machine-wide); every staging
+failure falls back to the legacy in-install-dir launch, which the preflight still blocks on; old
+copies are deleted only after a SUCCESSFUL process query shows nothing runs from them and the
+directory can be renamed aside. The host protocol stays additive-only — an older host is kept and
+used, an incompatible one is left running and reported, never killed.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not
@@ -504,6 +524,16 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   credentials, license or pairing belongs in `src/shared/host-control.ts` instead — refused to every
   relay peer.
 
+- **Live links: a new broadcast channel needs nothing, a new per-session pty channel needs a
+  decision.** Live-link viewers are quiet clients, so no broadcast ever reaches them. A per-session pty
+  event reaches a viewer only once it is added to `watcherEventAllowed`
+  (`src/core/watch-link/watcher-policy.ts`) on purpose — and only if its payload is the visible screen,
+  never history (why `pty:resync` is refused). Never add link state to a node, a board or a canvas op:
+  canvas sync and the canvas authority would publish it. `src/shared/watch-link/` is copied byte for
+  byte into the viewer page's repo: import only siblings and `tweetnacl`, write type imports as
+  `import type` (`isomorphism.guard.test.ts` fails otherwise), and expect a change there to need a
+  re-vendor. `docs/live-links.md`.
+
 - **A change to canvas content that does not travel as a `canvas:mut` op is lost on a hosted core —
   route new content edits through the op vocabulary (`src/shared/canvas-content.ts`).** On a Server
   Edition hosting a team, the canvas authority writes a shared project's nodes, edges and board
@@ -677,6 +707,14 @@ entry for another node.
 **Test generated shell for real.** If you generate a shell command, run it under an actual
 `/bin/sh` against a fixture tree. A composed fixture will not tell you that `echo ##MEM` prints an
 empty line because `#` starts a comment.
+
+**Share with team's remote commands are generated shell, and so is their test.** The probe, the
+installer wrapper, the `team` invocations and the kill-verify are built in
+`src/core/remote-ssh/share-team-remote.ts` and run under a real `/bin/sh` against a fake host in its
+test; a change to one of them lands with a run there. The handover kill stays on the `nodeterm-rmt`
+socket only, with exact `=nt-<id>` targets: the every-socket kill used elsewhere would also stop the
+server core's `node-terminal` sessions, which are the ones the handover is starting. See CLAUDE.md
+"Share with team".
 
 **Remote context polling must bound bytes before SSH transports them.** Bootstrap from the
 file's measured end, keep offsets in raw bytes, and distinguish an idle read from failure so
@@ -1119,6 +1157,13 @@ wordmark's drag area. `scripts/tabbar-drag.test.ts` checks native hit testing wi
 Electron/Xvfb on Linux; macOS traffic lights and actual window movement still need device checks.
 
 `npm test` must pass, and `npm run typecheck` is the fastest gate.
+
+**The typecheck does not catch a closure reading a later `const`.** If a helper defined in a
+component body reads a `const` declared further down and the helper is CALLED during render, it
+throws a TDZ `ReferenceError` at runtime while `tsc` stays green (#1090 blanked all of Settings
+this way). Declare what a render-time helper closes over above the helper, and give a new
+Settings section a render test with its real-world state populated — every section renders on
+each Settings open, visible or not, and each is wrapped in `SettingsSectionBoundary`.
 
 Beyond that, one habit is worth more than any other here:
 

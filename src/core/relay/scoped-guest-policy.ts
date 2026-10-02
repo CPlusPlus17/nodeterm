@@ -310,6 +310,7 @@ export const SCOPED: Readonly<Record<string, Check>> = Object.freeze({
   [IPC.ptySessionAge]: nodeArg0,
   [IPC.ptyReadScrollback]: nodeArg0,
   [IPC.ptySendText]: nodeArg0,
+  [IPC.ptySendChatPrompt]: nodeArg0,
   [IPC.ptyTmuxStatus]: pass,
   [IPC.ptyPaneCommand]: nodeArg0,
   [IPC.ptyPaneCwd]: nodeArg0,
@@ -444,6 +445,10 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.agentGatewayCredentialStatus,
   IPC.agentGatewayCredentialSave,
   IPC.agentGatewayCredentialClear,
+  // Custom alert sounds: host-wide files in the host's data dir, owned by no project.
+  IPC.filesSaveAlertSound,
+  IPC.filesReadAlertSound,
+  IPC.filesClearAlertSound,
   // The host's debug log spans every project; relay-api.ts keeps `logs` LOCAL.
   IPC.logSnapshot,
   IPC.logClear,
@@ -482,7 +487,8 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.relayHostedApprove,
   IPC.relayHostedDeny,
   IPC.relayHostedPeerPending,
-  IPC.relayHostedPendingClosed
+  IPC.relayHostedPendingClosed,
+  IPC.relayHostedSharedChanged
 ])
 
 function makeScope(projectId: string, deps: ScopedGuestDeps): Scope {
@@ -535,6 +541,9 @@ function scopedExtraEvent(json: string, s: Scope): boolean | null {
   const channel = m !== null && typeof m === 'object' ? (m as { channel?: unknown }).channel : undefined
   if (typeof channel !== 'string') return null
   if (channel === IPC.gitCloneProgress) return true
+  // A hosted team's shared-project list. Its VIEW_EVENTS entry admits it for a hosted team's viewers;
+  // a Team Access guest is scoped to ONE project and must never learn another project's id.
+  if (channel === IPC.relayHostedSharedChanged) return false
   const gh = IPC.githubIssuesChanged('')
   if (channel.startsWith(gh)) return channel.slice(gh.length) === s.projectId
   return null

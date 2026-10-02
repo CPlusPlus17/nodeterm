@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net, { type AddressInfo } from 'net'
 import path from 'path'
-import { Server, utils, type Connection } from 'ssh2'
+import { Server, type Connection } from 'ssh2'
 import { NativeMux } from './native-mux'
 import { runSshArgv, spawnSshArgvStream, startNativeMaster, useNativeSsh } from './native-invoke'
 import {
@@ -15,9 +15,10 @@ import {
   masterArgs
 } from '../control-master'
 import type { SshConnection } from '../../../shared/ssh'
+import { ed25519KeyPair } from './test-keys'
 
-const hostKey = utils.generateKeyPairSync('ed25519')
-const clientKey = utils.generateKeyPairSync('ed25519')
+const hostKey = ed25519KeyPair()
+const clientKey = ed25519KeyPair()
 
 let dir: string
 let server: Server

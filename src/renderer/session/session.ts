@@ -170,6 +170,17 @@ export function bindProjectToSession(projectId: string, sessionId: string): void
   PROJECT_BINDINGS.set(projectId, sessionId)
 }
 
+/** Unbind ONE project (a hosted team stopped sharing it, or the user closed that one of the team's
+ *  tabs). The session lives on for its other tabs. No-op when unbound. */
+export function unbindProject(projectId: string): void {
+  PROJECT_BINDINGS.delete(projectId)
+}
+
+/** Every project bound to `sessionId` (a hosted team's tabs, live or greyed). */
+export function projectIdsBoundToSession(sessionId: string): string[] {
+  return [...PROJECT_BINDINGS].filter(([, sid]) => sid === sessionId).map(([projectId]) => projectId)
+}
+
 /** The local session (the fallback every unbound tab resolves to), or the active one if — in a
  *  node-environment test — no 'local' session was created. */
 function localOrActiveSession(): WorkspaceSession {

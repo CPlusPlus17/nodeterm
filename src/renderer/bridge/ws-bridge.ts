@@ -2,6 +2,7 @@ import type { ChatCatalog } from '@shared/chat-catalog'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
+import type { AlertSoundSaveResult } from '../../shared/alert-sound'
 import type { RecentConversationsRequest, RecentConversationsResult } from '../../shared/recent-conversations'
 // WebSocket bridge that reconstructs `window.nodeTerminal` in the browser (Server Edition).
 //
@@ -19,6 +20,7 @@ import {
   type RpcMessage
 } from '../../shared/rpc'
 import { IPC } from '../../shared/ipc'
+import type { ChatPromptResult } from '../../shared/text-delivery'
 import type { GitHubControlApi, GitHubIssuesApi } from '../../shared/github-issues'
 import {
   UNKNOWN_CLAUDE_CLI_CAPS,
@@ -75,6 +77,13 @@ import { buildStubApi, unsupported } from './stubs'
 import { sanitizeStationNotices } from '@shared/station-notice'
 import { sanitizeOutcomeRecords } from '@shared/station-outcome'
 import { sanitizeHandoverRecords } from '@shared/station-handover'
+import type {
+  CreateWatchLinkResult,
+  RevokeAllOutcome,
+  WatchChatMessage,
+  WatchLinkNotice,
+  WatchLinkView
+} from '@shared/watch-link-types'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -272,6 +281,8 @@ export function buildRealApi(
       client.request(IPC.ptyReadScrollback, persistKey) as Promise<string>,
     sendText: (persistKey, text, opts) =>
       client.request(IPC.ptySendText, persistKey, text, opts?.enter) as Promise<boolean>,
+    sendChatPrompt: (persistKey, text, agentId) =>
+      client.request(IPC.ptySendChatPrompt, persistKey, text, agentId) as Promise<ChatPromptResult>,
     // A failed read is unknown, never evidence that persistence is available.
     tmuxStatus: () =>
       client
@@ -631,7 +642,14 @@ export function buildFilesApi(
     saveCanvasImage: (projectId, name, dataBase64) =>
       client.request(IPC.filesSaveCanvasImage, projectId, name, dataBase64) as Promise<
         string | null
-      >
+      >,
+    // Real: the browser holds the picked sound's bytes and the data dir is the server's, so the
+    // server stores it and serves it back by kind (issue #289). The browser's own path never leaves
+    // the browser — a host-local path would not exist on the server anyway.
+    saveAlertSound: (kind, name, dataBase64) =>
+      client.request(IPC.filesSaveAlertSound, kind, name, dataBase64) as Promise<AlertSoundSaveResult>,
+    readAlertSound: (kind) => client.request(IPC.filesReadAlertSound, kind) as Promise<string | null>,
+    clearAlertSound: (kind) => client.request(IPC.filesClearAlertSound, kind) as Promise<boolean>
   }
 
   const context: ContextApi = {
@@ -868,7 +886,8 @@ export function buildPresenceApi(client: RpcClient): Pick<NodeTerminalApi, 'pres
  * Edition browser never joins a relay host, and a Team Access relay tab (desktop to desktop) talks
  * to a host that answers none of these, so both leave `hosted` absent. The host core answers every
  * request itself (src/core/relay/hosted-service.ts) and judges the caller's role: `self` is open to
- * any member, the rest are owner-only. `peer-pending` / `pending-closed` reach connected OWNERS only.
+ * any member, the rest are owner-only. `peer-pending` / `pending-closed` reach connected OWNERS only;
+ * `shared-changed` (the team's whole shared set) reaches every connected member, viewers included.
  */
 export function buildHostedApi(client: RpcClient): Required<Pick<NodeTerminalApi, 'hosted'>> {
   const hosted: HostedSessionApi = {
@@ -878,7 +897,8 @@ export function buildHostedApi(client: RpcClient): Required<Pick<NodeTerminalApi
     approve: (pendingId, role) => client.request(IPC.relayHostedApprove, pendingId, role) as Promise<boolean>,
     deny: (pendingId) => client.request(IPC.relayHostedDeny, pendingId) as Promise<boolean>,
     onPeerPending: (listener) => client.subscribe(IPC.relayHostedPeerPending, listener as Listener),
-    onPendingClosed: (listener) => client.subscribe(IPC.relayHostedPendingClosed, listener as Listener)
+    onPendingClosed: (listener) => client.subscribe(IPC.relayHostedPendingClosed, listener as Listener),
+    onSharedChanged: (listener) => client.subscribe(IPC.relayHostedSharedChanged, listener as Listener)
   }
   return { hosted }
 }
@@ -978,6 +998,43 @@ export function buildTriggersApi(client: RpcClient): Pick<NodeTerminalApi, 'trig
           outcome: 'fired' | 'missed' | 'failed' | 'queued'
           detail?: string
         }>
+    }
+  }
+}
+
+/**
+ * The Server Edition's live links — the REAL bridge, backed by the same core service the desktop
+ * registers (src/core/watch-link/service.ts). Its browser tabs are the server's own user (owner
+ * clients), so the host-only `watchLink:` prefix does not refuse them. Until that edition has a license
+ * layer the service answers create `unsupported` and list `[]` (R43). Kept OUT of every builder a relay
+ * tab spreads (and out of the scoped-guest / access-policy BUILDERS lists): a relay tab shows another
+ * machine's terminals, which are not this browser's to publish — relay-api.ts takes the inert stub.
+ * A dropped socket answers create `network`; revoke and revokeAll reject, so the UI can say the stop
+ * did not reach the server.
+ */
+export function buildWatchLinkApi(client: RpcClient): Pick<NodeTerminalApi, 'watchLink'> {
+  return {
+    watchLink: {
+      create: (req) =>
+        (client.request(IPC.watchLinkCreate, req) as Promise<CreateWatchLinkResult>).catch(
+          (): CreateWatchLinkResult => ({ ok: false, error: 'network' })
+        ),
+      list: () => (client.request(IPC.watchLinkList) as Promise<WatchLinkView[]>).catch(() => []),
+      revoke: async (linkId) => {
+        await client.request(IPC.watchLinkRevoke, linkId)
+      },
+      // Rejects on a dropped socket, like revoke: the server half did not happen and the UI must say so.
+      revokeAll: () => client.request(IPC.watchLinkRevokeAll) as Promise<RevokeAllOutcome>,
+      kick: (linkId, viewerId) =>
+        (client.request(IPC.watchLinkKick, linkId, viewerId) as Promise<boolean>).catch(() => false),
+      sendChat: (linkId, text) =>
+        (client.request(IPC.watchLinkChatSend, linkId, text) as Promise<WatchChatMessage | null>).catch(() => null),
+      chatHistory: (linkId) =>
+        (client.request(IPC.watchLinkChatHistory, linkId) as Promise<WatchChatMessage[]>).catch(() => []),
+      onState: (cb) => client.subscribe(IPC.watchLinkState, ((links: WatchLinkView[]) => cb(links)) as Listener),
+      onChat: (cb) =>
+        client.subscribe(IPC.watchLinkChat, ((linkId: string, msg: WatchChatMessage) => cb(linkId, msg)) as Listener),
+      onNotice: (cb) => client.subscribe(IPC.watchLinkNotice, ((n: WatchLinkNotice) => cb(n)) as Listener)
     }
   }
 }
@@ -1308,6 +1365,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildSpeechApi(client),
     ...buildUsageApi(client),
     ...buildSessionMemoryApi(client),
+    ...buildWatchLinkApi(client),
     ...buildRecentConversationsApi(client),
     ...buildWallpaperApi(client),
     ...buildTriggersApi(client),

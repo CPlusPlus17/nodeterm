@@ -8,6 +8,7 @@ const reset = (): void =>
   useAgentNodes.setState({
     byId: {},
     activityById: {},
+    lastActivityAt: {},
     positions: {},
     sizes: {},
     expanded: {},
@@ -51,6 +52,26 @@ describe('start(…, supersedes) — a native card replacing the card its tool c
     const st = useAgentNodes.getState()
     expect(Object.keys(st.byId)).toEqual(['a123'])
     expect(st.byId.a123).toMatchObject({ startedAt: 2, label: 'fixed' })
+  })
+
+  it("carries the sweep's clock: the replaced card's last activity and a replayed seed both count", () => {
+    const s = useAgentNodes.getState()
+    s.start('toolu_1', { parentNodeId: 'n1', startedAt: 1000 })
+    useAgentNodes.setState({ lastActivityAt: { toolu_1: 5000 } })
+    s.start('a123', { parentNodeId: 'n1' }, 'toolu_1')
+    expect(useAgentNodes.getState().lastActivityAt).toEqual({ a123: 5000 })
+    // A reload replay of the superseding start seeds a newer time; the clock never goes backwards.
+    s.start('a123', { parentNodeId: 'n1', lastActivityAt: 9000 })
+    s.start('a123', { parentNodeId: 'n1', lastActivityAt: 2000 })
+    expect(useAgentNodes.getState().lastActivityAt).toEqual({ a123: 9000 })
+    expect(useAgentNodes.getState().byId.a123).not.toHaveProperty('lastActivityAt')
+  })
+
+  it('a replayed superseding start seeds its clock even when nothing was carried', () => {
+    const s = useAgentNodes.getState()
+    s.start('toolu_1', { parentNodeId: 'n1', startedAt: 1000 })
+    s.start('a123', { parentNodeId: 'n1', lastActivityAt: 7000 }, 'toolu_1')
+    expect(useAgentNodes.getState().lastActivityAt).toEqual({ a123: 7000 })
   })
 
   it('an unknown superseded key is a plain start', () => {

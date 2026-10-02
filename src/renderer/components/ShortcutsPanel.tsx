@@ -88,6 +88,8 @@ export interface ShortcutSectionsOptions {
   focusFollowsPointer: boolean
   /** Canonical effective binding strings for a command; `[]` when unbound or disabled. */
   bindingsFor: (id: CommandId) => readonly string[]
+  /** `settings.terminalFontZoomKeys` (issue #915). Optional: absent = off, the shipped default. */
+  terminalFontZoomKeys?: boolean
 }
 
 /** The section order IS the registry's group order (first appearance), so a new `CommandGroup`
@@ -170,7 +172,16 @@ function behaviorRows(o: ShortcutSectionsOptions): ShortcutRow[] {
     row([forceSelect, 'drag'], 'Select in the emulator (apps that grab the mouse)'),
     row(['⇧', 'Enter'], 'Insert a newline instead of submitting'),
     row(['⌘', 'click'], 'Open a link, file or folder from the output'),
-    row(['✦'], 'Name the terminal with AI')
+    row(['✦'], 'Name the terminal with AI'),
+    // Opt-in (issue #915), so only listed when on. Spelled per platform rather than with the
+    // panel's usual ⌘ glyph: this chord is deliberately ⌘ on mac and Ctrl elsewhere, never either
+    // (terminal-font-zoom.ts), and advertising ⌘ off-mac would name a key that does nothing.
+    ...(o.terminalFontZoomKeys
+      ? [
+          row([o.isMac ? '⌘' : 'Ctrl', '+ / −'], 'Terminal font size bigger / smaller'),
+          row([o.isMac ? '⌘' : 'Ctrl', '0'], 'Terminal font size back to the global size')
+        ]
+      : [])
   ]
 }
 
@@ -223,6 +234,7 @@ export function ShortcutsPanel({ onClose, onCustomize }: ShortcutsPanelProps) {
   const dragMode = useSettings((s) => s.settings.canvasDragMode)
   const doubleClickFocus = useSettings((s) => s.settings.doubleClickFocus)
   const wheelZoom = useSettings((s) => s.settings.wheelZoom)
+  const terminalFontZoomKeys = useSettings((s) => s.settings.terminalFontZoomKeys)
   const focusFollowsPointer = resolveFocusFollowsPointer(
     useSettings((s) => s.settings.terminalFocusFollowsPointer)
   )
@@ -234,6 +246,7 @@ export function ShortcutsPanel({ onClose, onCustomize }: ShortcutsPanelProps) {
     dragMode: dragMode === 'pan' ? 'pan' : 'select',
     doubleClickFocus,
     wheelZoom,
+    terminalFontZoomKeys,
     focusFollowsPointer,
     bindingsFor: effectiveBindings
   })

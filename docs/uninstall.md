@@ -123,3 +123,8 @@ So the honest design is:
 Windows note: the desktop build ships as an NSIS installer with its own uninstaller
 (Add/Remove Programs); after running it, delete `%APPDATA%\node-terminal` and
 `%USERPROFILE%\.nodeterm`. The POSIX script does not run there.
+The uninstaller also leaves `%LOCALAPPDATA%\nodeterm\session-host` — the session host's private
+runtime copies (about 250 MB per app version, issue #829) — because a host may still be running
+from one and the uninstaller never stops it. Delete that folder after any
+`nodeterm-sessionhost-v2.exe` process has exited (Task Manager → Details); Windows refuses while it
+is running, which is safe.

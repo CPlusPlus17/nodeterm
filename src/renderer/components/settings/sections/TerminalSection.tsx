@@ -12,6 +12,11 @@ import { NumberField } from '@renderer/ui/NumberField'
 import { Input } from '@renderer/ui/Input'
 import { SegmentedPill } from '@renderer/ui/SegmentedPill'
 import { TERMINAL_RESET_KEYS } from '@renderer/lib/settingsReset'
+import { isMacPlatform } from '@shared/platform-utils'
+import {
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN
+} from '@renderer/terminal/terminal-font-zoom'
 import {
   TERMINAL_LETTER_SPACING_MAX,
   TERMINAL_LETTER_SPACING_MIN,
@@ -44,6 +49,13 @@ const ROWS = {
   fontSize: {
     title: 'Size and weight',
     keywords: ['font', 'size', 'text', 'zoom', 'weight', 'bold', 'thin', 'light', 'heavy']
+  },
+  fontZoomKeys: {
+    title: 'Font size keys',
+    keywords: [
+      'font', 'size', 'zoom', 'bigger', 'smaller', 'cmd', 'ctrl', 'plus', 'minus', 'shortcut',
+      'per terminal'
+    ]
   },
   spacing: {
     title: 'Spacing',
@@ -152,6 +164,9 @@ function GroupHeading({ children }: { children: React.ReactNode }): React.JSX.El
 }
 
 /** A secondary label between two controls sharing one row ("13 · bold 700"). */
+/** The primary modifier as the user reads it in the font-size-keys description. */
+const modKey = isMacPlatform() ? '⌘' : 'Ctrl'
+
 function Sub({ children }: { children: React.ReactNode }): React.JSX.Element {
   return <span className="text-[13px] text-muted">{children}</span>
 }
@@ -203,8 +218,8 @@ export function TerminalSection({ isActive }: { isActive: boolean }): React.JSX.
               <NumberField
                 className="w-16"
                 value={settings.fontSize}
-                min={8}
-                max={28}
+                min={TERMINAL_FONT_SIZE_MIN}
+                max={TERMINAL_FONT_SIZE_MAX}
                 onChange={(v) => update({ fontSize: v || 13 })}
               />
               <Select
@@ -233,6 +248,21 @@ export function TerminalSection({ isActive }: { isActive: boolean }): React.JSX.
                 ))}
               </Select>
             </span>
+          }
+        />
+      </SearchableRow>
+      {/* Issue #915. Behaviour, not appearance: deliberately NOT in TERMINAL_RESET_KEYS (same as
+          middle-click paste), so the section's reset button does not flip a key binding. */}
+      <SearchableRow {...ROWS.fontZoomKeys}>
+        <FieldRow
+          label="Font size keys"
+          description={`${modKey}+ / ${modKey}− change the focused terminal's own font size; ${modKey}0 puts it back on the size above. Off: those keys do what they did before (${modKey}0 zooms the canvas to 100%).`}
+          control={
+            <Switch
+              checked={settings.terminalFontZoomKeys}
+              onChange={(v) => update({ terminalFontZoomKeys: v })}
+              ariaLabel="Font size keys"
+            />
           }
         />
       </SearchableRow>

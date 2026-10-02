@@ -110,8 +110,10 @@ interface Runners {
      *  master rather than guessed from a global timestamp. */
     pid?: () => number | undefined
   }
-  /** Run a one-shot ssh, resolving its stdout + exit code; optional stdin written to the child. */
-  run: (args: string[], stdin?: string) => Promise<{ code: number; stdout: string }>
+  /** Run a one-shot ssh, resolving its stdout + exit code; optional stdin written to the child.
+   *  `timeoutMs` (default 15 s) bounds the child; only a caller whose remote command legitimately
+   *  runs longer passes more (Share with team's verbs, up to 75 s for resume). */
+  run: (args: string[], stdin?: string, timeoutMs?: number) => Promise<{ code: number; stdout: string }>
   /** Run a one-shot ssh with a hard timeout, OUTSIDE the per-master child gate, and say only
    *  whether it finished in time. Used by the wake-from-sleep liveness probe: after a sleep the
    *  gate is often full of children hung on the dead master, and a probe queued behind them would
@@ -1524,8 +1526,8 @@ export class SshProjectManager {
    * search read over the SAME ControlMaster. `args` are full ssh child args (e.g. from
    * `childArgs(conn, controlPath, cmd)`); returns `{ code, stdout }`.
    */
-  sshRun(args: string[], stdin?: string): Promise<{ code: number; stdout: string }> {
-    return this.r.run(args, stdin)
+  sshRun(args: string[], stdin?: string, opts?: { timeoutMs?: number }): Promise<{ code: number; stdout: string }> {
+    return this.r.run(args, stdin, opts?.timeoutMs)
   }
 
   /**
@@ -2879,12 +2881,12 @@ export function initSshProject(
     // `MaxSessions` every excess child silently becomes a full login — enough of those at once
     // and sshd's `MaxStartups` resets some outright, which the app sees as a dropped terminal.
     // Mux control commands and the terminals themselves are never queued (see ssh-child-gate.ts).
-    run: (args, stdin) =>
+    run: (args, stdin, timeoutMs) =>
       sshChildGate.run(args, () =>
         native
           ? // Still gated: sshd's MaxSessions bounds channels on ONE connection just as it bounds
             // mux clients on a ControlMaster.
-            runSshArgv(nativeMux(), args, { stdin, timeoutMs: 15000 }).then((r) => ({
+            runSshArgv(nativeMux(), args, { stdin, timeoutMs: timeoutMs ?? 15000 }).then((r) => ({
               code: r.timedOut ? 1 : (r.code ?? 1),
               stdout: r.stdout.toString('utf-8')
             }))
@@ -2900,7 +2902,7 @@ export function initSshProject(
           const child = execFile(
             ssh,
             args,
-            { timeout: 15000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, ...appSshAgent.env() } },
+            { timeout: timeoutMs ?? 15000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, ...appSshAgent.env() } },
             (err, stdout) =>
               resolve({ code: err ? ((err as { code?: number }).code ?? 1) : 0, stdout: stdout ?? '' })
           )

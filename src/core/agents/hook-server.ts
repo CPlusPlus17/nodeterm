@@ -122,15 +122,37 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   ]).finally(() => clearTimeout(timer))
 }
 
-// Parses application/x-www-form-urlencoded bodies (what the managed script posts).
+const CP1252 = new TextDecoder('windows-1252')
+
+/**
+ * `decodeURIComponent`, except it never throws. On Windows the shims run under Git Bash but post
+ * through a NATIVE curl, which reads its argv in the ANSI code page: `--data-urlencode "arg.prompt=é"`
+ * goes out as `%E9`, not `%C3%A9`. `decodeURIComponent` rejects that with a URIError, which escaped
+ * the request handler and came back as an empty 204 — the shim exited 1 with no message, and every
+ * `open-claude --prompt` holding one accented letter failed silently. Bytes that are not UTF-8 are
+ * read as windows-1252, the code page that produced them; characters outside it were already lost
+ * to `?` by the argv conversion, before the request existed.
+ */
+function decodeFormComponent(s: string): string {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    const latin1 = s.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    return CP1252.decode(Buffer.from(latin1, 'latin1'))
+  }
+}
+
+// Parses application/x-www-form-urlencoded bodies (what the managed script posts). Field names come
+// from the request, so they go into a Map and out through `Object.fromEntries`, which defines own
+// properties: a `__proto__` field is an ordinary key, never a prototype write.
 function parseForm(body: string): Record<string, string> {
-  const out: Record<string, string> = {}
+  const out = new Map<string, string>()
   for (const pair of body.split('&')) {
     const i = pair.indexOf('=')
     if (i < 0) continue
-    out[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1).replace(/\+/g, ' '))
+    out.set(decodeFormComponent(pair.slice(0, i)), decodeFormComponent(pair.slice(i + 1).replace(/\+/g, ' ')))
   }
-  return out
+  return Object.fromEntries(out)
 }
 
 /**
@@ -147,10 +169,11 @@ export function parseControlBody(
 ): { nodeId: string; args: Record<string, string>; requestId?: string } {
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const form = parseForm(raw)
-    const args: Record<string, string> = {}
-    for (const [k, v] of Object.entries(form)) {
-      if (k.startsWith('arg.') && k.length > 4) args[k.slice(4)] = v
-    }
+    const args: Record<string, string> = Object.fromEntries(
+      Object.entries(form)
+        .filter(([k]) => k.startsWith('arg.') && k.length > 4)
+        .map(([k, v]) => [k.slice(4), v])
+    )
     // `requestId` is the id the shim generates once per RUN (not the caller's `--request-id`,
     // which arrives as `arg.request-id`): what lets the shim's own endpoint-walk re-post be
     // recognised as the same call. See control-request-ledger.ts.
@@ -312,6 +335,23 @@ export { REPORT_OUTCOME_CONTROL_REFUSAL }
 /** The flat refusal for an unverified `issues` / `prs` read (core/github/control-read.ts). */
 export const GITHUB_READ_CONTROL_REFUSAL = 'GitHub lane read refused.'
 
+/**
+ * Issue #1088: appended to a verified-only refusal when THIS INSTANCE has no node-auth secret, so no
+ * session on the machine can ever be `verified`. The flat refusals deliberately carry no per-node
+ * diagnosis (advice to a prober), but this is not one: it is a fact about the instance that no
+ * caller can change, and leaving it out made the refusal permanent AND causeless — the reporter
+ * had only a `console.warn` in a log they could not see. It names no token and no restart, because
+ * neither helps; the cause is fixed on the machine, then NodeTerm is restarted.
+ */
+export function identityUnavailableNote(reason: string | null): string {
+  const why = reason ? ` (${reason.replace(/\s+/g, ' ').trim().slice(0, 200)})` : ''
+  return (
+    `Node identity is unavailable in this NodeTerm instance: it could not load its node-identity key at startup${why}, ` +
+    'so no session on this machine can be verified and restarting a node will not help. ' +
+    'Fix the cause and restart NodeTerm; details are in its log under [node-identity].'
+  )
+}
+
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-terminal') return 'Terminal command refused.'
@@ -433,6 +473,8 @@ export class HookServer {
   private endpointPath = ''
   private publishedEndpoint = ''
   private nodeAuthSecret: Buffer | null = null
+  /** Why the shell could not arm a secret, when it tried and failed (see `setNodeIdentityUnavailable`). */
+  private nodeIdentityUnavailableReason: string | null = null
   /**
    * `settings.hookIdentityStrict`, read LIVE (a getter, not a snapshot) so flipping it in Settings
    * takes effect on the next request rather than the next launch. `undefined` — the default, and
@@ -611,6 +653,17 @@ export class HookServer {
   setNodeAuthSecret(secret: Uint8Array): void {
     if (secret.byteLength < 32) throw new Error('Invalid NodeTerm node-auth secret')
     this.nodeAuthSecret = Buffer.from(secret)
+    this.nodeIdentityUnavailableReason = null
+  }
+
+  /**
+   * The shell's boot-time arming FAILED (issue #1088). Recorded so a verified-only refusal can say
+   * the cause is the instance, not the node — see `identityUnavailableNote`. Both shells call it
+   * from the catch around their arming; a later successful `setNodeAuthSecret` supersedes it.
+   */
+  setNodeIdentityUnavailable(reason: unknown): void {
+    this.nodeIdentityUnavailableReason =
+      reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'unknown error'
   }
 
   /** True once a valid secret is set; false before, and after a failed load (nothing was set). The
@@ -628,6 +681,7 @@ export class HookServer {
   /** Test seam only: this server is a module singleton, so its secret otherwise leaks across tests. */
   clearNodeAuthSecretForTests(): void {
     this.nodeAuthSecret = null
+    this.nodeIdentityUnavailableReason = null
   }
 
   /**
@@ -788,7 +842,9 @@ export class HookServer {
           // plain terminals keep their existing policy. Both shells and transports use this gate.
           const commandOpen = verb === 'open-terminal' && args.cmd !== undefined
           if ((requiresVerified.has(verb) || commandOpen) && verdict !== 'verified') {
-            const refusal = verifiedRefusalFor(verb)
+            const refusal = this.identityAvailable()
+              ? verifiedRefusalFor(verb)
+              : `${verifiedRefusalFor(verb)} ${identityUnavailableNote(this.nodeIdentityUnavailableReason)}`
             if (wantsText) {
               res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
               res.end(`${refusal}\n`)

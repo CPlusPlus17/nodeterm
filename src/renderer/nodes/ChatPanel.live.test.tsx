@@ -22,7 +22,7 @@ interface Pending {
   reject: (e: unknown) => void
 }
 
-const { pending, session, sendText } = vi.hoisted(() => {
+const { pending, session, sendChatPrompt } = vi.hoisted(() => {
   const pending: Pending[] = []
   const readTranscript = (
     _s: string | undefined,
@@ -32,9 +32,9 @@ const { pending, session, sendText } = vi.hoisted(() => {
     _g?: string,
     page?: ChatTranscriptPageRequest
   ) => new Promise<ChatTranscriptResult>((resolve, reject) => pending.push({ page, resolve, reject }))
-  const sendText = vi.fn(async (_id: string, _t: string) => true as const)
-  const session = { api: { chat: { readTranscript }, pty: { sendText } } }
-  return { pending, session, sendText }
+  const sendChatPrompt = vi.fn(async (_id: string, _t: string, _agent: string) => true as const)
+  const session = { api: { chat: { readTranscript }, pty: { sendChatPrompt } } }
+  return { pending, session, sendChatPrompt }
 })
 vi.mock('../session/session', () => ({ useSession: () => session }))
 
@@ -76,7 +76,7 @@ async function advance(ms: number): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers()
   pending.length = 0
-  sendText.mockClear()
+  sendChatPrompt.mockClear()
   geo.clientHeight = 400
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -107,7 +107,7 @@ describe('ChatPanel live progress', () => {
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    expect(sendText).toHaveBeenCalledOnce()
+    expect(sendChatPrompt).toHaveBeenCalledOnce()
     const row = activity()!
     expect(row.textContent).toBe('Claude Code is working…')
     expect(row.getAttribute('role')).toBe('status')
@@ -554,7 +554,7 @@ describe('ChatPanel — a sent built-in that opens a dialog in the TUI', () => {
   it('/rewind is sent, THEN the view flips to the terminal (the dialog is there, and the next Enter would answer it)', async () => {
     const onShowTerminal = vi.fn(() => {
       // The flip happens only after the pane accepted the text.
-      expect(sendText).toHaveBeenCalledWith(NODE, '/rewind')
+      expect(sendChatPrompt).toHaveBeenCalledWith(NODE, '/rewind', 'claude')
     })
     await hook('done')
     await renderWith(onShowTerminal)
@@ -570,13 +570,13 @@ describe('ChatPanel — a sent built-in that opens a dialog in the TUI', () => {
     await settle(0, { messages: [say(0, 'hello')] })
     await send('/compact')
     await send('please rewind the file')
-    expect(sendText).toHaveBeenCalledTimes(2)
+    expect(sendChatPrompt).toHaveBeenCalledTimes(2)
     expect(onShowTerminal).not.toHaveBeenCalled()
   })
 
   it('a refused send (pane not writable) never flips', async () => {
     const onShowTerminal = vi.fn()
-    sendText.mockResolvedValueOnce(false as never)
+    sendChatPrompt.mockResolvedValueOnce(false as never)
     await hook('done')
     await renderWith(onShowTerminal)
     await settle(0, { messages: [say(0, 'hello')] })

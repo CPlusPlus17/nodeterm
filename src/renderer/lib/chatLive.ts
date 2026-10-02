@@ -43,6 +43,29 @@ export function turnEndReloadCarries(s: { final: boolean; working: boolean }): b
   return !s.final || s.working
 }
 
+/**
+ * How often an open chat view re-reads the pane's screen for the agent's own dialogs
+ * (shared/agents/claude-screen.ts) — they fire no hook, so this is the only way to disable the
+ * composer while one is up. One local `tmux capture-pane` per tick.
+ */
+export const CHAT_SCREEN_POLL_MS = 2000
+
+/**
+ * Should the panel poll the pane's screen? Only for an agent whose screen we can read, only for a
+ * LOCAL pane (each read of an SSH or relay pane is a network round trip, every two seconds, for as
+ * long as the view is open — those rely on the check at send time alone), and only while no other
+ * refusal already explains the pane: a hook-reported dialog or a shell-owned pane stands the
+ * composer down on its own. `working` still polls — a harness dialog can open mid-turn.
+ */
+export function shouldPollScreen(s: {
+  readable: boolean
+  readOnly: boolean
+  remote: boolean
+  refusal: ChatSendRefusal
+}): boolean {
+  return s.readable && !s.readOnly && !s.remote && (s.refusal === null || s.refusal === 'working')
+}
+
 /** What the row at the end of the thread says; `null` = no row. */
 export type ChatActivity = 'working' | 'dialog' | null
 

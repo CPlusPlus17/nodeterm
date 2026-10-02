@@ -97,7 +97,9 @@ import { createMemoryPressureMonitor } from '../core/memory-pressure'
 import { createPtyPressureMonitor } from '../core/pty-pressure'
 import { claudeCliCaps, type ClaudeCliCaps } from '../core/claude-cli'
 import { codexCliCaps } from '../core/codex-cli'
+import { codexIdentityCaps } from '../core/codex-identity-caps'
 import type { CodexCliCaps } from '../shared/types'
+import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import { claudeConfigDirFor, registerClaudeAccountsSource } from '../core/claude-config-dir'
 import { presenceHub } from '../core/presence/hub'
 import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
@@ -117,6 +119,22 @@ import { isPremium, getStoredEntitlement } from '../core/license'
 import { getDeviceId } from '../core/device-id'
 import { createHostedService } from '../core/relay/hosted-service'
 import { startTeamAdmin } from '../core/relay/team-admin'
+import { runResume } from '../core/relay/team-resume'
+import { launchHeadless } from '../core/headless-launch'
+import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '../shared/node-pty-options'
+import { assembleResumeCommand } from '../shared/agents/launch'
+import { gatePermissionMode, type AgentId, type BuiltinAgentId } from '../shared/agents/config'
+import {
+  createWatchLinkService,
+  registerWatchLinkIpc,
+  sendToOwners,
+  shutdownWithin,
+  workspaceNodeState,
+  type WatchLinkService
+} from '../core/watch-link/service'
+import { createWatchLinkApi } from '../core/watch-link/api'
+import { WatchLinkStore } from '../core/watch-link/store'
+import { createWatchPty } from '../core/watch-link/pty-seam'
 
 // Same env-override + default as src/core/check.ts / license.ts / src/main/telemetry.ts — each
 // shell derives it locally rather than sharing an import (src/server must not import src/main).
@@ -124,6 +142,8 @@ const API_BASE = process.env.NODETERM_API_BASE || 'https://api.nodeterm.dev'
 // The hosted team relay's wss endpoint. Same env override + default as the desktop's RELAY_URL
 // (src/main/remote/host-service.ts), derived locally for the same reason as API_BASE.
 const RELAY_URL = process.env.NODETERM_RELAY_URL || 'wss://relay.nodeterm.dev'
+/** How long close() waits for the live-link service's last write (the desktop races 1.5 s). */
+const WATCH_LINKS_STOP_MS = 2_000
 
 /**
  * App version fed to ServerPlatform (surfaced to the renderer as the desktop app's
@@ -704,6 +724,8 @@ export async function startServer(
     await armServerNodeIdentity(hookServer, () => workspaceStore.persistedCanvases())
   } catch (error) {
     console.warn('[node-identity] no secret — hook identity unavailable, running legacy', error)
+    // Issue #1088: a verified-only refusal must be able to say the cause is this instance.
+    hookServer.setNodeIdentityUnavailable(error)
   }
 
   // The Server Edition has the same local app-server, signed node tokens, and persistent canvas
@@ -735,6 +757,10 @@ export async function startServer(
       (project) => platform.broadcast(IPC.workspaceServerChange, project)
     )
   })
+  // Live links (src/core/watch-link/service.ts). Assigned after the hosted-team block below; declared
+  // here because the onPersist closure runs at the boot load just below (a later `const` would be a
+  // TDZ throw inside that load, which it would then report as a failed load).
+  let watchLinks: WatchLinkService | null = null
   // Every load()/save() is a canvas change as far as links are concerned: a browser drawing a
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
@@ -742,6 +768,7 @@ export async function startServer(
     workspaceWatcher.sync()
     contextLink.refresh()
     refreshNodeTokens()
+    watchLinks?.onWorkspaceChanged()
   }
   // Nothing has read the workspace index yet — the desktop gets its first load from the renderer,
   // and this shell may never have one. Read it once so links are live before any browser connects.
@@ -966,7 +993,59 @@ export async function startServer(
   // unix socket, or Windows, disables administration — it must not take the rest of the Server
   // Edition down with it.
   let otherServerHere = false
-  const teamAdmin = await startTeamAdmin(config.dataDir, hosted).catch((err: unknown) => {
+  // One set for the whole process: the nodes a `team resume` is launching right now (runResume).
+  const resumesInFlight = new Set<string>()
+  const teamAdmin = await startTeamAdmin(config.dataDir, hosted, {
+    // `team bootstrap`: adopt the folder into THIS core's workspace (saved before it is shared, so
+    // the canvas authority can read it). The server runs as the SSH login user, so its home is the
+    // one an SSH project's `~` cwds meant.
+    adoptFolder: (cwd) => workspaceStore.adoptFolder(cwd, { home: os.homedir() }),
+    // `team resume`: restart a handed-over agent on THIS core (its hook env reports to this core,
+    // so every teammate sees its status). Same launch primitive and the same release rule as the
+    // desktop's headless start: persistent tmux required, the synthetic client released after.
+    resume: (req) =>
+      runResume(
+        {
+          inFlight: resumesInFlight,
+          loadProject: async (id) => (await workspaceStore.load({ sideline: false })).projects.find((p) => p.id === id) ?? null,
+          sessionVerdict: (nodeId) => ptyManager.sessionVerdict(nodeId),
+          command: async (entry, node) => {
+            const settings = settingsStore.get()
+            const permissionMode =
+              entry.permissionMode && entry.agentId === 'claude'
+                ? gatePermissionMode(entry.permissionMode, (await claudeCliCaps().catch(() => null))?.autoPermissionMode === true)
+                : entry.permissionMode
+            const codexCaps = entry.agentId === 'codex' ? await codexCliCaps().catch(() => UNKNOWN_CODEX_CLI_CAPS) : UNKNOWN_CODEX_CLI_CAPS
+            const sharedIdentity = entry.agentId === 'codex' ? await codexIdentityCaps().then((c) => c.shared).catch(() => false) : false
+            return assembleResumeCommand(
+              {
+                agentId: entry.agentId as AgentId,
+                sessionId: entry.sessionId,
+                permissionMode,
+                model: node.agentModel,
+                launchCmdOverride: settings.agentLaunchCommands?.[entry.agentId as BuiltinAgentId],
+                sharedIdentity,
+                approvalCaps: { codexApprovalValues: codexCaps.approvalValues, codexNoDaemon: codexCaps.noDaemon ?? null }
+              },
+              process.env
+            ).command
+          },
+          launch: (project, node, command) =>
+            launchHeadless(
+              {
+                persistentSpawnAvailable: () => ptyManager.persistentSpawnAvailable(),
+                createHeadless: (o) => ptyManager.createHeadless(o),
+                paneCommand: (k) => ptyManager.paneCommand(k),
+                writeHeadless: (k, d) => ptyManager.writeHeadless(k, d),
+                onOutput: (k, cb) => ptyManager.onOutput(k, cb),
+                releaseHeadless: (k) => ptyManager.releaseHeadless(k)
+              },
+              { ptyOptions: localNodePtyOptions(project, node, { cols: HEADLESS_COLS, rows: HEADLESS_ROWS }), command, release: true, requirePersistent: true }
+            )
+        },
+        req
+      )
+  }).catch((err: unknown) => {
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     return { close: async (): Promise<void> => {} }
@@ -1012,6 +1091,41 @@ export async function startServer(
     authority.sharedChanged()
   }
 
+  // Live links (docs/live-links.md): the SAME core service the desktop registers, over the real seams.
+  // This edition has no license layer yet (`initLicense` is desktop-only), so the service is registered
+  // UNSUPPORTED with no entitlement (controller ruling R43): create answers `unsupported` — the browser
+  // shows "Live links need a Pro license on this server — not available in the Server Edition yet",
+  // never an Upgrade button — list answers [], and nothing is loaded, hosted or revoked. A server
+  // license layer (a named follow-up) changes `entitlement` and drops `unsupported`, nothing else.
+  // Headless, no keychain: the links file is a 0600 file in the data dir (spec D8). The workspace
+  // index was read above, so there is no load to wait for.
+  watchLinks = createWatchLinkService({
+    api: createWatchLinkApi({ apiBase: API_BASE }),
+    relayUrl: RELAY_URL,
+    store: new WatchLinkStore({ file: path.join(config.dataDir, 'watch-links.json') }),
+    entitlement: () => null,
+    relayAllowed: () => true,
+    nodeState: (nodeId) => workspaceNodeState(workspaceStore, nodeId),
+    clients: {
+      attach: (sink) => platform.attach(sink, { quiet: true, selfPaced: true }),
+      // The per-client drops a departed client is owed (its pty subscriptions), then the sink.
+      detach: (id) => {
+        dropUiClient(id)
+        platform.detach(id)
+      }
+    },
+    // No SSH-project manager here: a node of an SSH project is joinable only while this core holds
+    // its session live (join-only never spawns), and never through the local tmux.
+    pty: createWatchPty(ptyManager, (nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) ? { requireRemote: true } : {})),
+    emit: (channel, ...args) => sendToOwners(platform, channel, ...args),
+    unsupported: true
+  })
+  registerWatchLinkIpc(platform, watchLinks)
+  // Two servers on one data dir would host (and revoke) each other's links.
+  if (otherServerHere) {
+    console.error('Live links: NOT started — another nodeterm server owns this data directory.')
+  } else void watchLinks.init()
+
   // Headless notification host: every core service above (incl. the loopback hook server, which
   // is its own listener and MUST run) is booted, but we bind NO public HTTP/WS listener — no
   // renderer serving, no auth surface, no open port. The granted push senders reach the phone over
@@ -1028,6 +1142,9 @@ export async function startServer(
         // pty subscriptions) while the pty layer is still up. Same two lines in the serving close().
         await teamAdmin.close()
         hosted.stop()
+        // Stop the live-link hosts while the pty layer is still up (their viewers leave cleanly),
+        // bounded: the links file's last write must not hold the close on a stalled disk.
+        await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
         // Detach PTY clients — tmux sessions keep running (Phase 1 contract).
         sessionReaper.stop()
         pressure.stop()
@@ -1092,6 +1209,8 @@ export async function startServer(
       // headless close() above).
       await teamAdmin.close()
       hosted.stop()
+      // Stop the live-link hosts while the pty layer is still up (see the headless close() above).
+      await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
       // End the browser WebSockets next, BEFORE the canvas authority stops (N3). Once it has stopped
       // and been detached, a save from a still-attached tab is written un-overlaid, over its final
       // flush. Ending the sockets stops new saves; the `idle()` below lets the ones already queued

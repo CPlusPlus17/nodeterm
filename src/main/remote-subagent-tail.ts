@@ -14,6 +14,7 @@
 // a capped read lands mid-multibyte routinely, and only base64 keeps the byte accounting exact.
 import { type BrowserWindow } from 'electron'
 import { IPC } from '../shared/ipc'
+import { subagentReplay } from '../core/subagent-replay'
 import { formatSubagentChunk, splitCompleteLines, SUBAGENT_READ_CAP } from '../core/subagent-tail'
 import type { RemoteFile, RemoteFileRef } from './remote-ssh/remote-file'
 
@@ -40,7 +41,9 @@ export function createRemoteSubagentTail(win: BrowserWindow, remoteFile: RemoteF
   const resumeAt = new Map<string, { path: string; offset: number }>()
 
   const send = (toolUseId: string, chunk: string): void => {
-    if (chunk && !win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
+    if (!chunk) return
+    subagentReplay.touch(toolUseId) // a streaming subagent is alive: keep it in the reload replay
+    if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
   }
 
   // One async read+stream pass. Fail-open: RemoteFile returns empty on error. The `reading`

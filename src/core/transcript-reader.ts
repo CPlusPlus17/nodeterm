@@ -136,6 +136,38 @@ export function isHiddenMetaRecord(o: {
   return o.type === 'user' && o.isMeta === true && o.promptSource == null && o.origin == null && o.turnOrigin == null
 }
 
+/**
+ * A prompt the user submitted while a turn was running. Claude Code never records it as a `user`
+ * record: it hands it to the model at the next tool boundary of the SAME turn, as an `attachment`
+ * record of type `queued_command` (measured, 2.1.281–2.1.285), so the chat view lost it. Most
+ * queued attachments are NOT the user's words: on the machine this was measured on, 105 of 482 were
+ * typed prompts; the rest were task notifications (`commandMode:"task-notification"`) and peer or
+ * coordinator messages (`isMeta`). Those stay hidden, as before. A typed prompt is
+ * `commandMode:"prompt"`, not `isMeta`, with an `origin` that is absent or `human`. Returns its
+ * text (a string prompt, or the text blocks of an array prompt joined by `\n`), else null.
+ */
+export function queuedHumanPrompt(o: { type?: unknown; attachment?: unknown }): string | null {
+  if (o.type !== 'attachment' || !o.attachment || typeof o.attachment !== 'object') return null
+  const a = o.attachment as { type?: unknown; commandMode?: unknown; isMeta?: unknown; origin?: unknown; prompt?: unknown }
+  if (a.type !== 'queued_command' || a.commandMode !== 'prompt' || a.isMeta === true) return null
+  const origin = originKind(a.origin)
+  if (a.origin != null && origin !== 'human') return null
+  const text =
+    typeof a.prompt === 'string'
+      ? a.prompt
+      : Array.isArray(a.prompt)
+        ? a.prompt
+            .map((b: unknown) =>
+              b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string'
+                ? (b as { text: string }).text
+                : ''
+            )
+            .filter((t) => t !== '')
+            .join('\n')
+        : ''
+  return text.trim() === '' ? null : text
+}
+
 export function classifyLocalCommand(content: string): LocalCommandRecord | null {
   const tags = tagSequence(content)
   if (!tags) return null
@@ -388,6 +420,9 @@ function linesFrom(raw: string, opts?: ChatParseOptions): TranscriptLine[] {
       const s = summarizeResult(cmd.text)
       if (s) out.push({ role: 'tool', text: s })
     } else out.push({ role: 'user', text: userTextOf(content, opts) })
+  } else {
+    const queued = queuedHumanPrompt(o)
+    if (queued !== null) out.push({ role: 'user', text: userTextOf(queued, opts) })
   }
   return out
 }
@@ -600,6 +635,11 @@ function parseChatRecords(
       } else {
         push({ role: 'user', parts: [{ kind: 'text', text: userTextOf(content, opts) }] }, offset)
       }
+    } else {
+      // A prompt typed while a turn was running (see `queuedHumanPrompt`), in the place the model
+      // received it.
+      const queued = queuedHumanPrompt(o)
+      if (queued !== null) push({ role: 'user', parts: [{ kind: 'text', text: userTextOf(queued, opts) }] }, offset)
     }
   }
   const out: ChatRecordsOut = { messages, unmatched }
