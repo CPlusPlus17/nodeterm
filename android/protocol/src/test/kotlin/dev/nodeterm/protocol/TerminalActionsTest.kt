@@ -185,6 +185,97 @@ class TerminalActionsTest {
     }
 
     @Test
+    fun `momentum cancellation preserves admitted input and reports while allowing new direction`() = runBlocking {
+        val stream = Stream()
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            assertTrue(actions.write("typed"))
+            assertTrue(actions.scroll(true, 45))
+            assertTrue(actions.report("reply-one"))
+            assertTrue(actions.scroll(false, 9))
+            assertTrue(actions.report("reply-two"))
+            assertTrue(actions.cancelScroll())
+            assertTrue(actions.cancelScroll(), "Stopping an already stopped gesture is harmless")
+            assertTrue(actions.scroll(false, 7))
+            yield()
+            assertEquals(listOf("input:typed", "input:reply-one", "input:reply-two", "scroll:false:7"), stream.log)
+        } finally { actions.close() }
+    }
+
+    @Test
+    fun `momentum cancellation waits for one in flight scroll and preserves report order`() = runBlocking {
+        val stream = Stream()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        stream.onScroll = { _, _ -> if (!started.isCompleted) { started.complete(Unit); release.await() } }
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            assertTrue(actions.scroll(true, 65))
+            withTimeout(2_000) { started.await() }
+            assertTrue(actions.report("reply-before"))
+            assertTrue(actions.scroll(false, 13))
+            assertTrue(actions.report("reply-after"))
+            assertTrue(actions.cancelScroll())
+            assertTrue(actions.scroll(false, 6))
+            assertTrue(actions.report("new-reply"))
+            yield()
+            assertEquals(listOf("scroll:true:20"), stream.log, "Stopping momentum does not cancel or overtake the awaited call")
+            release.complete(Unit)
+            yield()
+            assertEquals(listOf("scroll:true:20", "input:reply-before", "input:reply-after", "scroll:false:6", "input:new-reply"), stream.log)
+        } finally { actions.close() }
+    }
+
+    @Test
+    fun `momentum cancellation keeps in flight and input budgets charged`() = runBlocking {
+        val stream = Stream()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        stream.onScroll = { _, _ -> if (!started.isCompleted) { started.complete(Unit); release.await() } }
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            assertTrue(actions.scroll(true, 320))
+            withTimeout(2_000) { started.await() }
+            val reply = "r".repeat(1024 * 1024)
+            assertTrue(actions.report(reply))
+            assertTrue(actions.cancelScroll())
+            assertTrue(actions.scroll(false, 300), "Only the awaited twenty remain charged after cancellation")
+            assertFalse(actions.scroll(false, 1), "Stopping momentum cannot free the in-flight budget")
+            assertFalse(actions.report("overflow"), "Accepted reports retain their character budget")
+            assertFalse(actions.write("overflow"))
+            release.complete(Unit)
+            yield()
+            assertEquals("scroll:true:20", stream.log[0])
+            assertEquals("input:$reply", stream.log[1])
+            assertEquals(300, stream.log.drop(2).sumOf { it.substringAfterLast(':').toInt() })
+            assertTrue(actions.scroll(true, 320), "Completed work releases its budget after cancellation too")
+        } finally { actions.close() }
+    }
+
+    @Test
+    fun `momentum cancellation cannot revive a retired obsolete or cancelled viewer`() = runBlocking {
+        val stream = Stream()
+        var current = true
+        val actions = TerminalActions(this, stream) { current }
+        assertTrue(actions.scroll(true, 9))
+        current = false
+        assertFalse(actions.cancelScroll())
+        yield()
+        assertTrue(stream.log.isEmpty())
+        current = true
+        assertFalse(actions.cancelScroll(), "An obsolete drain retires rather than being revived")
+        actions.close()
+        assertFalse(actions.cancelScroll())
+        val owner = Job()
+        val cancelled = TerminalActions(CoroutineScope(coroutineContext + owner), stream) { true }
+        owner.cancel()
+        assertFalse(cancelled.cancelScroll())
+        cancelled.close()
+        owner.join()
+        assertTrue(stream.log.isEmpty())
+    }
+
+    @Test
     fun `close cancels suspended RPC and clears pending input and scroll permanently`() = runBlocking {
         val stream = Stream()
         val started = CompletableDeferred<Unit>()

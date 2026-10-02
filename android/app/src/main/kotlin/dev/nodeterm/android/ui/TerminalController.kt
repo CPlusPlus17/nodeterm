@@ -304,6 +304,14 @@ class TerminalController(
             if (!input.scroll(up, notches)) inputBusy()
         }
 
+        /** A new touch or page/input barrier stops unsent momentum without typing into the pane. */
+        @JavascriptInterface
+        fun onScrollStop() {
+            val input = actions ?: return
+            if (!page.isCurrent(gen)) return
+            input.cancelScroll()
+        }
+
         /** xterm mouse/focus/protocol reports preserve a pending gesture and an armed Ctrl. */
         @JavascriptInterface
         fun onReport(data: String) {

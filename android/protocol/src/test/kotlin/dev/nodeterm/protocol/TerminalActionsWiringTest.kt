@@ -68,6 +68,18 @@ class TerminalActionsWiringTest {
     }
 
     @Test
+    fun `a page scroll stop cancels only its captured viewer queue without sending input`() {
+        val source = controller()
+        assertTrue(Regex("""@JavascriptInterface\s+fun onScrollStop\(""").containsMatchIn(source))
+        val stop = AppSourcePins.blockAfter(source, "fun onScrollStop()")
+        AppSourcePins.assertInOrder(stop, "val input = actions ?: return", "if (!page.isCurrent(gen)) return", "input.cancelScroll()")
+        assertFalse(stop.contains(".write("), "Stopping momentum must not type a synthetic key")
+        assertFalse(stop.contains(".close("), "The accepted viewer remains attached")
+        assertFalse(stop.contains("launch"), "A stop must be ordered with JavaBridge callbacks")
+        assertFalse(stop.contains("main.post"), "Do not delay a stop behind main-thread work")
+    }
+
+    @Test
     fun `native input cancels page momentum before the queue write and rechecks its stream`() {
         val source = controller()
         val raw = AppSourcePins.blockAfter(source, "fun raw(data:")

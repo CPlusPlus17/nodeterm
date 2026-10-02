@@ -107,6 +107,16 @@ class TerminalActions(
     /** Automatic emulator replies (DSR/DA etc.) are ordered writes, never gesture barriers. */
     fun report(data: String): Boolean = addInput(data, cancelScroll = false)
 
+    /**
+     * A new touch interrupts old momentum without discarding accepted input or emulator replies.
+     * The single already reserved/awaited scroll is allowed to finish; later movement is new work.
+     */
+    fun cancelScroll(): Boolean = synchronized(lock) {
+        if (closed || !drain.isActive || !isCurrent()) return false
+        discardScrollLocked()
+        true
+    }
+
     private fun addInput(data: String, cancelScroll: Boolean): Boolean = synchronized(lock) {
         if (closed || !drain.isActive || !isCurrent()) return false
         if (data.isEmpty()) return true
