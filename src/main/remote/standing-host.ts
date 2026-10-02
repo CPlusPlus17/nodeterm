@@ -11,7 +11,9 @@
 //     reconnect before expiry, and reconnect with bounded backoff on socket close;
 //   - uses PIN-ONCE approval: the first connect from a given phone (its box public key) prompts
 //     the host human via the shared SAS dialog; on approval the pubkey is pinned, so later
-//     connects auto-approve silently;
+//     connects auto-approve silently. A paired phone needs no dialog: its key is pinned at the scan
+//     when the pairing minted a relay leg (audit A07), and otherwise on its first handshake here while
+//     its pairing, which recorded the key, is still listed (`pinPairedPhone`, A07-late);
 //   - is cut on REVOCATION: forgetting a phone unpins its key and then closes the sessions it has
 //     open (`killStandingHostSessionsByPeerKey`, called by peer-revoker.ts).
 //
@@ -141,6 +143,15 @@ export function killStandingHostSessionsByPeerKey(peerKeyB64: string): number {
   return closed
 }
 
+export interface StandingHostOptions {
+  /**
+   * An unpinned phone completed the handshake: pin its key and answer true when a listed pairing
+   * recorded it (pairing-service.ts `approvePairedRelayKey`, A07-late), so the handshake is approved
+   * without the SAS dialog. False or a rejection ⇒ the dialog, as before. Absent ⇒ always the dialog.
+   */
+  pinPairedPhone?(boxPublicKeyB64: string): Promise<boolean>
+}
+
 /**
  * Wire the standing phone host. Idempotent to construct once; `setEnabled` / `syncFromSettings`
  * reconcile the live connection against (enabled && relay-allowed).
@@ -150,7 +161,8 @@ export function initStandingHost(
   ptyManager: PtyManager,
   getSettings: () => Settings,
   listProjects: () => Promise<string> = async () => '',
-  bridge: HostBridgeDeps = {}
+  bridge: HostBridgeDeps = {},
+  options: StandingHostOptions = {}
 ): StandingHost {
   initHostCanvasHub()
 
@@ -294,9 +306,24 @@ export function initStandingHost(
       s.approve() // pinned device → auto-approve silently
       return
     }
+    if (!pub || !s.sas()) return // never offer consent without a verified handshake identity
+    // A paired phone whose key its pairing recorded but did not pin (remote access was off at the
+    // scan and the phone adopted the relay later over SSH, or the pin at the scan failed): the scan
+    // was the approval, so pin it now instead of asking a desk that is usually empty (A07-late).
+    // The check runs inside the pin store's queue, so a revoke racing it cannot be undone by it.
+    if (options.pinPairedPhone) {
+      const pinned = await options.pinPairedPhone(pub).catch((err) => {
+        console.warn('[standing-host] could not check the paired phone keys:', err)
+        return false
+      })
+      if (!pool.has(pooled)) return // torn down (revoked, stopped) while that was in flight
+      if (pinned) {
+        s.approve()
+        return
+      }
+    }
     // Keep the handshake-bound consent record after a browse socket closes (#819). The
     // human may still compare its SAS and pin this exact identity until the bounded deadline.
-    if (!pub || !s.sas()) return // never offer consent without a verified handshake identity
     pooled.approvalPub = pub
     pooled.approvalId = approvals.add(pub)
     send(IPC.remoteHostPeerPending, {

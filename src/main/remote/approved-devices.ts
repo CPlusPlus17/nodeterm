@@ -10,7 +10,9 @@ import { app } from 'electron'
 import { writeFileAtomic } from '../../core/fs-atomic'
 import {
   emptyApprovedDevices,
+  isPinned,
   parseApprovedDevices,
+  pinDevice,
   type ApprovedDevices
 } from './approved-devices-core'
 
@@ -49,11 +51,39 @@ export async function saveApprovedDevices(store: ApprovedDevices): Promise<void>
 
 // Queue the WHOLE read/modify/write, not just rename: otherwise concurrent approvals lose pins,
 // and an approval racing a revoke can resurrect the removed key from an obsolete snapshot.
+// The update may be async (pinApprovedDeviceIf): the queue holds until it settles.
 let updateTail: Promise<void> = Promise.resolve()
-export function updateApprovedDevices(update: (store: ApprovedDevices) => ApprovedDevices): Promise<void> {
+export function updateApprovedDevices(
+  update: (store: ApprovedDevices) => ApprovedDevices | Promise<ApprovedDevices>
+): Promise<void> {
   const next = updateTail.then(async () => {
-    await saveApprovedDevices(update(await loadApprovedDevices()))
+    await saveApprovedDevices(await update(await loadApprovedDevices()))
   })
   updateTail = next.catch(() => {}) // one failed save must not poison later attempts
   return next
+}
+
+/**
+ * Pin `pubkeyB64` only if `allowed()` still answers true, asked INSIDE the queue, and say whether it
+ * is pinned afterwards (A07-late: the standing host pinning a paired phone's recorded relay key).
+ *
+ * The question is asked in the queue, not before it, because the answer can be withdrawn: revoking
+ * a paired phone removes its agent.json entry and only THEN queues its unpin. Asked before queueing,
+ * a "still paired" read could land just before that removal while its pin landed just after the
+ * unpin, resurrecting the key the revoke had just removed. Asked inside, it runs either before the
+ * unpin (which then removes the pin) or after the removal (which it then sees). Already pinned ⇒
+ * true without asking. A rejected `allowed()` or save rejects; the caller falls back to the dialog.
+ */
+export async function pinApprovedDeviceIf(pubkeyB64: string, allowed: () => Promise<boolean>): Promise<boolean> {
+  let pinned = false
+  await updateApprovedDevices(async (store) => {
+    if (isPinned(store, pubkeyB64)) {
+      pinned = true
+      return store
+    }
+    if (!pubkeyB64 || !(await allowed())) return store
+    pinned = true
+    return pinDevice(store, pubkeyB64)
+  })
+  return pinned
 }

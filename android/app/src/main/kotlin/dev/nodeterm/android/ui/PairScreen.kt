@@ -169,16 +169,11 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                     graph.hosts.remove(it.id)
                                 }
                                 graph.hosts.upsert(host)
-                                if (result.relayPinned) graph.hosts.setRelayApproved(host.id, true)
-                                Toast.makeText(
-                                    context,
-                                    when {
-                                        result.relayDeviceToken == null -> "Paired. This phone reaches the computer on your network."
-                                        result.relayPinned -> "Paired, and approved for remote access."
-                                        else -> "Paired. The first time you connect from outside your network, approve this phone on the computer."
-                                    },
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                // Also with no relay leg yet (A07-late): the computer approves this phone's
+                                // key on its first relay connect, so once a late adoption gives it a leg the
+                                // background check may use it without raising a dialog.
+                                if (result.relayApproved) graph.hosts.setRelayApproved(host.id, true)
+                                Toast.makeText(context, result.pairedNotice(), Toast.LENGTH_LONG).show()
                                 nav.replaceAll(Route.Hosts)
                                 nav.push(Route.Host(host.id))
                             } catch (e: kotlinx.coroutines.CancellationException) {

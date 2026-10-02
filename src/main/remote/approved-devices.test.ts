@@ -15,7 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, promises as fs, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
-import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from './approved-devices'
+import {
+  loadApprovedDevices,
+  pinApprovedDeviceIf,
+  saveApprovedDevices,
+  updateApprovedDevices
+} from './approved-devices'
 import { pinDevice, unpinDevice } from './approved-devices-core'
 import type { ApprovedDevices } from './approved-devices-core'
 
@@ -136,5 +141,69 @@ describe('approved-devices atomic write', () => {
     await expect(loadApprovedDevices()).resolves.toEqual(pinned)
     // A unique tmp name is never written again, so only this save's own cleanup collects it.
     expect(await tmpsLeft()).toEqual([])
+  })
+})
+
+describe('pinApprovedDeviceIf: the late pin of a paired phone (audit A07-late)', () => {
+  beforeEach(() => {
+    userData = mkdtempSync(path.join(tmpdir(), 'nt-approved-'))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  it('pins only when the check says so, and says whether the key is pinned', async () => {
+    await saveApprovedDevices({ pubkeys: ['other'] })
+    expect(await pinApprovedDeviceIf('phone', async () => false)).toBe(false)
+    expect(await loadApprovedDevices()).toEqual({ pubkeys: ['other'] })
+    expect(await pinApprovedDeviceIf('phone', async () => true)).toBe(true)
+    expect(await loadApprovedDevices()).toEqual({ pubkeys: ['other', 'phone'] })
+  })
+
+  it('an already pinned key is true without asking, and an empty key is never pinned', async () => {
+    await saveApprovedDevices({ pubkeys: ['phone'] })
+    const asked = vi.fn(async () => false)
+    expect(await pinApprovedDeviceIf('phone', asked)).toBe(true)
+    expect(asked).not.toHaveBeenCalled()
+    expect(await pinApprovedDeviceIf('', async () => true)).toBe(false)
+    expect(await loadApprovedDevices()).toEqual({ pubkeys: ['phone'] })
+  })
+
+  it('a check that throws rejects and changes nothing; the queue goes on', async () => {
+    await saveApprovedDevices({ pubkeys: ['other'] })
+    await expect(
+      pinApprovedDeviceIf('phone', async () => {
+        throw new Error('fixture')
+      })
+    ).rejects.toThrow('fixture')
+    await updateApprovedDevices((s) => pinDevice(s, 'next'))
+    expect(await loadApprovedDevices()).toEqual({ pubkeys: ['other', 'next'] })
+  })
+
+  it('a revoke racing the check never leaves the key pinned', async () => {
+    // A revoke removes the phone's agent.json entry (`paired = false` here) and only then queues its
+    // unpin. The check reads `paired` when it starts and answers when `release` fires, after the
+    // revoke has queued its unpin. Asked inside the queue, the pin lands before the unpin, which
+    // removes it. Asked before queueing (the race this exists to close), the pin would be queued
+    // after the unpin, from an answer the revoke had already withdrawn, and survive it.
+    let paired = true
+    let release!: () => void
+    const answered = new Promise<void>((r) => (release = r))
+    let checkStarted!: () => void
+    const started = new Promise<void>((r) => (checkStarted = r))
+    const pin = pinApprovedDeviceIf('phone', async () => {
+      const answer = paired
+      checkStarted()
+      await answered
+      return answer
+    })
+    await started
+    paired = false // the revoke's agent.json write…
+    const unpin = updateApprovedDevices((s) => unpinDevice(s, 'phone')) // …then its queued unpin
+    release()
+    await Promise.all([pin, unpin])
+    expect(await loadApprovedDevices()).toEqual({ pubkeys: [] })
   })
 })

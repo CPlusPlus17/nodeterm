@@ -91,7 +91,7 @@ vi.mock('./host-service', () => ({
 const relayHostKills = vi.fn((_pub: string) => {})
 vi.mock('./relay-host', () => ({ killRelayHostsByPeerKey: (pub: string) => relayHostKills(pub) }))
 
-import { initStandingHost, killStandingHostSessionsByPeerKey } from './standing-host'
+import { initStandingHost, killStandingHostSessionsByPeerKey, type StandingHostOptions } from './standing-host'
 import { createPeerRevoker } from './peer-revoker'
 import { IPC } from '../../shared/ipc'
 
@@ -110,7 +110,7 @@ let sender: unknown
 // Every host a test made, stopped after it even when an assertion threw first: a running host stays
 // registered for revocation, so one left running would answer a later test's revoke.
 const hosts: Array<{ stop(): void }> = []
-function makeHost() {
+function makeHost(options: StandingHostOptions = {}) {
   const win = {
     isDestroyed: () => false,
     webContents: {
@@ -118,7 +118,7 @@ function makeHost() {
     }
   }
   sender = win.webContents
-  const host = initStandingHost(win as never, {} as never, () => ({ phoneAccessEnabled: true }) as never)
+  const host = initStandingHost(win as never, {} as never, () => ({ phoneAccessEnabled: true }) as never, undefined, undefined, options)
   hosts.push(host)
   return host
 }
@@ -408,5 +408,83 @@ describe('revoking a phone cuts its live relay session (audit A07-revoke)', () =
     expect(a.closed).toBe(1)
     expect(killStandingHostSessionsByPeerKey('phone-A')).toBe(0)
     expect(a.closed).toBe(1)
+  })
+})
+
+describe('a paired phone adopting the relay late is approved by its pairing, not a dialog (audit A07-late)', () => {
+  // Pairing recorded the phone's relay key but did not pin it (no relay leg at the scan). The phone
+  // adopts the relay over SSH later, and its first handshake here is usually made away from the desk.
+  function pending(): Array<{ pub: string }> {
+    return sentToWin.filter((s) => s.channel === IPC.remoteHostPeerPending).map((s) => s.args[0] as { pub: string })
+  }
+
+  it('approves the handshake silently when the pairing record pins the key', async () => {
+    const asked: string[] = []
+    const host = makeHost({ pinPairedPhone: async (pub) => (asked.push(pub), true) })
+    host.setEnabled(true)
+    await settle()
+    sessions[0].opts.onPeerReady(sessions[0].session)
+    await settle()
+    expect(asked).toEqual(['phone-pub'])
+    expect(sessions[0].session.approve).toHaveBeenCalledOnce()
+    expect(pending()).toEqual([])
+    host.stop()
+  })
+
+  it('a key no pairing recorded, or a check that fails, gets the dialog as before', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const pinPairedPhone of [
+      async () => false,
+      async (): Promise<boolean> => {
+        throw new Error('fixture')
+      }
+    ]) {
+      sentToWin.length = 0
+      sessions.length = 0
+      const host = makeHost({ pinPairedPhone })
+      host.setEnabled(true)
+      await settle()
+      sessions[0].opts.onPeerReady(sessions[0].session)
+      await settle()
+      expect(sessions[0].session.approve).not.toHaveBeenCalled()
+      expect(pending().map((m) => m.pub)).toEqual(['phone-pub'])
+      host.stop()
+    }
+    warn.mockRestore()
+  })
+
+  it('an already pinned phone never reaches the check, and an unverified handshake never does', async () => {
+    const asked = vi.fn(async () => true)
+    disk = { pubkeys: ['phone-pub'] }
+    const host = makeHost({ pinPairedPhone: asked })
+    host.setEnabled(true)
+    await settle()
+    sessions[0].opts.onPeerReady(sessions[0].session)
+    await settle()
+    expect(sessions[0].session.approve).toHaveBeenCalledOnce()
+    disk = { pubkeys: [] }
+    const unverified = sessions.at(-1)!
+    unverified.session.sas = () => null as unknown as string
+    unverified.opts.onPeerReady(unverified.session)
+    await settle()
+    expect(unverified.session.approve).not.toHaveBeenCalled()
+    expect(asked).not.toHaveBeenCalled()
+    host.stop()
+  })
+
+  it('a phone revoked while the check is in flight is not approved', async () => {
+    let answer!: (v: boolean) => void
+    const host = makeHost({ pinPairedPhone: () => new Promise<boolean>((r) => (answer = r)) })
+    host.setEnabled(true)
+    await settle()
+    sessions[0].opts.onPeerReady(sessions[0].session)
+    await settle()
+    sessions.at(-1)!.peer = null // the replacement listener has no phone yet
+    expect(killStandingHostSessionsByPeerKey('phone-pub')).toBe(1)
+    answer(true)
+    await settle()
+    expect(sessions[0].session.approve).not.toHaveBeenCalled()
+    expect(sessions[0].closed).toBe(1)
+    host.stop()
   })
 })

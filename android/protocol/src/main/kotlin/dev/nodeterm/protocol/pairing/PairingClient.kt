@@ -58,8 +58,10 @@ class PairingException(message: String) : Exception(message) {
  *
  * Request body `{token, publicKey, deviceName, deviceId, priorDeviceToken?, boxPublicKey?}`.
  * `boxPublicKey` (the phone's persistent relay identity) is sent ONLY inside the sealed body; a
- * desktop that knows it pins it on its standing host and answers `relayPinned: true`, so the first
- * relay connect needs no approval at the desk (audit A07). An older desktop ignores it. When the QR carried a
+ * desktop that knows it pins it on its standing host (`relayPinned: true`, audit A07), or records it
+ * to pin on the phone's first relay handshake when the pairing had no relay leg (A07-late), and
+ * answers `relayApproved: true` either way, so the first relay connect needs no approval at the desk
+ * even after a late adoption. An older desktop ignores it. When the QR carried a
  * `hostKey`, the whole body is sealed to it — `{epk: <ephemeral box pubkey>, box: base64(nonce ‖
  * secretbox)}` under `box.before(hostKey, ephemeralSecret)` — and the answer comes back sealed the
  * same way, so the relay device token never crosses the LAN in the clear.
@@ -85,8 +87,8 @@ class PairingClient(
     companion object {
         /**
          * Largest header block or body accepted. The desktop's biggest real answer — the sealed
-         * `{box}` around `{ok, deviceId, agentToken, relay, relayDeviceToken, relayPinned}` —
-         * measured 606 bytes, headers included, with the interop fixture's short relay token
+         * `{box}` around `{ok, deviceId, agentToken, relay, relayDeviceToken, relayPinned, relayApproved}` —
+         * measured 634 bytes, headers included, with the interop fixture's short relay token
          * (PairingInteropTest counts it through a proxy and fails past 4 KiB). 64 KiB is also the
          * cap the desktop puts on the request it reads from us (pairing-service.ts `MAX_BODY_BYTES`).
          */
@@ -152,12 +154,15 @@ class PairingClient(
                 ?: throw PairingException("The computer's answer was not valid JSON.")
         }
         if (obj.b("ok") != true) throw PairingException("The computer did not confirm the pairing.")
+        val pinned = obj.b("relayPinned") == true
         PairingResult(
             deviceId = obj.s("deviceId") ?: throw PairingException("The computer did not assign a device id."),
             agentToken = obj.s("agentToken") ?: "",
             relay = obj.o("relay")?.let(PairingPayload::parseRelayBlock),
             relayDeviceToken = obj.s("relayDeviceToken"),
-            relayPinned = obj.b("relayPinned") == true
+            relayPinned = pinned,
+            // A desktop from before A07-late answers only `relayPinned`, which implies it.
+            relayApproved = pinned || obj.b("relayApproved") == true
         )
     }
 

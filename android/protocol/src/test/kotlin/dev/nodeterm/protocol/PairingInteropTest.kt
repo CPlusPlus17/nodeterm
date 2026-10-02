@@ -156,6 +156,7 @@ class PairingInteropTest {
             payloadOf(h), SshIdentity.generate().authorizedKeysLine(), "Pixel", "android-device-3", boxPublicKeyB64 = box.publicKeyB64
         )
         assertTrue(result.relayPinned)
+        assertTrue(result.relayApproved)
         assertEquals(box.publicKeyB64, h.awaitEvent("pin")["pub"]!!.jsonPrimitive.content)
     }
 
@@ -229,12 +230,37 @@ class PairingInteropTest {
     }
 
     @Test
-    fun `without a relay leg nothing is pinned and the answer says so`() = runBlocking<Unit> {
-        val (h, _) = start(withRelay = false)
-        val box = dev.nodeterm.protocol.crypto.BoxKeyPair.generate()
+    fun `without a relay leg the key is recorded, not pinned, and approved on the first relay handshake`() = runBlocking<Unit> {
+        // A07-late: paired while remote access is off, the phone adopts the relay later over SSH
+        // (relay.json), and its first relay connect is usually made away from the desk. The desktop's
+        // real service answers what the standing host asks on that handshake, for the key this client
+        // sent and for a stranger's, and again once the device is revoked.
+        val box = BoxKeyPair.generate()
+        val stranger = BoxKeyPair.generate()
+        val (h, home) = start(
+            withRelay = false,
+            env = mapOf("FIXTURE_LATE_PIN_KEYS" to "${box.publicKeyB64},${stranger.publicKeyB64}")
+        )
         val result = PairingClient().pair(
             payloadOf(h), SshIdentity.generate().authorizedKeysLine(), "Pixel", "android-device-4", boxPublicKeyB64 = box.publicKeyB64
         )
+        assertNull(result.relayDeviceToken)
         assertTrue(!result.relayPinned)
+        assertTrue(result.relayApproved, "the phone may let its background check use a relay it adopts later")
+        // Not pinned at the scan: a pin is written before the answer, and `done` follows the answer.
+        val first = h.await { it["event"]?.jsonPrimitive?.content in setOf("pin", "done") }
+        assertEquals("done", first["event"]!!.jsonPrimitive.content)
+        assertTrue(File(home, ".nodeterm/agent.json").readText().contains("\"relayBoxKey\": \"${box.publicKeyB64}\""))
+
+        fun approved(stage: String, pub: String): Boolean = h.await {
+            it["event"]?.jsonPrimitive?.content == "late-approval" &&
+                it["when"]?.jsonPrimitive?.content == stage && it["pub"]?.jsonPrimitive?.content == pub
+        }["approved"]!!.jsonPrimitive.content.toBooleanStrict()
+        assertTrue(approved("paired", box.publicKeyB64), "the handshake from the phone's key is approved")
+        assertTrue(!approved("paired", stranger.publicKeyB64), "a key no pairing recorded gets the dialog")
+        assertEquals(box.publicKeyB64, h.awaitEvent("late-pin")["pub"]!!.jsonPrimitive.content)
+        assertEquals(box.publicKeyB64, h.awaitEvent("revoke-relay-key")["pub"]!!.jsonPrimitive.content)
+        assertTrue(!approved("revoked", box.publicKeyB64), "a revoked pairing approves nothing")
+        assertTrue(!approved("revoked", stranger.publicKeyB64))
     }
 }

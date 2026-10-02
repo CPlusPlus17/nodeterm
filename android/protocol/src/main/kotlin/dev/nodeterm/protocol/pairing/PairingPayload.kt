@@ -112,7 +112,25 @@ data class PairingResult(
     val agentToken: String,
     val relay: RelayBlock?,
     val relayDeviceToken: String?,
-    /** The computer pinned this phone's relay key at pairing (audit A07): no SAS on first relay use.
-     *  False from a desktop that predates it — the phone is approved on its first relay connect. */
-    val relayPinned: Boolean = false
-)
+    /** The computer pinned this phone's relay key at pairing (audit A07). Implies [relayApproved]. */
+    val relayPinned: Boolean = false,
+    /**
+     * The computer serves this phone's relay key without its approval dialog (audit A07-late): pinned
+     * at the scan, or recorded with this pairing for its standing host to pin on the phone's first
+     * relay connect. The second is what a phone paired while remote access was off needs: it adopts
+     * the relay later over SSH (late adoption), and its first relay connect then raises no dialog at
+     * a desk it has usually left. False from a desktop that predates it, which shows the dialog on
+     * the first relay connect. What gates the background worker's relay leg
+     * ([dev.nodeterm.protocol.host.RelayApprovalGate]).
+     */
+    val relayApproved: Boolean = relayPinned
+) {
+    /** What the Pair screen says once paired. */
+    fun pairedNotice(): String = when {
+        relayDeviceToken == null && relayApproved ->
+            "Paired. This phone reaches the computer on your network, and is approved for remote access once the computer offers it."
+        relayDeviceToken == null -> "Paired. This phone reaches the computer on your network."
+        relayApproved -> "Paired, and approved for remote access."
+        else -> "Paired. The first time you connect from outside your network, approve this phone on the computer."
+    }
+}

@@ -45,7 +45,7 @@ vi.mock('../core/device-id', () => ({ getDeviceId: () => 'test-host-device-id' }
 import os from 'os'
 import { createPairingService, type PairingRelayDeps } from './pairing-service'
 import { rewriteKeyComment, type DeviceEntry } from './pairing-core'
-import { decrypt, deriveSharedKey, encrypt, genKeyPair, publicKeyToB64 } from './remote/e2ee'
+import { decrypt, deriveSharedKey, encrypt, genKeyPair, publicKeyToB64, type KeyPair } from './remote/e2ee'
 import type { Settings } from '../shared/types'
 
 const HOME = os.homedir()
@@ -413,6 +413,17 @@ describe('pairing remembers the phone’s relay device id', () => {
   })
 })
 
+/** POST /pair SEALED, the way the Android/iOS app does: `{epk, box}` to the QR's host key. */
+async function postSealedTo(hostKeys: KeyPair, port: number, body: unknown): Promise<Record<string, unknown>> {
+  const eph = genKeyPair()
+  const shared = deriveSharedKey(publicKeyToB64(hostKeys.publicKey), eph.secretKey)
+  const box = encrypt(Uint8Array.from(Buffer.from(JSON.stringify(body), 'utf8')), shared)
+  const text = await post(port, { epk: publicKeyToB64(eph.publicKey), box: Buffer.from(box).toString('base64') })
+  const outer = JSON.parse(text) as { box: string }
+  const plain = decrypt(Uint8Array.from(Buffer.from(outer.box, 'base64')), shared)
+  return JSON.parse(Buffer.from(plain!).toString('utf8'))
+}
+
 describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
   // Pin-once used to mean "approve on the first relay connect", which the Auto route makes happen
   // away from the desk. The scan is already the human's approval — the same one-time token that
@@ -439,16 +450,7 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
       : {})
   })
 
-  /** POST /pair SEALED, the way the Android/iOS app does: `{epk, box}` to the QR's host key. */
-  async function postSealed(port: number, body: unknown): Promise<Record<string, unknown>> {
-    const eph = genKeyPair()
-    const shared = deriveSharedKey(publicKeyToB64(hostKeys.publicKey), eph.secretKey)
-    const box = encrypt(Uint8Array.from(Buffer.from(JSON.stringify(body), 'utf8')), shared)
-    const text = await post(port, { epk: publicKeyToB64(eph.publicKey), box: Buffer.from(box).toString('base64') })
-    const outer = JSON.parse(text) as { box: string }
-    const plain = decrypt(Uint8Array.from(Buffer.from(outer.box, 'base64')), shared)
-    return JSON.parse(Buffer.from(plain!).toString('utf8'))
-  }
+  const postSealed = (port: number, body: unknown): Promise<Record<string, unknown>> => postSealedTo(hostKeys, port, body)
 
   beforeEach(() => {
     pins.length = 0
@@ -575,6 +577,173 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
       expect(pins).toEqual([])
     } finally {
       service.stop()
+    }
+  })
+})
+
+describe('a paired phone whose relay key was recorded, not pinned, is approved on its first relay handshake (audit A07-late)', () => {
+  // A phone paired while remote access was off gets no relay leg, so pairing records its sealed box
+  // key without pinning it. Turning remote access on later lets the phone adopt the relay over SSH
+  // (relay-advertise.ts), and its first relay connect used to raise the SAS dialog, typically at an
+  // empty desk. The standing host now asks `approvePairedRelayKey` first.
+  const hostKeys = genKeyPair()
+  const phoneBox = publicKeyToB64(genKeyPair().publicKey)
+  const stranger = publicKeyToB64(genKeyPair().publicKey)
+  const pins: string[] = []
+  const latePins: string[] = []
+  const revokes: string[] = []
+  let phoneAccess = false
+  let pinThrows = false
+  // The app asks `stillPaired` INSIDE the pin store's queue (pinApprovedDeviceIf, approved-devices.test).
+  const latePin: NonNullable<PairingRelayDeps['pinRelayKeyIfPaired']> = async (pub, stillPaired) => {
+    if (!(await stillPaired())) return false
+    latePins.push(pub)
+    return true
+  }
+  // `null` = not wired (a default parameter would replace `undefined`).
+  const relayDeps = (late: PairingRelayDeps['pinRelayKeyIfPaired'] | null = latePin): PairingRelayDeps => ({
+    getSettings: () => ({ phoneAccessEnabled: phoneAccess }) as unknown as Settings,
+    getEntitlement: () => null,
+    loadHostKeyPair: async () => hostKeys,
+    relayEndpoint: 'wss://relay.example/ws',
+    apiBase: 'https://api.example',
+    relayAllowed: () => true,
+    pinRelayKey: async (pub: string) => {
+      if (pinThrows) throw new Error('fixture')
+      pins.push(pub)
+    },
+    revokeRelayKey: async (pub: string) => (revokes.push(pub), { persisted: true, killed: true }),
+    ...(late ? { pinRelayKeyIfPaired: late } : {})
+  })
+  const pairSealed = async (service: ReturnType<typeof createPairingService>, body: Record<string, unknown>) => {
+    const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+    return postSealedTo(hostKeys, pairPort, { token, publicKey: freshEd25519Line(), ...body })
+  }
+
+  beforeEach(() => {
+    pins.length = 0
+    latePins.length = 0
+    revokes.length = 0
+    phoneAccess = false
+    pinThrows = false
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ deviceToken: 'device-token', hostId: 'host-id', exp: 0 })
+    } as unknown as Response)
+  })
+
+  it('remote access off: records the key, pins nothing at the scan, promises approval, and pins it on the handshake', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const resp = await pairSealed(service, { deviceId: 'p1', boxPublicKey: phoneBox })
+      expect(resp.relayDeviceToken).toBeUndefined()
+      expect(resp.relayPinned).toBeUndefined()
+      expect(resp.relayApproved).toBe(true)
+      expect(pins).toEqual([]) // a LAN-only phone is not a relay phone until it connects through it
+      const entry = ((agentJson().devices as DeviceEntry[]) ?? []).find((d) => d.id === resp.deviceId)!
+      expect(entry.relayBoxKey).toBe(phoneBox)
+
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(true)
+      expect(latePins).toEqual([phoneBox])
+      // A key no pairing recorded is the SAS dialog's, as before.
+      expect(await service.approvePairedRelayKey(stranger)).toBe(false)
+      expect(latePins).toEqual([phoneBox])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('a revoked pairing no longer approves its key, unless another pairing of the same phone is listed', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const a = await pairSealed(service, { boxPublicKey: phoneBox })
+      const b = await pairSealed(service, { boxPublicKey: phoneBox })
+      await service.revokeDevice(String(a.deviceId))
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(true)
+      await service.revokeDevice(String(b.deviceId))
+      expect(revokes).toEqual([phoneBox]) // the A07-revoke unpin + cut, once the last pairing went
+      latePins.length = 0
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(false)
+      expect(latePins).toEqual([])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('a relay leg whose pin failed at the scan is still approved on the handshake', async () => {
+    phoneAccess = true
+    pinThrows = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const service = createPairingService(relayDeps())
+    try {
+      const resp = await pairSealed(service, { boxPublicKey: phoneBox })
+      expect(resp.relayDeviceToken).toBe('device-token')
+      expect(resp.relayPinned).toBeUndefined()
+      expect(resp.relayApproved).toBe(true)
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(true)
+    } finally {
+      service.stop()
+      warn.mockRestore()
+    }
+  })
+
+  it('a pinned pairing answers both fields', async () => {
+    phoneAccess = true
+    const service = createPairingService(relayDeps())
+    try {
+      const resp = await pairSealed(service, { boxPublicKey: phoneBox })
+      expect(resp.relayPinned).toBe(true)
+      expect(resp.relayApproved).toBe(true)
+      expect(pins).toEqual([phoneBox])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('a key from the PLAINTEXT body is never recorded, promised or approved', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const resp = JSON.parse(await post(pairPort, { token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox }))
+      expect(resp.ok).toBe(true)
+      expect(resp.relayApproved).toBeUndefined()
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(false)
+      expect(latePins).toEqual([])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('without the late pin wired, the answer promises nothing the standing host would not keep', async () => {
+    const service = createPairingService(relayDeps(null))
+    try {
+      const resp = await pairSealed(service, { boxPublicKey: phoneBox })
+      expect(resp.relayApproved).toBeUndefined()
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(false)
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('a malformed key never reaches the pin store, and a failed check falls back to the dialog', async () => {
+    const asked: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const service = createPairingService(
+      relayDeps(async (pub) => {
+        asked.push(pub)
+        throw new Error('fixture')
+      })
+    )
+    try {
+      expect(await service.approvePairedRelayKey('not-a-key')).toBe(false)
+      expect(await service.approvePairedRelayKey('')).toBe(false)
+      expect(asked).toEqual([])
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(false)
+      expect(asked).toEqual([phoneBox])
+      expect(warn.mock.calls.map((c) => String(c[0]))).toContain('[pairing] could not pin a paired phone relay key:')
+    } finally {
+      service.stop()
+      warn.mockRestore()
     }
   })
 })

@@ -14,6 +14,9 @@
 //                 home dir pointed at a temp dir by the caller (HOME, and USERPROFILE for Windows, see
 //                 InteropHarness.scratchHomeEnv; refused unless `os.homedir()` is FIXTURE_HOME), and a
 //                 fake `/v1/relay/device` API. It exercises the direct-SSH pairing path on every OS.
+//                 With FIXTURE_LATE_PIN_KEYS it then asks the service, per key, what the standing host
+//                 asks on a relay handshake (`approvePairedRelayKey`, audit A07-late), before and
+//                 after revoking every device.
 //   mode "never-ready": prints nothing and stays alive, so InteropHarnessTest can check that a
 //                 harness whose ready wait fails still kills the process.
 //
@@ -429,14 +432,37 @@ async function runPair(): Promise<void> {
       apiBase: `http://127.0.0.1:${apiPort}`,
       relayAllowed: () => withRelay,
       pinRelayKey: async (pub) => emit({ event: 'pin', pub }),
-      revokeRelayKey: async (pub) => (emit({ event: 'revoke-relay-key', pub }), { persisted: true, killed: true })
+      revokeRelayKey: async (pub) => (emit({ event: 'revoke-relay-key', pub }), { persisted: true, killed: true }),
+      // A07-late. index.ts asks `stillPaired` inside the pin store's queue (pinApprovedDeviceIf, which
+      // reads Electron's userData and is vitest's to cover); what this mode checks is the service's
+      // own half: the key the phone sent is recorded, recognized later, and forgotten on revoke.
+      pinRelayKeyIfPaired: async (pub, stillPaired) => {
+        const paired = await stillPaired()
+        if (paired) emit({ event: 'late-pin', pub })
+        return paired
+      }
     },
     // The direct-SSH path on every OS (audit A70): on win32 the service pairs relay-only (no key, the
     // QR says `ssh:false`), which pairing-service.windows.test.ts covers. `platform` only separates
     // win32 from the rest, so Linux and macOS run exactly what they always did.
     { timeoutMs: 60_000, platform: process.platform === 'win32' ? 'linux' : process.platform }
   )
-  const started = await service.start((done) => emit({ event: 'done', ...done }))
+  // A07-late: after a pairing, ask the service what the standing host asks on a relay handshake from
+  // each of these keys (the phone's own and a stranger's, chosen by the test), then revoke every
+  // device and ask again.
+  const lateKeys = (process.env.FIXTURE_LATE_PIN_KEYS ?? '').split(',').filter(Boolean)
+  const askLate = async (when: string): Promise<void> => {
+    for (const pub of lateKeys) emit({ event: 'late-approval', when, pub, approved: await service.approvePairedRelayKey(pub) })
+  }
+  const started = await service.start((done) => {
+    emit({ event: 'done', ...done })
+    if (!done.ok || !lateKeys.length) return
+    void (async () => {
+      await askLate('paired')
+      for (const device of await service.listDevices()) await service.revokeDevice(device.id)
+      await askLate('revoked')
+    })().catch((err) => emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) }))
+  })
   emit({ ready: true, payload: started.payload, hostPublicKeyB64: publicKeyToB64(keys.publicKey), relayPlan: started.relayPlan })
 }
 

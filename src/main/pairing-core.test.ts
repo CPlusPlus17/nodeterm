@@ -4,6 +4,7 @@ import {
   buildPairingPayload,
   deviceCommentFor,
   filterAuthorizedKeys,
+  holdsPairedRelayKey,
   isValidEd25519PublicKey,
   normalizeAuthorizedKeysLine,
   normalizeDeviceName,
@@ -284,6 +285,33 @@ describe('device registry helpers', () => {
       { id: 'a', name: 'a', pairedAt: 1000, lastSeenAt: 0 }
     ])
     expect(toPublicDevices([dev('a')])[0]).not.toHaveProperty('token')
+  })
+})
+
+describe('holdsPairedRelayKey (audit A07-late)', () => {
+  // What the standing host asks before pinning a phone it has not pinned: did a pairing that is
+  // still listed record this key from its sealed body?
+  const dev = (id: string, relayBoxKey?: string): DeviceEntry => ({
+    id,
+    name: id,
+    token: `tok-${id}`,
+    pairedAt: 1,
+    lastSeenAt: 0,
+    ...(relayBoxKey ? { relayBoxKey } : {})
+  })
+
+  it('matches only a key a listed pairing recorded, exactly', () => {
+    const devices = [dev('a', 'KEY-A'), dev('b'), dev('c', 'KEY-C')]
+    expect(holdsPairedRelayKey(devices, 'KEY-A')).toBe(true)
+    expect(holdsPairedRelayKey(devices, 'KEY-C')).toBe(true)
+    expect(holdsPairedRelayKey(devices, 'KEY-B')).toBe(false)
+    expect(holdsPairedRelayKey(devices, 'key-a')).toBe(false)
+    expect(holdsPairedRelayKey(removeDevice(devices, 'a'), 'KEY-A')).toBe(false)
+  })
+
+  it('an empty key never matches, not even a pairing that recorded none', () => {
+    expect(holdsPairedRelayKey([dev('a'), { ...dev('b'), relayBoxKey: '' }], '')).toBe(false)
+    expect(holdsPairedRelayKey([], 'KEY-A')).toBe(false)
   })
 })
 

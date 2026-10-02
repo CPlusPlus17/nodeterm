@@ -155,8 +155,11 @@ export interface DeviceEntry {
   relayDeviceId?: string
   /**
    * The phone's relay (NaCl box) public key, base64, when it sent one inside the SEALED `/pair`
-   * body. Pairing pins it on the standing host (audit A07), so revoking the device unpins it again
-   * and closes the relay sessions it has open (A07-revoke).
+   * body. Pairing pins it on the standing host when the pairing minted a relay leg (audit A07);
+   * otherwise the standing host pins it on the phone's first relay handshake while this entry is
+   * listed (A07-late: remote access turned on after the scan, the phone adopting the relay over
+   * SSH). Revoking the device unpins it again and closes the relay sessions it has open
+   * (A07-revoke). Recorded whether or not a relay leg was minted.
    * Absent for pairings made before this field existed and for phones that do not send it.
    */
   relayBoxKey?: string
@@ -200,6 +203,16 @@ export function isValidBoxPublicKeyB64(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 64) return false
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false
   return Buffer.from(value, 'base64').length === 32
+}
+
+/**
+ * Does a listed pairing hold `boxKeyB64` as the relay key its phone sent in the sealed `/pair` body
+ * (A07-late)? What the standing host asks before pinning a phone it has not pinned yet: the scan that
+ * recorded the key is the approval, as at pairing. Exact string match against what pairing recorded,
+ * so a hand-edited entry carrying junk matches nothing. An empty key never matches.
+ */
+export function holdsPairedRelayKey(devices: DeviceEntry[], boxKeyB64: string): boolean {
+  return boxKeyB64.length > 0 && devices.some((d) => d.relayBoxKey === boxKeyB64)
 }
 
 /** Drop the device with the given id (no-op if absent). */

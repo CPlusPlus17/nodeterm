@@ -45,7 +45,17 @@ the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the 
 dials only a computer that has approved this phone, and a refused or unanswered approval suspends
 automatic dials until the user asks again. A current desktop pins the phone's relay key at pairing
 (the phone sends `boxPublicKey` inside the sealed `/pair` body; the answer says `relayPinned`), so
-most phones never see the dialog. Revoking the device drops the pin and closes any relay session
+most phones never see the dialog. A pairing with no relay leg (remote access off at the scan, or a
+failed mint) records the key on the device entry in `agent.json` without pinning it, and the
+standing host pins it on the phone's first relay handshake while that pairing is listed (audit
+`A07-late`, `approvePairedRelayKey`): the phone that adopts the relay later over SSH (`relay.json`,
+below) is not met by a dialog at a desk it has left. Either way the answer says `relayApproved`, which
+is what the phone stores as approved, so its background check may use a relay it adopts later. Not
+pinning at the scan keeps a LAN-only phone out of the pin store, which host-mode push reads as "a
+relay phone is paired". The late pin's "still paired?" check runs inside the pin store's queue, so a
+revoke racing a handshake cannot leave the key pinned. No new file is involved: the key is the one
+the scan already authorized, and someone who could edit `agent.json` has a shell as the user, which
+could edit the pin store just as well. Revoking the device drops the pin and closes any relay session
 the phone has open at that moment.
 
 **What direct SSH will not do.** It never creates a tmux session (the desktop injects the hook
@@ -242,8 +252,11 @@ unchanged.
   dropped, replayed/reordered sequence numbers dropped, boxes under a foreign key dropped.
 - **Pairing** — against the desktop's real `createPairingService` with HOME in a temp dir: the
   E2EE-sealed exchange, the key landing in `authorized_keys` under `nodeterm-ios-<deviceId>`, the
-  relay leg and its `/v1/relay/device` body, a refused wrong token, and the size of the desktop's
-  largest answer (606 bytes, counted through a proxy). Scripted local servers pin the client's
+  relay leg and its `/v1/relay/device` body, a refused wrong token, the relay key pinned at the scan
+  and, without a relay leg, recorded and approved on the first relay handshake (`A07-late`: the
+  fixture asks the service what the standing host asks, for the phone's key and a stranger's, before
+  and after revoking), and the size of the desktop's largest answer (634 bytes, counted through a
+  proxy). Scripted local servers pin the client's
   bounds on an answer from whatever `host:pairPort` a code names: a declared length is refused
   above 64 KiB or below zero before anything is allocated, a body with no length stops at 64 KiB,
   and the whole exchange ends at a 45 s deadline (or when the caller is cancelled) by closing the
@@ -774,10 +787,15 @@ later fix left to a device.
     is recorded for it, and the next open connects normally. *(A20)*
 16. Change a computer's route in Settings → How to reach each computer and check that the next connect
     follows it; forget a computer; pair two computers and move between them. *(A65)*
-17. Pair while the desktop's remote access is off, then turn it on and open the computer over the
-    network: the host list gains "From anywhere" without the app being restarted, and a relay connect
-    then works (after one approval, since this path does not pin). The host list stays smooth while a
-    connection is being made. *(A47, A65)*
+17. Pair while the desktop's remote access is off (the toast says the phone is approved for remote
+    access once the computer offers it), then turn it on and open the computer over the network: the
+    host list gains "From anywhere" without the app being restarted. Then take the phone off the LAN
+    with the app in the background for 15 minutes or more: the background check reaches the computer
+    through the relay, and the desktop shows no SAS dialog; its `remote-approved-devices.json` now
+    lists the phone's key. Open the computer off the LAN: it connects through the relay, again with
+    no dialog. Revoke the phone on the desktop, pair it again with remote access off, and adopt the
+    relay as above: still no dialog. The host list stays smooth while a connection is being made.
+    *(A47, A65, A07-late)*
 
 ### Terminal
 
@@ -1042,6 +1060,12 @@ later fix left to a device.
 
 ## Known gaps
 
+- **A pairing that recorded no relay key still asks once on the relay** (audit `A07-late`). The
+  desktop approves a late-adopting phone by the box key its pairing recorded from the sealed `/pair`
+  body. A pairing made by a phone that does not send `boxPublicKey` (the iOS app, until it adopts the
+  field), or by a desktop older than `A07`, recorded none, so that phone's first relay connect after
+  a late adoption still shows the SAS dialog, as it always did. Pairing again records the key. iOS can
+  adopt `boxPublicKey` and `relayApproved` unchanged.
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
   `/v1/push/*` fan-out is APNs-only, so nothing wakes the app when an agent needs you, and there is no
   equivalent of iOS's Live Activities (an ongoing notification would need FCM or a foreground

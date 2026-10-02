@@ -305,7 +305,7 @@ import { initStandingHost } from './remote/standing-host'
 import { createHostNewSessions } from './remote/host-new-sessions'
 import { initRelayHost } from './remote/relay-host-service'
 import { createPeerRevoker } from './remote/peer-revoker'
-import { loadApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
+import { loadApprovedDevices, pinApprovedDeviceIf, updateApprovedDevices } from './remote/approved-devices'
 import { pinDevice } from './remote/approved-devices-core'
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
@@ -1655,7 +1655,11 @@ app.whenReady().then(async () => {
     // the desk. Revoking the device takes the pin away again AND cuts the relay session the phone
     // has open, through the same revoker as `remote:revoke-peer` (A07-revoke).
     pinRelayKey: (pub) => updateApprovedDevices((store) => pinDevice(store, pub)),
-    revokeRelayKey: (pub) => peerRevoker.revoke(pub)
+    revokeRelayKey: (pub) => peerRevoker.revoke(pub),
+    // A07-late: a key the pairing recorded without pinning (no relay leg at the scan) is pinned by
+    // the standing host on the phone's first relay handshake, asked inside the pin store's queue so
+    // a racing revoke cannot be undone (see pinApprovedDeviceIf).
+    pinRelayKeyIfPaired: (pub, stillPaired) => pinApprovedDeviceIf(pub, stillPaired)
   })
   ipcMain.handle(IPC.pairingStart, () =>
     pairingService.start((result) => {
@@ -4075,7 +4079,11 @@ app.whenReady().then(async () => {
   // Standing (phone) relay host: keep a host connection registered so a paired phone can reach
   // this Mac from anywhere. Honors settings.phoneAccessEnabled internally. Revoking a phone reaches
   // its open sessions via `killStandingHostSessionsByPeerKey` (peerRevoker, remote/peer-revoker.ts).
-  const standingHost = initStandingHost(win, ptyManager, () => settingsStore.get(), listProjectsOutput, hostBridge)
+  const standingHost = initStandingHost(win, ptyManager, () => settingsStore.get(), listProjectsOutput, hostBridge, {
+    // A paired phone that adopted the relay after the scan is approved by its pairing record, not by
+    // a dialog at a desk it has left (A07-late).
+    pinPairedPhone: (pub) => pairingService.approvePairedRelayKey(pub)
+  })
   ipcMain.on(IPC.remoteStandingHostSet, (_e, enabled: boolean) => standingHost.setEnabled(!!enabled))
   // Reconcile from persisted settings on launch (starts hosting if enabled).
   standingHost.syncFromSettings()
