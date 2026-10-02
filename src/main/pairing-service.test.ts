@@ -787,6 +787,25 @@ describe('a paired phone whose relay key was recorded, not pinned, is approved o
     }
   })
 
+  it('a key no pairing recorded is answered without the pin store (review of A07-late)', async () => {
+    // The standing host asks on EVERY unpinned handshake, and most of those keys were never recorded
+    // (iOS phones, pre-A07 pairings, strangers). Their "no" must not queue behind, read or write the
+    // pin store before the dialog: the browse socket could close inside that window.
+    const asked: string[] = []
+    const service = createPairingService(relayDeps(async (pub, stillPaired) => (asked.push(pub), latePin(pub, stillPaired))))
+    try {
+      expect(await service.approvePairedRelayKey(stranger)).toBe(false)
+      expect(asked).toEqual([])
+      await pairSealed(service, { boxPublicKey: phoneBox })
+      expect(await service.approvePairedRelayKey(stranger)).toBe(false)
+      expect(asked).toEqual([])
+      expect(await service.approvePairedRelayKey(phoneBox)).toBe(true)
+      expect(asked).toEqual([phoneBox]) // a recorded key is still asked again inside the queue
+    } finally {
+      service.stop()
+    }
+  })
+
   it('a malformed key never reaches the pin store, and a failed check falls back to the dialog', async () => {
     const asked: string[] = []
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -800,6 +819,7 @@ describe('a paired phone whose relay key was recorded, not pinned, is approved o
       expect(await service.approvePairedRelayKey('not-a-key')).toBe(false)
       expect(await service.approvePairedRelayKey('')).toBe(false)
       expect(asked).toEqual([])
+      await pairSealed(service, { boxPublicKey: phoneBox }) // recorded, so the pin store is asked
       expect(await service.approvePairedRelayKey(phoneBox)).toBe(false)
       expect(asked).toEqual([phoneBox])
       expect(warn.mock.calls.map((c) => String(c[0]))).toContain('[pairing] could not pin a paired phone relay key:')

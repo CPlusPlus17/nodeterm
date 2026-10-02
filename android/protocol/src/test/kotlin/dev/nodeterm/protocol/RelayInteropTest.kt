@@ -198,6 +198,38 @@ class RelayInteropTest {
     }
 
     @Test
+    fun `a background dial is not turned away while the computer approves it on its own`() {
+        // Review of A07-late: the standing host decides silently whether a phone is approved (its pin
+        // store, and for a paired phone whose key pairing recorded, the late pin, which writes it),
+        // and the phone's first request can arrive while that is still on disk. The desktop holds it
+        // until the decision instead of answering "Awaiting host approval.", which a background check
+        // reads as "a human must approve this phone": it gives up and forgets it was approved.
+        val h = start(approveAfterMs = -1, extra = mapOf("FIXTURE_DECIDE_AFTER_MS" to "600", "FIXTURE_DECIDE" to "approve"))
+        val statuses = ArrayList<RelayConnectStatus>()
+        val connected = connect(h, statuses = statuses, requireApproved = true)
+        connected.connection.use {
+            assertTrue(connected.first.projects.isNotEmpty(), "served the listing it asked for while the host decided")
+            assertTrue(statuses.none { it is RelayConnectStatus.AwaitingApproval }, "no code shown: $statuses")
+            assertTrue(h.awaitEvent("decided")["approved"]!!.jsonPrimitive.content.toBoolean())
+            h.awaitEvent("approved")
+        }
+    }
+
+    @Test
+    fun `a background dial still gives up when the computer's decision is to ask the human`() {
+        // The hold ends with the decision: a phone the host hands to its dialog hears "Awaiting host
+        // approval." then, exactly as before, and a background dial does not wait on the human.
+        val decideMs = 600L
+        val h = start(approveAfterMs = -1, extra = mapOf("FIXTURE_DECIDE_AFTER_MS" to decideMs.toString(), "FIXTURE_DECIDE" to "ask"))
+        val t0 = System.currentTimeMillis()
+        assertFailsWith<RelayApprovalRequiredException> { connect(h, requireApproved = true) }
+        val elapsed = System.currentTimeMillis() - t0
+        assertFalse(h.awaitEvent("decided")["approved"]!!.jsonPrimitive.content.toBoolean())
+        assertTrue(elapsed >= decideMs - 100, "answered only once the host had decided (after ${elapsed} ms)")
+        assertTrue(elapsed < 10_000, "it did not wait on the human")
+    }
+
+    @Test
     fun `projects list parses the desktop blob`() {
         val h = start()
         val connected = connect(h)

@@ -20,11 +20,18 @@ class RelayApprovalTimeoutException :
  * "abort on awaiting" cannot keep the dialog off an unattended desktop. The only prevention is not
  * dialing. Two rules:
  *
- *  1. **Background never makes a first handshake.** A background check (the Inbox worker) dials the
- *     relay only for a computer on which a FOREGROUND relay connect has already succeeded — its key
- *     is pinned there, so the host approves silently — and even then asks the connector to give up
- *     rather than wait if approval turns out to be needed (the pin was revoked), and forgets the
- *     approval so it does not try again.
+ *  1. **Background dials only a computer that approves this phone without its dialog.** A background
+ *     check (the Inbox worker) dials the relay only when [isApproved] says so: a FOREGROUND relay
+ *     connect has already succeeded (the computer pinned this phone's key), or pairing said
+ *     `relayApproved` ([dev.nodeterm.protocol.pairing.PairingResult.relayApproved]). The second covers
+ *     a key the computer has not pinned yet and has never seen on the relay — a phone paired while
+ *     remote access was off, whose background check may then be its FIRST relay handshake — because
+ *     the pairing recorded the key and the computer's standing host pins it on that handshake without
+ *     the dialog (audit A07-late; the desktop holds the phone's first request until it has decided,
+ *     so the check is not told it is awaiting approval meanwhile). Either way the check asks the
+ *     connector to give up rather than wait if approval turns out to be needed (the pin was revoked,
+ *     the pairing removed, or a desktop that predates the late pin), and forgets the approval so it
+ *     does not try again.
  *  2. **A refused or unanswered approval is not retried on its own.** After Deny, or nobody
  *     answering, the automatic dials (the 8 s poll, reconnect-after-drop) skip the relay leg with the
  *     reason, until the user asks again (Try again / opening the computer). Before this, the phone

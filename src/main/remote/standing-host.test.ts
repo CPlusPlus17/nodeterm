@@ -580,6 +580,36 @@ describe('a paired phone adopting the relay late is approved by its pairing, not
     host.stop()
   })
 
+  it('hands connectHostSession a decision that settles only once it has approved or asked the human', async () => {
+    // connectHostSession holds the phone's requests until this settles (review of A07-late): a
+    // phone told "Awaiting host approval." while the late pin is still on disk gives up when it is
+    // a background check, and forgets that this computer approves it.
+    for (const paired of [true, false]) {
+      sentToWin.length = 0
+      sessions.length = 0
+      let answer!: (v: boolean) => void
+      const host = makeHost({ pinPairedPhone: () => new Promise<boolean>((r) => (answer = r)) })
+      host.setEnabled(true)
+      await settle()
+      const decision = sessions[0].opts.onPeerReady(sessions[0].session)
+      expect(decision).toBeInstanceOf(Promise)
+      let settled = false
+      void (decision as Promise<void>).then(() => (settled = true))
+      await settle()
+      expect(settled).toBe(false) // the late pin has not answered yet: still deciding
+      answer(paired)
+      await decision
+      if (paired) {
+        expect(sessions[0].session.approve).toHaveBeenCalledOnce()
+        expect(pending()).toEqual([])
+      } else {
+        expect(sessions[0].session.approve).not.toHaveBeenCalled()
+        expect(pending().map((m) => m.pub)).toEqual(['phone-pub']) // the dialog is up before it settles
+      }
+      host.stop()
+    }
+  })
+
   it('a phone revoked while the check is in flight is not approved', async () => {
     let answer!: (v: boolean) => void
     const host = makeHost({ pinPairedPhone: () => new Promise<boolean>((r) => (answer = r)) })

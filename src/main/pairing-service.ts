@@ -1080,13 +1080,18 @@ export function createPairingService(
 
   const approvePairedRelayKey = async (boxPublicKeyB64: string): Promise<boolean> => {
     if (!isValidBoxPublicKeyB64(boxPublicKeyB64) || !relayDeps?.pinRelayKeyIfPaired) return false
+    // Read fresh each time, not through `serialize`: agent.json is published by atomic rename, so
+    // this sees the file either before or after a revoke's write, and the ordering argument on
+    // `pinRelayKeyIfPaired` covers both. A missing or malformed file lists no device ⇒ no pin.
+    const stillPaired = async (): Promise<boolean> =>
+      holdsPairedRelayKey(readDevices(await readAgentJson()), boxPublicKeyB64)
+    // Asked once BEFORE the pin store's queue, so the commonest unpinned handshake (a key no
+    // pairing recorded: an iOS phone, a pairing older than A07, a stranger) is answered with one
+    // file read and never waits behind, or writes, the pin store (review of A07-late). A "no"
+    // pins nothing, so it cannot undo a revoke; only a "yes" has to be asked again in the queue.
     try {
-      // Read fresh each time, not through `serialize`: agent.json is published by atomic rename, so
-      // this sees the file either before or after a revoke's write, and the ordering argument on
-      // `pinRelayKeyIfPaired` covers both. A missing or malformed file lists no device ⇒ no pin.
-      return await relayDeps.pinRelayKeyIfPaired(boxPublicKeyB64, async () =>
-        holdsPairedRelayKey(readDevices(await readAgentJson()), boxPublicKeyB64)
-      )
+      if (!(await stillPaired())) return false
+      return await relayDeps.pinRelayKeyIfPaired(boxPublicKeyB64, stillPaired)
     } catch (err) {
       // The SAS dialog is the fallback, exactly as before this existed.
       console.warn('[pairing] could not pin a paired phone relay key:', err)

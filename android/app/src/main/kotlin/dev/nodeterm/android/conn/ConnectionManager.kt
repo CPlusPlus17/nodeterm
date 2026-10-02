@@ -324,7 +324,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * The primary connection when it already IS the relay; otherwise one opened next to it and kept
      * until [disconnect]. [trigger] goes to [RelayApprovalGate]: a user's tap releases a held
      * approval and, the first time, the desktop's approval code is reported through [onStatus] (and
-     * [relayApproval]); a background caller never makes a first handshake.
+     * [relayApproval]); a background caller never makes a first handshake that would raise the
+     * dialog (only one with a computer whose pairing answered `relayApproved`, audit A07-late).
      */
     suspend fun viaRelay(trigger: Trigger = Trigger.USER, onStatus: (RelayConnectStatus) -> Unit = {}): HostConnection {
         conn?.takeIf { it.kind == TransportKind.RELAY }?.let { return it }

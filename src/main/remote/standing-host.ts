@@ -325,6 +325,8 @@ export function initStandingHost(
 
   // A phone completed the E2EE handshake on `pooled`'s listener. Mark it bridged (→ open a
   // replacement listener), then approve: pinned device → silent; unknown → prompt the human.
+  // Settles once that is decided (approved, handed to the human, refused, or torn down), which is
+  // when connectHostSession answers the requests the phone sent meanwhile.
   async function onPeerReady(pooled: Pooled): Promise<void> {
     if (!pooled.bridged) {
       pooled.bridged = true
@@ -445,7 +447,13 @@ export function initStandingHost(
         lanReport: bridge.lanReport,
         // Typing attribution: this pooled session's input frames are ITS phone's keystrokes.
         getClientId: () => pooled.presence.id(),
-        onPeerReady: () => void onPeerReady(pooled),
+        // Returned, not voided: connectHostSession holds the phone's requests until this settles,
+        // so a phone this host approves without the human is never told it is awaiting approval
+        // while the disk reads and the late pin are still running (review of A07-late).
+        onPeerReady: () =>
+          onPeerReady(pooled).catch((err) => {
+            console.warn('[standing-host] the approval decision failed:', err)
+          }),
         onClose: () => {
           console.info('[phone-approval] socket-closed', { pending: !!pooled.approvalId })
           pooled.presence.leave()

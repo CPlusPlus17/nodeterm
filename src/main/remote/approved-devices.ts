@@ -52,12 +52,17 @@ export async function saveApprovedDevices(store: ApprovedDevices): Promise<void>
 // Queue the WHOLE read/modify/write, not just rename: otherwise concurrent approvals lose pins,
 // and an approval racing a revoke can resurrect the removed key from an obsolete snapshot.
 // The update may be async (pinApprovedDeviceIf): the queue holds until it settles.
+// An update that hands back the very store it was given changed nothing (pinDevice and unpinDevice
+// do that for a key already pinned / not pinned), so nothing is written: the list on disk already
+// says what it would say, and a write there would only add a failure that is not about this change.
 let updateTail: Promise<void> = Promise.resolve()
 export function updateApprovedDevices(
   update: (store: ApprovedDevices) => ApprovedDevices | Promise<ApprovedDevices>
 ): Promise<void> {
   const next = updateTail.then(async () => {
-    await saveApprovedDevices(await update(await loadApprovedDevices()))
+    const store = await loadApprovedDevices()
+    const updated = await update(store)
+    if (updated !== store) await saveApprovedDevices(updated)
   })
   updateTail = next.catch(() => {}) // one failed save must not poison later attempts
   return next

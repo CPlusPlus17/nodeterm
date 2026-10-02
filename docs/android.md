@@ -77,8 +77,9 @@ on direct SSH reads off the host, and an iOS app that does not read `lan` sees t
 
 **Relay approval.** The standing host raises its SAS dialog as soon as an unpinned phone completes
 the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the background worker
-dials only a computer that has approved this phone, and a refused or unanswered approval suspends
-automatic dials until the user asks again. A current desktop pins the phone's relay key at pairing
+dials only a computer that approves this phone without its dialog (a relay connect has succeeded, or
+pairing answered `relayApproved`, below), and a refused or unanswered approval suspends automatic
+dials until the user asks again. A current desktop pins the phone's relay key at pairing
 (the phone sends `boxPublicKey` inside the sealed `/pair` body; the answer says `relayPinned`), so
 most phones never see the dialog. A pairing with no relay leg (remote access off at the scan, or a
 failed mint) records the key on the device entry in `agent.json` without pinning it, and the
@@ -88,7 +89,11 @@ below) is not met by a dialog at a desk it has left. Either way the answer says 
 is what the phone stores as approved, so its background check may use a relay it adopts later. Not
 pinning at the scan keeps a LAN-only phone out of the pin store, which host-mode push reads as "a
 relay phone is paired". The late pin's "still paired?" check runs inside the pin store's queue, so a
-revoke racing a handshake cannot leave the key pinned. No new file is involved: the key is the one
+revoke racing a handshake cannot leave the key pinned. While the standing host decides on its own
+(its pin store, then the late pin), `connectHostSession` holds the phone's requests instead of
+answering "Awaiting host approval.", which a background check reads as an approval it needs: they are
+answered once the host has approved the phone or raised its dialog (`PEER_DECISION_HOLD_MS`, 5 s at
+most). No new file is involved: the key is the one
 the scan already authorized, and someone who could edit `agent.json` has a shell as the user, which
 could edit the pin store just as well. Revoking the device drops the pin and closes any relay session
 the phone has open at that moment. The phone then redials (about 1.5 s after a drop while its screen
@@ -130,7 +135,8 @@ wake/refresh/rename), never hidden; the Source control screen (`A29`) says it in
 repository. The relay dial still goes through `RelayApprovalGate` with the caller's trigger: these
 are taps (`Trigger.USER`), so the first one on a desktop that has not pinned the phone shows the
 approval code on the screen that asked (the host screen, or Source control), and a background path
-never makes a first handshake. Answering approvals, read-acks, typing keys and ending a session stay
+never makes a first handshake that would raise the dialog (its only first handshakes are with a
+computer whose pairing answered `relayApproved`, above). Answering approvals, read-acks, typing keys and ending a session stay
 on SSH.
 
 **A computer a desktop drives over SSH, and the Server Edition (audit `A27`, part a).** The SSH

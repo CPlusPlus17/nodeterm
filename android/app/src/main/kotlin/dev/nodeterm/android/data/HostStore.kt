@@ -93,7 +93,9 @@ class HostStore(context: Context) {
 
     /**
      * This computer serves this phone over the relay without an approval dialog: a relay connect has
-     * succeeded (its standing host pinned our box key), or pairing pinned it. Gates the background
+     * succeeded (its standing host pinned our box key), or pairing answered `relayApproved` — it
+     * pinned the key, or recorded it for the standing host to pin on this phone's first relay
+     * handshake, which may then be the background worker's (audit A07-late). Gates the background
      * worker's relay leg (dev.nodeterm.protocol.host.RelayApprovalGate, audit A05).
      */
     fun relayApproved(id: String): Boolean = prefs.getBoolean("relayApproved.$id", false)
