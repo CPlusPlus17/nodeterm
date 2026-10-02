@@ -18,13 +18,21 @@ describe('video/web nodes', () => {
   })
 
   it('routes generated documents to their built-in canvas viewers', () => {
-    expect(fileViewerKind('/tmp/page.html')).toBe('web')
-    expect(fileViewerKind('/tmp/page.htm')).toBe('web')
+    const view = { renderHtml: true }
+    expect(fileViewerKind('/tmp/page.html', view)).toBe('web')
+    expect(fileViewerKind('/tmp/page.htm', view)).toBe('web')
+    expect(fileViewerKind('/tmp/interview.mp3', view)).toBe('video')
+    expect(fileViewerKind('/tmp/notes.md', view)).toBe('editor')
+    expect(fileViewerKind('/tmp/report.pdf', view)).toBe('editor')
+    expect(fileViewerKind('/tmp/screenshot.png', view)).toBe('editor')
+  })
+
+  it('keeps .html in the editor unless a LOCAL view was asked for', () => {
+    // Explorer / ⌘K / files node: .html means "edit the source".
+    expect(fileViewerKind('/tmp/page.html')).toBe('editor')
     expect(fileViewerKind('/tmp/interview.mp3')).toBe('video')
-    expect(fileViewerKind('/tmp/notes.md')).toBe('editor')
-    expect(fileViewerKind('/tmp/report.pdf')).toBe('editor')
-    expect(fileViewerKind('/tmp/screenshot.png')).toBe('editor')
-    expect(fileViewerKind('/tmp/page.html', true)).toBe('editor')
+    // An SSH project's page lives on the host; a WebNode can only serve this machine's disk.
+    expect(fileViewerKind('/tmp/page.html', { renderHtml: true, sshFs: true })).toBe('editor')
   })
 
   it('isVideoFile matches common video extensions, not images', () => {

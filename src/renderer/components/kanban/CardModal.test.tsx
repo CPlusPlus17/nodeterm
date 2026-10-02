@@ -40,10 +40,12 @@ vi.mock('./ModalTerminal', async () => {
     ModalTerminal: ({
       nodeId,
       covered,
+      projectId,
       onOpenFile
     }: {
       nodeId: string
       covered?: boolean
+      projectId?: string
       onOpenFile?: (file: { path: string; projectId: string; ssh: boolean }) => void
     }) => {
       useEffect(() => {
@@ -53,7 +55,13 @@ vi.mock('./ModalTerminal', async () => {
         }
       }, [])
       return (
-        <div className="kanban-modal__term" data-node-id={nodeId} data-covered={String(!!covered)} tabIndex={0}>
+        <div
+          className="kanban-modal__term"
+          data-node-id={nodeId}
+          data-project-id={projectId}
+          data-covered={String(!!covered)}
+          tabIndex={0}
+        >
           Terminal Mock
           <button
             className="modal-terminal-file-link"
@@ -174,6 +182,8 @@ describe('CardModal', () => {
       )
     )
 
+    // File links resolve against the CARD's project, which the modal hands to its live viewer.
+    expect(document.body.querySelector<HTMLElement>('.kanban-modal__term')?.dataset.projectId).toBe('p1')
     act(() => {
       document.body.querySelector<HTMLButtonElement>('.modal-terminal-file-link')!.click()
     })

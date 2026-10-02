@@ -12850,7 +12850,7 @@ button.pull-checks__name {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: rgba(var(--tint-rgb), 0.4);
-  font-family: var(--mono-font, monospace);
+  font-family: ui-monospace, monospace;
   font-size: 10px;
 }
 .local-file-preview__body {
@@ -12896,7 +12896,7 @@ button.pull-checks__name {
   white-space: pre-wrap;
   word-break: break-word;
   color: rgba(var(--tint-rgb), 0.88);
-  font: 12px/1.55 var(--mono-font, monospace);
+  font: 12px/1.55 ui-monospace, monospace;
 }
 .local-file-preview__message {
   position: absolute;
@@ -12908,7 +12908,7 @@ button.pull-checks__name {
   font-size: 12px;
 }
 .local-file-preview__message--error {
-  color: rgba(255, 120, 120, 0.88);
+  color: var(--danger);
 }
 
 /* ---- Node comments flyout: the header 💬 expands the board-log feed to the node's right ---- */

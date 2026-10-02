@@ -1009,10 +1009,15 @@ export function isVideoFile(path: string): boolean {
   return VIDEO_EXTS.includes(ext)
 }
 
-/** Pick the canvas surface used for a linked file. Remote HTML stays source-editable because a
- *  WebNode can only serve a local file; every other preview works through EditorNode's routed fs. */
-export function fileViewerKind(path: string, sshFs = false): 'editor' | 'video' | 'web' {
-  if (!sshFs && isHtmlFile(path)) return 'web'
+/** Pick the canvas surface for a file. HTML renders as a page only when the caller asked to VIEW
+ *  it (`renderHtml` — a terminal link, not Explorer/⌘K, where .html means "edit the source"), and
+ *  only locally: a WebNode serves a file off THIS machine's disk, so an SSH project's page stays in
+ *  the editor. Every other preview works through EditorNode's routed fs. */
+export function fileViewerKind(
+  path: string,
+  opts: { sshFs?: boolean; renderHtml?: boolean } = {}
+): 'editor' | 'video' | 'web' {
+  if (opts.renderHtml && !opts.sshFs && isHtmlFile(path)) return 'web'
   if (isMediaFile(path)) return 'video'
   return 'editor'
 }

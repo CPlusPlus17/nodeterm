@@ -655,6 +655,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                       searchOpen={searchOpen}
                       onCloseSearch={() => setSearchOpen(false)}
                       covered={mdOpen}
+                      projectId={projectId}
                       onOpenFile={setPreviewFile}
                     />
                     {/* The ⌘M face is laid OVER the live viewer (the pane anchors it), never swapped

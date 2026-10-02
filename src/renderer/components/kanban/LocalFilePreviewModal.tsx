@@ -12,9 +12,13 @@ import {
 import { useSession } from '../../session/session'
 import { useProjects } from '../../state/projects'
 import { sshFs } from '../../terminal/ssh-fs'
+import { isBrowserRuntime } from '../../bridge/runtime'
 
 export interface LocalFileTarget {
   path: string
+  /** The CARD's project — the filesystem the link was resolved against (may not be the active one). */
+  projectId: string
+  /** The path lives on that SSH project's host. */
   ssh: boolean
 }
 
@@ -29,12 +33,23 @@ interface LocalFilePreviewModalProps {
 export function LocalFilePreviewModal({ file, onClose }: LocalFilePreviewModalProps) {
   const isTopDialog = useDialogStack()
   const { api } = useSession()
-  const activeProjectId = useProjects((s) => s.activeProjectId)
+  // The same filesystem the link was existence-checked against: the CARD's project, never the
+  // active one (the Omni board opens cards from every project).
   const fs = useMemo(
-    () => (file.ssh && activeProjectId ? sshFs(activeProjectId) : api.fs),
-    [activeProjectId, api, file.ssh]
+    () => (file.ssh ? sshFs(file.projectId) : api.fs),
+    [api, file.projectId, file.ssh]
   )
-  const kind = useMemo<LocalFilePreviewKind>(() => localFilePreviewKind(file.path), [file.path])
+  // "Open on canvas" opens in the ACTIVE project's canvas, so it is offered only for a card of that
+  // project — a file of another project's card would land on the wrong canvas (and, for an SSH
+  // card, be read off the wrong machine).
+  const onActiveCanvas = useProjects((s) => s.activeProjectId === file.projectId)
+  // A browser tab has no <webview> and no agent-web jail (media.writeHtml is a bridge stub), so the
+  // Server Edition shows an HTML file's source instead of a page that could never render.
+  const browser = isBrowserRuntime()
+  const kind = useMemo<LocalFilePreviewKind>(() => {
+    const k = localFilePreviewKind(file.path)
+    return k === 'html' && browser ? 'text' : k
+  }, [file.path, browser])
   const fileName = file.path.replace(/\\/g, '/').split('/').pop() || file.path
   const [content, setContent] = useState('')
   const [binarySrc, setBinarySrc] = useState('')
@@ -144,7 +159,7 @@ export function LocalFilePreviewModal({ file, onClose }: LocalFilePreviewModalPr
 
   const openOnCanvas = (): void => {
     window.dispatchEvent(
-      new CustomEvent('nodeterm:open-file', { detail: { path: file.path, ssh: file.ssh } })
+      new CustomEvent('nodeterm:open-file', { detail: { path: file.path, ssh: file.ssh, view: true } })
     )
   }
 
@@ -154,9 +169,11 @@ export function LocalFilePreviewModal({ file, onClose }: LocalFilePreviewModalPr
         <div className="local-file-preview__header">
           <span className="local-file-preview__title" title={file.path}>{fileName}</span>
           <span className="local-file-preview__path" title={file.path}>{file.path}</span>
-          <button className="kanban-modal__action" title="Open on canvas" onClick={openOnCanvas}>
-            <IconExternal />
-          </button>
+          {onActiveCanvas && (
+            <button className="kanban-modal__action" title="Open on canvas" onClick={openOnCanvas}>
+              <IconExternal />
+            </button>
+          )}
           <button className="kanban-modal__action" title="Close preview" onClick={onClose}>
             <IconClose />
           </button>
