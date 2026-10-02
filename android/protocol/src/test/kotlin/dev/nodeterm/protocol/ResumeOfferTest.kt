@@ -189,7 +189,7 @@ class ResumeOfferTest {
         val attach = AppSourcePins.blockAfter(controller, "private suspend fun afterAttach(")
         AppSourcePins.assertInOrder(attach, "ResumeOffer.wantsPane(", "conn.paneCommand(nodeId)", "ResumeOffer.afterAttach(", "paneCommand = pane")
         val tap = AppSourcePins.blockAfter(controller, "fun acceptResume()")
-        AppSourcePins.assertInOrder(tap, "ResumeOffer.Kind.WAKE", "conn?.paneCommand(nodeId)", "offer.stillOffered(snap, nodeId, pane)", "s.write(offer.keys)")
+        AppSourcePins.assertInOrder(tap, "ResumeOffer.Kind.WAKE", "conn?.paneCommand(nodeId)", "offer.stillOffered(snap, nodeId, pane)", "writeAfterScrollCancel(offer.keys, s)")
     }
 
     @Test

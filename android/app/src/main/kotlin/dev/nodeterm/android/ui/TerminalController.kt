@@ -42,6 +42,7 @@ import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.PhoneLaunch
 import dev.nodeterm.protocol.host.StreamLease
 import dev.nodeterm.protocol.host.TerminalPage
+import dev.nodeterm.protocol.host.TerminalActions
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.ViewerSlot
@@ -183,6 +184,8 @@ class TerminalController(
      */
     private val slot = ViewerSlot()
     private val stream: TerminalStream? get() = slot.stream
+    /** One ordered input drain per installed stream; retired before its viewer ticket changes. */
+    @Volatile private var actions: TerminalActions? = null
     private var attachJob: Job? = null
     private var cols = 0
     private var rows = 0
@@ -236,6 +239,7 @@ class TerminalController(
                 // Not the stream this screen shows: our own detach on ON_STOP or on leaving (it ends the
                 // stream too), or a stream a superseded attach or a launch held. Not a drop to recover from.
                 if (!slot.ended(ticket)) return@post
+                retireActions()
                 // exit 0 with the session still running = another client attached with -D and
                 // detached us — audit A13. A current desktop no longer does this to a relay-attached
                 // phone, but an older desktop does, and any desktop still does it to a phone attached
@@ -283,20 +287,21 @@ class TerminalController(
 
         @JavascriptInterface
         fun onInput(data: String) {
+            val s = stream ?: return
             if (!page.isCurrent(gen)) return
             var out = data
             if (ctrlArmed && data.length == 1) {
                 Keys.ctrl(data)?.let { out = it }
-                main.post { ctrlArmed = false }
+                main.post { if (page.isCurrent(gen) && stream === s) ctrlArmed = false }
             }
-            stream?.write(out)
+            writeInput(out, s)
         }
 
         @JavascriptInterface
         fun onScroll(up: Boolean, notches: Int) {
+            val input = actions ?: return
             if (!page.isCurrent(gen)) return
-            val s = stream ?: return
-            graph.scope.launch { runCatching { s.scroll(up, notches) } }
+            if (!input.scroll(up, notches)) inputBusy()
         }
 
         /** The OSC 52 base64 cap terminal.js applies before a copy crosses this bridge (A53). */
@@ -494,6 +499,29 @@ class TerminalController(
         if (page.offer(code)) webView?.evaluateJavascript(code, null)
     }
 
+    private fun retireActions() {
+        actions?.close()
+        actions = null
+    }
+
+    private fun inputBusy() {
+        main.post { if (attached) notice = "Terminal input is busy. Wait a moment and try again." }
+    }
+
+    private fun writeInput(data: String, expected: TerminalStream? = stream) {
+        val input = actions ?: return
+        if (expected == null || stream !== expected) return
+        if (!input.write(data)) inputBusy()
+    }
+
+    /** A native resume must wait for JS to discard its unsent swipe, then check the viewer again. */
+    private fun writeAfterScrollCancel(data: String, expected: TerminalStream) {
+        val wv = webView ?: return
+        wv.evaluateJavascript("nt.cancelScroll()") {
+            if (webView === wv && stream === expected && attached) writeInput(data, expected)
+        }
+    }
+
     /**
      * The renderer behind [view] is gone (audit A45): Android killed it to reclaim memory, or it
      * crashed. That WebView can never be used again. The stream is detached (it would paint into
@@ -511,6 +539,7 @@ class TerminalController(
         val showing = showing(state)
         webView = null
         page.lost()
+        retireActions()
         // Detached as on ON_STOP. A launch still holding the stream finishes first (A40), and the
         // stream's exit is not reported: its ticket is retired.
         attachJob?.cancel()
@@ -656,6 +685,8 @@ class TerminalController(
         // The offer stays on screen (A41 review): this attach settles it, keeping an unanswered
         // resume or dropping it (afterAttach). Until then it cannot be typed.
         resumeSettled = false
+        retireActions()
+        js("nt.suspendScroll()")
         val ticket = slot.begin()
         val sink = sinkFor(ticket)
         attachJob = graph.scope.launch {
@@ -698,6 +729,8 @@ class TerminalController(
                     // since this one began. Then the stream is let go of instead of installed (A40).
                     main.post {
                         if (!slot.accept(ticket, lease)) return@post
+                        actions = TerminalActions(graph.scope, s) { slot.isCurrent(ticket) && stream === s }
+                        js("nt.resumeScroll()")
                         attachedAt = System.currentTimeMillis()
                         state = TermState.Attached
                         // A session started for a launch types its own line: nothing to offer.
@@ -787,7 +820,7 @@ class TerminalController(
         resumeOffer = null
         val s = stream ?: return
         if (offer.kind != ResumeOffer.Kind.WAKE) {
-            s.write(offer.keys)
+            writeAfterScrollCancel(offer.keys, s)
             return
         }
         val conn = resumeConn
@@ -800,7 +833,9 @@ class TerminalController(
             main.post {
                 // The screen moved on meanwhile (a reattach, or it left): not this tap's stream.
                 if (stream !== s) return@post
-                if (offer.stillOffered(snap, nodeId, pane)) s.write(offer.keys) else notice = ResumeOffer.WITHDRAWN
+                if (offer.stillOffered(snap, nodeId, pane)) {
+                    writeAfterScrollCancel(offer.keys, s)
+                } else notice = ResumeOffer.WITHDRAWN
             }
         }
     }
@@ -847,7 +882,7 @@ class TerminalController(
 
     /** Raw bytes (the ^C/^D/^R/^L chips). Nothing while not [attached] (A41). */
     fun raw(data: String) {
-        if (attached) stream?.write(data)
+        if (attached) js("nt.raw('${b64(data.toByteArray(Charsets.UTF_8))}')")
     }
 
     /**
@@ -892,6 +927,8 @@ class TerminalController(
     fun onStop() {
         if (disposed || stopped) return
         stopped = true
+        js("nt.suspendScroll()")
+        retireActions()
         // Stops a connect or an approval wait; an attach already sent still lands, and is let go of
         // by the hand-off (see attach(), A40). onStart begins its own.
         attachJob?.cancel()
@@ -913,6 +950,7 @@ class TerminalController(
 
     fun dispose() {
         disposed = true
+        retireActions()
         // Detaches the stream (after a launch that still holds it, A40), and refuses every attach
         // still on its way. attachJob is deliberately not cancelled: an attach that lands now is
         // let go of by the hand-off, and a session it created still gets its launch.

@@ -1,0 +1,68 @@
+package dev.nodeterm.protocol
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+/** Native lifecycle/bridge callbacks need a device; pin their delegation to the tested queue. */
+class TerminalActionsWiringTest {
+    private fun controller() = AppSourcePins.ui("TerminalController.kt")
+        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+        .replace(Regex("""(?m)^\s*//.*$"""), "")
+
+    @Test
+    fun `a queue belongs to the accepted stream and ticket and starts before JS scrolling resumes`() {
+        val source = controller()
+        val attach = AppSourcePins.blockAfter(source, "private fun attach()")
+        AppSourcePins.assertInOrder(attach, "retireActions()", "nt.suspendScroll()", "slot.begin()")
+        AppSourcePins.assertInOrder(attach, "if (!slot.accept(ticket, lease)) return@post",
+            "actions = TerminalActions(graph.scope, s) { slot.isCurrent(ticket) && stream === s }", "nt.resumeScroll()")
+        assertEquals(1, Regex("""\bTerminalActions\(""").findAll(source).count())
+    }
+
+    @Test
+    fun `every viewer retirement closes its queue and stop suspends the page before detaching`() {
+        val source = controller()
+        val retire = AppSourcePins.blockAfter(source, "private fun retireActions()")
+        AppSourcePins.assertInOrder(retire, "actions?.close()", "actions = null")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(source, "override fun onExit(code:"),
+            "if (!slot.ended(ticket)) return@post", "retireActions()")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(source, "private fun rendererGone("),
+            "page.lost()", "retireActions()", "slot.leave()")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(source, "fun onStop()"),
+            "nt.suspendScroll()", "retireActions()", "slot.leave()", "webView?.onPause()")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(source, "fun dispose()"),
+            "retireActions()", "slot.close()")
+    }
+
+    @Test
+    fun `bridge input and scrolling use bounded admission and never launch independent RPCs`() {
+        val source = controller()
+        val input = AppSourcePins.blockAfter(source, "fun onInput(data:")
+        AppSourcePins.assertInOrder(input, "val s = stream ?: return", "if (!page.isCurrent(gen)) return", "writeInput(out, s)")
+        val scroll = AppSourcePins.blockAfter(source, "fun onScroll(up:")
+        AppSourcePins.assertInOrder(scroll, "val input = actions ?: return", "if (!page.isCurrent(gen)) return",
+            "if (!input.scroll(up, notches)) inputBusy()")
+        assertFalse(scroll.contains("launch"), "A suspended relay RPC must not run in a per-gesture coroutine")
+        val write = AppSourcePins.blockAfter(source, "private fun writeInput(")
+        AppSourcePins.assertInOrder(write, "val input = actions ?: return", "expected == null || stream !== expected",
+            "if (!input.write(data)) inputBusy()")
+        assertTrue(AppSourcePins.blockAfter(source, "private fun inputBusy()").contains("notice ="))
+    }
+
+    @Test
+    fun `native input cancels page momentum before the queue write and rechecks its stream`() {
+        val source = controller()
+        val raw = AppSourcePins.blockAfter(source, "fun raw(data:")
+        assertTrue(raw.contains("nt.raw("), "Raw chips must enter the page's scroll-cancelling input path")
+        assertFalse(raw.contains(".write("))
+        val resume = AppSourcePins.blockAfter(source, "fun acceptResume()")
+        assertEquals(2, Regex("""writeAfterScrollCancel\(offer\.keys, s\)""").findAll(resume).count())
+        val cancel = AppSourcePins.blockAfter(source, "private fun writeAfterScrollCancel(")
+        AppSourcePins.assertInOrder(cancel, "val wv = webView ?: return", "wv.evaluateJavascript(\"nt.cancelScroll()\") {",
+            "webView === wv && stream === expected && attached", "writeInput(data, expected)")
+        assertFalse(Regex("""\b(?:stream|s)\??\.write\(""").containsMatchIn(source),
+            "Installed-viewer input must not bypass its ordered queue")
+    }
+}
