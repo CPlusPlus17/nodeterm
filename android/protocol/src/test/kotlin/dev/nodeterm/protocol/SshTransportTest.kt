@@ -17,6 +17,7 @@ import dev.nodeterm.protocol.model.Pane
 import dev.nodeterm.protocol.pairing.SshIdentity
 import dev.nodeterm.protocol.ssh.HostBrowse
 import dev.nodeterm.protocol.ssh.HostKeyChangedException
+import dev.nodeterm.protocol.ssh.HostKeyNotPairedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshHostConnection
@@ -72,6 +73,8 @@ class SshTransportTest {
     private lateinit var ptyScript: PtyScript
     private val identity = SshIdentity.generate()
     private var port = 0
+    /** Every public key the server was asked to accept, ours or not. */
+    private val authAttempts = java.util.concurrent.atomic.AtomicInteger()
 
     private fun tmuxAvailable() = runCatching { ProcessBuilder("tmux", "-V").start().waitFor() == 0 }.getOrDefault(false)
 
@@ -174,6 +177,7 @@ class SshTransportTest {
         server.keyPairProvider = SimpleGeneratorHostKeyProvider(File(root, "hostkey.ser").toPath())
         val expected = identity.keyPair.public.encoded
         server.publickeyAuthenticator = org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator { user, key, _ ->
+            authAttempts.incrementAndGet()
             user == "dev" && key.encoded.contentEquals(expected)
         }
         server.commandFactory = org.apache.sshd.server.command.CommandFactory { _, command ->
@@ -302,11 +306,12 @@ class SshTransportTest {
         }
     }
 
-    private class MemoryPin(var value: String? = null) : HostKeyPin {
+    private class MemoryPin(var value: String? = null, private val paired: List<String> = emptyList()) : HostKeyPin {
         override fun pinned() = value
         override fun pin(fingerprint: String) {
             value = fingerprint
         }
+        override fun anchors() = paired
     }
 
     private class Sink : TerminalSink {
@@ -1158,6 +1163,42 @@ class SshTransportTest {
         connect(pin).close()
         val serverKey = server.keyPairProvider.loadKeys(null).first().public
         assertEquals(SshHostConnection.fingerprint(serverKey), pin.value)
+    }
+
+    @Test
+    fun `a first connect must present a key the pairing named, refused before our key is offered (A49-anchor)`() {
+        val serverFp = SshHostConnection.fingerprint(server.keyPairProvider.loadKeys(null).first().public)
+        val stranger = "SHA256:" + "A".repeat(43)
+        // The computer named other keys at pairing: whatever answers here is not one of them.
+        val pin = MemoryPin(paired = listOf(stranger))
+        val before = authAttempts.get()
+        val refused = assertFailsWith<HostKeyNotPairedException> { connect(pin).close() }
+        assertNull(pin.value, "a key the pairing did not name must never become the pin")
+        assertEquals(before, authAttempts.get(), "the phone's key must not be offered to a server the pairing did not name")
+        assertEquals(serverFp, refused.actual)
+        assertEquals(listOf(stranger), refused.paired)
+        assertTrue(refused.message!!.contains("reported when this phone was paired"), refused.message)
+        // A HostKeyChangedException, so SshFallback refuses SSH and in Auto still tries the relay.
+        assertIs<HostKeyChangedException>(refused)
+
+        // The computer named this server's key among others: it connects and pins exactly that key.
+        val anchored = MemoryPin(paired = listOf(stranger, serverFp))
+        connect(anchored).close()
+        assertEquals(serverFp, anchored.value)
+        // Later connects verify the pin, as they always did.
+        connect(anchored).close()
+    }
+
+    @Test
+    fun `a host certificate matches the pairing by the key it certifies (A49-anchor)`() {
+        val inner = server.keyPairProvider.loadKeys(null).first().public
+        val innerFp = SshHostConnection.fingerprint(inner)
+        val cert = com.hierynomus.sshj.userauth.certificate.Certificate.getBuilder<java.security.PublicKey>().publicKey(inner).build()
+        assertTrue(SshHostConnection.matchesAnchor(listOf(innerFp), "SHA256:the-certificate-itself", cert))
+        assertFalse(SshHostConnection.matchesAnchor(listOf("SHA256:" + "B".repeat(43)), "SHA256:the-certificate-itself", cert))
+        // A plain key matches by its own fingerprint only.
+        assertTrue(SshHostConnection.matchesAnchor(listOf(innerFp), innerFp, inner))
+        assertFalse(SshHostConnection.matchesAnchor(listOf("SHA256:" + "B".repeat(43)), innerFp, inner))
     }
 
     @Test

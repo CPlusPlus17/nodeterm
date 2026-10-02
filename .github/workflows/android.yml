@@ -14,7 +14,7 @@ name: Android
 #                         blob, ...); also ack-sweep behind ~/.nodeterm/acks, which is not bundled
 #   src/shared/**         bundled (types, agents/*, kanban-labels, ssh, ...); also pair-qr.ts (the
 #                         pairing QR envelope) and agents/pane.ts (read by ResumeOfferTest)
-#   src/main/*.ts         bundled: pairing-core, pairing-service, windows-ssh-keys; also index.ts, which
+#   src/main/*.ts         bundled: pairing-core, pairing-service, windows-ssh-keys, ssh-host-keys; also index.ts, which
 #                         names the projects.list blob's sources and wires the relay verbs
 #   src/main/remote/**    bundled: host-service, connectHostSession and the relay/E2EE code under it
 #   tsconfig.json         esbuild applies its compilerOptions to every bundled file (the root one; it

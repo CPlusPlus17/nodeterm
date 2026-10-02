@@ -7,7 +7,10 @@ import dev.nodeterm.protocol.model.J.s
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.PairingResult
 import dev.nodeterm.protocol.pairing.RelayBlock
+import dev.nodeterm.protocol.ssh.HostKeyAnchors
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -32,7 +35,11 @@ data class PairedHost(
     /** The host's box key from the QR (`hostKey`): the relay identity pinned at pairing. */
     val hostKeyB64: String?,
     val relay: RelayBlock?,
-    /** `SHA256:…` of the SSH host key, pinned on first connect (TOFU). */
+    /**
+     * `SHA256:…` of the SSH host key, pinned by the first connect that authenticated. When
+     * [sshHostKeyAnchors] is not empty that connect had to present one of them; otherwise it was trust
+     * on first use.
+     */
     val sshHostKeyFingerprint: String?,
     /** When it was paired, or added by address. */
     val pairedAt: Long,
@@ -45,7 +52,17 @@ data class PairedHost(
      * whole list on its next save with no `manual` key. So [fromJson] also reads the flag from the
      * id, which survives that round trip ([MANUAL_ID_PREFIX]).
      */
-    val manual: Boolean = false
+    val manual: Boolean = false,
+    /**
+     * The computer's SSH host key fingerprints from its sealed pairing answer (audit A49-anchor,
+     * [dev.nodeterm.protocol.ssh.HostKeyAnchors]): the first SSH connect must present one of them before
+     * anything is pinned. Empty for a computer whose desktop sent none (older, Windows, keys it could
+     * not read) and for one added by its SSH address; that first connect is trust on first use. Kept
+     * after the pin is set, which then decides on its own. Persisted as `sshHostKeyAnchors` only when
+     * there are some, so a record without them is what it was; a build that predates the key drops it
+     * on its next save, which leaves the computer on trust on first use, as that build always had it.
+     */
+    val sshHostKeyAnchors: List<String> = emptyList()
 ) {
     /** The relay host key: the relay block's when present, else the QR's `hostKey` (same key). */
     val relayHostKeyB64: String? get() = relay?.hostPublicKeyB64 ?: hostKeyB64
@@ -73,6 +90,7 @@ data class PairedHost(
             })
         }
         sshHostKeyFingerprint?.let { put("sshHostKeyFingerprint", it) }
+        if (sshHostKeyAnchors.isNotEmpty()) put("sshHostKeyAnchors", JsonArray(sshHostKeyAnchors.map(::JsonPrimitive)))
         put("pairedAt", pairedAt)
         // Only when set: a paired computer's record is byte-for-byte what it was before A27.
         if (manual) put("manual", true)
@@ -105,7 +123,9 @@ data class PairedHost(
                 relay = if (manual) null else o.o("relay")?.let(PairingPayload::parseRelayBlock),
                 sshHostKeyFingerprint = o.s("sshHostKeyFingerprint"),
                 pairedAt = o.l("pairedAt") ?: 0,
-                manual = manual
+                manual = manual,
+                // Nothing pairs a computer added by address, so nothing anchors its first connect.
+                sshHostKeyAnchors = if (manual) emptyList() else HostKeyAnchors.parse(o["sshHostKeyAnchors"])
             )
         }
 
@@ -119,7 +139,8 @@ data class PairedHost(
             hostKeyB64 = payload.hostKey,
             relay = result.relay ?: payload.relay,
             sshHostKeyFingerprint = null,
-            pairedAt = now
+            pairedAt = now,
+            sshHostKeyAnchors = result.sshHostKeyFingerprints
         )
     }
 }

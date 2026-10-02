@@ -22,7 +22,7 @@ written for it and tested where the layer allows, and the numbered
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
 | Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: no relay (so no new session, board writes, node actions or source control from the phone, and nothing "from anywhere" beyond what reaches its SSH, a VPN say) and no push. No password login, no Windows |
-| Direct connection on your network (SSH + tmux) | ✓ | TOFU-pinned host key; the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
+| Direct connection on your network (SSH + tmux) | ✓ | Host key checked against the keys the computer names at pairing, then pinned (trust on first use with a desktop that names none); the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body), also when remote access is turned on only after pairing; an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
@@ -207,9 +207,12 @@ iOS app does receive the detail, in the push the desktop sends.
 - Relay traffic is end-to-end encrypted (NaCl box under a per-session HKDF key) and checked exactly
   as the desktop checks it: role byte (no reflections), strictly increasing sequence numbers (no
   replays), no re-key once ready, and the host key pinned from pairing.
-- The SSH host key is pinned on the first connect that authenticates (a server that refuses the
-  phone's key is never pinned). A changed key is never used over SSH; in Auto the phone goes on to
-  the relay, which verifies the computer separately, and shows a warning.
+- The computer names its SSH host keys in the sealed pairing answer, and the phone's first connect
+  must present one of them; a server that does not is refused before the phone's key is offered. An
+  older desktop names none, and the first connect is then trust on first use. Either way the key is
+  pinned on the first connect that authenticates (a server that refuses the phone's key is never
+  pinned). A changed key is never used over SSH; in Auto the phone goes on to the relay, which
+  verifies the computer separately, and shows a warning.
 - A computer added by its SSH address has no pairing behind its first connect, so compare the
   fingerprint the Add screen shows with the computer's own (the screen gives the `ssh-keygen`
   command). A changed key stops it; forget it and add it again only if you know why it changed. To

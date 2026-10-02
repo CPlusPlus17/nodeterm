@@ -10,6 +10,9 @@
 // Windows is relay-only: no key is installed (see `directSsh` in createPairingService), the QR
 // says `"ssh":false`, and a pairing whose relay mint fails pairs nothing.
 //
+// A sealed answer also carries this computer's SSH host key fingerprints (`ssh-host-keys.ts`), so the
+// phone checks its first SSH connect against them instead of trusting whichever key answers there.
+//
 // Pure bits (payload build, key validation, LAN-IPv4 pick) live in `pairing-core.ts` so they're
 // unit-tested without spinning up a server.
 
@@ -48,6 +51,7 @@ import { hostIdFromPublicKeyB64 } from './remote/relay-id'
 import type { RevokeResult } from './remote/revocation'
 import { getDeviceId } from '../core/device-id'
 import { administratorsKeysPath, detectWindowsKeyFile, type WindowsKeyFile } from './windows-ssh-keys'
+import { readSshHostKeyFingerprints, SSH_HOST_KEY_DIRS } from './ssh-host-keys'
 
 const execFileAsync = promisify(execFile)
 
@@ -469,6 +473,9 @@ export interface PairingServiceOptions {
   defaultRouteAddress?: () => Promise<string | null>
   /** Defaults to PAIR_TIMEOUT_MS. */
   timeoutMs?: number
+  /** Where sshd's host keys (and `sshd_config`) are read from for the sealed answer's
+   *  `sshHostKeyFingerprints` (audit A49-anchor). Defaults to `SSH_HOST_KEY_DIRS`. */
+  sshHostKeyDirs?: readonly string[]
 }
 
 export function createPairingService(
@@ -898,13 +905,24 @@ export function createPairingService(
         // after a late adoption. Not pinned at the scan without a relay leg, so a LAN-only pairing
         // does not count as a relay phone (host-mode push keys on the pin store).
         const relayApproved = relayPinned || (!!relayBoxKey && !!relayDeps?.pinRelayKeyIfPaired)
+        // `sshHostKeyFingerprints` (additive, A49-anchor): this computer's SSH host key fingerprints,
+        // so the phone's first SSH connect must present one of them instead of pinning whichever key
+        // answers at the paired address. In the SEALED answer only, which is bound to the host key on
+        // this screen; a plaintext answer could be rewritten on the LAN, and the QR stays as it is.
+        // Not on Windows, where the phone has no SSH leg. Unreadable keys ⇒ the field is left out and
+        // the phone keeps its pin-after-authentication, as with an older desktop.
+        const sshHostKeyFingerprints =
+          sealed && directSsh
+            ? await readSshHostKeyFingerprints(options.sshHostKeyDirs ?? SSH_HOST_KEY_DIRS).catch(() => [])
+            : []
         const responseObj = {
           ok: true,
           deviceId,
           agentToken,
           ...relayFields,
           ...(relayPinned ? { relayPinned: true } : {}),
-          ...(relayApproved ? { relayApproved: true } : {})
+          ...(relayApproved ? { relayApproved: true } : {}),
+          ...(sshHostKeyFingerprints.length ? { sshHostKeyFingerprints } : {})
         }
         if (sealed) {
           const respBox = encrypt(

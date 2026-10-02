@@ -28,17 +28,31 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
 `Auto` tries SSH with a 4 s budget and falls back to the relay. Per-computer overrides live in
 Settings ("How to reach each computer").
 
-**SSH host key.** Trust on first use, and the pin is saved only once the server has accepted the
-phone's key (audit `A49`): a machine that merely answers at the paired address and refuses us never
-becomes the pin. A key that differs from the pin is never used over SSH. In `Auto` the connect then
-goes on to the relay (`SshFallback`, audit `A74`), which authenticates the computer on its own (the
-relay host key from pairing, then the SAS approval), and the host screen keeps a warning up while
-connected that way; the relay dial still goes through `RelayApprovalGate`, so a background check
-never makes a first relay handshake because of it. "Only on my network" stops with the warning. The
-usual cause is benign: the LAN leg dials the DHCP address the computer had at pairing, and another
-SSH-running machine now has it (or the phone is on another network using the same range). The
-message points at "Only through the relay"; pairing again is the way to trust a reinstalled
-computer's new key (for a computer added by its SSH address, forgetting it and adding it again).
+**SSH host key.** Anchored in the pairing (audit `A49-anchor`): the desktop's sealed `/pair` answer
+names its SSH host keys (`sshHostKeyFingerprints`, the `SHA256:…` of every
+`/etc/ssh/ssh_host_*_key.pub` and of the keys `sshd_config` names, read by
+`src/main/ssh-host-keys.ts`; macOS 10.10 and older kept them in `/etc`). The phone stores them on
+the paired computer (`PairedHost.sshHostKeyAnchors`), and its first SSH connect must present one of
+them: a server whose key is none of them is refused during the key exchange, before the phone's key
+is offered, and nothing is pinned (`HostKeyNotPairedException`). The keys ride only the SEALED
+answer, which is bound to the host key the QR on the computer's screen carries; a plaintext answer
+could be rewritten on the LAN, so the desktop leaves them out of it and the phone ignores them
+there, and the QR does not carry them. A desktop that predates the field, a Windows desktop (no SSH
+leg) and one that could not read its keys send none, and the first connect is then trust on first
+use as before. Either way the pin is saved only once the server has accepted the phone's key (audit
+`A49`): a machine that merely answers at the paired address and refuses us never becomes the pin. A
+key that differs from the pin (or, before the first pin, from every key the pairing named) is never
+used over SSH. In `Auto` the connect then goes on to the relay (`SshFallback`, audit `A74`), which
+authenticates the computer on its own (the relay host key from pairing, then the SAS approval), and
+the host screen keeps a warning up while connected that way; the relay dial still goes through
+`RelayApprovalGate`, so a background check never makes a first relay handshake because of it. "Only
+on my network" stops with the warning. The usual cause is benign: the LAN leg dials the DHCP address
+the computer had at pairing, and another SSH-running machine now has it (or the phone is on another
+network using the same range). The message points at "Only through the relay"; pairing again is the
+way to trust a reinstalled computer's new key (for a computer added by its SSH address, forgetting
+it and adding it again). The iOS app can adopt the same field: it is additive in the sealed answer,
+and a phone that does not read it pairs exactly as before (a follow-up for @eneskirca in
+nodeterm-ios).
 
 **Relay approval.** The standing host raises its SAS dialog as soon as an unpinned phone completes
 the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the background worker
@@ -255,8 +269,11 @@ unchanged.
   relay leg and its `/v1/relay/device` body, a refused wrong token, the relay key pinned at the scan
   and, without a relay leg, recorded and approved on the first relay handshake (`A07-late`: the
   fixture asks the service what the standing host asks, for the phone's key and a stranger's, before
-  and after revoking), and the size of the desktop's largest answer (634 bytes, counted through a
-  proxy). Scripted local servers pin the client's
+  and after revoking), the SSH host keys a sealed answer names (`A49-anchor`: read from a host-key
+  dir the fixture is pointed at, never the machine's `/etc`; in the form sshj reports; none in a
+  plaintext answer; a first connect to a real MINA server whose key they name pins it, and one whose
+  key they do not name is refused), and the size of the desktop's largest answer (1,803 bytes with
+  the 16 host keys it sends at most, counted through a proxy). Scripted local servers pin the client's
   bounds on an answer from whatever `host:pairPort` a code names: a declared length is refused
   above 64 KiB or below zero before anything is allocated, a body with no length stops at 64 KiB,
   and the whole exchange ends at a 45 s deadline (or when the caller is cancelled) by closing the
@@ -385,9 +402,15 @@ missed link there); the port's always includes it, which also keeps the Copy she
 such a run from standing still (a test runs one).
 
 An SSH test pins that a server which completes the key exchange and then refuses the phone's key
-(or user) leaves the host-key pin empty (`A49`). `SshFallbackTest` pins what follows a failed SSH
-leg (`A74`): a changed key goes on to the relay in Auto with a warning, stops on the SSH-only route,
-and its text names "Only through the relay" rather than only re-pairing. The app's use of it (the
+(or user) leaves the host-key pin empty (`A49`), and that a first connect to a server whose key the
+pairing did not name is refused before the phone's key is offered, while one whose key it named
+connects and pins exactly that key (`A49-anchor`; a host certificate matches by the key it
+certifies). `HostKeyAnchorsTest` checks that sshj fingerprints GitHub's published host keys exactly as
+OpenSSH prints them (`src/main/ssh-host-keys.test.ts` checks the desktop's reader against the same
+pair), the parsing and the record, and that a plaintext answer's keys are ignored.
+`SshFallbackTest` pins what follows a failed SSH leg (`A74`): a changed key goes on to the relay in
+Auto with a warning, stops on the SSH-only route, and its text names "Only through the relay" rather
+than only re-pairing. The app's use of it (the
 relay dial behind `RelayApprovalGate`, the warning on the host screen) is only type-checked.
 
 `TerminalHandoffTest` pins the terminal screen's attach hand-off (`A40`). A stream that arrives
@@ -770,11 +793,14 @@ later fix left to a device.
 
 10. On the LAN (route Automatic): the Sessions tab shows the desktop's projects and sessions, grouped
     Needs you / Running / Sleeping, with activity and context %. *(A02, A65)*
-11. The first connect over the network pins the computer's SSH host key, and later connects use it
-    silently. Then present a different key at that address (another SSH-running machine takes the
-    desktop's LAN address, or the desktop's host keys are regenerated): on Automatic the phone refuses
-    SSH, connects through the relay and keeps a warning on the host screen that names "Only through
-    the relay"; on "Only on my network (SSH)" it stops with the warning. *(A49, A74)*
+11. Pair with a current desktop (macOS and Linux), then connect over the network: the first connect
+    is accepted (the key the computer's sshd serves is one the pairing named) and pins it, and later
+    connects use it silently. Then present a different key at that address (another SSH-running
+    machine takes the desktop's LAN address, or the desktop's host keys are regenerated): on
+    Automatic the phone refuses SSH, connects through the relay and keeps a warning on the host
+    screen that names "Only through the relay"; on "Only on my network (SSH)" it stops with the
+    warning. Do the same once between pairing and the first connect: the phone says the key is not
+    one the computer reported when it was paired, and pins nothing. *(A49, A74)*
 12. On cellular, off the LAN: connect through the relay. The desktop shows the SAS dialog and the phone
     shows the same code; approve. Reconnect later: no second prompt. On another pairing press Deny: the
     phone says it was not approved and does not dial again until Try again. *(A65, A30)*
@@ -1168,14 +1194,17 @@ later fix left to a device.
   resumes in its CLI's default, which can edit after asking, and a Codex node in `manual` on a
   codex before 0.149 loses `--ask-for-approval untrusted` and resumes in `on-request`, where the
   model decides when to ask.
-- **The SSH pin is not anchored in pairing, and the LAN address is frozen at pairing** (audit
-  `A49`/`A74`). Neither the QR nor the sealed `/pair` answer carries the computer's SSH host key, so
-  the first connect is trust on first use (on the pairing LAN, right after the QR, so normally the
-  real computer). A server that accepts any key could still become the pin. The fix is desktop-side
-  as well (return the host key fingerprints inside the sealed `/pair` answer and store them in
-  `PairedHost.from`; it would serve iOS too). Nothing refreshes `PairedHost.host` either: the desktop
-  could publish its current LAN address over the relay, letting the phone update it after a relay
-  connect.
+- **The SSH pin is anchored only by a current desktop, and the LAN address is frozen at pairing**
+  (audit `A49`/`A74`). A desktop with `A49-anchor` names its SSH host keys in the sealed `/pair`
+  answer and the first connect must present one of them; an older desktop, one that could not read
+  its keys, a computer paired before this build and one added by its SSH address still pin on first
+  use (on the pairing LAN, right after the QR, so normally the real computer), where a server that
+  accepts any key could become the pin. An sshd that serves a key from a place `ssh-host-keys.ts`
+  does not read (a `HostKey` in a file `sshd_config` includes from elsewhere than `sshd_config.d/`,
+  or a relative path) is refused over SSH, as a key the computer did not report at pairing, and the
+  phone then uses the relay in Auto. The iOS app does not read the field yet. Nothing refreshes
+  `PairedHost.host` either: the desktop could publish its current LAN address over the relay, letting
+  the phone update it after a relay connect.
 - **No signed release build** (audit `A50`). The only APK there is to install is the debug build,
   and AGP marks every debug build debuggable: anyone with adb access to the unlocked phone while USB
   debugging is on can read the app's files (`run-as`) and attach a debugger to the running app, whose

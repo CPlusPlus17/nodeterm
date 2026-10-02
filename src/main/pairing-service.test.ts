@@ -747,3 +747,101 @@ describe('a paired phone whose relay key was recorded, not pinned, is approved o
     }
   })
 })
+
+describe('the sealed answer carries this computer’s SSH host key fingerprints (audit A49-anchor)', () => {
+  // The phone's first SSH connect used to pin whichever key answered at the paired address (once that
+  // server had accepted the phone's key). The `/pair` exchange is already bound to the host key on
+  // this screen, so the answer it seals now names the computer's own SSH host keys, and the first
+  // connect is checked against them.
+  const hostKeys = genKeyPair()
+  // GitHub's published ed25519 host key and the fingerprint OpenSSH prints for it (an outside vector;
+  // ssh-host-keys.test.ts has the format cases).
+  const PUB = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl root@box'
+  const FP = 'SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU'
+  const relayDeps = (): PairingRelayDeps => ({
+    getSettings: () => ({ phoneAccessEnabled: true }) as unknown as Settings,
+    getEntitlement: () => null,
+    loadHostKeyPair: async () => hostKeys,
+    relayEndpoint: 'wss://relay.example/ws',
+    apiBase: 'https://api.example',
+    relayAllowed: () => true
+  })
+  let keyDir = ''
+  const withKeys = (): string => {
+    mkdirSync(keyDir, { recursive: true })
+    writeFileSync(path.join(keyDir, 'ssh_host_ed25519_key.pub'), `${PUB}\n`)
+    return keyDir
+  }
+
+  beforeEach(() => {
+    keyDir = path.join(HOME, `etc-ssh-${randomBytes(4).toString('hex')}`)
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ deviceToken: 'device-token', hostId: 'host-id', exp: 0 })
+    } as unknown as Response)
+  })
+
+  it('a sealed answer names them; the QR does not', async () => {
+    const service = createPairingService(relayDeps(), { sshHostKeyDirs: [withKeys()] })
+    try {
+      const { payload } = await service.start(() => {})
+      expect(payload).not.toContain(FP)
+      expect(payload).not.toContain('sshHostKey')
+      const { token, pairPort } = JSON.parse(payload) as { token: string; pairPort: number }
+      const resp = await postSealedTo(hostKeys, pairPort, { token, publicKey: freshEd25519Line(), deviceId: 'p1' })
+      expect(resp.ok).toBe(true)
+      expect(resp.sshHostKeyFingerprints).toEqual([FP])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('a plaintext answer never does (it could be rewritten on the LAN)', async () => {
+    const service = createPairingService(relayDeps(), { sshHostKeyDirs: [withKeys()] })
+    try {
+      const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const text = await post(pairPort, { token, publicKey: freshEd25519Line(), deviceId: 'p2' })
+      const resp = JSON.parse(text) as Record<string, unknown>
+      expect(resp.ok).toBe(true)
+      expect('sshHostKeyFingerprints' in resp).toBe(false)
+      expect(text).not.toContain(FP)
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('keys it cannot read are left out, and the pairing goes on without the field', async () => {
+    const junkDir = path.join(HOME, `etc-ssh-junk-${randomBytes(4).toString('hex')}`)
+    mkdirSync(junkDir, { recursive: true })
+    writeFileSync(path.join(junkDir, 'ssh_host_x_key.pub'), 'not a key\n')
+    // No such directory, then one whose only "key" is not a key.
+    for (const dir of [keyDir, junkDir]) {
+      const service = createPairingService(relayDeps(), { sshHostKeyDirs: [dir] })
+      try {
+        const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+        const resp = await postSealedTo(hostKeys, pairPort, { token, publicKey: freshEd25519Line() })
+        expect(resp.ok).toBe(true)
+        expect('sshHostKeyFingerprints' in resp).toBe(false)
+      } finally {
+        service.stop()
+      }
+    }
+  })
+
+  it('a Windows desktop sends none: the phone has no SSH leg there', async () => {
+    const service = createPairingService(relayDeps(), {
+      sshHostKeyDirs: [withKeys()],
+      platform: 'win32',
+      detectKeyFile: async () => 'administrators',
+      defaultRouteAddress: async () => null
+    })
+    try {
+      const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const resp = await postSealedTo(hostKeys, pairPort, { token, publicKey: freshEd25519Line(), deviceId: 'pw' })
+      expect(resp.relayDeviceToken).toBe('device-token')
+      expect('sshHostKeyFingerprints' in resp).toBe(false)
+    } finally {
+      service.stop()
+    }
+  })
+})

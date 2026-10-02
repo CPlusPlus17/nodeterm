@@ -14,6 +14,9 @@
 //                 home dir pointed at a temp dir by the caller (HOME, and USERPROFILE for Windows, see
 //                 InteropHarness.scratchHomeEnv; refused unless `os.homedir()` is FIXTURE_HOME), and a
 //                 fake `/v1/relay/device` API. It exercises the direct-SSH pairing path on every OS.
+//                 The SSH host keys its sealed answer names are read from FIXTURE_SSH_HOST_KEY_DIR (a
+//                 dir of `ssh_host_*_key.pub` the test lays out), or from a dir that does not exist
+//                 when unset, never from the machine's real /etc (audit A49-anchor).
 //                 With FIXTURE_LATE_PIN_KEYS it then asks the service, per key, what the standing host
 //                 asks on a relay handshake (`approvePairedRelayKey`, audit A07-late), before and
 //                 after revoking every device.
@@ -445,7 +448,11 @@ async function runPair(): Promise<void> {
     // The direct-SSH path on every OS (audit A70): on win32 the service pairs relay-only (no key, the
     // QR says `ssh:false`), which pairing-service.windows.test.ts covers. `platform` only separates
     // win32 from the rest, so Linux and macOS run exactly what they always did.
-    { timeoutMs: 60_000, platform: process.platform === 'win32' ? 'linux' : process.platform }
+    {
+      timeoutMs: 60_000,
+      platform: process.platform === 'win32' ? 'linux' : process.platform,
+      sshHostKeyDirs: [process.env.FIXTURE_SSH_HOST_KEY_DIR || path.join(scratch, 'no-ssh-host-keys')]
+    }
   )
   // A07-late: after a pairing, ask the service what the standing host asks on a relay handshake from
   // each of these keys (the phone's own and a stranger's, chosen by the test), then revoke every

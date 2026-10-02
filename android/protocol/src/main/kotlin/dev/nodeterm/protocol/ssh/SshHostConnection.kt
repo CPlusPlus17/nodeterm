@@ -1,5 +1,6 @@
 package dev.nodeterm.protocol.ssh
 
+import com.hierynomus.sshj.userauth.certificate.Certificate
 import dev.nodeterm.protocol.host.ApprovalOutcome
 import dev.nodeterm.protocol.host.CardLabelEdit
 import dev.nodeterm.protocol.host.GitVerb
@@ -57,18 +58,26 @@ import java.util.concurrent.TimeUnit
 import javax.net.SocketFactory
 
 /**
- * Trust-on-first-use pin for the computer's SSH host key (`SHA256:<base64>`, OpenSSH's format).
+ * The pin for the computer's SSH host key (`SHA256:<base64>`, OpenSSH's format).
  *
  * [pin] is called only once the server has ACCEPTED this phone's key (audit A49), never during the
  * key exchange: a machine that merely answered at the paired address — another computer that now
  * has that DHCP lease, or the same private range on another network — refuses our key, and it must
- * not become the pin. A server that accepts our key is the one the pairing installed it on (or one
- * that accepts any key; anchoring the pin in the pairing itself is still to come).
+ * not become the pin.
+ *
+ * Before the first pin, [anchors] decides which keys may become it (audit A49-anchor): the
+ * fingerprints the computer named in its sealed pairing answer ([HostKeyAnchors]). A server whose
+ * key is none of them is refused during the key exchange, before this phone's key is offered. With no
+ * anchors (an older or Windows desktop, keys it could not read, a computer added by its SSH address)
+ * the first server that accepts our key becomes the pin: trust on first use.
  */
 interface HostKeyPin {
     /** The pinned fingerprint, or null until a connect has authenticated with this phone's key. */
     fun pinned(): String?
     fun pin(fingerprint: String)
+
+    /** The fingerprints the first connect must present one of, from pairing; empty = trust on first use. */
+    fun anchors(): List<String> = emptyList()
 }
 
 /**
@@ -76,13 +85,37 @@ interface HostKeyPin {
  * the fact and its likely causes; what the user can do about it depends on the route, and
  * [SshFallback] adds it.
  */
-class HostKeyChangedException(val expected: String, val actual: String) :
-    Exception(
+open class HostKeyChangedException protected constructor(
+    val expected: String,
+    val actual: String,
+    message: String
+) : Exception(message) {
+    constructor(expected: String, actual: String) : this(
+        expected,
+        actual,
         "This computer's SSH host key changed (expected $expected, got $actual), so the phone did not connect " +
             "to it over your network. Another machine may now have its network address (a different Wi-Fi, or " +
             "a reassigned address), or the computer was reinstalled; if neither, someone may be intercepting " +
             "the connection."
     )
+}
+
+/**
+ * The first SSH connect to a paired computer met a host key that is none of the keys the computer
+ * named in its sealed pairing answer (audit A49-anchor). Nothing was pinned, and this phone's key was
+ * never offered. A [HostKeyChangedException], so [SshFallback] treats it as one: never used over SSH,
+ * and in Auto the relay leg, which checks the computer on its own, is still tried.
+ */
+class HostKeyNotPairedException(val paired: List<String>, actual: String) : HostKeyChangedException(
+    paired.joinToString(" or "),
+    actual,
+    "This computer's SSH server presented a host key ($actual) that is " +
+        (if (paired.size == 1) "not the key" else "none of the ${paired.size} keys") +
+        " the computer reported when this phone was paired, so the phone did not connect to it over your network. " +
+        "Another machine may have its network address (a different Wi-Fi, or a reassigned address), or the " +
+        "computer's SSH server uses a key nodeterm could not read at pairing; if neither, someone may be " +
+        "intercepting the connection."
+)
 
 /**
  * The browse found nothing of nodeterm's on the computer: not an empty computer, but the wrong place
@@ -690,6 +723,15 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
         }
 
+        /**
+         * Whether a presented host key (fingerprint [fp]) is one of [anchors]. A host CERTIFICATE (sshd's
+         * `HostCertificate`, which sshj prefers when offered) also matches by the key it certifies: the
+         * desktop names its plain `.pub` keys, and the server proves it holds that key's private half in
+         * the key exchange either way.
+         */
+        internal fun matchesAnchor(anchors: List<String>, fp: String, key: PublicKey): Boolean =
+            fp in anchors || (key is Certificate<*> && runCatching { fingerprint(key.key) }.getOrNull()?.let { it in anchors } == true)
+
         fun connect(
             host: String,
             port: Int,
@@ -717,8 +759,16 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                     val expected = pin.pinned() ?: presented
                     return when {
                         expected == null -> {
-                            presented = fp
-                            true
+                            // Not pinned yet: a key the pairing named, if it named any (A49-anchor).
+                            // Refused here, during the key exchange, so a stranger never sees our key.
+                            val anchors = pin.anchors()
+                            if (anchors.isEmpty() || matchesAnchor(anchors, fp, key)) {
+                                presented = fp
+                                true
+                            } else {
+                                mismatch = HostKeyNotPairedException(anchors, fp)
+                                false
+                            }
                         }
                         expected == fp -> {
                             presented = fp

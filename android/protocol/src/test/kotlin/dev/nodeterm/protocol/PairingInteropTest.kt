@@ -6,6 +6,16 @@ import dev.nodeterm.protocol.pairing.PairingClient
 import dev.nodeterm.protocol.pairing.PairingException
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.SshIdentity
+import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.ssh.HostKeyAnchors
+import dev.nodeterm.protocol.ssh.HostKeyNotPairedException
+import dev.nodeterm.protocol.ssh.HostKeyPin
+import dev.nodeterm.protocol.ssh.SshHostConnection
+import net.schmizz.sshj.common.Buffer
+import net.schmizz.sshj.common.KeyType
+import org.apache.sshd.server.SshServer
+import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
+import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -100,6 +110,90 @@ class PairingInteropTest {
         val agent = File(home, ".nodeterm/agent.json").readText()
         assertTrue(agent.contains("\"name\": \"Pixel Test\""), agent)
         assertTrue(agent.contains("\"relayDeviceId\": \"android-device-1\""), agent)
+        // The fixture's host-key dir does not exist unless a test lays one out: no keys, no anchors.
+        assertEquals(emptyList(), result.sshHostKeyFingerprints)
+    }
+
+    /** Writes each key as sshd's `ssh_host_<name>_key.pub` (`<type> <base64 blob> <comment>`) under a new dir. */
+    private fun hostKeyDir(vararg keys: Pair<String, java.security.PublicKey>): File {
+        val dir = Files.createTempDirectory("nt-etc-ssh").toFile()
+        cleanup += AutoCloseable { dir.deleteRecursively() }
+        for ((name, key) in keys) {
+            val blob = Buffer.PlainBuffer().putPublicKey(key).compactData
+            File(dir, "ssh_host_${name}_key.pub").writeText("${KeyType.fromKey(key)} ${java.util.Base64.getEncoder().encodeToString(blob)} root@box\n")
+        }
+        return dir
+    }
+
+    private fun ecKey(): java.security.PublicKey =
+        java.security.KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair().public
+
+    /** A real SSH server that lets [identity] in as `dev`, and its host key. */
+    private fun sshServer(identity: SshIdentity): Pair<SshServer, java.security.PublicKey> {
+        val root = Files.createTempDirectory("nt-pair-sshd").toFile()
+        cleanup += AutoCloseable { root.deleteRecursively() }
+        val server = SshServer.setUpDefaultServer()
+        server.host = "127.0.0.1"
+        server.port = 0
+        server.keyPairProvider = SimpleGeneratorHostKeyProvider(File(root, "hostkey.ser").toPath())
+        val accepted = identity.keyPair.public.encoded
+        server.publickeyAuthenticator = PublickeyAuthenticator { user, key, _ -> user == "dev" && key.encoded.contentEquals(accepted) }
+        server.start()
+        cleanup += AutoCloseable { server.stop(true) }
+        return server to server.keyPairProvider.loadKeys(null).first().public
+    }
+
+    private class Pin(private val paired: List<String>) : HostKeyPin {
+        var value: String? = null
+        override fun pinned() = value
+        override fun pin(fingerprint: String) {
+            value = fingerprint
+        }
+        override fun anchors() = paired
+    }
+
+    @Test
+    fun `the sealed answer names the computer's SSH host keys, and the first connect must present one (A49-anchor)`() = runBlocking<Unit> {
+        // The desktop's real pairing service reads a host-key dir laid out like /etc/ssh, holding the
+        // key of a real SSH server and one more (sshd serves one of several keys per connection).
+        val identity = SshIdentity.generate()
+        val (sshd, serverKey) = sshServer(identity)
+        val other = ecKey()
+        val keys = hostKeyDir("ecdsa" to serverKey, "other" to other)
+        val (h, _) = start(withRelay = false, env = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to keys.path))
+        val payload = payloadOf(h)
+        assertTrue(!h.ready["payload"]!!.jsonPrimitive.content.contains("SHA256:"), "the QR carries no SSH host key")
+        val result = PairingClient().pair(payload, identity.authorizedKeysLine(), "Pixel", "android-device-7")
+        // In the form sshj reports, in the order the desktop read the files.
+        val serverFp = SshHostConnection.fingerprint(serverKey)
+        assertEquals(listOf(serverFp, SshHostConnection.fingerprint(other)), result.sshHostKeyFingerprints)
+        val host = PairedHost.from(payload, result)
+        assertEquals(result.sshHostKeyFingerprints, host.sshHostKeyAnchors)
+        assertNull(host.sshHostKeyFingerprint, "nothing is pinned before a connect has authenticated")
+        assertEquals(host, PairedHost.fromJson(host.toJson()), "the anchors survive the phone's own record")
+
+        // The first connect presents a key the pairing named: it connects and pins exactly that one.
+        val pin = Pin(host.sshHostKeyAnchors)
+        SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, pin).close()
+        assertEquals(serverFp, pin.value)
+
+        // Had the pairing named only the other key, the same server is refused and nothing is pinned.
+        val elsewhere = Pin(listOf(SshHostConnection.fingerprint(other)))
+        assertFailsWith<HostKeyNotPairedException> {
+            SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, elsewhere).close()
+        }
+        assertNull(elsewhere.value)
+    }
+
+    @Test
+    fun `a plaintext answer carries no SSH host keys, whatever the computer has (A49-anchor)`() = runBlocking<Unit> {
+        // No `hostKey` in the QR: the phone pairs in the clear, and a clear answer could have been
+        // rewritten on the LAN, so the desktop leaves the keys out of it.
+        val keys = hostKeyDir("ecdsa" to ecKey())
+        val (h, _) = start(withRelay = false, env = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to keys.path))
+        val result = PairingClient().pair(payloadOf(h).copy(hostKey = null), SshIdentity.generate().authorizedKeysLine(), "Pixel", "android-device-8")
+        assertTrue(result.deviceId.isNotBlank())
+        assertEquals(emptyList(), result.sshHostKeyFingerprints)
     }
 
     @Test
@@ -163,9 +257,11 @@ class PairingInteropTest {
     @Test
     fun `the desktop's largest real answer sits far below the client's response cap`() = runBlocking<Unit> {
         // A54 caps the /pair answer at PairingClient.MAX_RESPONSE_BYTES. This measures the biggest
-        // answer the desktop's real service gives — sealed, with the relay leg and the pin — through
-        // a byte-counting proxy, so a desktop change that grows it toward the cap is caught here.
-        val (h, _) = start(withRelay = true)
+        // answer the desktop's real service gives — sealed, with the relay leg, the pin and as many
+        // SSH host keys as it sends (A49-anchor) — through a byte-counting proxy, so a desktop change
+        // that grows it toward the cap is caught here.
+        val keys = hostKeyDir(*Array(HostKeyAnchors.MAX + 2) { "k%02d".format(it) to ecKey() })
+        val (h, _) = start(withRelay = true, env = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to keys.path))
         val payload = payloadOf(h)
         val proxy = CountingProxy(payload.host, payload.pairPort)
         cleanup += proxy
@@ -175,8 +271,9 @@ class PairingInteropTest {
             boxPublicKeyB64 = BoxKeyPair.generate().publicKeyB64
         )
         assertTrue(result.relayPinned)
+        assertEquals(HostKeyAnchors.MAX, result.sshHostKeyFingerprints.size, "the desktop sends at most as many keys as the phone keeps")
         val answered = proxy.awaitDownstreamBytes()
-        println("[pair] the desktop's sealed answer with relay leg + pin: $answered bytes, headers included")
+        println("[pair] the desktop's sealed answer with relay leg + pin + SSH host keys: $answered bytes, headers included")
         assertTrue(answered in 1..(PairingClient.MAX_RESPONSE_BYTES / 16).toLong(), "answer was $answered bytes")
     }
 

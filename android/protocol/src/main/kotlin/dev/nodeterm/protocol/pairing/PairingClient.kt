@@ -7,6 +7,7 @@ import dev.nodeterm.protocol.model.J
 import dev.nodeterm.protocol.model.J.b
 import dev.nodeterm.protocol.model.J.o
 import dev.nodeterm.protocol.model.J.s
+import dev.nodeterm.protocol.ssh.HostKeyAnchors
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -64,7 +65,9 @@ class PairingException(message: String) : Exception(message) {
  * even after a late adoption. An older desktop ignores it. When the QR carried a
  * `hostKey`, the whole body is sealed to it — `{epk: <ephemeral box pubkey>, box: base64(nonce ‖
  * secretbox)}` under `box.before(hostKey, ephemeralSecret)` — and the answer comes back sealed the
- * same way, so the relay device token never crosses the LAN in the clear.
+ * same way, so the relay device token never crosses the LAN in the clear. A sealed answer may also
+ * name the computer's SSH host keys (`sshHostKeyFingerprints`, audit A49-anchor), which the first SSH
+ * connect is then checked against; a plaintext answer's are ignored.
  *
  * Spoken over a RAW TCP socket rather than an HTTP client, like the iOS app: a bare-IP `http://`
  * URL is cleartext traffic Android's network security policy blocks by default for HTTP stacks,
@@ -87,9 +90,10 @@ class PairingClient(
     companion object {
         /**
          * Largest header block or body accepted. The desktop's biggest real answer — the sealed
-         * `{box}` around `{ok, deviceId, agentToken, relay, relayDeviceToken, relayPinned, relayApproved}` —
-         * measured 634 bytes, headers included, with the interop fixture's short relay token
-         * (PairingInteropTest counts it through a proxy and fails past 4 KiB). 64 KiB is also the
+         * `{box}` around `{ok, deviceId, agentToken, relay, relayDeviceToken, relayPinned, relayApproved,
+         * sshHostKeyFingerprints}` with the most host keys it sends (16) — measured 1,803 bytes, headers
+         * included, with the interop fixture's short relay token (634 without the host keys;
+         * PairingInteropTest counts it through a proxy and fails past 4 KiB). 64 KiB is also the
          * cap the desktop puts on the request it reads from us (pairing-service.ts `MAX_BODY_BYTES`).
          */
         const val MAX_RESPONSE_BYTES = 64 * 1024
@@ -155,6 +159,9 @@ class PairingClient(
         }
         if (obj.b("ok") != true) throw PairingException("The computer did not confirm the pairing.")
         val pinned = obj.b("relayPinned") == true
+        // Only from the sealed answer (A49-anchor): a plaintext one could have been rewritten on the
+        // LAN, and the desktop never puts the field there.
+        val sshHostKeys = if (shared != null) HostKeyAnchors.parse(obj["sshHostKeyFingerprints"]) else emptyList()
         PairingResult(
             deviceId = obj.s("deviceId") ?: throw PairingException("The computer did not assign a device id."),
             agentToken = obj.s("agentToken") ?: "",
@@ -162,7 +169,8 @@ class PairingClient(
             relayDeviceToken = obj.s("relayDeviceToken"),
             relayPinned = pinned,
             // A desktop from before A07-late answers only `relayPinned`, which implies it.
-            relayApproved = pinned || obj.b("relayApproved") == true
+            relayApproved = pinned || obj.b("relayApproved") == true,
+            sshHostKeyFingerprints = sshHostKeys
         )
     }
 

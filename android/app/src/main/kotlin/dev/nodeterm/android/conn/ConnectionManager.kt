@@ -387,6 +387,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     private fun pinFor(host: PairedHost) = object : HostKeyPin {
         override fun pinned(): String? = graph.hosts.get(host.id)?.sshHostKeyFingerprint
         override fun pin(fingerprint: String) = graph.hosts.update(host.id) { it.copy(sshHostKeyFingerprint = fingerprint) }
+        // The keys the computer named at pairing (A49-anchor): the first connect must present one.
+        override fun anchors(): List<String> = graph.hosts.get(host.id)?.sshHostKeyAnchors.orEmpty()
     }
 
     /** One late adoption at a time: a connect and a listing may both ask for it. */

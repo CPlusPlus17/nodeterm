@@ -123,7 +123,16 @@ data class PairingResult(
      * the first relay connect. What gates the background worker's relay leg
      * ([dev.nodeterm.protocol.host.RelayApprovalGate]).
      */
-    val relayApproved: Boolean = relayPinned
+    val relayApproved: Boolean = relayPinned,
+    /**
+     * The fingerprints of the computer's SSH host keys (audit A49-anchor), in the form sshj and OpenSSH
+     * print (`SHA256:…`). Taken ONLY from a sealed answer, which is bound to the host key the QR on the
+     * computer's screen carries: a plaintext one could have been rewritten on the LAN. Empty from a
+     * desktop that predates the field, from a Windows desktop (no SSH leg), when the desktop could not
+     * read its keys, and for a plaintext answer; the first SSH connect then pins the key of the first
+     * server that accepts the phone's key, as before. See [dev.nodeterm.protocol.ssh.HostKeyAnchors].
+     */
+    val sshHostKeyFingerprints: List<String> = emptyList()
 ) {
     /** What the Pair screen says once paired. */
     fun pairedNotice(): String = when {
