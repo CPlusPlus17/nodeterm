@@ -45,6 +45,7 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.HostConnection
+import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.QuickActions
 import dev.nodeterm.protocol.model.AccountNames
@@ -120,8 +121,9 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
                     block(session.ensureConnected())
                 } catch (e: NeedsRelayException) {
                     // Direct SSH reaches only this computer; a node of one of its SSH projects is
-                    // answered where it lives, through the relay (audit A09).
-                    if (!session.hasRelay) throw e
+                    // answered where it lives, through the relay (audit A09). With no relay leg, say
+                    // so without offering one (A27).
+                    if (!session.hasRelay) throw HostException(e.withoutRelay)
                     block(session.viaRelay())
                 }
                 when (result) {

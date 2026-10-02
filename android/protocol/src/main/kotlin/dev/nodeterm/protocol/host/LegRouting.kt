@@ -53,7 +53,12 @@ object LegRouting {
         /** The phone holds no relay leg: remote access was off at pairing and has not been adopted since. */
         NOT_SET_UP,
         /** The phone has one, but the user set this computer to "Only on my network". */
-        ROUTE_SSH_ONLY
+        ROUTE_SSH_ONLY,
+        /**
+         * The computer was added by its SSH address, not paired (audit A27): it has no relay leg and
+         * never gets one, so turning remote access on would not help.
+         */
+        ADDED_OVER_SSH
     }
 
     sealed interface Leg {
@@ -65,8 +70,13 @@ object LegRouting {
         data class Unavailable(val reason: String) : Leg
     }
 
-    /** Facts the relay leg's availability comes from. Pure, so the app and its tests agree. */
-    fun relayLeg(relayConfigured: Boolean, sshOnlyRoute: Boolean): RelayLeg = when {
+    /**
+     * Facts the relay leg's availability comes from. Pure, so the app and its tests agree.
+     * [addedOverSsh] (a computer added by its SSH address, audit A27) wins over the rest: such a
+     * computer has no relay leg, whatever else the phone holds.
+     */
+    fun relayLeg(relayConfigured: Boolean, sshOnlyRoute: Boolean, addedOverSsh: Boolean = false): RelayLeg = when {
+        addedOverSsh -> RelayLeg.ADDED_OVER_SSH
         !relayConfigured -> RelayLeg.NOT_SET_UP
         sshOnlyRoute -> RelayLeg.ROUTE_SSH_ONLY
         else -> RelayLeg.AVAILABLE
@@ -86,6 +96,7 @@ object LegRouting {
             RelayLeg.AVAILABLE -> Leg.Relay
             RelayLeg.NOT_SET_UP -> Leg.Unavailable(notSetUp(cap))
             RelayLeg.ROUTE_SSH_ONLY -> Leg.Unavailable(sshOnly(cap))
+            RelayLeg.ADDED_OVER_SSH -> Leg.Unavailable(addedOverSsh(cap))
         }
     }
 
@@ -112,6 +123,14 @@ object LegRouting {
         "${cap.what} goes through nodeterm on the computer, which this phone reaches through the relay, and " +
             "this phone has no relay connection to it yet. Turn on remote access in nodeterm → Settings → Phone; " +
             "the phone picks it up the next time it connects on your network."
+
+    /**
+     * A computer added by its SSH address: unlike [notSetUp], nothing on the computer can switch the
+     * relay on for it (a Server Edition has no pairing service), so the text names no setting.
+     */
+    fun addedOverSsh(cap: Capability) =
+        "${cap.what} goes through nodeterm on the computer over the relay, and remote access isn't set up for " +
+            "this computer: it was added by its SSH address, so the phone reaches it over SSH only."
 
     private fun sshOnly(cap: Capability) =
         "${cap.what} goes through the relay, and this computer is set to \"Only on my network (SSH)\". Choose " +

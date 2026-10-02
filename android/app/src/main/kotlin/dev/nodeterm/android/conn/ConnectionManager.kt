@@ -99,7 +99,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         var sshWarning: String? = null
 
         if (route != RoutePreference.RELAY_ONLY && host.sshAvailable) {
-            _state.value = ConnState.Connecting("Connecting on your network…")
+            _state.value = ConnState.Connecting(if (host.manual) "Connecting over SSH…" else "Connecting on your network…")
             // The blocking dial finishes even when this coroutine is cancelled meanwhile (the poll
             // job stops when a screen goes away), and withContext then drops its result: close it,
             // or it stays open, keep-alive and all, for the life of the process (audit A20).
@@ -124,7 +124,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 // stop the relay leg, which authenticates the computer on its own (audit A49/A74):
                 // most often another machine simply has the paired address now. "Only on my
                 // network" has nothing else to try, so there it stops.
-                when (val next = SshFallback.afterFailure(e, route != RoutePreference.SSH_ONLY, relayConfigured(host))) {
+                // A computer added by its SSH address has nothing else to try either (audit A27).
+                when (val next = SshFallback.afterFailure(e, route != RoutePreference.SSH_ONLY, relayConfigured(host), addedOverSsh = host.manual)) {
                     is SshFallback.Next.Stop -> {
                         _sshWarning.value = null
                         _state.value = ConnState.Failed(next.message)
@@ -181,9 +182,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         throw HostException(msg)
     }
 
-    /** The phone holds a relay leg for [host]: the same three facts the relay block needs to dial. */
+    /**
+     * The phone holds a relay leg for [host]: the same three facts the relay block needs to dial. Never
+     * for a computer added by its SSH address, which has none (audit A27).
+     */
     private fun relayConfigured(host: PairedHost): Boolean =
-        host.relay != null && host.relayHostKeyB64 != null &&
+        !host.manual && host.relay != null && host.relayHostKeyB64 != null &&
             graph.secure.getString(SecureStore.relayTokenKey(host.id)) != null
 
     private suspend fun dialRelay(
@@ -219,7 +223,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         val host = graph.hosts.get(hostId) ?: return LegRouting.RelayLeg.NOT_SET_UP
         return LegRouting.relayLeg(
             relayConfigured = relayConfigured(host),
-            sshOnlyRoute = graph.hosts.route(hostId) == RoutePreference.SSH_ONLY
+            sshOnlyRoute = graph.hosts.route(hostId) == RoutePreference.SSH_ONLY,
+            addedOverSsh = host.manual
         )
     }
 
@@ -362,6 +367,9 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * token, so the phone can reach the computer from anywhere without re-pairing.
      */
     private suspend fun adoptRelayIfAdvertised(ssh: SshHostConnection, host: PairedHost) {
+        // A computer added by its SSH address never gets a relay leg (audit A27): no pairing anchors
+        // the relay key such a file names, and its relay would not be one this phone was paired with.
+        if (host.manual) return
         val tokenKey = SecureStore.relayTokenKey(host.id)
         if (host.relay != null && graph.secure.getString(tokenKey) != null) return
         val ad = ssh.readRelayAdvertisement() ?: return

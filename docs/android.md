@@ -18,7 +18,8 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
    `new-session` (`A08`). PATH is *appended* with the Homebrew dirs, exactly like
    `remoteTmuxPathPrologue`, and the macOS app's bundled `Contents/Resources/bin/tmux` is the last
    resort, as it is for the desktop's `findTmux`. Not available on Windows hosts (the QR says
-   `"ssh":false`).
+   `"ssh":false`). A computer with no pairing code can be added by its SSH address instead, and is
+   then reached this way only (audit `A27`, below).
 2. **The relay** (from anywhere). E2EE through `wss://relay.nodeterm.dev`, to the standing phone
    host (`src/main/remote/standing-host.ts`). The phone trades its device token for a single-use
    relay token (`POST /v1/relay/join`), runs the handshake, and — the first time only — waits while
@@ -37,7 +38,7 @@ never makes a first relay handshake because of it. "Only on my network" stops wi
 usual cause is benign: the LAN leg dials the DHCP address the computer had at pairing, and another
 SSH-running machine now has it (or the phone is on another network using the same range). The
 message points at "Only through the relay"; pairing again is the way to trust a reinstalled
-computer's new key.
+computer's new key (for a computer added by its SSH address, forgetting it and adding it again).
 
 **Relay approval.** The standing host raises its SAS dialog as soon as an unpinned phone completes
 the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the background worker
@@ -105,8 +106,45 @@ git) belongs to the desktop elsewhere, which neither leg of this computer reache
 running says it starts from that desktop instead of offering this computer's relay. The status block
 merges the host's own mirror with the fresh slices (the host's entries, settings, usage and `server`
 block win). The Server Edition's `server` block (version, commit, install date) is shown on the
-host screen, above its tabs. Until a computer can be added without pairing (`A27` part b), the
-phone reaches these only on a computer it paired with; see Known gaps.
+host screen, above its tabs. A computer that has no pairing code to scan reaches this browse
+through "Add SSH server", next.
+
+**A computer added by its SSH address (audit `A27`, part b).** A headless Server Edition has no
+pairing service anywhere in `src/server`, and a dev host the phone reaches only over SSH has no
+nodeterm of its own to show a code, so neither can be paired. "Add SSH server" (from the computers
+list, its empty state and the Pair screen) adds one by host, port (22) and user; the rules are
+`ManualHost` (`android/protocol`, `ManualHostTest`) and the screen only lays them out:
+
+- **The key.** The phone cannot put its own key on the computer before it can log in, and it never
+  asks for or keeps a password. The screen shows the phone's Ed25519 public key line
+  (`ssh-ed25519 … nodeterm-android`, the same key every pairing installs; copy or share it) to add
+  to `~/.ssh/authorized_keys` of that user, and a one-line command that does it: `sh -c '…'`, so a
+  bash, zsh or fish prompt hands it to `sh` as is (only `/bin/sh` itself is tested), which adds the
+  line only when it is missing, after a newline when the file's last line has none (appending onto
+  it would break both keys), and sets the modes sshd's `StrictModes` wants (`700` / `600`). `ManualHostTest` runs that command under `/bin/sh` and
+  then logs in against an SSH server that reads the very file it wrote.
+- **The host key.** Nothing like the QR carries anything to check it against, so it is trust on
+  first use by A49's rule: Connect pins the key of the first server that **accepts** the phone's
+  key (a server that refuses it pins nothing), and the computer is added only then, already pinned,
+  so nothing ever dials it in the background before an authenticated connect. The screen shows the
+  pinned `SHA256:` fingerprint with the command that prints the computer's own
+  (`ssh-keygen -lf` over `/etc/ssh/ssh_host_*_key.pub`) to compare. A refused key says to add the
+  line; an address already in the list (paired or added, same host in any case, port and user) is
+  refused with the name it has.
+- **SSH only.** The record is the paired one's with `"manual": true` (`PairedHost.manual`): no relay
+  block, no host box key, `sshAvailable` true, and a `fromJson` that drops a relay a record might
+  carry. Its route is fixed to SSH (`HostStore.route`), Settings shows no choice for it, the late
+  relay adoption never runs for it, and `LegRouting.RelayLeg.ADDED_OVER_SSH` makes every relay verb
+  (a new session, board writes, node actions, git) unavailable with "remote access isn't set up for
+  this computer: it was added by its SSH address". A session that is not running, or a node of an SSH
+  project, is refused without the relay offer (`NeedsRelayException.withoutRelay`, which a paired
+  computer with remote access off now uses too). A changed host key stops with "forget it and add it
+  again". Forget works as for a paired computer, and its dialog says the phone's access is revoked by
+  removing the line ending in `nodeterm-android` from that `authorized_keys`.
+- **Older builds.** A build that predates the flag ignores the `manual` key and reads a computer with
+  SSH, no relay and the same pin. The add also stores the route `SSH_ONLY` for it, which such a build
+  reads, so it does not dial a relay for it either (its late relay adoption could still read a
+  `relay.json` on that computer; this build never does).
 
 ## Protocol mapping
 
@@ -182,7 +220,13 @@ unchanged.
   `nodeterm-rmt` sessions, project file and slices, a stale slice dropped, attach / keys / pane read /
   kill landing on `nodeterm-rmt`, nothing created for a session that is not running), one with both
   sockets in use (a name on both is the host's own; the paired desktop's own SSH project stays
-  relay-routed), a Server Edition data dir, and a computer where nothing is found.
+  relay-routed), a Server Edition data dir, and a computer where nothing is found. A computer added
+  by its SSH address (`A27`, `ManualHostTest`, its own MINA server whose authenticator reads
+  `~/.ssh/authorized_keys`): refused before the key line is installed (no pin, no record), the
+  install command run under `/bin/sh`, then accepted and pinned to exactly the server's host key; a
+  later connect verifies that pin and another server at the address is refused; the form's checks,
+  the record's JSON (and what an older build reads of it), and the app's wiring, pinned in its
+  source.
   No desktop code runs on this leg: the test writes the files the desktop would have (the v3
   `workspace.json` index and project files, `agent-status.json`, the status slices, the held request
   in `~/.nodeterm/pending`), and checks what the phone writes against file names copied from
@@ -867,6 +911,26 @@ later fix left to a device.
     session, board writes and Wake / Refresh / Rename say they belong to the other computer. A node of
     the paired desktop's own SSH projects still opens through the relay. *(A27, A09)*
 
+### A computer added by its SSH address
+
+63. On a Linux computer with a Server Edition installed (`install-server.sh`) and no desktop app,
+    tap "Add SSH server" on the computers list, fill in address, port and user, and tap Connect
+    before adding the key: it says the computer did not accept the phone's key, and nothing is
+    added. Share the key line to yourself, run the screen's command on the computer as that user (in
+    bash, then once more in fish or zsh: the key is in `~/.ssh/authorized_keys` once, the file `600`
+    and `~/.ssh` `700`), and tap Connect: the computer is added and the screen shows a `SHA256:`
+    fingerprint that matches one line of the screen's `ssh-keygen` command on the computer. Open it:
+    the Sessions tab lists the Server Edition's projects, the host screen shows its version, and a
+    session opens and takes keys. New session, board writes and Wake / Refresh / Rename say remote
+    access isn't set up for this computer, and so does a session that is not running; Settings → How
+    to reach each computer offers no choice for it. *(A27)*
+64. Add a Linux dev host that another computer's nodeterm drives over SSH (no nodeterm of its own) by
+    its address: its projects and sessions are listed as in item 62, and approvals are answered from
+    the Inbox. Then reinstall its SSH host keys (or point the address at another machine): the phone
+    refuses it, saying to forget it and add it again. Forget it: the dialog names the
+    `nodeterm-android` line to remove on the computer, and the computer leaves the list. Adding an
+    address that is already in the list (paired or added) is refused with its name. *(A27, A49)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -880,13 +944,18 @@ later fix left to a device.
 - **`/v1/relay/join`.** The request/response shape is not in this repo (the backend is separate).
   The client sends `{deviceToken, hostId}` and accepts `pairingToken`, `token` or `joinToken` —
   unverified against the live backend.
-- **A computer that is not paired is not reachable yet** (audit `A27`, part b). The browse reads a
-  Server Edition's data dir, both tmux sockets and a driving desktop's status slices, but the app
-  still adds a computer only by pairing, and the Server Edition has no pairing service. So today it
-  helps only on a paired computer (a Linux desktop another desktop also drives over SSH); a headless
-  Server Edition, or a dev host the phone reaches only over SSH, needs the manual "Add SSH server"
-  flow. Push for such a host stays the backend's APNs-only fan-out (see Push). Smaller limits of the
-  browse: a Server Edition with a `--data-dir` elsewhere is not found unless the SSH session carries
+- **A computer added by its SSH address is SSH only, and has no push** (audit `A27`, part b). "Add
+  SSH server" reaches a headless Server Edition or a dev host the phone reaches only over SSH, but
+  only where the phone can open an SSH connection to it (the same network, or a VPN): there is no
+  relay leg for it, ever, so nothing that goes through nodeterm the app (a new session, board writes,
+  node actions, git) and no "from anywhere". It gets no push either: the grant an iOS phone drops in
+  such a host's `~/.nodeterm/push-grants` and the backend's `/v1/push` fan-out are APNs-only (see
+  Push), and Android drops none, so the phone polls it like any other computer; docs/SERVER.md's
+  "full push / Live-Activity coverage" is iOS's. Not built: a one-time password login to install the key (the user adds the
+  line), the Server Edition's `install-server.sh` one-liner offered per connection, and Windows (the
+  browse is POSIX `sh` + tmux, as for a paired computer). The host key is trust on first use, as for
+  a paired computer, but with no pairing LAN behind the first connect: compare the fingerprint the
+  screen shows. Smaller limits of the browse: a Server Edition with a `--data-dir` elsewhere is not found unless the SSH session carries
   `NODETERM_DATA_DIR`; a slice's freshness compares the phone's clock with the driving desktop's; on a
   computer that runs its own nodeterm AND is driven, launch settings come from its own mirror (a
   driven session's wake line uses its permission mode); a project whose sessions all start outside

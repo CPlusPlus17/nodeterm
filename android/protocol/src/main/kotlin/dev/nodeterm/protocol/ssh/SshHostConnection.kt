@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.NewSessionHint
+import dev.nodeterm.protocol.host.SshAuthRefusedException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.TransportKind
@@ -42,6 +43,7 @@ import net.schmizz.sshj.common.Buffer
 import net.schmizz.sshj.common.KeyType
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
+import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.keyprovider.KeyProvider
 import java.io.OutputStream
 import java.security.MessageDigest
@@ -293,7 +295,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         val where = remoteNodes[nodeId] ?: return
         throw NeedsRelayException(
             nodeId,
-            "This session runs on $where, which the phone reaches through your computer: it opens through the relay, not over your network."
+            "This session runs on $where, which the phone reaches through your computer: it opens through the relay, not over your network.",
+            withoutRelay = "This session runs on $where, not on this computer, and the phone reaches it only through the relay. " +
+                NeedsRelayException.NO_RELAY_TO_OFFER
         )
     }
 
@@ -305,7 +309,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             NeedsRelayException(
                 nodeId,
                 "This session isn't running on the computer right now. Starting it over your network would leave it " +
-                    "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer)."
+                    "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer).",
+                withoutRelay = "This session isn't running on the computer right now, and the phone does not start it over " +
+                    "SSH: it would run without status reporting. Remote access isn't set up for this computer, so start it " +
+                    "in nodeterm on the computer."
             )
         }
 
@@ -616,7 +623,13 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 runCatching { client.disconnect() }
                 if (client.isConnected) runCatching { client.socket?.close() }
                 mismatch?.let { throw it }
-                throw HostException("Couldn't connect over SSH to $user@$host:$port (${e.message ?: e.javaClass.simpleName}).")
+                val detail = e.message ?: e.javaClass.simpleName
+                if (e is UserAuthException) {
+                    throw SshAuthRefusedException(
+                        "Couldn't connect over SSH to $user@$host:$port: it did not accept this phone's key ($detail)."
+                    )
+                }
+                throw HostException("Couldn't connect over SSH to $user@$host:$port ($detail).")
             }
             val conn = SshHostConnection(client)
             // The transport dying (network change, sleep, the computer going away) is the one event

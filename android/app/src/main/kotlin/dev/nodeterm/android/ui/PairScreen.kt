@@ -26,6 +26,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -116,6 +117,13 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                     placeholder = { Text("{\"v\":1,\"host\":…}") }
                 )
                 OutlinedButton(onClick = { accept(raw) }, enabled = raw.isNotBlank()) { Text("Use this code") }
+                // No code to scan: a Server Edition has no pairing service, and an SSH-only host no
+                // nodeterm to show one (audit A27).
+                Text(
+                    "No pairing code? A nodeterm Server Edition, or a computer you reach over SSH, is added by its address.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = { nav.push(Route.AddSshHost) }) { Text("Add SSH server") }
             } else {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

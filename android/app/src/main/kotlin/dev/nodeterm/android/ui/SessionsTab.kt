@@ -40,6 +40,7 @@ import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.TerminalSink
@@ -242,8 +243,9 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                                 c.killSession(node.id)
                             } catch (e: NeedsRelayException) {
                                 // A node of an SSH project lives on its host: end it through the
-                                // relay, where the desktop reaches that host (audit A09).
-                                if (!session.hasRelay) throw e
+                                // relay, where the desktop reaches that host (audit A09). With no
+                                // relay leg, say so without offering one (A27).
+                                if (!session.hasRelay) throw HostException(e.withoutRelay)
                                 session.viaRelay().attach(node.id, 80, 24, quiet).endSession()
                             }
                         } else {

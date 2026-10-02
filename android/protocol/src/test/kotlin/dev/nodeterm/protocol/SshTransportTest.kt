@@ -275,6 +275,12 @@ class SshTransportTest {
         }
     }
 
+    /** What a screen shows for [e] when the phone has no relay leg (A27): no relay offered, the reason given. */
+    private fun assertNoRelayPromised(e: NeedsRelayException) {
+        assertTrue(e.withoutRelay.contains("Remote access isn't set up for this computer"), e.withoutRelay)
+        assertFalse(e.withoutRelay.contains("opens through the relay"), e.withoutRelay)
+    }
+
     private class MemoryPin(var value: String? = null) : HostKeyPin {
         override fun pinned() = value
         override fun pin(fingerprint: String) {
@@ -465,6 +471,9 @@ class SshTransportTest {
             conn.listProjects()
             val e = assertFailsWith<NeedsRelayException> { conn.attach("term-z-9", 80, 24, Sink()) }
             assertEquals("term-z-9", e.nodeId)
+            // With no relay leg to offer (remote access off, or a computer added by its SSH address,
+            // A27), the refusal promises no relay and says remote access isn't set up.
+            assertNoRelayPromised(e)
             Thread.sleep(300)
             assertEquals(1, tmux("has-session", "-t", "=nt-term-z-9").first, "no session was created")
         }
@@ -630,6 +639,8 @@ class SshTransportTest {
             conn.listProjects()
             val e = assertFailsWith<NeedsRelayException> { conn.attach("term-b-2", 80, 24, Sink()) }
             assertTrue(e.message!!.contains("me@box"), e.message)
+            assertTrue(e.withoutRelay.contains("me@box"), e.withoutRelay)
+            assertNoRelayPromised(e)
             assertFailsWith<NeedsRelayException> { conn.sendKeys("term-b-2", "1") }
             val ev = InboxEvent("e2", 1, "term-b-2", "claude", null, InboxKind.APPROVAL, "Approve", null, false, false, emptyList(), false, "term-b-2-1-1")
             assertFailsWith<NeedsRelayException> { conn.answerApproval(ev, allow = true) }

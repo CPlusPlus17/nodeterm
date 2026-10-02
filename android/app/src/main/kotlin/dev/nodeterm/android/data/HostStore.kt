@@ -6,6 +6,7 @@ import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.SeenLog
 import dev.nodeterm.protocol.secure.PlainStorage
+import dev.nodeterm.protocol.ssh.ManualHost
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +48,22 @@ class HostStore(context: Context) {
         save(_hosts.value.filterNot { it.id == host.id || (it.host == host.host && it.user == host.user && it.name == host.name) } + host)
     }
 
+    /**
+     * Keep a computer added by its SSH address (audit A27). Unlike [upsert] it replaces nothing: when
+     * a computer is already listed under that address (paired or added), that one is returned and
+     * nothing is saved. Null when it was added.
+     */
+    @Synchronized
+    fun addManual(host: PairedHost): PairedHost? {
+        require(host.manual) { "only a computer added by its SSH address" }
+        ManualHost.existing(_hosts.value, ManualHost.Address(host.host, host.port, host.user, host.name))?.let { return it }
+        save(_hosts.value + host)
+        // [route] answers SSH for it from the record; this is for a build that predates `manual`,
+        // which reads only the stored route, so it too never dials a relay for it.
+        prefs.edit().putString("route.${host.id}", RoutePreference.SSH_ONLY.name).apply()
+        return null
+    }
+
     @Synchronized
     fun update(id: String, change: (PairedHost) -> PairedHost) {
         save(_hosts.value.map { if (it.id == id) change(it) else it })
@@ -69,10 +86,14 @@ class HostStore(context: Context) {
         prefs.edit().putBoolean("relayApproved.$id", approved).apply()
     }
 
-    fun route(id: String): RoutePreference =
-        runCatching { RoutePreference.valueOf(prefs.getString("route.$id", null) ?: "AUTO") }.getOrDefault(RoutePreference.AUTO)
+    /** How to reach [id]. A computer added by its SSH address has SSH only (audit A27), whatever is stored. */
+    fun route(id: String): RoutePreference {
+        if (get(id)?.manual == true) return RoutePreference.SSH_ONLY
+        return runCatching { RoutePreference.valueOf(prefs.getString("route.$id", null) ?: "AUTO") }.getOrDefault(RoutePreference.AUTO)
+    }
 
     fun setRoute(id: String, route: RoutePreference) {
+        if (get(id)?.manual == true) return
         prefs.edit().putString("route.$id", route.name).apply()
     }
 

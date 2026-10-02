@@ -16,6 +16,10 @@ import kotlinx.serialization.json.put
  * key, its SSH seed) live in the app's Keystore-backed store, never in this record — except the
  * relay device token, which is a bearer credential and is therefore persisted by the app through
  * the same encrypted store (see the app's `SecureStore`).
+ *
+ * A computer added by its SSH address instead of a pairing code ([manual], audit A27) is one of
+ * these too: the same fields, no relay, and a host key pinned by the first connect that
+ * authenticated ([dev.nodeterm.protocol.ssh.ManualHost]).
  */
 data class PairedHost(
     /** Local id for this pairing (the host-assigned deviceId — unique per pairing). */
@@ -30,10 +34,26 @@ data class PairedHost(
     val relay: RelayBlock?,
     /** `SHA256:…` of the SSH host key, pinned on first connect (TOFU). */
     val sshHostKeyFingerprint: String?,
-    val pairedAt: Long
+    /** When it was paired, or added by address. */
+    val pairedAt: Long,
+    /**
+     * Added by its SSH address ("Add SSH server", audit A27), not paired: reached over SSH only. It
+     * has no relay leg, ever — a Server Edition has no pairing service and a plain SSH host no
+     * standing phone host — so the app fixes its route to SSH and never adopts a relay for it.
+     * Persisted as `"manual": true`, which a build that predates it ignores (it then sees a paired
+     * computer with SSH and no relay, which is what this is).
+     */
+    val manual: Boolean = false
 ) {
     /** The relay host key: the relay block's when present, else the QR's `hostKey` (same key). */
     val relayHostKeyB64: String? get() = relay?.hostPublicKeyB64 ?: hostKeyB64
+
+    /**
+     * How the SSH leg is named on screen. A paired computer's is the LAN one the pairing found; a
+     * computer added by address may be reached any way its SSH is (a VPN, a public address), so it is
+     * not called "your network".
+     */
+    val sshLegName: String get() = if (manual) "Over SSH" else "On your network"
 
     fun toJson(): JsonObject = buildJsonObject {
         put("id", id)
@@ -52,22 +72,28 @@ data class PairedHost(
         }
         sshHostKeyFingerprint?.let { put("sshHostKeyFingerprint", it) }
         put("pairedAt", pairedAt)
+        // Only when set: a paired computer's record is byte-for-byte what it was before A27.
+        if (manual) put("manual", true)
     }
 
     companion object {
         fun fromJson(o: JsonObject): PairedHost? {
             val id = o.s("id") ?: return null
+            val manual = o.b("manual") == true
             return PairedHost(
                 id = id,
                 name = o.s("name") ?: "Computer",
                 host = o.s("host") ?: return null,
                 port = o.l("port")?.toInt() ?: 22,
                 user = o.s("user") ?: return null,
-                sshAvailable = o.b("sshAvailable") != false,
-                hostKeyB64 = o.s("hostKeyB64"),
-                relay = o.o("relay")?.let(PairingPayload::parseRelayBlock),
+                // A computer added by address is reached over SSH or not at all.
+                sshAvailable = manual || o.b("sshAvailable") != false,
+                // No relay leg for one added by address, whatever the record says: nothing pairs it.
+                hostKeyB64 = if (manual) null else o.s("hostKeyB64"),
+                relay = if (manual) null else o.o("relay")?.let(PairingPayload::parseRelayBlock),
                 sshHostKeyFingerprint = o.s("sshHostKeyFingerprint"),
-                pairedAt = o.l("pairedAt") ?: 0
+                pairedAt = o.l("pairedAt") ?: 0,
+                manual = manual
             )
         }
 

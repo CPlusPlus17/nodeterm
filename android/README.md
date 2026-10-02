@@ -21,7 +21,8 @@ written for it and tested where the layer allows, and the numbered
 | | Android | Notes |
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
-| Direct connection on your network (SSH + tmux) | ✓ | TOFU-pinned host key; the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir, though a computer can only be added by pairing for now |
+| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: no relay (so no new session, board writes, node actions or source control from the phone, and nothing "from anywhere" beyond what reaches its SSH, a VPN say) and no push. No password login, no Windows |
+| Direct connection on your network (SSH + tmux) | ✓ | TOFU-pinned host key; the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body); an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
@@ -102,7 +103,8 @@ are also debuggable, which hands the phone's pairing credentials to anyone with 
   Linux, where node-pty ships no prebuild, not built at all) and `src/main/node-pty-patch.test.ts` red
   until you run `npm install` or `npm run rebuild` again (`bootstrap-windows.bat` on Windows). The
   SSH tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
-- **`app/`** — the Compose UI on top: pairing, the computers list (each with its needs-you count),
+- **`app/`** — the Compose UI on top: pairing, adding a computer by its SSH address, the computers
+  list (each with its needs-you count),
   a computer's Sessions / Board / Inbox / Usage tabs, the All computers screen (every computer's
   Inbox and Usage), the terminal screen (with dictation into its input bar), a project's source
   control, settings, background notifications.
@@ -122,7 +124,8 @@ Other paired computers are not polled while you look at one, so their notificati
 the background check only. That includes a computer you just left: the app may still hold its
 connection for a while, but no longer re-lists it when it pushes a change. The All computers screen
 is not polled either: it re-lists every computer once when you open it, and again on Refresh.
-Real-time push on Android needs an FCM leg in the backend.
+Real-time push on Android needs an FCM leg in the backend. A computer added by its SSH address is
+polled the same way, over SSH: the push a Server Edition gives an iOS phone is APNs-only.
 
 The live check leaves out what you are looking at: nothing of a computer is announced while its
 Inbox tab (or the All computers Inbox) is on screen, and nothing a session's terminal shows while it
@@ -201,6 +204,12 @@ iOS app does receive the detail, in the push the desktop sends.
 - The SSH host key is pinned on the first connect that authenticates (a server that refuses the
   phone's key is never pinned). A changed key is never used over SSH; in Auto the phone goes on to
   the relay, which verifies the computer separately, and shows a warning.
+- A computer added by its SSH address has no pairing behind its first connect, so compare the
+  fingerprint the Add screen shows with the computer's own (the screen gives the `ssh-keygen`
+  command). A changed key stops it; forget it and add it again only if you know why it changed. To
+  revoke the phone there, remove the line ending in `nodeterm-android` from that user's
+  `~/.ssh/authorized_keys` (the same key every pairing installs, under another comment). The phone
+  never asks for or keeps an SSH password.
 - No cleartext HTTP anywhere; the LAN `/pair` POST runs over a raw socket and is sealed to the host
   key from the QR. Its answer is read as untrusted: at most 64 KiB, within 45 seconds.
 

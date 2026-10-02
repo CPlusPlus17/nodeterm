@@ -203,6 +203,15 @@ fun SettingsScreen(nav: Navigator) {
                 Text("How to reach each computer", style = MaterialTheme.typography.titleMedium)
                 hosts.forEach { host ->
                     Text(host.name, style = MaterialTheme.typography.labelLarge)
+                    // Added by its SSH address (audit A27): SSH is its only route, so there is no choice.
+                    if (host.manual) {
+                        Text(
+                            "Over SSH only: this computer was added by its SSH address, so it has no relay.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        return@forEach
+                    }
                     listOf(
                         RoutePreference.AUTO to "Automatic (network first, then relay)",
                         RoutePreference.SSH_ONLY to "Only on my network (SSH)",

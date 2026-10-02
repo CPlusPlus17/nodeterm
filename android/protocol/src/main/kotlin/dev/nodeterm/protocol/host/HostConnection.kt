@@ -143,8 +143,29 @@ open class HostException(message: String) : Exception(message)
  * session is not running (creating it over SSH would give it no hook environment — audit A08), or
  * the node belongs to one of the desktop's SSH projects and lives on another host (audit A09). The
  * app offers to open it through the relay, where the desktop attaches it properly.
+ *
+ * [message] is that offer's text. [withoutRelay] is what to say instead when the phone has no relay
+ * leg to offer — a computer whose remote access is off, or one added by its SSH address, which has
+ * none at all (audit A27): the same fact, without promising a relay, and saying remote access is not
+ * set up for this computer.
  */
-class NeedsRelayException(val nodeId: String, message: String) : HostException(message)
+class NeedsRelayException(
+    val nodeId: String,
+    message: String,
+    val withoutRelay: String = "$message $NO_RELAY_TO_OFFER"
+) : HostException(message) {
+    companion object {
+        /** The sentence a refusal ends with when there is no relay leg to open it through. */
+        const val NO_RELAY_TO_OFFER = "Remote access isn't set up for this computer, so open it in nodeterm on the computer."
+    }
+}
+
+/**
+ * The SSH server answered but did not accept this phone's key (or this user). Kept apart from other
+ * connect failures because what to do differs: a computer added by its address needs the phone's
+ * key in its `authorized_keys` first (audit A27), and a paired one was revoked or re-keyed.
+ */
+class SshAuthRefusedException(message: String) : HostException(message)
 
 /**
  * For an attach that STARTS a session the phone just created: which project it belongs to, and the

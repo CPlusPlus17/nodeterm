@@ -43,11 +43,25 @@ object SshFallback {
             "(Settings → Phone) and pair again, which also trusts the computer's current key."
 
     /**
+     * A computer added by its SSH address (audit A27) has no relay leg to fall back to, and no pairing
+     * to repeat: forgetting it and adding it again is what trusts a new key.
+     */
+    const val ADDED_OVER_SSH_KEY_ADVICE =
+        "This computer was added by its SSH address, so the phone has no other way to reach it. If it was " +
+            "reinstalled, forget it on this phone and add it again, which trusts its new key."
+
+    /**
      * @param relayAllowed the route lets this connect use the relay (anything but "Only on my network").
      * @param relayConfigured the phone holds a relay leg for this computer (endpoint, relay host key and
      *   device token), i.e. a relay dial is possible at all.
+     * @param addedOverSsh the computer was added by its SSH address ([dev.nodeterm.protocol.ssh.ManualHost]):
+     *   SSH is its only route, and the failure is said without "your network" or a relay to turn on.
      */
-    fun afterFailure(error: Throwable, relayAllowed: Boolean, relayConfigured: Boolean): Next {
+    fun afterFailure(error: Throwable, relayAllowed: Boolean, relayConfigured: Boolean, addedOverSsh: Boolean = false): Next {
+        if (addedOverSsh) {
+            val message = error.message ?: error.javaClass.simpleName
+            return Next.Stop(if (error is HostKeyChangedException) "$message $ADDED_OVER_SSH_KEY_ADVICE" else message)
+        }
         if (error is HostKeyChangedException) {
             val fact = error.message ?: "This computer's SSH host key changed."
             return when {

@@ -97,7 +97,7 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
                         Text(host.name)
                         Text(
                             when (val s = state) {
-                                is ConnState.Connected -> if (s.kind == TransportKind.SSH) "On your network" else "Through the relay · end-to-end encrypted"
+                                is ConnState.Connected -> if (s.kind == TransportKind.SSH) host.sshLegName else "Through the relay · end-to-end encrypted"
                                 is ConnState.Connecting -> s.detail
                                 is ConnState.AwaitingApproval -> "Waiting for approval"
                                 is ConnState.Failed -> "Offline"

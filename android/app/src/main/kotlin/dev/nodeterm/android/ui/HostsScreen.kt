@@ -53,6 +53,7 @@ import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.AllComputers
 import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.ssh.ManualHost
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -69,6 +70,8 @@ fun HostsScreen(nav: Navigator) {
             TopAppBar(
                 title = { Text("nodeterm") },
                 actions = {
+                    // A computer with no pairing code (a Server Edition, an SSH-only host): audit A27.
+                    if (hosts.isNotEmpty()) TextButton(onClick = { nav.push(Route.AddSshHost) }) { Text("Add SSH server") }
                     IconButton(onClick = { nav.push(Route.Settings) }) { Icon(Icons.Filled.Settings, "Settings") }
                 }
             )
@@ -100,6 +103,14 @@ fun HostsScreen(nav: Navigator) {
                 )
                 Spacer(Modifier.padding(12.dp))
                 Button(onClick = { nav.push(Route.PairHost()) }) { Text("Pair a computer") }
+                Spacer(Modifier.padding(8.dp))
+                Text(
+                    "No pairing code? A nodeterm Server Edition, or a computer you reach over SSH, is added by its address.",
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = { nav.push(Route.AddSshHost) }) { Text("Add SSH server") }
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
@@ -164,7 +175,7 @@ fun HostsScreen(nav: Navigator) {
                             )
                             Text(
                                 routeSummary(host, relayTokenStored) +
-                                    stateSuffix(state),
+                                    stateSuffix(state, host),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -181,8 +192,13 @@ fun HostsScreen(nav: Navigator) {
             title = { Text("Forget ${host.name}?") },
             text = {
                 Text(
-                    "This phone forgets the pairing and its keys for this computer. To revoke the phone's access on " +
-                        "the computer too, remove it under nodeterm → Settings → Phone → Paired devices."
+                    if (host.manual) {
+                        // Added by address (audit A27): no Paired devices entry on the computer, only a key line.
+                        "This phone forgets this computer and its pinned host key. " + ManualHost.revokeHint(host.user)
+                    } else {
+                        "This phone forgets the pairing and its keys for this computer. To revoke the phone's access on " +
+                            "the computer too, remove it under nodeterm → Settings → Phone → Paired devices."
+                    }
                 )
             },
             confirmButton = {
@@ -215,15 +231,19 @@ private fun NeedsYouBadge(count: Int) {
 }
 
 fun routeSummary(host: PairedHost, hasRelayToken: Boolean): String {
+    // Added by its SSH address (audit A27): SSH is its only route, and it has no relay to add.
+    if (host.manual) return "Over SSH only"
     val legs = buildList {
-        if (host.sshAvailable) add("On your network")
+        if (host.sshAvailable) add(host.sshLegName)
         if (host.relay != null && hasRelayToken) add("From anywhere")
     }
     return if (legs.isEmpty()) "No route configured" else legs.joinToString(" · ")
 }
 
-private fun stateSuffix(state: ConnState): String = when (state) {
-    is ConnState.Connected -> if (state.kind == TransportKind.SSH) " — connected (network)" else " — connected (relay)"
+private fun stateSuffix(state: ConnState, host: PairedHost): String = when (state) {
+    is ConnState.Connected -> if (state.kind == TransportKind.SSH) {
+        if (host.manual) " — connected (SSH)" else " — connected (network)"
+    } else " — connected (relay)"
     is ConnState.Connecting -> " — connecting…"
     is ConnState.AwaitingApproval -> " — waiting for approval"
     is ConnState.Failed -> " — offline"

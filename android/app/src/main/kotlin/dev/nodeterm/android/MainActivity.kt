@@ -19,6 +19,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.core.content.ContextCompat
+import dev.nodeterm.android.ui.AddSshHostScreen
 import dev.nodeterm.android.ui.AllComputersScreen
 import dev.nodeterm.android.ui.HostScreen
 import dev.nodeterm.android.ui.HostsScreen
@@ -29,10 +30,12 @@ import dev.nodeterm.android.ui.SourceControlScreen
 import dev.nodeterm.android.ui.TerminalScreen
 import dev.nodeterm.protocol.model.BackStack
 
-/** The screens. A plain back stack: seven destinations, one deep link (the pairing URL). */
+/** The screens. A plain back stack: eight destinations, one deep link (the pairing URL). */
 sealed interface Route {
     data object Hosts : Route
     data class PairHost(val code: String? = null) : Route
+    /** Add a computer by its SSH address, with no pairing code (audit A27). */
+    data object AddSshHost : Route
     data object Settings : Route
     data class Host(val hostId: String, val tab: Int = 0) : Route
     data class Terminal(val hostId: String, val nodeId: String, val title: String) : Route
@@ -98,6 +101,7 @@ class Navigator(initial: BackStack<Route>) {
         private fun encode(r: Route): List<String> = when (r) {
             Route.Hosts -> listOf("hosts")
             is Route.PairHost -> listOfNotNull("pair", r.code)
+            Route.AddSshHost -> listOf("addssh")
             Route.Settings -> listOf("settings")
             is Route.Host -> listOf("host", r.hostId, r.tab.toString())
             is Route.Terminal -> listOf("terminal", r.hostId, r.nodeId, r.title)
@@ -111,6 +115,8 @@ class Navigator(initial: BackStack<Route>) {
             "hosts" -> Route.Hosts
             // A pairing code is single-use: coming back to it would only fail. Drop it.
             "pair" -> null
+            // Unlike a pairing code nothing in it is single-use: the form comes back as it was typed.
+            "addssh" -> Route.AddSshHost
             "settings" -> Route.Settings
             "host" -> parts.getOrNull(1)?.let { Route.Host(it, parts.getOrNull(2)?.toIntOrNull() ?: 0) }
             "terminal" -> if (parts.size == 4) Route.Terminal(parts[1], parts[2], parts[3]) else null
@@ -253,6 +259,7 @@ private fun AppContent(nav: Navigator) {
         when (val r = top.value) {
             Route.Hosts -> HostsScreen(nav)
             is Route.PairHost -> PairScreen(nav, r.code)
+            Route.AddSshHost -> AddSshHostScreen(nav)
             Route.Settings -> SettingsScreen(nav)
             is Route.Host -> HostScreen(nav, r.hostId, r.tab)
             is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
