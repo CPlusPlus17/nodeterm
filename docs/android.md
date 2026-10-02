@@ -581,7 +581,11 @@ every paired computer once through its normal connect path, so a relay leg goes 
 approval code on this screen, labelled with its computer, but one whose approval was refused or went
 unanswered keeps its hold, and says so with a Try again of its own (`Trigger.USER`). Lifting every
 hold on every visit would raise the desktop's dialog again, each time, on a computer the user did not
-ask about and may not be at (`A05`/`A23`). Open, Approve and Answer on a card go to the card's own
+ask about and may not be at (`A05`/`A23`). A computer whose last listing failed says so too, with the
+same Try again, also when the failure dropped its connection (an error the phone did not expect leaves
+the session idle): nothing on this screen re-lists it on its own, so its cached cards would otherwise
+stay on screen looking current. A computer's own screen shows that error under the same rule
+(`ConnState.showsListError`). Open, Approve and Answer on a card go to the card's own
 computer: its session and connection, and its relay leg for a node of that computer's SSH projects.
 The cards are the Inbox tab's composables (`InboxFeedList`, `UsageCard`), not copies. The rules are
 unit-tested; the screen, the row count and the route (saved in the back stack as `["all"]`, a name

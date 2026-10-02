@@ -47,6 +47,15 @@ sealed interface ConnState {
     data class AwaitingApproval(val sas: String) : ConnState
     data class Connected(val kind: TransportKind) : ConnState
     data class Failed(val message: String) : ConnState
+
+    /**
+     * Whether this state leaves a failed listing ([HostSession.lastError]) to the screen to show. Not
+     * while connecting or waiting for approval (an attempt is under way) and not [Failed] (it carries
+     * its own message). [Idle] does: a listing that fails with an unexpected error drops the connection
+     * ([HostSession.refreshNow]) and a background check closes it when it ends, and both leave Idle
+     * with the error standing and the cached cards on screen (the review of A55).
+     */
+    val showsListError: Boolean get() = this is Connected || this == Idle
 }
 
 /**
@@ -461,7 +470,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            _lastError.value = e.message
+            // Never null: an exception without a message must still say that the listing failed.
+            _lastError.value = e.message ?: e.javaClass.simpleName
             // A HostException is an ANSWER (the host refused, or the connection already reported its
             // own drop). Anything else is an unexpected transport failure: drop the connection so the
             // next refresh dials a fresh one instead of reusing a dead socket.

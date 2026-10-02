@@ -154,10 +154,12 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
                 )
             }
             // A listing that failed on a connection that is still up (e.g. nodeterm's data not found
-            // over SSH) used to be invisible: the screen just stayed empty (audit A31).
+            // over SSH) used to be invisible: the screen just stayed empty (audit A31). Also once the
+            // failure dropped the connection (Idle): one the phone cannot parse fails every poll the
+            // same way, and the screen showed nothing between them (the review of A55).
             val listError by session.lastError.collectAsState()
             val err = listError
-            if (state is ConnState.Connected && err != null) {
+            if (state.showsListError && err != null) {
                 Text(
                     err,
                     Modifier.fillMaxWidth().background(NtColors.attention.copy(alpha = 0.12f)).padding(12.dp),

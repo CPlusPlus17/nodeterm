@@ -208,7 +208,9 @@ private fun AllUsage(sections: List<AllComputers.UsageSection>) {
 /**
  * What keeps a computer's cards from this screen, if anything: it is connecting, the computer shows an
  * approval code (the relay's first connect, or the relay leg an answer opened next to SSH), its connect
- * failed, or its listing did. Nothing while it is connected and listed.
+ * failed, or its last listing did. That last one also when the failure dropped the connection, which
+ * leaves the session Idle ([ConnState.showsListError]): nothing re-lists here on its own, so without
+ * the strip its cached cards would stay on screen looking current. Nothing while it is listed.
  */
 @Composable
 private fun ComputerStatus(computer: ComputerLabel, session: HostSession) {
@@ -227,9 +229,10 @@ private fun ComputerStatus(computer: ComputerLabel, session: HostSession) {
         )
         // Try again is the user asking about THIS computer (Trigger.USER): it lifts a held approval.
         is ConnState.Failed -> Problem("${computer.label}: ${s.message}") { session.refresh(Trigger.USER) }
-        is ConnState.Connected -> listError?.let { Problem("${computer.label}: $it") { session.refresh(Trigger.USER) } }
-        ConnState.Idle -> Unit
+        is ConnState.Connected, ConnState.Idle -> Unit
     }
+    // Its last listing failed, also when that dropped the connection and left it Idle.
+    if (state.showsListError) listError?.let { Problem("${computer.label}: $it") { session.refresh(Trigger.USER) } }
     relayApproval?.let { if (state !is ConnState.AwaitingApproval) ApprovalFor(computer, it) }
 }
 

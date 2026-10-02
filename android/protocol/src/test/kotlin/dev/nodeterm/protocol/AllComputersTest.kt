@@ -323,6 +323,45 @@ class AllComputersTest {
     }
 
     @Test
+    fun `a computer whose last listing failed says so, also once the failure dropped its connection`() {
+        // Review of A55: a listing that fails with an unexpected error drops the connection, which
+        // leaves the session Idle (refreshNow -> disconnect), and the strip drew nothing for Idle. This
+        // screen re-lists nothing on its own, so the computer's cached cards stayed, looking current.
+        val connections = AppSourcePins.app("conn/ConnectionManager.kt")
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(connections, "suspend fun refreshNow("),
+            "} catch (e: Exception) {",
+            // Never a null error: an exception without a message still says the listing failed.
+            "_lastError.value = e.message ?: e.javaClass.simpleName",
+            "if (e !is HostException) disconnect()"
+        )
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(connections, "fun disconnect() {"),
+            "_state.value = ConnState.Idle"
+        )
+        // One rule for which states leave a failed listing to the screen: Connected AND Idle.
+        assertTrue(connections.contains("val showsListError: Boolean get() = this is Connected || this == Idle"))
+
+        // The merged screen's strip: the error with a Try again of its own (USER), under that rule.
+        val status = AppSourcePins.blockAfter(AppSourcePins.ui("AllComputersScreen.kt"), "private fun ComputerStatus(")
+        AppSourcePins.assertInOrder(
+            status,
+            "val listError by session.lastError.collectAsState()",
+            "is ConnState.Failed -> Problem(",
+            "if (state.showsListError) listError?.let { Problem(\"${'$'}{computer.label}: ${'$'}it\") { session.refresh(Trigger.USER) } }",
+            "relayApproval?.let"
+        )
+        assertFalse(
+            Regex("""is ConnState\.Connected ->[^\n]*listError""").containsMatchIn(status),
+            "the strip shows a failed listing only while connected"
+        )
+        // A computer's own screen reads the same rule.
+        val host = AppSourcePins.ui("HostScreen.kt")
+        assertTrue(host.contains("if (state.showsListError && err != null) {"))
+        assertFalse(host.contains("state is ConnState.Connected && err != null"), "HostScreen shows a failed listing only while connected")
+    }
+
+    @Test
     fun `the merged Inbox shows every computer's Inbox while started, and draws through the shared list`() {
         val screen = AppSourcePins.ui("AllComputersScreen.kt")
         val inbox = AppSourcePins.blockAfter(screen, "private fun AllInbox(")
