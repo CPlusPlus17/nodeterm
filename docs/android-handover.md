@@ -11,21 +11,38 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 - The Android app exists (`android/`), and **CI builds it with AGP**: a debug APK and, since `A37`,
   a minified release build that runs R8 (unsigned; no release key exists). The protocol tests pass in
   CI too.
-- **It has never been run on a phone.** Of the audit's 77 findings, all 9 release blockers (WP1 +
-  WP2), every WP4 medium bug and nearly all of WP6 are fixed on the branch; `A56` was deliberately
-  not built and `A50` is documented only. The WP5 parity gaps and a handful of follow-ups remain (see
-  "What is still open"). Everything is unit/interop-tested where the layer allows and type-checked,
-  but **nothing has run on a device**. Do not hand the APK to anyone until the device pass (WP3) has
-  run.
+- **It has never been run on a phone.** Of the audit's 77 findings, 73 are fixed on the branch:
+  all 9 release blockers (WP1 + WP2), every WP4 medium bug, the WP5 parity gaps and nearly all of
+  WP6, plus the follow-ups of batch E. Four are not: `A25` is fixed in the app but push needs FCM
+  on the backend, `A56` was deliberately not built, `A50` is documented only (no release key), and
+  `A68` (the CI trigger change) is the next step. Everything is unit/interop-tested where the layer
+  allows and type-checked, but **nothing has run on a device**. Do not hand the APK to anyone until
+  the device pass (WP3) has run.
 - The next session should run the **device checklist** in
-  [`android.md`](android.md#device-checklist) if a phone is available, then batch D (WP5), batch E
-  (follow-ups) and last `A68`, as listed under "What is still open". No PR is open, and none should be
-  opened unless the user asks.
+  [`android.md`](android.md#device-checklist) (64 items) if a phone is available, then `A68`, then
+  pick from the known gaps under "What is still open". No PR is open, and none should be opened
+  unless the user asks.
 
 ## Progress log
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
+
+### Batch E (follow-ups, desktop + phone): done on the branch, not device-verified
+
+Six follow-ups from earlier batches. Each had one or two adversarial reviews and a follow-up commit
+for every finding above "nit"; all were confirmed against the code before fixing. Four of them
+change the desktop, and three add wire fields (all additive, so older phones and iOS are
+unaffected until they read them).
+
+| Item | Commits | What changed | Checked by |
+|---|---|---|---|
+| A12 (SSH projects) | `8430243` | `node.sendKeys` types into a node of the desktop's SSH project over that project's ControlMaster (`PtyManager.backgroundWriteOver`, `send-keys -H` to the exact `=nt-<id>:` pane, copy mode cancelled first). Master down, no remote support or a failed resolve answer `sent:false`; never the local socket. Wire unchanged. | vitest `host-node-actions.test.ts`, `pty-background-write-over.test.ts`, `remote-send-keys.realtmux.test.ts` (the generated line under real `/bin/sh` + tmux, mutation-checked); `RelayInteropTest`. |
+| A07 (revoke) | `c199349`, `a988a30` | Revoking a paired phone closes its live relay sessions through the standing host's own Deny path and withdraws a pending consent for that key; other keys are untouched. An unpin that could not be written puts the device back in the list (Revoke retries) instead of reporting success; Settings says when the cut could not be confirmed. | vitest `standing-host.test.ts`, `pairing-service.test.ts`, `peer-revoke-wiring.test.ts`, `PhoneSection.revoke.test.tsx`. |
+| A07 (late adoption) | `f66fddf`, `07b7276` | A phone paired while remote access was off is approved on its first relay handshake: the desktop pins a box key that a listed pairing recorded (sealed `/pair` body), re-asked inside the pin queue so a revoke cannot be undone. The `/pair` answer gains `relayApproved`. The host holds the phone's first requests (at most 5 s / 32 requests) until it has decided, so a phone about to be approved silently is not told "awaiting approval" first; a background dial may therefore make the first relay handshake for a pairing that answered `relayApproved`. No new SSH-visible file. | vitest `approved-devices.test.ts`, `pairing-core.test.ts`, `paired-phone-late-pin-wiring.test.ts`, `host-service.decision-hold.test.ts`; `PairingInteropTest`, `RelayInteropTest`. |
+| A49 (anchor) | `513c166`, `402f139` | The sealed `/pair` answer carries the computer's SSH host key fingerprints (`sshHostKeyFingerprints`, read from `/etc/ssh` and sshd's `HostKey` lines; never in the QR or a plaintext answer). The phone's first SSH connect accepts only a named key (`HostKeyNotPairedException` otherwise, routed like a changed key with its own advice). | vitest `ssh-host-keys.test.ts`, `pairing-service.test.ts`; `HostKeyAnchorsTest`, `SshFallbackTest`, `PairingInteropTest`, `SshTransportTest`. |
+| A74 (refresh) | `cb12f3b`, `898d937` | `projects.list` over the relay answers `{output, lan?}` with the computer's current LAN IPv4 and host key fingerprints beside the blob (not inside it). The phone takes them only from a RELAY listing: a new address replaces the stored one, and the reported keys become the anchors. A host certificate is named by the key it certifies, so it no longer flips the pin. | vitest `host-lan-report.test.ts`; `LanRefreshTest`, `HostCertificatePinTest`, `RelayInteropTest`, `SshTransportTest`. |
+| Seen log per computer | `6afd8f5`, `a65e12f` | The notification seen log is keyed by computer, and an event that reaches the phone through two pairings (a desktop and the SSH host it drives) still notifies once (same id and node). The old store migrates as seen for every computer until it ages out; forgetting a computer drops its entries. | `SeenLogTest`, `LiveNotificationsTest`. |
 
 ### WP5 batch D (iOS parity features): done on the branch, not device-verified
 
@@ -119,16 +136,14 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Batch D — done** (see its progress table). What it left open is listed under the known gaps
-   below.
-2. **Batch E — follow-ups.** `node.sendKeys` for SSH-project nodes over their ControlMaster (`A12`);
-   a device revoke cuts its live relay session (`A07`); late relay adoption pins the box key (`A07`,
-   probably a new SSH-visible file, so iOS and the fixture are owed); the SSH host keys in the sealed
-   `/pair` answer anchor the pin (`A49`); a relay-authenticated refresh of the LAN address (`A74`);
-   the notification seen log keyed per computer.
-3. **`A68` last.** `push: branches: [main]` + `pull_request`, no `merge_group` (see the verifier).
-   After it, pushes to this branch no longer run the Android workflow until a PR exists, which is why
-   it waits until everything else is verified.
+1. **Batches D and E — done** (see their progress tables).
+2. **`A68`.** `push: branches: [main]` + `pull_request`, no `merge_group` (see the verifier).
+   After it, pushes to this branch no longer run the Android workflow until a PR exists, so do it
+   when the branch is ready for one, or open the PR first.
+3. **iOS adoption (@eneskirca).** Batch E added three additive fields iOS can read: `relayApproved`
+   and `sshHostKeyFingerprints` in the sealed `/pair` answer (iOS also needs to send its
+   `boxPublicKey` there for the late-adoption approval and the revoke cut to apply to it), and `lan`
+   beside the `projects.list` output. iOS should also key its notification seen state by computer.
 
 **Known gaps and caveats:**
 
@@ -139,18 +154,26 @@ section before starting, since the verifier corrections take precedence):
   `updatedPermissions`, carried by the answer file and `approvals.answer`. That spans the desktop,
   the `~/.nodeterm/pending` contract, iOS and Android, so it needs a design decision. The iOS app's
   blind `2` should be re-checked by @eneskirca.
-- **A49 anchoring.** The SSH pin is still trust-on-first-use. Anchoring it needs the desktop to
-  return its SSH host key fingerprints in the sealed `/pair` answer (desktop + iOS + fixture), and
-  refreshing a stale LAN address needs the desktop to publish its current one.
+- **A49 / A74 residuals.** Phones paired before batch E have no anchors and stay on
+  trust-on-first-use until they pair again or get a relay listing. A host key sshd serves from an
+  `Include` outside `sshd_config.d` or a relative `HostKey` path is not read, so SSH is refused for
+  it (Auto falls back to the relay). `pickLanIPv4` reports the first non-internal adapter, which
+  may not be the one the phone can reach. A phone that only uses "Only on my network" never gets a
+  refresh.
 - **A72 project overrides.** A phone-started session gets the agent env and a proven owner, but not
   the project's `.nodeterm/settings.json` env/shell overrides (that read is async and may raise a
   trust dialog).
-- **A12 for SSH-project nodes.** `node.sendKeys` answers `sent:false` for them (background writes
-  do not reach a remote host), so the phone opens the session instead of answering in one tap.
+- **Quick-answer false success on the desktop (found during batch E).** The local
+  `PtyManager.backgroundWrite` sends `send-keys -t nt-<id>` without the exact `=…:` target (a miss
+  can prefix-match another node's session and exit 0) and does not cancel copy mode (a key into a
+  scrolled-up pane is eaten while reporting success). The SSH-project path added in batch E does
+  both; the phone's direct-SSH `SshScripts.sendKeys` targets exactly but does not cancel copy mode.
 - **A33 on an older desktop.** An older desktop ignores the new attach fields, so a Windows host
   still starts phone sessions in the home folder until it is updated.
-- **A07 edges.** Late relay adoption does not pin; revoking a device unpins but does not cut a relay
-  session open at that moment.
+- **A07 for older pairings.** A device paired without a recorded `relayBoxKey` (before A07, or
+  any phone that does not send `boxPublicKey`, which includes current iOS builds) has nothing to
+  unpin or cut on revoke and is not approved on a late adoption. Fixing it needs a SAS-approval pin
+  to be linked to a device entry, which the approved-devices store does not record.
 - **Batch D leftovers.** No git over direct SSH (Source Control needs the relay leg; `A29`). With
   remote access off, New session and board edits are disabled with the reason, where iOS writes
   `project.json` over SSH (`A26`). No FCM push and no Live-Activity equivalent (`A25`). The All
@@ -162,8 +185,8 @@ section before starting, since the verifier corrections take precedence):
   32 continuing full-width rows the paragraph it returns does not contain the row, so a link there is
   missed. One-character fix (`MAX_JOIN_ROWS - 1`), owed with its own vitest.
 - **A10 trade-off.** The debug key is public by the user's decision; a release key does not exist.
-- **Seen log per host.** The notification seen log is phone-global; two computers could in theory
-  mint the same event id in the same millisecond.
+- **HostStore leftovers.** `HostStore.upsert` leaves a replaced record's `route.<id>` /
+  `relayApproved.<id>` prefs behind (pre-existing).
 - **Server-e2e and native-module vitest suites** could not run in this sandbox (`npm ci
   --ignore-scripts` skips the native builds, and there is no `ssh` client); the same 14 tests and 31
   files fail identically on the pre-session commit. Desktop CI does not run on branch pushes here,
@@ -178,10 +201,10 @@ section before starting, since the verifier corrections take precedence):
 | A08 | `1cdd2f0` | Chose "refuse and route to the relay". SSH attach runs `attach-session` after a `has-session` check (exit 3), never `new-session`; a session that is not running raises `NeedsRelayException`, and the terminal offers "Open through the relay" (`HostSession.viaRelay`, a relay connection held next to the SSH one), where the desktop creates it with its hook env. | SSH transport tests: nothing is created by the transport or by the script itself. |
 | A09 / A28 | `726271a` (desktop), `1cdd2f0` (phone) | **Desktop:** the relay `pty.attach` of an SSH-project node now attaches over that project's ControlMaster (`requireRemote`, host-side freshness and snapshot) or refuses with the host's name — never locally. **Phone:** over direct SSH, attach/keys/approvals/kill for those nodes raise `NeedsRelayException` and read-acks are skipped; the terminal, the Inbox and End session retry through the relay. | vitest `remote-security.test.ts` (4 new cases); SSH transport test for the refusals. |
 
-Not done here, noted for later: late relay adoption (`adoptRelayIfAdvertised`) does not pin, so a phone
-adopted that way still approves on its first relay connect; revoking a device unpins its key but
-does not cut a relay session that is open at that moment (the standing host's revocation path does
-that). iOS can adopt `boxPublicKey`/`relayPinned` unchanged.
+Not done here, noted for later (both closed in batch E): late relay adoption
+(`adoptRelayIfAdvertised`) did not pin, so a phone adopted that way still approved on its first
+relay connect; revoking a device unpinned its key but did not cut a relay session open at that
+moment. iOS can adopt `boxPublicKey`/`relayPinned` unchanged.
 
 ### WP1 (blockers): done on the branch, not device-verified
 
@@ -201,14 +224,15 @@ when it did not deliver. iOS can adopt `reason` unchanged; an older phone keeps 
 | | |
 |---|---|
 | Repo / branch | `CPlusPlus17/nodeterm`, branch `claude/android-ios-parity-75kfem` (pushed) |
-| Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; `2dd539f` this handover; then the WP1/WP2/WP4 fixes listed in the progress log (`af1f820` … `0db0b6e`) |
+| Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; `2dd539f` this handover; then every fix and feature in the progress log, newest first (`git log` on the branch) |
 | PR | none (do not open one unless asked) |
-| CI | `.github/workflows/android.yml`: **Protocol** (JVM + desktop interop) and **App** (`assembleDebug`). Both green on `2f58918` |
+| CI | `.github/workflows/android.yml`: **Protocol** (JVM + desktop interop), **App** (`assembleDebug`), **App release** (R8, unsigned, `A37`) and **CodeQL (Kotlin)** (`A69`). It runs on every push to this branch until `A68` lands. Desktop CI does not run on branch pushes here |
 
 What is in the tree:
 
 - `android/protocol` is pure Kotlin/JVM with no Android dependency. It holds the NaCl port, the relay
-  client, the host RPC, pairing, direct SSH over sshj, and the parsers. It has 41 tests. The
+  client, the host RPC, pairing, direct SSH over sshj, the parsers, and the pure rules the app's
+  screens use (most of the app's logic lives here so it can be tested). It has 589 tests. The
   interop tests run the desktop's own `connectHostSession` / `createPairingService` through
   `android/protocol/src/test/interop/host-fixture.ts`; the SSH tests use Apache MINA sshd with a
   sandboxed tmux.
@@ -220,6 +244,12 @@ What is in the tree:
   - `src/main/remote/host-service.ts` gained the relay verbs **`approvals.answer`** and
     **`inbox.ack`**, tested in `src/main/remote/host-inbox-verbs.test.ts`.
   - `src/main/index.ts` extracted `answerPermission` and wired `hostBridge.inbox`.
+  - Later additive changes the phone uses: `node.sendKeys` (`A12`, SSH-project nodes over their
+    ControlMaster since batch E), the `projectId`/`accountId`/`agentId` fields on `pty.attach`
+    (`A33`/`A72`), `relayPinned`, `relayApproved` and `sshHostKeyFingerprints` in the sealed `/pair`
+    answer (`A07`, `A49`), `lan` beside the `projects.list` output (`A74`), additive account
+    `label`/`email` in the mirror (`A39`), the `-D`-free attach while a relay phone is attached
+    (`A13`), the hibernated self-heal in the mirror (`A76`), and the revoke cut (`A07`).
   - The renderer copy now names both phone apps (`PhonePairPopover.tsx`, `PhoneSection.tsx`,
     `lib/links.ts`).
   - CLAUDE.md gained an Android paragraph under Conventions → three surfaces, and CONTRIBUTING.md
@@ -229,12 +259,17 @@ What is in the tree:
 
 Verified:
 
-- The protocol against the desktop's real code: the relay handshake, SAS, approval wait,
-  `projects.list`, attach/snapshot/input/resize/exit, scroll, node actions, board verbs,
-  `approvals.answer`, `inbox.ack`, registration, and pairing (E2EE `/pair`, the key landing in
-  `authorized_keys`).
+- The protocol against the desktop's real code: the relay handshake, SAS, approval wait (and the
+  host's decision hold), `projects.list` with its `lan` report, attach/snapshot/input/resize/exit,
+  scroll, node actions (quick answers into SSH-project nodes through a fake remote writer), board
+  verbs, `git.*` through the real `GitService`, `approvals.answer`, `inbox.ack`, registration, and
+  pairing (E2EE `/pair`, the key landing in `authorized_keys`, the relay pin, the SSH host key
+  fingerprints from a fixture key directory).
 - Relay security properties: no re-key, reflection, replay/reorder, and a foreign key.
-- SSH transport against a real SSH server with tmux.
+- SSH transport against a real SSH server with tmux, including the pin anchors, a host
+  certificate, and the Server Edition / driven-host browse.
+- The remote `send-keys` line the desktop generates for SSH-project nodes, under a real `/bin/sh`
+  and tmux (not over a real ControlMaster).
 - The debug APK builds with AGP in CI.
 
 **Not verified:**
@@ -248,7 +283,7 @@ Verified:
   desktop's own assembly (`src/core/projects-list-blob.ts`, shared with `src/main/index.ts`) and its
   mirror entries from the real mirror writer; the session list inside the blob and the mirror's
   `settings` provider are still fixture-authored. The SSH leg's shapes (the v3 index, project files,
-  `agent-status.json`, the pending/acks files, `relay.json`) are still hand-copied in
+  `agent-status.json`, the status slices, the pending/acks files, `relay.json`) are still hand-copied in
   `SshTransportTest`; `docs/android.md` names them. That hand-copying is how `A02` passed its test
   while being wrong on every real desktop.
 
@@ -390,14 +425,16 @@ Paste this into the next session.
 Continue the Android companion work on branch claude/android-ios-parity-75kfem of CPlusPlus17/nodeterm.
 
 Start by reading docs/android-handover.md (progress log, "What is still open", environment notes,
-conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). WP1, WP2,
-WP4 and nearly all of WP6 are fixed on the branch, but nothing has run on a device.
+conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). 73 of the
+77 findings and the batch E follow-ups are fixed on the branch, but nothing has run on a device.
 
 1. If a phone is available: run the device checklist in docs/android.md (#device-checklist) with the
    latest CI APK, record results in docs/android.md → "What is verified", and turn every failure into
    a finding.
-2. Batch D (WP5 parity: A26, A29, A32, A25, A55, A59, A27), then batch E (the follow-ups listed under
-   "What is still open"), then A68 last.
+2. A68 (CI triggers), when the branch is ready for a PR: after it, branch pushes no longer run the
+   Android workflow.
+3. Then pick from the known gaps under "What is still open" (for example the desktop quick-answer
+   false-success hazards found in batch E).
 
 Before each push run the protocol tests (cd android/protocol && gradle test --offline; an existing
 npm install at the repo root is enough), the offline type-check (cd android/tools/typecheck && gradle
