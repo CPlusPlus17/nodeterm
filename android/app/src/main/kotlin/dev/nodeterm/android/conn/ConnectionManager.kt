@@ -3,8 +3,10 @@ package dev.nodeterm.android.conn
 import dev.nodeterm.android.AppGraph
 import dev.nodeterm.android.data.RoutePreference
 import dev.nodeterm.android.data.SecureStore
+import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.host.RelayApprovalGate.Trigger
 import dev.nodeterm.protocol.host.RelayConnectStatus
@@ -205,24 +207,66 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     private val sideMutex = Mutex()
 
     /** This computer can be reached through the relay at all (a relay leg and its device token). */
-    val hasRelay: Boolean
-        get() {
-            val host = graph.hosts.get(hostId) ?: return false
-            return host.relay != null && host.relayHostKeyB64 != null &&
-                graph.secure.getString(SecureStore.relayTokenKey(host.id)) != null &&
-                graph.hosts.route(hostId) != RoutePreference.SSH_ONLY
+    val hasRelay: Boolean get() = relayLeg() == LegRouting.RelayLeg.AVAILABLE
+
+    /**
+     * Whether the relay leg can be opened next to the primary connection. Read fresh each time: a
+     * late adoption ([adoptRelayIfAdvertised]) mints the token while connected over SSH.
+     */
+    fun relayLeg(): LegRouting.RelayLeg {
+        val host = graph.hosts.get(hostId) ?: return LegRouting.RelayLeg.NOT_SET_UP
+        return LegRouting.relayLeg(
+            relayConfigured = relayConfigured(host),
+            sshOnlyRoute = graph.hosts.route(hostId) == RoutePreference.SSH_ONLY
+        )
+    }
+
+    /** Which leg answers [cap] right now ([LegRouting.route]): the one decision the UI and [connectionFor] share. */
+    fun route(cap: Capability): LegRouting.Leg {
+        val c = conn
+        return LegRouting.route(cap, c?.kind, c?.capabilities, relayLeg())
+    }
+
+    /**
+     * A connection that can do [cap] (audit A26): the primary one when it can, else the relay leg
+     * opened next to it. For a USER's action — the relay dial goes through [RelayApprovalGate] with
+     * [trigger], so a background caller never makes a first relay handshake. Throws a
+     * [HostException] carrying the reason when neither leg can.
+     */
+    suspend fun connectionFor(
+        cap: Capability,
+        trigger: Trigger = Trigger.USER,
+        onStatus: (RelayConnectStatus) -> Unit = {}
+    ): HostConnection {
+        val primary = ensureConnected(trigger)
+        return when (val leg = route(cap)) {
+            LegRouting.Leg.Primary -> primary
+            LegRouting.Leg.Relay -> viaRelay(trigger, onStatus)
+            is LegRouting.Leg.Unavailable -> throw HostException(leg.reason)
         }
+    }
+
+    private val _relayApproval = MutableStateFlow<String?>(null)
+
+    /**
+     * The approval code while the relay leg next to an SSH connection waits for the desktop's
+     * dialog (its first dial on a desktop that has not pinned this phone): the host screen shows it,
+     * since the board or New session that asked has no screen of its own for it.
+     */
+    val relayApproval: StateFlow<String?> = _relayApproval.asStateFlow()
 
     /**
      * A relay connection for one action the direct-SSH transport refuses
      * ([dev.nodeterm.protocol.host.NeedsRelayException]): a session that is not running (creating it
-     * over SSH would leave it without its hook environment — audit A08), or a node of the desktop's
-     * SSH projects, which the desktop reaches on its host (audit A09). The primary connection when
-     * it already IS the relay; otherwise one opened next to it and kept until [disconnect]. The user
-     * asked (they tapped "Open through the relay"), so a held approval is released and, the first
-     * time, the desktop's approval code is reported through [onStatus].
+     * over SSH would leave it without its hook environment — audit A08), a node of the desktop's
+     * SSH projects, which the desktop reaches on its host (audit A09), or a verb only nodeterm the
+     * app serves (board writes, a new session, node actions, git — audit A26, via [connectionFor]).
+     * The primary connection when it already IS the relay; otherwise one opened next to it and kept
+     * until [disconnect]. [trigger] goes to [RelayApprovalGate]: a user's tap releases a held
+     * approval and, the first time, the desktop's approval code is reported through [onStatus] (and
+     * [relayApproval]); a background caller never makes a first handshake.
      */
-    suspend fun viaRelay(onStatus: (RelayConnectStatus) -> Unit = {}): HostConnection {
+    suspend fun viaRelay(trigger: Trigger = Trigger.USER, onStatus: (RelayConnectStatus) -> Unit = {}): HostConnection {
         conn?.takeIf { it.kind == TransportKind.RELAY }?.let { return it }
         sideRelay?.let { return it }
         return sideMutex.withLock {
@@ -234,17 +278,22 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 if (relay == null || token == null || hostKey == null || graph.hosts.route(hostId) == RoutePreference.SSH_ONLY) {
                     throw HostException("Remote access isn't set up for this computer. Open the session in nodeterm on the computer instead.")
                 }
-                when (val d = graph.relayGate.decide(hostId, Trigger.USER)) {
+                val requireApproved = when (val d = graph.relayGate.decide(hostId, trigger)) {
                     is RelayApprovalGate.Decision.Skip -> throw HostException(d.reason)
-                    is RelayApprovalGate.Decision.Dial -> Unit
+                    is RelayApprovalGate.Decision.Dial -> d.requireApproved
                 }
                 val connected = try {
-                    dialRelay(relay, token, hostKey, requireApproved = false, onStatus = onStatus)
+                    dialRelay(relay, token, hostKey, requireApproved = requireApproved) { st ->
+                        _relayApproval.value = (st as? RelayConnectStatus.AwaitingApproval)?.sas
+                        onStatus(st)
+                    }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     graph.relayGate.onFailed(hostId, e)
                     throw e
+                } finally {
+                    _relayApproval.value = null
                 }
                 graph.relayGate.onConnected(hostId)
                 val c = connected.connection

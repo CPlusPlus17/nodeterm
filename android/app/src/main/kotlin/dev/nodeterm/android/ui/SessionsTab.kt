@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -38,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
+import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TransportKind
@@ -149,26 +152,35 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                             onLongClick = { menuFor = node }
                         )
                         DropdownMenu(expanded = menuFor?.id == node.id, onDismissRequest = { menuFor = null }) {
-                            val conn = session.connection
                             DropdownMenuItem(text = { Text("Open") }, onClick = {
                                 menuFor = null
                                 nav.push(Route.Terminal(hostId, node.id, displayTitle(node, snapshot)))
                             })
-                            if (conn?.capabilities?.nodeActions == true) {
-                                if (snapshot.statusOf(node.id)?.hibernated == true) {
-                                    DropdownMenuItem(text = { Text("Wake") }, onClick = {
-                                        menuFor = null
-                                        act("Wake") { conn.wake(node.id) }
-                                    })
-                                }
-                                DropdownMenuItem(text = { Text("Refresh view on computer") }, onClick = {
+                            // Wake/refresh/rename are nodeterm the app's (`node.*`): on the LAN that is
+                            // the relay leg opened next to SSH, on a tap. Where this phone has none they
+                            // stay listed, disabled, with the reason (audit A26).
+                            val blocked = session.route(Capability.NODE_ACTIONS) as? LegRouting.Leg.Unavailable
+                            if (snapshot.statusOf(node.id)?.hibernated == true) {
+                                DropdownMenuItem(text = { Text("Wake") }, enabled = blocked == null, onClick = {
                                     menuFor = null
-                                    act("Refresh") { conn.refresh(node.id) }
+                                    act("Wake") { session.connectionFor(Capability.NODE_ACTIONS).wake(node.id) }
                                 })
-                                DropdownMenuItem(text = { Text("Rename…") }, onClick = {
-                                    menuFor = null
-                                    renaming = node
-                                })
+                            }
+                            DropdownMenuItem(text = { Text("Refresh view on computer") }, enabled = blocked == null, onClick = {
+                                menuFor = null
+                                act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS).refresh(node.id) }
+                            })
+                            DropdownMenuItem(text = { Text("Rename…") }, enabled = blocked == null, onClick = {
+                                menuFor = null
+                                renaming = node
+                            })
+                            if (blocked != null) {
+                                Text(
+                                    blocked.reason,
+                                    Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                             DropdownMenuItem(text = { Text("End session…", color = NtColors.attention) }, onClick = {
                                 menuFor = null
@@ -190,8 +202,7 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
             confirmButton = {
                 TextButton(enabled = title.isNotBlank(), onClick = {
                     renaming = null
-                    val conn = session.connection ?: return@TextButton
-                    act("Rename") { conn.rename(node.id, title.trim()) }
+                    act("Rename") { session.connectionFor(Capability.NODE_ACTIONS).rename(node.id, title.trim()) }
                 }) { Text("Rename") }
             },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } }

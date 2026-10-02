@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import dev.nodeterm.android.AppGraph
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.HostConnection
+import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RendererRecovery
@@ -550,13 +551,17 @@ class TerminalController(
         attachJob = graph.scope.launch {
             val job = coroutineContext[Job]
             try {
-                val conn = if (useRelay) {
-                    session.viaRelay { st ->
-                        // A superseded attach's dial must not put its code over the current screen.
-                        if (st is RelayConnectStatus.AwaitingApproval) main.post { if (slot.isCurrent(ticket)) state = TermState.AwaitingApproval(st.sas) }
-                    }
-                } else {
-                    session.ensureConnected()
+                val onStatus: (RelayConnectStatus) -> Unit = { st ->
+                    // A superseded attach's dial must not put its code over the current screen.
+                    if (st is RelayConnectStatus.AwaitingApproval) main.post { if (slot.isCurrent(ticket)) state = TermState.AwaitingApproval(st.sas) }
+                }
+                val conn = when {
+                    useRelay -> session.viaRelay(onStatus = onStatus)
+                    // A session this phone starts is created and registered on the canvas by nodeterm
+                    // the app: over direct SSH that is the relay leg, opened next to it (audit A26).
+                    // The user tapped New session, so this may make the relay's first handshake.
+                    PendingLaunches.peek(nodeId) != null -> session.connectionFor(Capability.REGISTER_NODE, onStatus = onStatus)
+                    else -> session.ensureConnected()
                 }
                 val c = if (cols > 0) cols else 80
                 val r = if (rows > 0) rows else 24

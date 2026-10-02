@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -45,6 +46,8 @@ import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.conn.ConnState
 import dev.nodeterm.android.conn.HostSession
+import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.NewSessionChoice
 
@@ -77,8 +80,12 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     }
 
     val needsYou = snapshot.status?.inbox?.events?.count { it.actionable } ?: 0
-    val canCreate = (state as? ConnState.Connected)?.kind == TransportKind.RELAY &&
-        NewSessionChoice.offeredProjects(snapshot).isNotEmpty()
+    // New session goes through nodeterm the app (the relay's `projects.registerNode`): on the LAN
+    // (direct SSH) that is the relay leg opened next to it, and where this phone has none the button
+    // stays, disabled, with the reason (audit A26) — it used to vanish without a word.
+    val offersNew = state is ConnState.Connected && NewSessionChoice.offeredProjects(snapshot).isNotEmpty()
+    val newRoute = session.route(Capability.REGISTER_NODE)
+    val relayApproval by session.relayApproval.collectAsState()
 
     Scaffold(
         topBar = {
@@ -104,17 +111,36 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
             )
         },
         floatingActionButton = {
-            if (tab == 0 && canCreate) {
-                ExtendedFloatingActionButton(
-                    onClick = { newSession = true },
-                    icon = { Icon(Icons.Filled.Add, null) },
-                    text = { Text("New session") }
-                )
+            if (tab == 0 && offersNew) {
+                val blocked = newRoute as? LegRouting.Leg.Unavailable
+                if (blocked == null) {
+                    ExtendedFloatingActionButton(
+                        onClick = { newSession = true },
+                        icon = { Icon(Icons.Filled.Add, null) },
+                        text = { Text("New session") }
+                    )
+                } else {
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            blocked.reason,
+                            Modifier.widthIn(max = 300.dp).background(NtColors.panel2).padding(10.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(onClick = {}, enabled = false) {
+                            Icon(Icons.Filled.Add, null)
+                            Text("New session")
+                        }
+                    }
+                }
             }
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             ConnectionBanner(state, session)
+            // The relay leg a board edit or New session opened next to the SSH connection is waiting
+            // for the computer's approval dialog (its first dial on a desktop that has not pinned us).
+            relayApproval?.let { if (state !is ConnState.AwaitingApproval) ApprovalCode(it) }
             // Connected through the relay because the server at the paired address presented a
             // different SSH host key (audit A49/A74): the relay proves the computer, but the change
             // itself must stay visible.
@@ -172,26 +198,7 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
 @Composable
 private fun ConnectionBanner(state: ConnState, session: HostSession) {
     when (state) {
-        is ConnState.AwaitingApproval -> Column(
-            Modifier.fillMaxWidth().background(NtColors.panel2).padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text("Approve this phone on your computer", fontWeight = FontWeight.SemiBold)
-            Text(
-                state.sas,
-                fontSize = 34.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                color = NtColors.accent
-            )
-            Text(
-                "nodeterm on your computer is showing a code. Approve only if it matches this one — a different code " +
-                    "means someone is in the middle. You only do this once per phone.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        is ConnState.AwaitingApproval -> ApprovalCode(state.sas)
         is ConnState.Failed -> Column(
             Modifier.fillMaxWidth().background(NtColors.attention.copy(alpha = 0.12f)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -200,5 +207,29 @@ private fun ConnectionBanner(state: ConnState, session: HostSession) {
             Row { Button(onClick = { session.refresh() }) { Text("Try again") } }
         }
         else -> Unit
+    }
+}
+
+@Composable
+private fun ApprovalCode(sas: String) {
+    Column(
+        Modifier.fillMaxWidth().background(NtColors.panel2).padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text("Approve this phone on your computer", fontWeight = FontWeight.SemiBold)
+        Text(
+            sas,
+            fontSize = 34.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = NtColors.accent
+        )
+        Text(
+            "nodeterm on your computer is showing a code. Approve only if it matches this one — a different code " +
+                "means someone is in the middle. You only do this once per phone.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

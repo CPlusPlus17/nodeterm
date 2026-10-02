@@ -43,6 +43,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
@@ -90,12 +92,19 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     var projectMenu by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf<NodeInfo?>(null) }
     var labeling by remember { mutableStateOf<NodeInfo?>(null) }
-    val writable = session.connection?.capabilities?.boardWrites == true
+    // Board writes are nodeterm the app's (the relay's `projects.*` verbs): on the LAN that is the
+    // relay leg opened next to the SSH connection, on a tap (audit A26). Where this phone has no
+    // relay leg the controls stay, disabled, and say why.
+    val boardRoute = session.route(Capability.BOARD_WRITES)
+    val readOnlyReason = (boardRoute as? LegRouting.Leg.Unavailable)?.reason
 
     if (project == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No projects yet.") }
         return
     }
+
+    /** The leg that writes the board: the open connection, or the relay leg next to SSH (a tap). */
+    suspend fun boardConnection() = session.connectionFor(Capability.BOARD_WRITES)
 
     fun write(label: String, block: suspend () -> Unit) {
         scope.launch {
@@ -126,9 +135,9 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                 }
             }
             Spacer(Modifier.width(8.dp))
-            if (!writable) {
+            if (readOnlyReason != null) {
                 Text(
-                    "Read-only here — board edits need the relay connection.",
+                    "Read-only here. $readOnlyReason",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -173,7 +182,9 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                                 onClick = {
                                     if (card.kind == NodeKind.TERMINAL) nav.push(Route.Terminal(hostId, card.id, displayTitle(card, snapshot)))
                                 },
-                                onLongClick = { if (writable) moving = card }
+                                // Long-press opens the card's actions even when they cannot run,
+                                // so the disabled controls can say why (audit A26).
+                                onLongClick = { moving = card }
                             )
                         }
                     }
@@ -188,19 +199,23 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
             title = { Text(displayTitle(card, snapshot)) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
+                    readOnlyReason?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    val writable = readOnlyReason == null
                     Text("Move to", style = MaterialTheme.typography.labelLarge)
                     val cols = project.board?.columns?.map { it.id to it.title }
-                    TextButton(onClick = {
+                    TextButton(enabled = writable, onClick = {
                         moving = null
-                        write("Move") { session.ensureConnected().setCardColumn(project.id, card.id, null) }
+                        write("Move") { boardConnection().setCardColumn(project.id, card.id, null) }
                     }) { Text("Ungrouped") }
                     if (cols == null) {
                         // No board yet: ask the host to seed the default one, then move into its column.
                         dev.nodeterm.protocol.model.KanbanBoard.DEFAULT_COLUMN_TITLES.forEachIndexed { i, t ->
-                            TextButton(onClick = {
+                            TextButton(enabled = writable, onClick = {
                                 moving = null
                                 write("Move") {
-                                    val conn = session.ensureConnected()
+                                    val conn = boardConnection()
                                     val seeded = conn.ensureBoard(project.id) ?: error("this project can't have a board written")
                                     val target = seeded.firstOrNull { it.title == t } ?: seeded.getOrNull(i) ?: error("no such column")
                                     conn.setCardColumn(project.id, card.id, target.id)
@@ -209,13 +224,13 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                         }
                     } else {
                         cols.forEach { (id, t) ->
-                            TextButton(onClick = {
+                            TextButton(enabled = writable, onClick = {
                                 moving = null
-                                write("Move") { session.ensureConnected().setCardColumn(project.id, card.id, id) }
+                                write("Move") { boardConnection().setCardColumn(project.id, card.id, id) }
                             }) { Text(t) }
                         }
                     }
-                    TextButton(onClick = {
+                    TextButton(enabled = writable, onClick = {
                         labeling = card
                         moving = null
                     }) { Text("Labels…") }
@@ -232,7 +247,7 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
             onDismiss = { labeling = null },
             onApply = { edit ->
                 labeling = null
-                write("Labels") { session.ensureConnected().editCardLabels(project.id, card.id, edit) }
+                write("Labels") { boardConnection().editCardLabels(project.id, card.id, edit) }
             }
         )
     }

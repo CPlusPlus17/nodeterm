@@ -7,6 +7,7 @@ import dev.nodeterm.protocol.host.HostCapabilities
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.LabelEditResult
+import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.NewSessionHint
@@ -409,6 +410,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         runCatching { client.socket?.close() }
     }
 
+    // The app routes these to the relay leg itself ([LegRouting.route], audit A26); a caller that
+    // reaches them here skipped that routing, and is told where they go.
     override suspend fun wake(nodeId: String) { relayOnly("Waking a sleeping session") }
     override suspend fun refresh(nodeId: String) { relayOnly("Refreshing a terminal view") }
     override suspend fun rename(nodeId: String, title: String) { relayOnly("Renaming a session") }
@@ -419,7 +422,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     override suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement>): JsonElement? = relayOnly("Source control")
 
     private fun relayOnly(what: String): Nothing =
-        throw HostException("$what needs the relay connection (turn on remote access in nodeterm → Settings → Phone).")
+        throw HostException(LegRouting.sshRefusal(what))
 
     override suspend fun answerApproval(event: InboxEvent, allow: Boolean): ApprovalOutcome = withContext(Dispatchers.IO) {
         refuseRemoteNode(event.nodeId)

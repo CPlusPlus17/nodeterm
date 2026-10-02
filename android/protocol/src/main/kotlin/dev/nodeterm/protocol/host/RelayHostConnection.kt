@@ -54,9 +54,7 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
     @Volatile private var readyListener: ((String) -> Unit)? = null
 
     override val kind = TransportKind.RELAY
-    override val capabilities = HostCapabilities(
-        boardWrites = true, git = true, nodeActions = true, registerNode = true, answerApprovals = true
-    )
+    override val capabilities = LegRouting.RELAY_CAPABILITIES
 
     private inner class Stream(val id: Long, override val fresh: Boolean, val sink: TerminalSink) : TerminalStream {
         private val snapshot = SnapshotReassembler()

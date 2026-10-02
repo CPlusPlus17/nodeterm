@@ -1,6 +1,10 @@
 package dev.nodeterm.protocol
 
 import dev.nodeterm.protocol.host.ApprovalOutcome
+import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.CardLabelEdit
+import dev.nodeterm.protocol.host.LegRouting
+import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.ResumeOffer
@@ -615,6 +619,36 @@ class SshTransportTest {
             conn.ackRead("term-b-2", "e2")
             assertFalse(File(home, ".nodeterm/acks/term-b-2.seen").exists(), "no ack written on the wrong machine")
             assertEquals(1, tmux("has-session", "-t", "=nt-term-b-2").first, "no phantom session")
+        }
+    }
+
+    @Test
+    fun `on the LAN the app's own verbs route to the relay leg, and SSH says where they go`() = runBlocking<Unit> {
+        // A26: Auto keeps the SSH leg when it works, and board writes, a new session and node
+        // actions need nodeterm the app. They go to the relay leg opened next to it — and a caller
+        // that reaches the SSH transport anyway is not told to turn on remote access (it may be on).
+        connect().use { conn ->
+            for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS, Capability.GIT)) {
+                assertEquals(LegRouting.Leg.Relay, LegRouting.route(cap, conn.kind, conn.capabilities, LegRouting.RelayLeg.AVAILABLE), "$cap")
+            }
+            // What SSH does itself stays on SSH.
+            assertEquals(
+                LegRouting.Leg.Primary,
+                LegRouting.route(Capability.ANSWER_APPROVALS, conn.kind, conn.capabilities, LegRouting.RelayLeg.AVAILABLE)
+            )
+            val refusals = listOf<suspend () -> Unit>(
+                { conn.registerNode("p1", NewNode("term-n-1", "x", null, null)) },
+                { conn.ensureBoard("p1") },
+                { conn.setCardColumn("p1", "term-a-1", null) },
+                { conn.editCardLabels("p1", "term-a-1", CardLabelEdit()) },
+                { conn.wake("term-a-1") },
+                { conn.rename("term-a-1", "x") }
+            )
+            for (call in refusals) {
+                val e = assertFailsWith<HostException> { call() }
+                assertFalse(e.message!!.contains("turn on remote access"), e.message)
+                assertTrue(e.message!!.contains("through the relay"), e.message)
+            }
         }
     }
 

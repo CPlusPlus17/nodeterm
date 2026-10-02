@@ -49,6 +49,22 @@ environment at creation, which the phone cannot reproduce) and never touches nod
 SSH projects (they live on another host). Both surface as `NeedsRelayException`, and the app opens
 the session through a relay connection held next to the SSH one (`HostSession.viaRelay`).
 
+**The relay leg next to SSH (audit `A26`).** What needs nodeterm *the app* rather than the machine
+— a new session (`projects.registerNode`, and the attach that creates it), board writes
+(`projects.ensureBoard|setCardColumn|editCardLabels`), node actions (`node.wake|refresh|rename`) and
+`git.*` — is the relay's. `Auto` still keeps the SSH leg as the primary connection when it works;
+when one of those verbs is needed, `HostSession.connectionFor` opens the computer's relay leg next to
+it on that tap and keeps it until the connection is dropped. Which leg answers is ONE pure decision,
+`LegRouting.route` (`android/protocol`, `LegRoutingTest`): the primary connection when its
+capabilities include the verb, else the relay leg when the phone holds one (a relay block and a
+stored device token — often minted while on SSH by late adoption — and a route other than "Only on
+my network"), else unavailable with a reason. The screens ask the same function, so an unavailable
+control is shown **disabled with that reason** (New session, the board's card actions, the session
+menu's wake/refresh/rename), never hidden. The relay dial still goes through `RelayApprovalGate`
+with the caller's trigger: these are taps (`Trigger.USER`), so the first one on a desktop that has
+not pinned the phone shows the approval code on the host screen, and a background path never makes a
+first handshake. Answering approvals, read-acks, typing keys and ending a session stay on SSH.
+
 ## Protocol mapping
 
 The standing phone host still speaks the **legacy relay dialect** (`host-service.ts`
@@ -63,9 +79,9 @@ describes as the future. The Android client implements what the host actually se
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
 | Wake on open | the attach itself: host-service reports the viewer (`remoteViewer.attached` → `agent:wake`) and the desktop wakes a Sleeping node it has mounted; the phone offers nothing, so it never types a second `--resume` | nothing reaches the desktop, so opening a Sleeping node offers the desktop's wake line (the agent's `--resume <id>`, plus the permission mode for Claude only, no `cd` or account: the pane's shell already has both), only while a shell owns the pane (`#{pane_current_command}`, read on open and again at the tap), typed only on a tap, after a kill-line |
-| Wake, refresh, rename | `node.wake|refresh|rename` | — (needs the desktop app) |
-| Board | `projects.ensureBoard|setCardColumn|editCardLabels` | read-only |
-| New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | — |
+| Wake, refresh, rename | `node.wake|refresh|rename` | through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
+| Board | `projects.ensureBoard|setCardColumn|editCardLabels` | reads over SSH; writes through the relay leg opened next to it (`A26`), disabled with the reason when the phone has none |
+| New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
 | Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`, typed through the node's existing session; an older desktop gets attach → wait for paint → write → linger | `tmux send-keys -l` |
@@ -555,6 +571,16 @@ later fix left to a device.
     are unchanged. *(A77)*
 51. Light and dark system theme; a tablet or a foldable if one is available. *(A65)*
 
+### The relay leg next to SSH
+
+52. On the same network as the computer, with remote access on and the route Automatic (the host
+    screen says "On your network"): New session starts a session that appears on the canvas; a card
+    moved or labelled on the Board moves there; Wake, Refresh and Rename from a session's menu act.
+    On a desktop that has not pinned this phone, the first of these shows the approval code on the
+    host screen. With remote access off (re-pair with it off), and again with the route "Only on my
+    network", the New session button, the card actions and the menu items are shown disabled with a
+    reason that matches the case, and none of them opens a relay connection. *(A26)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -563,9 +589,13 @@ later fix left to a device.
   The client sends `{deviceToken, hostId}` and accepts `pairingToken`, `token` or `joinToken` —
   unverified against the live backend.
 - **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and new sessions
-  need the relay. iOS writes `project.json` over SSH for some of these; Android deliberately does
-  not (the host verbs exist because that write breaks past `MAX_ARG_STRLEN` and cannot reach an SSH
-  project's file at all).
+  go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
+  SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over
+  SSH for some of these; Android deliberately does not (the host verbs exist because that write
+  breaks past `MAX_ARG_STRLEN` and cannot reach an SSH project's file at all). The cost: a phone
+  whose computer has remote access OFF (so it holds no relay leg) cannot do them on the LAN at all,
+  where iOS can for a local folder project whose file still fits in one argv string. The controls
+  say so instead of vanishing.
 - **A desktop mounting a node can still detach a direct-SSH phone.** The desktop leaves `-D` off
   its own tmux client only while a relay-served client of that node is attached (it spawned that
   one itself, so it can see it). A phone attached over direct SSH is detached (exit 0), and so is a
