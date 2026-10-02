@@ -10,7 +10,10 @@ Prioritised plan and handover: [`android-handover.md`](android-handover.md).
 deliberately not built is marked `📝` with the reason; its section below
 keeps the original audit text (line numbers still refer to `2f58918`). Continuation findings
 `A78`–`A80` were confirmed against cached branch tip `6afd8f53` on 2026-10-02; their local
-fix commits have not been pushed or checked by the full suite, CI or a phone. Where the fix departs from
+fix commits were initially checked only within a restricted sandbox. Later local AGP work found
+`A83`, and the first full local protocol run found the test-isolation fault `A84`; current build,
+full-suite and phone verification are tracked in the handover. CI remains
+unverified. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
 ## Index
@@ -66,7 +69,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 📝 private-beta packaging and retained signer ready locally; actual signed delivery and phone validation remain open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 🟡 private signed minified beta built; wrong-test-device launch verified then removed; intended-phone install/full validation open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -99,6 +102,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; full checks pending · The control client's startup attach reply consumes the first queued command's reply slot |
 | [A81](#a81) | medium | | small | runtime/bug | ✅ locally fixed in `86390a49`, `7e11e93c`; full checks pending · Relay join and device mint can hang on stalled mobile connections and ignore coroutine cancellation |
 | [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; full checks pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
+| [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
+| [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 
 ## A01
 
@@ -1622,7 +1627,16 @@ only after success. Keys and signed APKs stay local: Actions artifacts on a publ
 private downloads. Real Android-tool regressions use disposable fixture keys/APKs, not an app build.
 The user confirmed the first private beta and its retained signer is prepared in ignored local
 state (RSA-3072 PKCS12, restricted directory/files, verified certificate pin distinct from debug).
-No signed nodeterm APK or phone result exists here; delivery and device checks leave `A50` open.
+The actual private minified beta at `fa71cb08` is signed, verified, and was installed and cold-started on
+an MI8 (Android 15 / API 35). Installed metadata confirms version code `2`, minSdk `26`, targetSdk
+`35`; refused `run-as` confirms the non-debuggable build. With notification permission granted,
+the empty Computers screen, Pair button and Settings appear with no crash markers. This addresses
+signed-artifact preparation and part of checklist item 5 on that test device. The user identified
+the MI8 as the wrong phone, so only the newly installed app and its test UI dump were removed;
+its newly authorized SSH key was removed and host `authorized_keys` restored byte-for-byte.
+No host had been paired and no SSH connection attempted. The intended phone still needs
+installation and pairing to this Linux host over the user's WireGuard VPN. Terminal, mobile-data
+preflight and full 64-item phone validation leave `A50` partly open.
 
 ## A51
 
@@ -2431,3 +2445,47 @@ Regression tests cover two owners, late ownership, expired-node inbox cards, mul
 one host and refusal of unexpected output. Android interop uses the actual `SshScripts.ackRead`
 producer against the desktop's real local/remote consumers. File names/content stay compatible with
 iOS; @eneskirca should validate multi-desktop behavior. Full checks and device execution remain open.
+
+## A83
+
+**Release R8 cannot parse Kotlin 2.2 metadata (local build, 2026-10-02).**
+
+The first actual local `:app:assembleRelease` completed under AGP 8.9.1, Kotlin 2.2.0, wrapper
+Gradle 8.14.3 and JDK 21, but emitted many R8 Kotlin-metadata parsing warnings. A successful task
+therefore did not establish that the shrinker supported the metadata in its inputs. The APK was
+not accepted as the final beta.
+
+The configuration fix in `fa71cb08` changes only AGP to 8.10.1 in `android/build.gradle.kts`;
+Kotlin 2.2.0, Gradle 8.14.3 and JDK 21 remain unchanged. `GradleCiCoverageTest` now guards the
+Kotlin/AGP/R8 compatibility boundary and AGP's Gradle minimum. Eight bounded guard tests pass and
+two mutations are caught. These checks establish the version policy, not an app build.
+
+The corrected actual release and final offline `:app:assembleRelease` succeeded; the metadata
+warnings are gone, and every R8 runtime keep passed. That APK was privately signed, verified,
+installed and cold-started on an MI8 (Android 15 / API 35), then removed when it was identified as
+the wrong phone. Its newly authorized SSH key was removed; no host was paired or SSH connection
+attempted. These results establish the build fix, while intended-phone installation and the full
+phone pass remain open under `A50`. The test-only `A84` fix passed all 606 protocol tests. The compatibility sources are linked from the guard:
+[Android Kotlin support](https://developer.android.com/build/kotlin-support) and
+[AGP 8.10 release notes](https://developer.android.com/build/releases/agp-8-10-0-release-notes).
+
+## A84
+
+**Real SSH tests inherit host login hooks and share interactive Readline state (local verification, 2026-10-02).**
+
+- Severity: **low**; effort: small; area: tests; kind: bug
+- Location: `android/protocol/src/test/kotlin/dev/nodeterm/protocol/SshTransportTest.kt`
+
+The first restored-host full protocol run executed 605 tests: 603 passed, two real-SSH tests
+failed, and none were skipped. Both failures are confirmed harness isolation faults. The literal
+leading-dash test types `-R; echo sk_$((2+3))` into a login Bash pane; Fedora's PackageKit
+`command_not_found_handle` delays that command beyond the assertion deadline. The earlier test
+which refuses a missing SSH exit status still delivers its lone Escape byte into the shared pane.
+Readline keeps that state for the next test and turns its `echo` into `cho`.
+
+The test-only fix in `1d6b04cc` starts a fresh primary pane for each test with a non-login shell and
+isolates its initialization environment. It retains real SSH/tmux execution and the literal
+leading-dash and missing-exit-status assertions. Both isolation mutations were caught, the fixed
+source was restored, and the final full rerun passed all 606 tests with zero failures, errors or
+skips. This was not an observed phone/APK failure; production app source and the `fa71cb08` APK
+build are unchanged.

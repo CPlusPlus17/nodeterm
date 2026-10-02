@@ -296,6 +296,51 @@ unchanged.
 
 ## What is verified, and how
 
+**Current local beta (2026-10-02):** restored host access allowed reconciling remote tip
+`82940e17` in `990f90c6` and building the actual app locally. The first AGP 8.9.1 release exposed
+R8 Kotlin-metadata warnings (`A83`). The corrected source
+`fa71cb08072f399f24a81bfb361ea852a0275f3b` uses AGP 8.10.1 with Kotlin 2.2.0, wrapper Gradle 8.14.3
+and JDK 21. Its real release and final offline `:app:assembleRelease` (15 seconds) passed, the
+metadata warnings are gone, and `check-r8-output.sh` passed every runtime keep.
+
+`0.1.0-beta.1`, version code `2`, was privately signed with the retained signer, verified as
+non-debuggable with the expected certificate and local APK/R8/source/hash provenance, and installed
+on an MI8 running Android 15 / API 35. The first cold start succeeded and reached the notification
+permission dialog. After granting `POST_NOTIFICATIONS`, the app shows its empty Computers screen,
+Pair button and Settings, with no crash markers. Installed metadata confirms version code `2`,
+minSdk `26` and targetSdk `35`; `run-as` is refused because the app is non-debuggable. The phone's
+WebView is `com.android.webview` `144.0.7559.76`. Inputs/logs are in the original workspace's ignored
+`.nodeterm/android-beta-build-1/`; the APK/checksum/metadata are in `.nodeterm/android-beta-1/`.
+APK SHA-256: `39afa15f15219536e3de1a462f2e5018515847a43684093eef18d95faf5e7fb4`.
+**Wrong test device:** the user identified the MI8 as the wrong phone. The newly installed app and
+its test UI dump were removed. The phone's newly authorized SSH public key was removed, restoring
+the host's `authorized_keys` byte-for-byte to its pre-change state. The MI8 had no paired host and
+no SSH connection was attempted. The device evidence above remains first-launch evidence for that
+test device only. Installation and pairing on the intended phone remain open; the user's target
+is this Linux host over their WireGuard VPN. This partially addresses `A50`: the signed artifact
+and test-device launch are verified, while intended-phone installation and full validation remain open.
+
+The full desktop type-check and 679 desktop tests passed, with three platform skips. The offline
+Gradle app type-check passed, and 23 Python beta-tool tests passed with real SDK APK/signature
+fixtures. Eight bounded compatibility/CI guard tests and two toolchain mutations also passed.
+The real Gradle protocol run executed 605 tests: 603 passed, two real-SSH tests failed, none skipped.
+The two initial SSH failures were test-harness isolation faults (`A84`): a Fedora login-shell
+command-not-found handler delays the literal `-R` command, and an earlier no-exit-status test leaves
+Escape in the shared pane's Readline state, corrupting the next `echo` into `cho`. The test-only fix
+in `1d6b04cc`
+isolates a fresh non-login pane and initialization environment per test. The final full protocol
+rerun passed all 606 tests with zero failures, errors or skips; both harness mutations were caught,
+and the fixed test source was restored before that rerun. Current GitHub Actions verification
+remains open; the user authorized this local build instead of requiring CI for the first beta.
+
+Device results are partial and apply only to the wrong MI8 test device: item 1 has first-install
+evidence; item 5 has install, non-debuggable
+and initial-launch evidence. Neither complete item has passed. There has
+been no pairing, update-between-betas, terminal, SSH/relay, mobile-data or full 64-item device pass.
+First cold start reaching a permission dialog does not establish those features. Use the
+[private-beta procedure](../android/README.md#private-beta), which accepts same-build local
+APK/R8/source/version/hash provenance with `buildOrigin: "local"`.
+
 **Continuation checks (2026-10-02, cached branch base `6afd8f53`):** the new `A78`–`A80` fixes are
 local and have not run in CI. Six targeted desktop unit suites pass (170 tests), and eleven
 production mutations fail the relevant regressions. These run with a cached Vitest 4.1.9 runtime;
@@ -307,15 +352,15 @@ four shell mutations fail. An isolated adapter containing the actual SSH `sendKe
 null/nonzero exit status; restoring null-as-success fails that check. This is narrower than compiling
 the full SSH transport or running JUnit/MINA.
 
-The required full protocol tests and app type-check could not start: system Gradle is absent, and
+In the earlier restricted sandbox, the required full protocol tests and app type-check could not start: system Gradle is absent, and
 a recovered Gradle 9.5.1 fails initializing its socket-based lock service in this sandbox. Real
 tmux/SSH checks and adb are also blocked by socket permissions. `npm run typecheck` is blocked by
 missing desktop dependencies, and `npm ci --offline --ignore-scripts` cannot complete from the cache.
 That command deletes `node_modules` and leaves node-pty unpatched/unbuilt; a desktop checkout
 recovers with `npm install` or `npm run rebuild` once dependencies can be installed.
-GitHub DNS is unavailable, so fetching, downloading an APK, pushing and checking Android CI were
-not possible. **No device checklist item has been run in this session.** The checks below describe
-earlier work; they do not establish that these local commits pass the full suite or work on a phone.
+GitHub DNS was unavailable in that sandbox, so fetching, downloading an APK, pushing and checking
+Android CI were not possible at that stage. **No device checklist item had been run at that stage.**
+The checks below describe earlier work; current local checks and partial phone results are above.
 
 No relay verb or payload changes in this continuation. The desktop fix serves Android and iOS;
 @eneskirca should check the iOS direct-SSH answer path for the same copy-mode and exit-status hazards.
@@ -340,28 +385,31 @@ strict TypeScript check of the ack core/new fixture also passes. The separate fi
 The [private beta procedure](../android/README.md#private-beta) keeps the signing key and finished
 APK local. Pushes to the exact takeover branch prepare versioned unsigned beta inputs without a
 PR; manual CI beta inputs provide the later optional path once the workflow is on the default branch.
-Both select an unsigned release, R8 reports and provenance;
+A verified local AGP build is now also authorized; its same-build unsigned APK, R8 reports and
+provenance use the same required fields, with `buildOrigin: "local"`. The CI path selects those inputs;
 the beta checks require protocol/release success, desktop type-check and delivery/ack tests, and
 real-tool packaging regressions. Local packaging verifies the expected private signer, release
-manifest, R8 keeps, alignment and checksum. **No nodeterm app APK has been built, signed or installed
-in this session.** Packaging fixture APKs prove the tool's gates only. `A50` remains open until an
-actual signed non-debuggable APK is delivered and tested.
+manifest, R8 keeps, alignment and checksum. **The actual corrected release is signed; its wrong-test-device
+installation was removed, and intended-phone installation and validation remain pending.** Packaging fixture APKs prove the tool's gates only; the
+actual APK and partial phone results are recorded above. `A50` stays partly open until the full
+phone pass.
 
 The user confirmed a first private beta; its retained RSA-3072 PKCS12 signer is now prepared in
 the original workspace's ignored `.nodeterm/android-beta-signing/`, outside the temporary source
 checkout. The directory is `0700` and every file `0600`; passwords stay in separate local files.
 The private-key entry, certificate fingerprint and distinction from the public debug certificate
 are verified. Source exports contain none of these private files. Preserve a private backup for
-future APK updates. The actual app APK, CI run and device results are still missing.
+future APK updates. The first signed APK was tested on the wrong MI8 and removed; current CI,
+intended-phone installation and the full phone pass remain open.
 
 Beta tooling checks pass 22 real SDK packaging fixture tests plus one selected-version environment
 test (12 cases), with 13 packaging mutations and one version-validation bypass caught. Seven CI
 configuration tests pass under the cached compiler; six workflow mutations are caught. Nine existing
 device/contributor documentation tests pass under that runner. The extracted Gradle version
 expressions also pass nine boundary/default cases; this does not run Gradle configuration. The full
-protocol/app Gradle commands were retried after these changes and still stop before project tasks at
-the lock service; desktop type-check still stops at missing `electron-vite/node` types. No push or
-continuation CI result is available.
+protocol/app Gradle commands were retried in the restricted sandbox and stopped before project tasks
+at the lock service; desktop type-check stopped at missing `electron-vite/node` types. Restored-host
+results supersede those limits above. No continuation CI result is available.
 
 `android/protocol` has no Android dependency and is tested on a JVM (`./gradlew -p protocol test`):
 
@@ -450,9 +498,10 @@ from a string) builds green without its keep. It needs its own keep and a line i
 `tools/check-r8-output.sh`. `R8RulesTest` re-derives the classes Android lacks from the jars the
 protocol module ships to the app, and requires a keep for every WorkManager worker in the app sources.
 The debug APK stays unminified. CI attaches unsigned release inputs; the private-beta path signs
-them locally. The app has no instrumented tests and has
-**not been run on a device**, minified or not; the [device checklist](#device-checklist) below is what
-a first device pass has to run. An audit of the code found release blockers; the fixed ones are
+them locally. The app has no instrumented tests. The actual private minified APK installed and
+cold-started on the wrong test device, then was removed. Intended-phone installation, connections
+and terminal behavior remain unverified; the
+[device checklist](#device-checklist) below is what the full device pass has to run. An audit of the code found release blockers; the fixed ones are
 marked in its index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md).
 The plan and the decisions still open are in [`android-handover.md`](android-handover.md).
 
@@ -893,9 +942,12 @@ on a phone is a device check.
 
 ## Device checklist
 
-Nothing in this section has been run. CI builds the APK, but no row of the README's feature table and
-no fix above has been checked on a phone: the tests stop at the JVM, and the app's screens are only
-type-checked. Run these on a real phone against a real desktop and record, for each item, pass or
+Partial installation/startup evidence is recorded in "What is verified, and how": the private
+minified beta installed and cold-started on an MI8 (Android 15 / API 35), which the user then
+identified as the wrong phone. That installation and its newly authorized SSH key were removed;
+the intended phone has not been installed or paired. No complete item below has
+passed: items 1 and 5 include further update, pairing and runtime checks that remain open. Run these
+on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
 the route (network or relay). Write the results into "What is verified, and how" above, and turn each
 failure into a new finding. Every item names the audit finding it checks; `A65` marks the baseline
@@ -1413,14 +1465,15 @@ later fix left to a device.
   with several (Ethernet and Wi-Fi, a VPN), it is whichever the OS lists first, which may not be the
   one the phone can reach; the relay then still serves. The refresh needs a relay connection, so a phone that only ever uses
   "Only on my network" keeps the pairing's address and keys, and the iOS app does not read `lan` yet.
-- **Signed release delivery and device pass pending** (audit `A50`). The debug build
-  and AGP marks every debug build debuggable: anyone with adb access to the unlocked phone while USB
+- **Private beta device validation pending** (audit `A50`). AGP marks every debug build
+  debuggable: anyone with adb access to the unlocked phone while USB
   debugging is on can read the app's files (`run-as`) and attach a debugger to the running app, whose
   code can use the Keystore key those files are sealed under. That is the phone's pairing
   credentials: the SSH key its computers accept, the relay box secret and the relay device token.
   android/README.md says so under Security. A private beta now has a local signing/verification
   tool and opt-in versioned unsigned CI inputs, documented in the README; its key and signed APK
-  stay off Actions. No actual signed nodeterm APK or phone result is available in this session.
+  stay off Actions. The first private minified APK installed and cold-started on the wrong test
+  phone, then was removed; intended-phone installation and full validation remain open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.
