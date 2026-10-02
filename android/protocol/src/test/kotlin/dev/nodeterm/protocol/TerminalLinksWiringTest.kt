@@ -61,6 +61,50 @@ class TerminalLinksWiringTest {
     }
 
     @Test
+    fun `a touch on a bar, card or sheet over the terminal stays there`() {
+        // Review of A32: Compose hit-tests overlapping siblings from the top down and moves on to the
+        // next where the top one has no pointer-input node, and background() and Text have none. A tap
+        // on the link bar's URL or the Copy sheet's title reached the WebView (a click or scroll in the
+        // pane, or another link offered) and one on the sheet's bottom row the input bar (the keyboard).
+        val overlays = screen.lines().filter { "Modifier.align(Alignment." in it }
+        // The five state cards, the resume offer, the notice and the bottom bars (the link offer's).
+        assertTrue(overlays.size >= 8, "found only ${overlays.size} overlays over the terminal:\n${overlays.joinToString("\n")}")
+        for (line in overlays) {
+            val blocks = line.indexOf(".blockTouchesBelow()")
+            assertTrue(blocks >= 0, "an overlay over the terminal lets a touch on its text through:\n$line")
+            val padding = line.indexOf(".padding(")
+            assertTrue(padding < 0 || blocks < padding, "the blocker sits inside the overlay's padding, which then lets touches through:\n$line")
+        }
+        assertTrue("LinkOffer(controller, link)" in AppSourcePins.blockAfter(screen, "Column(Modifier.align(Alignment.BottomCenter)"))
+        // The sheet covers the key row and the input bar too.
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "private fun CopySheet("), "Column(Modifier.fillMaxSize().blockTouchesBelow()")
+        // It only has to be a pointer-input node, and must consume nothing: a parent sees the Main pass
+        // after its children, whose taps and drags check the Final pass for a consumed change, so a
+        // consumed move (a finger's jitter) would cancel the overlay's own buttons and the sheet's scroll.
+        val overlaysKt = AppSourcePins.ui("Overlays.kt")
+        assertTrue("fun Modifier.blockTouchesBelow(): Modifier = pointerInput(Unit) {" in overlaysKt, overlaysKt)
+        val blocker = AppSourcePins.blockAfter(overlaysKt, "fun Modifier.blockTouchesBelow()")
+        assertTrue("awaitPointerEvent()" in blocker, blocker)
+        assertFalse("consume" in blocker, "the blocker consumes events, which cancels the overlay's own taps:\n$blocker")
+    }
+
+    @Test
+    fun `the link bar can show the whole URL, which two lines cut short on a phone`() {
+        // Review of A32: two lines are a few dozen characters on a phone, too few to tell a long URL
+        // from one row's fragment of it; the bar now shows all of it on request, scrolling in the bar.
+        val offer = AppSourcePins.blockAfter(screen, "private fun LinkOffer(")
+        AppSourcePins.assertInOrder(
+            offer,
+            "link.url",
+            ".heightIn(max = ",
+            ".verticalScroll(",
+            "maxLines = if (whole) Int.MAX_VALUE else 2",
+            "TextButton(onClick = { whole = !whole })"
+        )
+        assertTrue("var whole by remember(link)" in offer, "a new link must start collapsed:\n$offer")
+    }
+
+    @Test
     fun `the page loads no web-links addon, which cannot join repainted rows`() {
         val html = File(assets, "index.html").readText()
         val js = File(assets, "terminal.js").readText()

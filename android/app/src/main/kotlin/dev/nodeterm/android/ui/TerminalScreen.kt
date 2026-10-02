@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -24,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -139,7 +141,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     }
                     when (val st = controller.state) {
                         TermState.Connecting -> Row(
-                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(12.dp),
+                            Modifier.align(Alignment.Center).blockTouchesBelow().background(NtColors.panel, RoundedCornerShape(8.dp)).padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
@@ -147,7 +149,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                             Text("Opening terminal…")
                         }
                         is TermState.Ended -> Column(
-                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            Modifier.align(Alignment.Center).blockTouchesBelow().background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -155,7 +157,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                             Button(onClick = { controller.reattach() }) { Text("Reattach") }
                         }
                         is TermState.RelayOffer -> Column(
-                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            Modifier.align(Alignment.Center).blockTouchesBelow().background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -163,7 +165,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                             Button(onClick = { controller.openThroughRelay() }) { Text("Open through the relay") }
                         }
                         is TermState.ViewLost -> Column(
-                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            Modifier.align(Alignment.Center).blockTouchesBelow().background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -171,7 +173,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                             Button(onClick = { controller.reopenTerminal() }) { Text("Reopen terminal") }
                         }
                         is TermState.AwaitingApproval -> Column(
-                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            Modifier.align(Alignment.Center).blockTouchesBelow().background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -186,7 +188,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     }
                     controller.resumeOffer?.let { offer ->
                         Column(
-                            Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(12.dp),
+                            Modifier.align(Alignment.TopCenter).blockTouchesBelow().fillMaxWidth().background(NtColors.panel2).padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(offer.message)
@@ -199,14 +201,14 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     }
                     controller.notice?.let { msg ->
                         Row(
-                            Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 6.dp),
+                            Modifier.align(Alignment.TopCenter).blockTouchesBelow().fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                             TextButton(onClick = { controller.notice = null }) { Text("OK") }
                         }
                     }
-                    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    Column(Modifier.align(Alignment.BottomCenter).blockTouchesBelow().fillMaxWidth()) {
                         // A tapped link, offered before anything opens (audit A32).
                         controller.linkOffer?.let { link -> LinkOffer(controller, link) }
                         controller.sizedElsewhere?.let { (c, r) ->
@@ -278,34 +280,54 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     IconButton(onClick = send, enabled = controller.attached) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
                 }
             }
-            // Over the whole body, key row and input bar included: they have nothing to do while copying.
+            // Over the whole body, key row and input bar included: they have nothing to do while copying,
+            // and a touch on the sheet's text stays on the sheet (blockTouchesBelow, the A32 review).
             controller.copySheet?.let { snapshot -> CopySheet(controller, snapshot) }
         }
     }
 }
 
-/** "Open <host>?" for a link tapped in the terminal (audit A32): the host and the URL, then a choice. */
+/**
+ * "Open <host>?" for a link tapped in the terminal (audit A32): the host, a choice, and the URL. The URL
+ * shows two lines until All shows the whole of it (review of A32). On a phone two lines are a few dozen
+ * characters, which a long OAuth URL fills, and so would one row's fragment of it, the very thing the
+ * matcher must never offer: only the whole URL says what Open opens. A long one scrolls inside the bar
+ * rather than covering the terminal.
+ */
 @Composable
 private fun LinkOffer(controller: TerminalController, link: ExternalLink) {
     val ctx = LocalContext.current
-    Row(
-        Modifier.fillMaxWidth().background(NtColors.panel2).padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("Open ${link.host}?", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    var whole by remember(link) { mutableStateOf(false) }
+    // Whether two lines cut the URL short, so All is offered only where it shows more.
+    var cut by remember(link) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().background(NtColors.panel2).padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Open ${link.host}?",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            TextButton(onClick = { controller.openLink(ctx, link) }) { Text("Open") }
+            TextButton(onClick = { controller.copyLink(ctx, link) }) { Text("Copy") }
+            IconButton(onClick = { controller.dismissLink() }) { Icon(Icons.Filled.Close, "Dismiss") }
+        }
+        Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 link.url,
+                Modifier.weight(1f).heightIn(max = 160.dp).verticalScroll(rememberScrollState()),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 color = NtColors.muted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                maxLines = if (whole) Int.MAX_VALUE else 2,
+                overflow = if (whole) TextOverflow.Clip else TextOverflow.Ellipsis,
+                onTextLayout = { if (!whole) cut = it.hasVisualOverflow }
             )
+            if (cut || whole) {
+                TextButton(onClick = { whole = !whole }) { Text(if (whole) "Less" else "All") }
+            }
         }
-        TextButton(onClick = { controller.openLink(ctx, link) }) { Text("Open") }
-        TextButton(onClick = { controller.copyLink(ctx, link) }) { Text("Copy") }
-        IconButton(onClick = { controller.dismissLink() }) { Icon(Icons.Filled.Close, "Dismiss") }
     }
 }
 
@@ -325,7 +347,7 @@ private fun CopySheet(controller: TerminalController, snapshot: TerminalCopy.Sna
     // The links come first in the list: the sheet opens on the screen's top line below them.
     val linkRows = if (snapshot.links.isEmpty()) 0 else snapshot.links.size + 2
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = linkRows + snapshot.firstVisible)
-    Column(Modifier.fillMaxSize().background(NtColors.panel)) {
+    Column(Modifier.fillMaxSize().blockTouchesBelow().background(NtColors.panel)) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Copy from the terminal", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             if (selection.selected.isEmpty()) {

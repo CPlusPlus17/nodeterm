@@ -316,18 +316,25 @@ row's fragment). A tap on a link, an OSC 8 link included (its label hides the UR
 the URL as the URL parser writes it and cancels the touchend, so the click the tap makes never
 reaches tmux or the app in the pane; a tap anywhere else, a swipe or two fingers are left alone. OSC 8
 links go through `options.linkHandler`, never xterm's `confirm()` (the WebView has no WebChromeClient
-to show one), and only http(s) crosses from any way in. The app then names the host and shows the URL
-(`Open <host>?`), and opens it with a browsable `ACTION_VIEW` only on Open; `ExternalLink`
+to show one), and only http(s) crosses from any way in. The app then names the host (`Open <host>?`)
+and shows the URL, two lines of it until All shows the whole (a long one scrolls inside the bar), and
+opens it with a browsable `ACTION_VIEW` only on Open; `ExternalLink`
 (`TerminalCopyTest`) checks the URL again: http(s), a host, printable ASCII, and the host named is the
 one after any user info. The key row's Copy chip opens a sheet of what the buffer holds (its last 500
 rows, which under tmux is the visible screen; soft wraps joined) and the links in it. `TerminalCopyTest`
 covers how `TerminalCopy` reads that snapshot, the selection (a tap toggles a line, a long-press
 selects the range from the last line tapped), and the 100,000-character cap the OSC 52 copy keeps,
-for Copy and Share alike. `TerminalLinksWiringTest` pins the Android half in the source. The offer,
-the sheet, the intents, and whether a tap on a phone produces the events the page expects are a
-device check. The matching shares the desktop's limits: text that exactly fills a row can be joined
-with the next, a URL inside a box a TUI draws with `│` at both edges is not joined, and each CJK
-character before a URL on its row shifts where a tap lands by a column. One difference: below a run
+for Copy and Share alike. `TerminalLinksWiringTest` pins the Android half in the source, including
+that every bar, card and sheet drawn over the terminal keeps a touch on it from reaching what it
+covers (`blockTouchesBelow`): Compose hands a touch to the sibling below wherever the one on top has
+no pointer-input node, and a background or a `Text` has none, so a tap on the bar's URL or the
+sheet's title reached the WebView (a click or a scroll in the pane) or the input bar (the keyboard).
+The blocker consumes nothing, since a consumed move would cancel the overlay's own taps and scrolls.
+The offer, the sheet, the intents, whether a touch on them stays there, and whether a tap on a phone
+produces the events the page expects are a device check. The matching shares the desktop's limits:
+text that exactly fills a row can be joined with the next, a URL inside a box a TUI draws with `│` at
+both edges is not joined, and each CJK character before a URL on its row shifts where a tap lands by
+a column. One difference: below a run
 of more than 32 such full-width rows, the desktop's join could leave out the row asked about (a
 missed link there); the port's always includes it, which also keeps the Copy sheet's scan through
 such a run from standing still (a test runs one).
@@ -867,11 +874,15 @@ later fix left to a device.
 ### Links and copy in the terminal
 
 54. Print a URL long enough to wrap over several rows, e.g.
-    `printf 'https://example.com/%s\n' "$(head -c 300 /dev/zero | tr '\0' a)"` in a shell, and ask a
-    Claude session to print one: tap the URL on its first, a middle and its last row. Each time a bar names the host
-    and shows the WHOLE URL, and nothing reached the pane (no click in Claude, no soft keyboard). Open
-    opens the browser on the whole URL; Copy puts it on the clipboard ("Copied the link"); × closes the
-    bar. A tap on plain text, and a swipe that starts on a URL, behave as before. *(A32)*
+    `printf 'https://example.com/%s/end\n' "$(head -c 300 /dev/zero | tr '\0' a)"` in a shell, and
+    ask a Claude session to print one: tap the URL on its first, a middle and its last row. Each time
+    a bar names the host and shows two lines of the URL, and nothing reached the pane (no click in
+    Claude, no soft keyboard). The bar's All shows the WHOLE URL, scrolling inside the bar when it is
+    long: the printf one starts `https://example.com/` and ends in `/end`, wherever the tap was; Less
+    shortens it again. Open opens the browser on the whole URL; Copy puts it on the clipboard ("Copied
+    the link"); × closes the bar. A tap or a drag on the bar's text, away from its buttons, changes
+    nothing: no click or scroll in the pane, and the bar keeps its link even with another link under
+    that spot. A tap on plain text, and a swipe that starts on a URL, behave as before. *(A32)*
 55. An OSC 8 link: `printf '\033]8;;https://example.com/osc8\033\\label\033]8;;\033\\\n'` in the
     pane, then tap "label": the bar offers example.com and opens `https://example.com/osc8`. The same
     with `file:///etc/passwd` in place of the URL offers nothing. With a mouse connected, a click on a
@@ -881,7 +892,9 @@ later fix left to a device.
     some scrollback too) and, above them, its links with Open and Copy. Tap lines to select them,
     long-press one to select the range from the last line tapped; Copy puts them on the clipboard
     ("Copied N lines"), Share opens the system share sheet, and Back or × closes the sheet. The sheet
-    opens on the line at the top of the screen. *(A32)*
+    opens on the line at the top of the screen. A tap on the sheet's title, its instructions or its
+    "No lines selected" line does nothing: no soft keyboard comes up, and nothing reaches the pane
+    under the sheet (after closing it, the pane shows no click or scroll there). *(A32)*
 
 ### Notification actions
 
