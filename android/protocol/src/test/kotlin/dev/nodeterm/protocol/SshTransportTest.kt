@@ -111,6 +111,8 @@ class SshTransportTest {
         private var process: Process? = null
         /** Counted down once the command's process has exited (for a pty, `script` and what it ran). */
         val exited = java.util.concurrent.CountDownLatch(1)
+        /** A server that closes the channel without confirming the command's exit status. */
+        var omitExitStatus = false
 
         override fun setInputStream(`in`: InputStream) { input = `in` }
         override fun setOutputStream(out: OutputStream) { output = out }
@@ -152,7 +154,7 @@ class SshTransportTest {
                 outPump.join(2000)
                 errPump.join(2000)
                 exited.countDown()
-                exit.onExit(code)
+                if (omitExitStatus) channel.close(false) else exit.onExit(code)
             }.apply { isDaemon = true; start() }
         }
 
@@ -807,6 +809,22 @@ class SshTransportTest {
                 Thread.sleep(100)
             }
             assertTrue(pane.contains("sk_5"), pane)
+        }
+    }
+
+    @Test
+    fun `send keys refuses to confirm success when the server gives no exit status`() = runBlocking<Unit> {
+        connect().use { conn ->
+            conn.listProjects()
+            try {
+                onCommand = { command, cmd ->
+                    if (command.contains("send-keys")) cmd.omitExitStatus = true
+                }
+                val e = assertFailsWith<HostException> { conn.sendKeys("term-a-1", "\u001b") }
+                assertTrue(e.message!!.contains("without a status"), e.message)
+            } finally {
+                onCommand = null
+            }
         }
     }
 

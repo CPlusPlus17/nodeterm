@@ -608,7 +608,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             ensureListed()
             refuseRemoteNode(nodeId)
             val (code, _) = run(SshScripts.sendKeys(nodeId, keys, socketFor(nodeId)))
-            if (code != null && code != 0) throw HostException("Couldn't type into the session (tmux exited $code).")
+            if (code != 0) throw HostException("Couldn't type into the session (tmux exited ${code ?: "without a status"}).")
         }
     }
 

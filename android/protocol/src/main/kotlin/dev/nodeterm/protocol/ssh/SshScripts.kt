@@ -250,6 +250,8 @@ object SshScripts {
     /**
      * Type into a pane. `-l --` so text is literal and a leading `-` is never an option (the
      * leading-dash hazard documented in tmux-naming.ts). A lone ESC is sent as the `Escape` key.
+     * Resolve the exact session's pane once and leave copy mode before typing: tmux otherwise
+     * accepts the keys into copy mode and exits successfully without delivering the answer.
      */
     fun sendKeys(nodeId: String, keys: String, socket: String): String {
         // A PANE target: `=name` alone is refused ("can't find pane", measured on tmux 3.4); the
@@ -257,13 +259,22 @@ object SshScripts {
         val pane = q("=" + target(nodeId) + ":")
         val s = socket(socket)
         val send = when (keys) {
-            "\u001b" -> "\"${'$'}NT_TMUX\" -L $s send-keys -t $pane Escape"
-            "\r" -> "\"${'$'}NT_TMUX\" -L $s send-keys -t $pane Enter"
-            else -> "\"${'$'}NT_TMUX\" -L $s send-keys -t $pane -l -- ${q(keys)}"
+            "\u001b" -> "\"${'$'}NT_TMUX\" -L $s send-keys -t \"${'$'}NT_PANE\" Escape"
+            "\r" -> "\"${'$'}NT_TMUX\" -L $s send-keys -t \"${'$'}NT_PANE\" Enter"
+            else -> "\"${'$'}NT_TMUX\" -L $s send-keys -t \"${'$'}NT_PANE\" -l -- ${q(keys)}"
         }
         return """
             $PRELUDE
             [ -n "${'$'}NT_TMUX" ] || exit 127
+            NT_STATE=${'$'}("${'$'}NT_TMUX" -L $s display-message -p -t $pane '#{pane_id} #{pane_in_mode}') || exit ${'$'}?
+            NT_PANE=${'$'}{NT_STATE% *}
+            case "${'$'}NT_PANE" in %*) ;; *) exit 1 ;; esac
+            case "${'$'}{NT_PANE#%}" in ''|*[!0-9]*) exit 1 ;; esac
+            case "${'$'}{NT_STATE##* }" in
+              0) ;;
+              1) "${'$'}NT_TMUX" -L $s send-keys -t "${'$'}NT_PANE" -X cancel || exit ${'$'}? ;;
+              *) exit 1 ;;
+            esac
             $send
         """.trimIndent()
     }
