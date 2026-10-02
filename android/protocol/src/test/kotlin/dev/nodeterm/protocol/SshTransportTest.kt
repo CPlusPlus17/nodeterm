@@ -409,6 +409,59 @@ class SshTransportTest {
     }
 
     @Test
+    fun `SSH scrolling reveals history produced before the phone attached`() = runBlocking<Unit> {
+        val pane = "=nt-term-a-1:"
+        val marker = "history_before_attach_${System.nanoTime()}"
+        // The desktop owns scrolling through tmux's mouse mode. The general SSH fixture only
+        // disables the status bar, so enable that production setting for this session explicitly.
+        val mouse = tmux("set-option", "-t", pane, "mouse", "on")
+        assertEquals(0, mouse.first, mouse.second)
+        try {
+            assertEquals(0, tmux("clear-history", "-t", pane).first)
+            val command = "printf '$marker\\n'; i=1; while [ \"${'$'}i\" -le 60 ]; do " +
+                "printf 'history_tail_%03d\\n' \"${'$'}i\"; i=${'$'}((i+1)); done"
+            assertEquals(0, tmux("send-keys", "-t", pane, "-l", "--", command).first)
+            assertEquals(0, tmux("send-keys", "-t", pane, "Enter").first)
+            waitForPane("node-terminal", "nt-term-a-1", "history_tail_060")
+
+            connect().use { conn ->
+                val sink = Sink()
+                val stream = conn.attach("term-a-1", 100, 30, sink)
+                try {
+                    sink.waitFor("history_tail_060")
+                    assertFalse(synchronized(sink.out) { sink.out.toString(Charsets.UTF_8) }.contains(marker),
+                        "the old marker must be above the initial screen, not replayed on attach")
+                    val history = tmux("display-message", "-p", "-t", pane, "#{history_size}").second.trim().toInt()
+                    assertTrue(history > 0, "the host retained the output produced before attach")
+
+                    stream.scroll(up = true, lines = 20)
+                    sink.waitFor(marker)
+                    assertEquals("1", tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}").second.trim(),
+                        "the phone's wheel-up must enter tmux copy mode")
+                    val position = tmux("display-message", "-p", "-t", pane, "#{scroll_position}").second.trim().toInt()
+                    assertTrue(position > 0, "the phone is viewing older output")
+
+                    stream.scroll(up = false, lines = 20)
+                    val deadline = System.currentTimeMillis() + 8_000
+                    var after = position
+                    while (after >= position && System.currentTimeMillis() < deadline) {
+                        Thread.sleep(50)
+                        after = tmux("display-message", "-p", "-t", pane, "#{scroll_position}")
+                            .second.trim().toIntOrNull() ?: 0 // copy mode may close at the live bottom
+                    }
+                    assertTrue(after < position, "wheel-down must return toward live output: $position -> $after")
+                } finally {
+                    stream.detach()
+                }
+            }
+        } finally {
+            tmux("send-keys", "-X", "-t", pane, "cancel")
+            val resetMouse = tmux("set-option", "-u", "-t", pane, "mouse")
+            assertEquals(0, resetMouse.first, resetMouse.second)
+        }
+    }
+
+    @Test
     fun `an attach cancelled while it opens leaves no tmux client behind`() = runBlocking<Unit> {
         // A40 review: the blocking open finishes even when its caller is cancelled meanwhile, and
         // withContext then drops the stream. Nothing held it, so its tmux client stayed attached for

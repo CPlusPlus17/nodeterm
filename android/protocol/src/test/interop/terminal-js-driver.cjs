@@ -1,7 +1,7 @@
 // Runs the Android app's REAL terminal page script (android/app/src/main/assets/terminal/terminal.js)
 // in node, against stubs of xterm.js, the DOM and the WebView bridge, so a JVM test can check what
 // the page does. Driven today: the OSC 52 handler (audit A53), the page's focus for the ⌨ chip
-// (audit A46), and links and the Copy sheet (audit A32).
+// (audit A46), links and the Copy sheet (audit A32), and touch-to-history wheel requests.
 //
 // Usage: node terminal-js-driver.cjs <path to terminal.js>
 // stdin:  {"copyLimit": <number the stub bridge answers>, "osc52": ["<OSC 52 data>", ...],
@@ -18,7 +18,7 @@
 //    "nt": [{"fn": name, "focusChanges": ["blur" | "focus", ...], "focusedAfter": bool}],
 //    "provideLinks": [{"links": null | [{"text", "range", "opened": [url, ...]}]}],
 //    "linkHandler": [{"opened": [url, ...]}],
-//    "taps": [{"prevented": bool, "opened": [url, ...]}],
+//    "taps": [{"prevented": bool, "movePrevented": bool, "opened": [url, ...], "scrolls": [[up, notches], ...]}],
 //    "copySheet": {"raw": "<the JSON string the page handed onCopySheet>", "calls": n},
 //    "confirmCalls": n}
 // where an onCopy call's argument is reported as {"length": n, "sameAsInput": bool}, so a payload of
@@ -42,6 +42,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'))
 let current = null
 let copyLimitCalls = 0
 let opened = []
+let scrolls = []
 let copySheetRaw = null
 let copySheetCalls = 0
 let confirmCalls = 0
@@ -68,7 +69,9 @@ const bridge = {
   onResize() {},
   onReady() {},
   onInput() {},
-  onScroll() {}
+  onScroll(up, notches) {
+    scrolls.push([up, notches])
+  }
 }
 
 const screenIn = input.screen || { cols: 80, rows: 24, lines: [] }
@@ -263,7 +266,9 @@ function dispatch(type, event) {
 const tapped = []
 for (const tap of input.taps || []) {
   opened = []
+  scrolls = []
   let prevented = false
+  let movePrevented = false
   const x = SCREEN_LEFT + tap.col * CELL_W + CELL_W / 2
   const y = SCREEN_TOP + tap.row * CELL_H + CELL_H / 2
   const fingers = tap.fingers || 1
@@ -275,8 +280,9 @@ for (const tap of input.taps || []) {
   if (tap.move) {
     ex = x + tap.move[0]
     ey = y + tap.move[1]
-    const moved = [touchAt(ex, ey)]
-    dispatch('touchmove', { touches: moved, changedTouches: moved, preventDefault() {} })
+    const moved = []
+    for (let i = 0; i < fingers; i++) moved.push(touchAt(ex + i * 50, ey))
+    dispatch('touchmove', { touches: moved, changedTouches: moved, preventDefault() { movePrevented = true } })
   }
   dispatch('touchend', {
     touches: [],
@@ -285,7 +291,7 @@ for (const tap of input.taps || []) {
       prevented = true
     }
   })
-  tapped.push({ prevented, opened })
+  tapped.push({ prevented, movePrevented, opened, scrolls })
 }
 
 let copySheet = null
