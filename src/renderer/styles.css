@@ -4065,14 +4065,22 @@ body,
 
 /* ---- Welcome / empty state ---- */
 .welcome {
+  /* The card row's width — four 150px cards and three 14px gaps. The lists below take exactly
+     this width so their outer edges line up with the first and last card. */
+  --welcome-row: calc(4 * 150px + 3 * 14px);
   position: absolute;
   inset: 0;
   z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* `safe`: when the content is taller than the window (stacked lists on a phone), start at the
+     top and scroll instead of centering the overflow off both edges where nothing can reach it. */
+  justify-content: safe center;
   gap: 6px;
+  padding: 24px 16px;
+  box-sizing: border-box;
+  overflow-y: auto;
   background: var(--canvas-bg);
 }
 
@@ -4139,11 +4147,56 @@ body,
   color: var(--accent);
 }
 
-/* ---- "Recently closed" projects list on the start screen ---- */
-.welcome__recent {
-  margin-top: 28px;
+/* ---- The lists under the cards: Recent conversations | Recently closed ----
+   ONE container as wide as the card row, centered with it (the page's flex column centers it).
+   Each section used to be its own centered max-width box, so the two lists had different widths
+   and neither lined up with the cards. Two equal columns; a lone section spans both. */
+.welcome__lists {
   width: 100%;
-  max-width: 480px;
+  max-width: var(--welcome-row);
+  margin-top: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 28px;
+  align-items: start;
+}
+
+.welcome__lists:empty {
+  display: none;
+}
+
+.welcome__lists > :only-child {
+  grid-column: 1 / -1;
+}
+
+/* Below the card row's own width (642px + the 16px page gutters) the four cards no longer fit
+   on one line: they become a 2×2 grid as wide as the lists, and the lists stack in reading order
+   — Recent conversations, then Recently closed. Above it two ~314px columns always fit, because
+   the container IS the card row. */
+@media (max-width: 700px) {
+  .welcome__cards {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    width: 100%;
+    max-width: var(--welcome-row);
+  }
+
+  .welcome__card {
+    width: auto;
+    min-width: 0;
+  }
+
+  .welcome__lists {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- "Recently closed" projects list on the start screen ----
+   Every line in a section — title, folder headers, rows, "Show all" — puts its text 10px in from
+   the column edge, and trailing bits (age, action, ×) sit 10px in from the right edge. */
+.welcome__recent {
+  min-width: 0;
 }
 
 .welcome__recent-title {
@@ -4153,7 +4206,7 @@ body,
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 8px;
-  padding-left: 2px;
+  padding: 0 10px;
 }
 
 /* Issue #506: shown only past RECENT_FILTER_THRESHOLD rows, where the list is already
@@ -4164,7 +4217,8 @@ body,
   box-sizing: border-box;
   margin-bottom: 6px;
   font-size: 12px;
-  padding: 5px 8px;
+  /* 9px + the 1px border = the shared 10px text inset. */
+  padding: 5px 9px;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -4189,7 +4243,8 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  /* 9px + the 1px (hover) border = the shared 10px text inset. */
+  padding: 8px 9px;
   border-radius: 8px;
   border: 1px solid transparent;
   color: var(--text);
@@ -4294,13 +4349,24 @@ body,
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
   padding: 2px 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--muted);
 }
 
+.welcome__convs-folder-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .welcome__convs-folder .welcome__recent-path {
+  flex: 1 1 0;
+  min-width: 0;
   font-weight: 400;
 }
 
@@ -4313,23 +4379,32 @@ body,
   white-space: nowrap;
 }
 
+/* Age and action share ONE slot at the row's right edge: the age at rest, the action on hover /
+   focus. An invisible-but-present action used to reserve its width after the age, so every
+   timestamp stopped short of the edge by a different amount ("Resume" vs "Go to node"). */
 .welcome__conv-age {
   flex: none;
+  margin-left: auto;
   font-size: 11px;
   color: var(--muted);
 }
 
 .welcome__conv-action {
+  display: none;
   flex: none;
+  margin-left: auto;
   font-size: 11px;
   color: var(--accent);
-  opacity: 0;
-  transition: opacity 0.12s;
+}
+
+.welcome__conv:hover .welcome__conv-age,
+.welcome__conv:focus-visible .welcome__conv-age {
+  display: none;
 }
 
 .welcome__conv:hover .welcome__conv-action,
 .welcome__conv:focus-visible .welcome__conv-action {
-  opacity: 1;
+  display: inline;
 }
 
 .welcome__conv--disabled {
@@ -4342,8 +4417,10 @@ body,
 }
 
 .welcome__convs-more {
-  margin-top: 4px;
+  display: block;
+  margin: 4px 0 0;
   padding: 2px 10px;
+  text-align: left;
   font-size: 11px;
   color: var(--muted);
   background: transparent;
