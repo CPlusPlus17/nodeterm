@@ -39,14 +39,14 @@ the audit's proposal, the handover's progress log says how and why.
 | [A22](#a22) | medium |  | small | runtime/bug | ✅ fixed in `ade7428` · The Navigator back stack is not saved across activity recreation, and the original launch intent is re-applied |
 | [A23](#a23) | medium |  | small | security/risk | ✅ fixed in `3d36d60` · Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
 | [A24](#a24) | medium |  | small | security/bug | ✅ fixed in `8e304db` · SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
-| [A25](#a25) | medium |  | medium | parity/gap | No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
-| [A26](#a26) | medium |  | medium | parity/gap | New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH |
-| [A27](#a27) | medium |  | large | parity/gap | Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup) |
+| [A25](#a25) | medium |  | medium | parity/gap | 🟡 in-app part fixed in `4ffb8b7`, `0d310cc` (notification actions, the tap opens the session); FCM push is still a backend gap · No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
+| [A26](#a26) | medium |  | medium | parity/gap | ✅ fixed in `9cdc4cf`, `1eeb5b8` · New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH |
+| [A27](#a27) | medium |  | large | parity/gap | ✅ fixed in `8691e6d`, `9b5c342`, `1d8201f`, `c450e16` · Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup) |
 | [A28](#a28) | medium |  | small | parity/gap | ✅ fixed in `726271a,1cdd2f0` · SSH-project sessions over direct SSH are attached, approved and resumed on the wrong machine |
-| [A29](#a29) | medium |  | medium | parity/gap | No source-control screen, although the protocol layer already implements the git verbs iOS uses |
+| [A29](#a29) | medium |  | medium | parity/gap | ✅ fixed in `0c5a1e1`, `a5f38f5` · No source-control screen, although the protocol layer already implements the git verbs iOS uses |
 | [A30](#a30) | medium |  | small | critic/bug | ✅ fixed in `3d36d60` · Pressing Deny on the desktop is not respected: the phone re-dials about 8 s later and the SAS approval dialog reappears |
 | [A31](#a31) | medium |  | small | critic/bug | ✅ fixed in `a622e71` · A silently dead SSH peer (laptop asleep, desktop IP or VPN change) wedges the host as 'On your network' for many minutes: no detection, no relay fallback, and the error is never shown |
-| [A32](#a32) | medium |  | medium | critic/gap | No way to open a URL or copy text from the phone terminal: no link detection, no touch selection, and the WebView cannot show xterm's link confirm |
+| [A32](#a32) | medium |  | medium | critic/gap | ✅ fixed in `7035bde`, `88beed2` · No way to open a URL or copy text from the phone terminal: no link detection, no touch selection, and the WebView cannot show xterm's link confirm |
 | [A33](#a33) | medium |  | medium | critic/bug | ✅ fixed in `0db0b6e` · On a Windows computer, 'New session' starts the agent in the user's home folder instead of the project, and silently drops the chosen Claude account while still registering it |
 | [A34](#a34) | medium |  | small | critic/bug | ✅ fixed in `2a273a7` · The Ctrl key-row chip does not apply to text sent from the input bar: arming Ctrl and sending 'z' submits a literal 'z' plus Enter |
 | [A35](#a35) | medium |  | small | critic/bug | ✅ fixed in `16706f4` · approvals.answer returns `answered:false` both for 'already handled' and for 'the write failed'; the phone always says 'Already handled.' |
@@ -69,11 +69,11 @@ the audit's proposal, the handover's progress log says how and why.
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
 | [A54](#a54) | low |  | small | security/bug | ✅ fixed in `32330df` · PairingClient trusts an unbounded Content-Length / EOF body from the pairing endpoint |
-| [A55](#a55) | low |  | medium | parity/gap | Inbox and Usage are per computer; iOS merges them across all paired computers |
+| [A55](#a55) | low |  | medium | parity/gap | ✅ fixed in `71b592a`, `0772cbf` · Inbox and Usage are per computer; iOS merges them across all paired computers |
 | [A56](#a56) | low |  | small | parity/gap | 📝 not built, by decision (`38fa6c4`): a blind `2` can answer No or switch to auto mode on current Claude Code · Approval cards lack iOS's "Always allow" answer |
 | [A57](#a57) | low |  | small | parity/gap | ✅ fixed in `8dbeb48` · Multi-select AskUserQuestion cards fall back to "Open session" |
 | [A58](#a58) | low |  | small | parity/gap | ✅ fixed in `a44f16c` · Usage and feed cards omit iOS's pace line and the context indicator on event cards |
-| [A59](#a59) | low |  | small | parity/gap | No built-in dictation (iOS has on-device Whisper plus a Cloud engine) |
+| [A59](#a59) | low |  | small | parity/gap | ✅ fixed in `57804cf`, `8020796` · No built-in dictation (iOS has on-device Whisper plus a Cloud engine) |
 | [A60](#a60) | low |  | small | ci-docs/bug | ✅ fixed in `67e6297` · Interop fixture needs the Electron binary, which is downloaded at test time inside the 20 s ready window, despite the workflow saying 'not Electron' |
 | [A61](#a61) | low |  | small | ci-docs/bug | ✅ fixed in `39e7995` · Following CONTRIBUTING / android/README (`npm ci --ignore-scripts`) wipes a desktop developer's patched node_modules |
 | [A62](#a62) | low |  | small | ci-docs/bug | ✅ fixed in `77c760d` · SSH transport tests fail, not skip, on macOS: the gate checks only that /usr/bin/script exists, then runs util-linux-only flags |

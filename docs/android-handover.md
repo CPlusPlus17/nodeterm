@@ -27,6 +27,22 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### WP5 batch D (iOS parity features): done on the branch, not device-verified
+
+Each item had an adversarial review and a follow-up commit; the review findings were all checked
+against the code before fixing. Most rules live in pure `android/protocol` classes; the Compose
+screens are type-checked and source-pinned only.
+
+| Finding | Commits | What changed | Checked by |
+|---|---|---|---|
+| A26 | `9cdc4cf`, `1eeb5b8` | `LegRouting` decides per capability (board writes, git, node actions, register node, answer approvals) whether the primary leg serves it, the relay leg opened next to SSH does, or it is unavailable with a reason that names the fix (remote access not set up / off on the computer right now / not picked up yet / the "Only on my network (SSH)" route). The browse reports whether `~/.nodeterm/relay.json` is there, so a held token with remote access switched off reads as off. Availability is a presence check (`hasRelayToken`), never a Keystore decrypt while composing. New session and board controls are disabled with the reason instead of failing on tap. | `LegRoutingTest`, `HostBrowseTest`; source pins on the screens. |
+| A29 | `0c5a1e1`, `a5f38f5` | A per-project Source Control screen over the desktop's `git.*` verbs (status, diff, stage/unstage, commit, history), routed by `LegRouting` (relay only; no SSH git). Merge conflicts get their own section (no Stage; Commit refuses until resolved), combined-diff markers are read, and long git operations get the desktop's own timeout. | `SourceControlTest`; `RelayInteropTest` drives the desktop's real `GitService` over a temp repository. |
+| A32 | `7035bde`, `88beed2` | terminal.js ports the desktop's wrapped-row URL matcher (not addon-web-links), handles OSC 8 through `linkHandler`, and opens http(s) only behind a link bar; a "Copy lines" sheet reads `term.buffer`. Overlays over the terminal stop touches from reaching the WebView or the input bar (`blockTouchesBelow`). | `TerminalJsLinksTest` runs the real terminal.js under node; source pins. |
+| A25 (in-app part) | `4ffb8b7`, `0d310cc` | Inbox notifications carry Approve/Deny and option actions, run by a worker through the same `QuickActions` re-checks as the in-app card, never making a first relay handshake. A stale notification cannot type into a newer prompt (the card must still be listed and unresolved), and an interrupted worker never sends an answer twice. A tap opens that session's terminal with the computer's Inbox one Back away; an action that cannot answer from outside the session updates the notification to say so (Android forbids starting the session from a worker or receiver). **FCM is still missing** (backend). | `NotificationActionsTest`, `QuickActionsTest`. |
+| A55 | `71b592a`, `0772cbf` | Each computer row shows its needs-you count from the snapshot it already holds (no dialing); with two or more computers an "All computers" screen merges Inbox and Usage, with a per-computer status strip that shows a failed listing and its Try again. | `AllComputersTest`; source pins. |
+| A59 | `57804cf`, `8020796` | A mic button in the terminal input bar uses `SpeechRecognizer`; the words go into the draft (cursor after them) and are never sent. No on-device Whisper and no `/v1/transcribe` (that endpoint does not exist yet). | `DictationTest`; source pins. |
+| A27 | `8691e6d`, `9b5c342`, `1d8201f`, `c450e16` | (a) The direct-SSH browse reads a Server Edition (`~/.nodeterm-server`) and a host a desktop drives over SSH (both tmux sockets, the per-project status slices); a node no listing names is never offered the relay, so a phantom `nt-<id>` cannot be created. (b) "Add SSH server": add a computer by address, show the phone's public key line for `authorized_keys`, pin the host key after auth, SSH only; the `ssh-` id prefix keeps an added computer added across an older build's rewrite. | `HostBrowseTest`, `ManualHostTest`, SSH transport tests. |
+
 ### WP6 batch C (CI, test harness and docs): done on the branch
 
 | Finding | Commits | What changed | Checked by |
@@ -103,22 +119,8 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Batch D — WP5 parity features.**
-   - `A26`: while connected over direct SSH, open the relay leg on demand for the relay-only verbs
-     (register node, board writes, `node.*`, git), reusing HostSession's side relay and the
-     `RelayApprovalGate` (a user action is `USER`; a background path never makes a first handshake);
-     show New session and board controls disabled with the reason when there is no relay leg.
-   - `A29`: a Source Control screen over `conn.git(...)` (relay, gated on the git capability), with a
-     relay interop test through the desktop's real git bridge.
-   - `A32`: port the desktop's wrapped-row URL link provider into terminal.js (not addon-web-links), an
-     OSC 8 `linkHandler`, `openUrl` for http(s) only, and a "Copy lines" sheet from `term.buffer`.
-   - `A25` (in-app part): Approve/Deny and option actions on notifications (never a first relay
-     handshake from an action), and a tap that opens the node's terminal. FCM stays a backend gap.
-   - `A55`: a needs-you count per computer, and a merged "All computers" Inbox + Usage screen.
-   - `A59`: a SpeechRecognizer mic in the input bar that fills the draft and never submits.
-   - `A27`: (a) direct-SSH browse of a Server Edition host (`~/.nodeterm-server`, both tmux sockets
-     tracked per session, the per-project status slices); (b) a manual "Add SSH server" flow (show the
-     phone's public key; TOFU-after-auth pin; SSH only).
+1. **Batch D — done** (see its progress table). What it left open is listed under the known gaps
+   below.
 2. **Batch E — follow-ups.** `node.sendKeys` for SSH-project nodes over their ControlMaster (`A12`);
    a device revoke cuts its live relay session (`A07`); late relay adoption pins the box key (`A07`,
    probably a new SSH-visible file, so iOS and the fixture are owed); the SSH host keys in the sealed
@@ -149,6 +151,16 @@ section before starting, since the verifier corrections take precedence):
   still starts phone sessions in the home folder until it is updated.
 - **A07 edges.** Late relay adoption does not pin; revoking a device unpins but does not cut a relay
   session open at that moment.
+- **Batch D leftovers.** No git over direct SSH (Source Control needs the relay leg; `A29`). With
+  remote access off, New session and board edits are disabled with the reason, where iOS writes
+  `project.json` over SSH (`A26`). No FCM push and no Live-Activity equivalent (`A25`). The All
+  computers screen is not polled; it refreshes on open, on Refresh and after an answer (`A55`).
+  Dictation uses the phone's own language with no picker (`A59`). "Add SSH server" has no one-time
+  password bootstrap and does not offer the Server Edition install one-liner (`A27`).
+- **Desktop file links, found during A32.** `src/renderer/terminal/file-links.ts`
+  `paragraphContaining` has the same walk-up limit A32 fixed in terminal.js: below a run of more than
+  32 continuing full-width rows the paragraph it returns does not contain the row, so a link there is
+  missed. One-character fix (`MAX_JOIN_ROWS - 1`), owed with its own vitest.
 - **A10 trade-off.** The debug key is public by the user's decision; a release key does not exist.
 - **Seen log per host.** The notification seen log is phone-global; two computers could in theory
   mint the same event id in the same millisecond.
