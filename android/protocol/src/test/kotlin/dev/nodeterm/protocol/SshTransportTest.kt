@@ -12,8 +12,10 @@ import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
+import dev.nodeterm.protocol.model.NewSessionChoice
 import dev.nodeterm.protocol.model.Pane
 import dev.nodeterm.protocol.pairing.SshIdentity
+import dev.nodeterm.protocol.ssh.HostBrowse
 import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.SshHostConnection
@@ -31,6 +33,7 @@ import org.apache.sshd.server.command.Command
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import kotlin.test.assertIs
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.TestInstance
 import java.io.ByteArrayOutputStream
@@ -78,8 +81,11 @@ class SshTransportTest {
     } +
         mapOf("HOME" to home.path, "TMUX_TMPDIR" to tmuxDir.path, "XDG_CONFIG_HOME" to File(home, ".config").path)
 
-    private fun tmux(vararg args: String): Pair<Int, String> {
-        val pb = ProcessBuilder(listOf("tmux", "-L", "node-terminal") + args).redirectErrorStream(true)
+    private fun tmux(vararg args: String): Pair<Int, String> = tmuxOn("node-terminal", *args)
+
+    /** tmux on [socket] — inside this class's private TMUX_TMPDIR, never a developer's server (#629). */
+    private fun tmuxOn(socket: String, vararg args: String): Pair<Int, String> {
+        val pb = ProcessBuilder(listOf("tmux", "-L", socket) + args).redirectErrorStream(true)
         pb.environment().clear()
         pb.environment().putAll(childEnv())
         val p = pb.start()
@@ -178,6 +184,7 @@ class SshTransportTest {
     fun tearDown() {
         if (!::server.isInitialized) return
         runCatching { tmux("kill-server") }
+        runCatching { stopRmtServer() }
         server.stop(true)
         root.deleteRecursively()
     }
@@ -590,19 +597,29 @@ class SshTransportTest {
     }
 
     @Test
-    fun `the attach script itself refuses to create a missing session`() {
-        // Belt and braces for the race where the session ends between the check and the attach.
-        val (code, _) = run {
-            val pb = ProcessBuilder(ptyScript.argv(SshScripts.attach("term-y-8"))).directory(home)
-            pb.environment().clear()
-            pb.environment().putAll(childEnv())
-            val p = pb.start()
-            p.outputStream.close()
-            p.waitFor(10, TimeUnit.SECONDS)
-            p.exitValue() to p.inputStream.bufferedReader().readText()
+    fun `the attach script itself refuses to create a missing session, on either socket`() {
+        // Belt and braces for the race where the session ends between the check and the attach. On
+        // nodeterm-rmt too (A27): a session a driving desktop makes there gets its remote tmux.conf
+        // and hook env, which an attach from the phone would not. A live server on each socket, so
+        // "missing" is a missing SESSION, not a socket nobody listens on.
+        try {
+            assertEquals(0, tmuxOn("nodeterm-rmt", "-f", "/dev/null", "new-session", "-d", "-s", "nt-keep-rmt").first)
+            for (socket in listOf("node-terminal", "nodeterm-rmt")) {
+                val (code, _) = run {
+                    val pb = ProcessBuilder(ptyScript.argv(SshScripts.attach("term-y-8", socket))).directory(home)
+                    pb.environment().clear()
+                    pb.environment().putAll(childEnv())
+                    val p = pb.start()
+                    p.outputStream.close()
+                    p.waitFor(10, TimeUnit.SECONDS)
+                    p.exitValue() to p.inputStream.bufferedReader().readText()
+                }
+                assertEquals(SshScripts.NO_SESSION_EXIT, code, socket)
+                assertEquals(1, tmuxOn(socket, "has-session", "-t", "=nt-term-y-8").first, socket)
+            }
+        } finally {
+            stopRmtServer()
         }
-        assertEquals(SshScripts.NO_SESSION_EXIT, code)
-        assertEquals(1, tmux("has-session", "-t", "=nt-term-y-8").first)
     }
 
     @Test
@@ -681,6 +698,275 @@ class SshTransportTest {
             assertEquals(ApprovalOutcome.GONE, conn.answerApproval(event, allow = true))
             conn.ackRead("term-a-1", "e1")
             assertEquals("e1", File(home, ".nodeterm/acks/term-a-1.seen").readText())
+        }
+    }
+
+    // ---- Audit A27: a computer a desktop drives over SSH, and the Server Edition ----------------------
+
+    private val remoteRepo get() = File(root, "remote-repo")
+    private val dotNodeterm get() = File(home, ".nodeterm")
+
+    /**
+     * What a desktop that drives this computer over SSH leaves here, written in the shapes its own
+     * code writes them (hand-copied, like the rest of this class's layout — docs/android.md "Interop
+     * tests"): an SSH project's canvas in `<remoteCwd>/.nodeterm/project.json` with the desktop's
+     * project id as `id` (`projectToFile(p, …, p.id)`), the per-project status slices
+     * `~/.nodeterm/agent-status-<projectId>.json` (`filterMirrorForNodes` + the host's settings block,
+     * remote-status-push.ts) — one fresh, one a connected desktop's with no project file, one stale —
+     * and sessions on the `nodeterm-rmt` socket started in the node's folder (`new-session -c`).
+     */
+    private fun layOutDrivenHost(now: Long) {
+        File(remoteRepo, ".nodeterm").mkdirs()
+        File(remoteRepo, "sub").mkdirs()
+        File(remoteRepo, ".nodeterm/project.json").writeText(
+            """{"version":1,"rev":4,"savedAt":"x","id":"project-drv","name":"Remote repo","color":"#30d158",
+               "viewport":{"x":0,"y":0,"zoom":1},
+               "nodes":[{"id":"term-r-1","kind":"terminal","title":"Claude here","color":"#d97757","group":null,
+                         "agentId":"claude","cwd":"${File(remoteRepo, "sub").path}","position":{"x":0,"y":0},"size":{"width":1,"height":1}},
+                        {"id":"term-r-2","kind":"terminal","title":"Shell here","color":"#000","group":null,
+                         "position":{"x":0,"y":0},"size":{"width":1,"height":1}},
+                        {"id":"term-r-3","kind":"terminal","title":"Not running","color":"#000","group":null,"agentId":"claude",
+                         "position":{"x":0,"y":0},"size":{"width":1,"height":1}}],
+               "kanban":{"columns":[{"id":"c9","title":"Doing","color":"#0a84ff"}],"assignments":[{"nodeId":"term-r-1","columnId":"c9"}]}}"""
+        )
+        dotNodeterm.mkdirs()
+        File(dotNodeterm, "agent-status-project-drv.json").writeText(
+            """{"v":1,"updatedAt":$now,"nodes":{"term-r-1":{"state":"working","agentId":"claude","sessionId":"sid-r1","updatedAt":$now}},
+               "inbox":{"events":[{"id":"ev-r1","ts":$now,"nodeId":"term-r-1","agentId":"claude","kind":"approval",
+                                   "title":"Run the tests?","pendingId":"term-r-1-1700000000000-7"}],"nodes":{}},
+               "settings":{"claudePermissionMode":"plan","autoSupported":true,"claudeAccounts":[]}}"""
+        )
+        File(dotNodeterm, "agent-status-project-live2.json").writeText(
+            """{"v":1,"updatedAt":$now,"nodes":{"term-s-7":{"state":"done","agentId":"codex","updatedAt":$now}}}"""
+        )
+        val old = now - 5 * 60_000
+        File(dotNodeterm, "agent-status-project-gone.json").writeText(
+            """{"v":1,"updatedAt":$old,"nodes":{"term-g-1":{"state":"blocked","agentId":"claude","updatedAt":$old}},
+               "inbox":{"events":[{"id":"ev-g1","ts":$old,"nodeId":"term-g-1","kind":"approval","title":"Stale"}],"nodes":{}}}"""
+        )
+        val elsewhere = File(root, "elsewhere").apply { mkdirs() }
+        for ((name, dir) in listOf("nt-term-r-1" to File(remoteRepo, "sub"), "nt-term-r-2" to remoteRepo, "nt-term-g-1" to elsewhere)) {
+            val (code, out) = tmuxOn("nodeterm-rmt", "-f", "/dev/null", "new-session", "-d", "-s", name, "-c", dir.path)
+            assertEquals(0, code, out)
+        }
+    }
+
+    private fun clearDrivenHost() {
+        stopRmtServer()
+        dotNodeterm.listFiles()?.filter { it.name.startsWith("agent-status-") }?.forEach { it.delete() }
+        remoteRepo.deleteRecursively()
+    }
+
+    /**
+     * Stop this class's `nodeterm-rmt` server and wait until it is gone: a server exits AFTER
+     * `kill-server` (or the end of its last session) returns, and a client that connects meanwhile
+     * gets "server exited unexpectedly" instead of starting a new one.
+     */
+    private fun stopRmtServer() {
+        tmuxOn("nodeterm-rmt", "kill-server")
+        val end = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < end) {
+            val (code, out) = tmuxOn("nodeterm-rmt", "list-sessions")
+            if (code != 0 && !out.contains("server exited unexpectedly")) return
+            Thread.sleep(50)
+        }
+    }
+
+    /** Run [block] with the desktop app's userData moved away: a computer no nodeterm runs on. */
+    private fun <T> withoutOwnData(block: () -> T): T {
+        val ud = File(home, ".config/node-terminal")
+        val aside = File(root, "ud-aside")
+        check(ud.renameTo(aside))
+        try {
+            return block()
+        } finally {
+            check(aside.renameTo(ud))
+        }
+    }
+
+    private fun waitForPane(socket: String, session: String, needle: String): String {
+        val end = System.currentTimeMillis() + 8_000
+        var pane = ""
+        while (System.currentTimeMillis() < end) {
+            pane = tmuxOn(socket, "capture-pane", "-p", "-J", "-t", "=$session:").second
+            if (pane.contains(needle)) break
+            Thread.sleep(100)
+        }
+        return pane
+    }
+
+    @Test
+    fun `a computer another desktop drives over SSH lists its projects, sessions and status from what that desktop left there`() = runBlocking<Unit> {
+        val now = System.currentTimeMillis()
+        try {
+            layOutDrivenHost(now)
+            withoutOwnData {
+                runBlocking {
+                    connect().use { conn ->
+                        val snap = conn.listProjects()
+                        assertEquals(
+                            listOf("Remote repo", "project-live2", HostBrowse.OTHER_SESSIONS_NAME),
+                            snap.projects.map { it.name },
+                            "the project file, a connected desktop's slice with no file, and the sessions nobody names"
+                        )
+                        assertTrue(snap.projects.all { it.drivenRemotely && it.sshTarget == null })
+                        val drv = snap.projects[0]
+                        assertEquals("project-drv", drv.id, "the desktop's project id, which its slice is named by")
+                        assertEquals(remoteRepo.path, drv.cwd)
+                        assertEquals(listOf("term-r-1", "term-r-2", "term-r-3"), drv.nodes.map { it.id })
+                        assertEquals("c9", drv.board!!.columnOf("term-r-1"))
+                        assertEquals(listOf("term-s-7"), snap.projects[1].nodes.map { it.id })
+                        assertEquals(listOf("term-g-1"), snap.projects[2].nodes.map { it.id }, "a stale slice names no project")
+
+                        assertTrue(snap.isLive("term-r-1") && snap.isLive("term-r-2") && snap.isLive("term-g-1"))
+                        assertFalse(snap.isLive("term-r-3"))
+                        assertEquals("nodeterm-rmt", snap.socketOf("term-r-1"))
+                        assertEquals(AgentState.WORKING, snap.statusOf("term-r-1")!!.state)
+                        assertEquals(AgentState.DONE, snap.statusOf("term-s-7")!!.state)
+                        assertNull(snap.statusOf("term-g-1"), "a slice older than twice the heartbeat is no data")
+                        assertEquals(listOf("ev-r1"), snap.status!!.inbox!!.events.map { it.id })
+                        assertEquals("plan", snap.status!!.settings!!.claudePermissionMode, "the slice carries the host's settings")
+
+                        // What needs nodeterm the app is that OTHER desktop's.
+                        assertTrue(NewSessionChoice.offeredProjects(snap).isEmpty())
+                        assertIs<LegRouting.Leg.Unavailable>(
+                            LegRouting.forProject(Capability.BOARD_WRITES, drv, LegRouting.Leg.Relay)
+                        )
+
+                        // The session runs HERE, on nodeterm-rmt: attach, type, read its pane.
+                        val sink = Sink()
+                        val stream = conn.attach("term-r-1", 100, 30, sink)
+                        assertFalse(stream.fresh)
+                        Thread.sleep(400)
+                        stream.write("echo rmt_\$((6*7))\r")
+                        sink.waitFor("rmt_42")
+                        assertTrue(waitForPane("nodeterm-rmt", "nt-term-r-1", "rmt_42").contains("rmt_42"), "typed into the rmt session")
+                        stream.detach()
+                        Thread.sleep(300)
+                        assertEquals(0, tmuxOn("nodeterm-rmt", "has-session", "-t", "=nt-term-r-1").first, "detaching never ends it")
+
+                        conn.sendKeys("term-r-2", "echo sk_rmt_\$((3*3))")
+                        conn.sendKeys("term-r-2", "\r")
+                        assertTrue(waitForPane("nodeterm-rmt", "nt-term-r-2", "sk_rmt_9").contains("sk_rmt_9"))
+                        assertTrue(Pane.isShell(conn.paneCommand("term-r-2")), "the pane read reaches the rmt socket")
+
+                        // Not running: only its own desktop starts it, and the phone's relay is not that
+                        // desktop's, so there is nothing to offer — and nothing is created on either socket.
+                        val e = assertFailsWith<HostException> { conn.attach("term-r-3", 80, 24, Sink()) }
+                        assertFalse(e is NeedsRelayException)
+                        assertEquals(SshHostConnection.DRIVEN_NOT_RUNNING, e.message)
+                        Thread.sleep(300)
+                        assertEquals(1, tmuxOn("nodeterm-rmt", "has-session", "-t", "=nt-term-r-3").first)
+                        assertEquals(1, tmux("has-session", "-t", "=nt-term-r-3").first)
+
+                        // The held approval and the read-ack are files on THIS computer, where the driving
+                        // desktop's SSH answer path and ack sweep look for them.
+                        val pending = File(dotNodeterm, "pending").apply { mkdirs() }
+                        val ev = snap.status!!.inbox!!.events.single()
+                        File(pending, "${ev.pendingId}.json").writeText("{}")
+                        assertEquals(ApprovalOutcome.SENT, conn.answerApproval(ev, allow = true))
+                        assertEquals("allow", File(pending, "${ev.pendingId}.answer").readText())
+                        conn.ackRead("term-r-1", "ev-r1")
+                        assertEquals("ev-r1", File(dotNodeterm, "acks/term-r-1.seen").readText())
+
+                        // Ending it stops the rmt session and nothing on the host's own socket.
+                        conn.killSession("term-r-2")
+                        assertEquals(1, tmuxOn("nodeterm-rmt", "has-session", "-t", "=nt-term-r-2").first)
+                        assertEquals(0, tmux("has-session", "-t", "=nt-term-a-1").first)
+                    }
+                }
+            }
+        } finally {
+            clearDrivenHost()
+        }
+    }
+
+    @Test
+    fun `with both sockets in use the host's own projects come first, and the paired desktop's SSH project stays its own (A09)`() = runBlocking<Unit> {
+        val now = System.currentTimeMillis()
+        // The paired desktop drives THIS computer as its SSH project "Server" (p2): that project's
+        // file and session are here too, and must not turn into a second, directly reachable project.
+        val selfSsh = File(root, "self-ssh/.nodeterm")
+        try {
+            layOutDrivenHost(now)
+            selfSsh.mkdirs()
+            File(selfSsh, "project.json").writeText(
+                """{"version":1,"rev":1,"savedAt":"x","id":"p2","name":"Server again","color":"#000","viewport":{"x":0,"y":0,"zoom":1},
+                   "nodes":[{"id":"term-b-2","kind":"terminal","title":"Remote","color":"#000","group":null,"position":{"x":0,"y":0},"size":{"width":1,"height":1}}]}"""
+            )
+            assertEquals(0, tmuxOn("nodeterm-rmt", "new-session", "-d", "-s", "nt-term-b-2", "-c", selfSsh.parentFile.path).first)
+            // A name on BOTH sockets is the host's own session (first wins, as the desktop's sweep does).
+            assertEquals(0, tmuxOn("nodeterm-rmt", "new-session", "-d", "-s", "nt-term-a-1", "-c", root.path).first)
+            connect().use { conn ->
+                val snap = conn.listProjects()
+                assertEquals(
+                    listOf("Repo", "Server", "Scratch", "Parked", "Remote repo", "project-live2", HostBrowse.OTHER_SESSIONS_NAME),
+                    snap.projects.map { it.name }
+                )
+                assertEquals(listOf("term-g-1"), snap.projects.last().nodes.map { it.id }, "neither term-a-1 nor term-b-2 is an orphan")
+                assertEquals("node-terminal", snap.socketOf("term-a-1"))
+                assertEquals("nodeterm-rmt", snap.socketOf("term-r-1"))
+                assertEquals(AgentState.WORKING, snap.statusOf("term-a-1")!!.state, "the host's own mirror")
+                assertEquals(AgentState.WORKING, snap.statusOf("term-r-1")!!.state, "the slice")
+
+                // The desktop's own SSH project: still reached through the desktop.
+                val e = assertFailsWith<NeedsRelayException> { conn.attach("term-b-2", 80, 24, Sink()) }
+                assertTrue(e.message!!.contains("me@box"), e.message)
+
+                // term-a-1 is attached on node-terminal, never on the rmt session of the same name.
+                val sink = Sink()
+                val stream = conn.attach("term-a-1", 100, 30, sink)
+                Thread.sleep(400)
+                stream.write("echo own_\$((4*4))\r")
+                sink.waitFor("own_16")
+                assertTrue(waitForPane("node-terminal", "nt-term-a-1", "own_16").contains("own_16"))
+                assertFalse(tmuxOn("nodeterm-rmt", "capture-pane", "-p", "-t", "=nt-term-a-1:").second.contains("own_16"))
+                stream.detach()
+            }
+        } finally {
+            clearDrivenHost()
+            selfSsh.parentFile.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a Server Edition's data dir is found, and its install metadata read`() = runBlocking<Unit> {
+        val data = File(home, ".nodeterm-server").apply { mkdirs() }
+        File(data, "workspace.json").writeText(
+            """{"version":3,"activeProjectId":"p1","entries":[{"id":"p1","name":"Served repo","color":"#0a84ff","cwd":"${repo.path}"}]}"""
+        )
+        File(data, "agent-status.json").writeText(
+            """{"v":1,"updatedAt":1,"nodes":{"term-a-1":{"state":"done","agentId":"claude","updatedAt":5}},
+               "server":{"version":"0.2.17","commit":"1e56f83","installedAt":"2026-09-01T10:00:00.000Z"}}"""
+        )
+        try {
+            withoutOwnData {
+                runBlocking {
+                    connect().use { conn ->
+                        val snap = conn.listProjects()
+                        assertEquals(listOf("Served repo"), snap.projects.map { it.name })
+                        assertEquals(listOf("term-a-1"), snap.projects.single().nodes.map { it.id })
+                        assertFalse(snap.projects.single().drivenRemotely)
+                        assertEquals(AgentState.DONE, snap.statusOf("term-a-1")!!.state)
+                        assertEquals("nodeterm server 0.2.17 · 1e56f83 · installed 2026-09-01", snap.status!!.server!!.describe())
+                    }
+                }
+            }
+        } finally {
+            data.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `nothing of nodeterm's found is an error that says where it looked, not an empty computer`() = runBlocking<Unit> {
+        withoutOwnData {
+            runBlocking {
+                connect().use { conn ->
+                    val e = assertFailsWith<HostException> { conn.listProjects() }
+                    assertEquals(SshHostConnection.NO_USER_DATA, e.message)
+                    assertTrue(e.message!!.contains("~/.nodeterm-server") && e.message!!.contains("--data-dir"), e.message)
+                }
+            }
         }
     }
 

@@ -54,7 +54,7 @@ class AllComputersTest {
         settings = null,
         usage = usage,
         inbox = MirrorInbox(events, inboxNodes),
-        serverVersion = null
+        server = null
     )
 
     private fun snapshot(status: AgentStatusFile?) = ProjectsSnapshot(emptyList(), emptySet(), status, 1)

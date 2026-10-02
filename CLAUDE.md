@@ -5396,7 +5396,10 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      serves — the legacy relay dialect of `host-service.ts` and the direct-SSH/tmux conventions —
      so **a change to a `host-service.ts` verb, the `projects.list` blob, the pairing payload, the
      mirror file, or the SSH-visible file contracts (`~/.nodeterm/pending`, `~/.nodeterm/acks`,
-     `~/.nodeterm/relay.json`) owes the Android client (and its interop fixture,
+     `~/.nodeterm/relay.json`, and the per-project status slices
+     `~/.nodeterm/agent-status-<projectId>.json`, read with the `nodeterm-rmt` sessions and
+     `<remoteCwd>/.nodeterm/project.json` by a phone SSHing into a desktop-driven host, audit A27)
+     owes the Android client (and its interop fixture,
      `android/protocol/src/test/interop/host-fixture.ts`) in the same PR**; the Android workflow
      (`.github/workflows/android.yml`) runs on those paths: its filter covers every input of the
      fixture's esbuild bundle (`src/core`, `src/shared`, `src/main/*.ts`, `src/main/remote`), which
@@ -5411,7 +5414,9 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      `WorkspaceStore` and an `agent-status.json` the real mirror wrote from hook payloads
      (`android-interop-fixture.guard.test.ts` refuses a hand-written blob or mirror there). The SSH
      leg is HAND-COPIED: `SshTransportTest` writes the v3 index, the project files,
-     `agent-status.json` and the held `~/.nodeterm/pending` request itself and checks the phone's
+     `agent-status.json`, the status slices and the held `~/.nodeterm/pending` request itself
+     (`HostBrowseTest` reads only the slices' heartbeat and file name, the Server Edition's data
+     dir and the socket names from the desktop's sources) and checks the phone's
      `.answer` / `acks/<node>.seen` against names copied from `pending-approvals.ts` /
      `ack-sweep.ts`, and nothing tests `relay.json` — a change to those owes a hand edit of the
      Android tests. The fixture implements host-service's

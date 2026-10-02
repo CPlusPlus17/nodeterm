@@ -43,6 +43,8 @@ class NewSessionChoiceTest {
                 project("closed", closed = true),
                 project("remote", ssh = "me@box"),
                 project("inline", cwd = null),
+                // A27: run here over SSH by another desktop, whose canvas this computer cannot register in.
+                project("driven").copy(drivenRemotely = true),
                 project("b")
             )
         )

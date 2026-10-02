@@ -166,6 +166,17 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+            // A Server Edition's install metadata (the mirror's `server` block, A27): which version
+            // this computer runs, the question an installed server's updates raise.
+            snapshot.status?.server?.describe()?.let {
+                Text(
+                    it,
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
             TabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Sessions") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Board") })

@@ -1,5 +1,6 @@
 package dev.nodeterm.protocol.git
 
+import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.GitVerb
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
@@ -115,6 +116,8 @@ object SourceControlGate {
      */
     fun of(project: ProjectInfo?, leg: LegRouting.Leg): Availability {
         if (project == null) return Availability.Unavailable("This project is no longer on the computer.")
+        // Its folder IS on this computer, but the git bridge is its own desktop's, elsewhere (A27).
+        if (project.drivenRemotely) return Availability.Unavailable(LegRouting.drivenElsewhere(Capability.GIT))
         project.sshTarget?.let {
             return Availability.Unavailable(
                 "This project's folder is on $it, which the computer reaches over SSH. Source control from the " +

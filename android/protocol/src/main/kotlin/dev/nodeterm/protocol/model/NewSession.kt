@@ -18,10 +18,12 @@ object NewSessionChoice {
     /**
      * The projects a phone can start a session in: open, on this computer (an SSH project's terminals
      * run on another machine), and with a folder — the desktop refuses to register a node in a
-     * cwd-less canvas, which would orphan the session (A14).
+     * cwd-less canvas, which would orphan the session (A14). Never a project another desktop drives
+     * over SSH (A27): this computer's nodeterm would be asked to register a node in a canvas it does
+     * not have.
      */
     fun offeredProjects(snapshot: ProjectsSnapshot): List<ProjectInfo> =
-        snapshot.openProjects().filter { it.sshTarget == null && it.cwd != null }
+        snapshot.openProjects().filter { it.sshTarget == null && it.cwd != null && !it.drivenRemotely }
 
     /**
      * The project Start uses: the one the user picked while it is still offered, else the first

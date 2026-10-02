@@ -57,7 +57,7 @@ class QuickActionsTest {
             nodes = mapOf(node to AgentNodeStatus(state, "claude", "s", null, false, 1, null)),
             settings = null, usage = null,
             inbox = MirrorInbox(events.toList(), emptyMap()),
-            serverVersion = null
+            server = null
         ),
         fetchedAt = 1
     )

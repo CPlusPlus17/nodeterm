@@ -11,9 +11,20 @@ data class ProjectsSnapshot(
     /** Live nodeterm tmux session names (`nt-<nodeId>`), from `tmux ls` on the host. */
     val liveSessions: Set<String>,
     val status: AgentStatusFile?,
-    val fetchedAt: Long
+    val fetchedAt: Long,
+    /**
+     * Which tmux socket each live session is on ([TmuxNames.SOCKETS]), session name → socket. Only
+     * the direct-SSH browse fills it: one host can carry both the `node-terminal` sessions of a
+     * nodeterm running ON it and the `nodeterm-rmt` sessions of a desktop that drives it over SSH
+     * (audit A27), and a session is reached on the socket it was listed on. Empty for a relay
+     * listing (the desktop attaches its own sessions itself).
+     */
+    val sockets: Map<String, String> = emptyMap()
 ) {
     fun isLive(nodeId: String): Boolean = liveSessions.contains(TmuxNames.sessionName(nodeId))
+
+    /** The socket [nodeId]'s session was listed on, or null when the listing did not see it. */
+    fun socketOf(nodeId: String): String? = sockets[TmuxNames.sessionName(nodeId)]
 
     fun statusOf(nodeId: String): AgentNodeStatus? = status?.nodes?.get(nodeId)
 
@@ -44,7 +55,17 @@ data class ProjectInfo(
      *  global one exactly as the desktop's `resolvePermissionMode` does. Unvalidated here. */
     val defaultPermissionMode: String? = null,
     /** The machine-local default Claude account for new sessions in this project. */
-    val defaultAccountId: String? = null
+    val defaultAccountId: String? = null,
+    /**
+     * A project of a nodeterm desktop ELSEWHERE that drives this computer over SSH (audit A27): its
+     * sessions run here, on the `nodeterm-rmt` socket, and its canvas is that desktop's. The direct-SSH
+     * browse finds it from `<remoteCwd>/.nodeterm/project.json`, the status slice that desktop pushes
+     * here (`~/.nodeterm/agent-status-<projectId>.json`) and `tmux ls`. What the machine does — attach,
+     * keys, approvals, read-acks, ending the tmux session — works on it over SSH; what needs nodeterm
+     * the app (new sessions, the board, node actions, git) belongs to that other desktop, which this
+     * connection does not reach ([dev.nodeterm.protocol.host.LegRouting.forProject]).
+     */
+    val drivenRemotely: Boolean = false
 ) {
     /** Session nodes — what the phone lists and can attach to. */
     val sessions: List<NodeInfo> get() = nodes.filter { it.kind == NodeKind.TERMINAL }
@@ -146,8 +167,27 @@ data class AgentStatusFile(
     val settings: MirrorSettings?,
     val usage: MirrorUsage?,
     val inbox: MirrorInbox?,
-    val serverVersion: String?
+    /** The Server Edition's install metadata (the mirror's top-level `server` block), when present. */
+    val server: MirrorServer?
 )
+
+/**
+ * `MirrorServer` (src/core/agent-status-mirror.ts): what `scripts/install-server.sh` recorded in
+ * `<data-dir>/install-meta.json`, surfaced by a Server Edition so a phone can show which version it
+ * is on. Every field is optional there; a server started without the installer has no block at all.
+ */
+data class MirrorServer(val version: String?, val commit: String?, val installedAt: String?) {
+    /** One line for the host screen ("nodeterm server 0.2.17 · 1e56f83 · installed 2026-09-01"), or null with nothing to say. */
+    fun describe(): String? {
+        if (version == null && commit == null && installedAt == null) return null
+        return buildList {
+            add("nodeterm server" + (version?.let { " $it" } ?: ""))
+            commit?.let { add(it) }
+            // An ISO-8601 timestamp: its date is what a person compares. Anything else is shown as given.
+            installedAt?.let { add("installed " + (Regex("^\\d{4}-\\d{2}-\\d{2}").find(it)?.value ?: it)) }
+        }.joinToString(" · ")
+    }
+}
 
 data class MirrorSettings(
     val claudePermissionMode: String?,
@@ -257,9 +297,18 @@ data class KanbanBoard(
 
 /** `src/core/tmux-naming.ts`. */
 object TmuxNames {
+    /** The socket of a nodeterm running ON the computer (the desktop app or the Server Edition). */
     const val SOCKET = "node-terminal"
-    /** The socket a DESKTOP uses for sessions it runs on an SSH host (never the phone's target). */
+    /**
+     * The socket a DESKTOP uses for the sessions it runs on an SSH host (`remoteTmuxCommand`,
+     * src/shared/ssh.ts). The phone reaches it when it SSHes into that host itself (audit A27); a
+     * node of the paired desktop's own SSH projects is still reached through the desktop (A09).
+     */
     const val REMOTE_SOCKET = "nodeterm-rmt"
+
+    /** Every socket a session may be on, in the order a name on both is attributed (first wins, as
+     *  the desktop's session-memory sweep does). Nothing else is ever spliced into `tmux -L`. */
+    val SOCKETS = listOf(SOCKET, REMOTE_SOCKET)
 
     fun sessionName(persistKey: String): String = "nt-" + persistKey.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 

@@ -17,6 +17,7 @@ import dev.nodeterm.protocol.model.J
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.OnScreenTracker
 import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.RelayBlock
@@ -243,18 +244,26 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     }
 
     /**
+     * [route] for something in [project]: a project another desktop drives over SSH is that
+     * desktop's, which neither leg of this computer reaches ([LegRouting.forProject], audit A27).
+     */
+    fun route(cap: Capability, project: ProjectInfo?): LegRouting.Leg = LegRouting.forProject(cap, project, route(cap))
+
+    /**
      * A connection that can do [cap] (audit A26): the primary one when it can, else the relay leg
      * opened next to it. For a USER's action — the relay dial goes through [RelayApprovalGate] with
      * [trigger], so a background caller never makes a first relay handshake. Throws a
-     * [HostException] carrying the reason when neither leg can.
+     * [HostException] carrying the reason when neither leg can, which includes a [project] another
+     * desktop drives over SSH (A27).
      */
     suspend fun connectionFor(
         cap: Capability,
         trigger: Trigger = Trigger.USER,
-        onStatus: (RelayConnectStatus) -> Unit = {}
+        onStatus: (RelayConnectStatus) -> Unit = {},
+        project: ProjectInfo? = null
     ): HostConnection {
         val primary = ensureConnected(trigger)
-        return when (val leg = route(cap)) {
+        return when (val leg = route(cap, project)) {
             LegRouting.Leg.Primary -> primary
             LegRouting.Leg.Relay -> viaRelay(trigger, onStatus)
             is LegRouting.Leg.Unavailable -> throw HostException(leg.reason)

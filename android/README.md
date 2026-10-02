@@ -21,7 +21,7 @@ written for it and tested where the layer allows, and the numbered
 | | Android | Notes |
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
-| Direct connection on your network (SSH + tmux) | ✓ | TOFU-pinned host key; the desktop's own tmux socket |
+| Direct connection on your network (SSH + tmux) | ✓ | TOFU-pinned host key; the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir, though a computer can only be added by pairing for now |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body); an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |

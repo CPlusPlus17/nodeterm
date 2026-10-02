@@ -8,23 +8,42 @@ import dev.nodeterm.protocol.model.TmuxNames
  * interpolation is single-quoted with [q] and every target is checked against the shape this app
  * generates (`nt-[A-Za-z0-9_-]+`) before it is spliced.
  *
- * Three facts about the desktop these encode:
+ * Four facts about the computer these encode:
  *  - an ssh exec channel gets a NON-login shell, so Homebrew's tmux is not on PATH on a Mac: the
  *    PATH is APPENDED (never prepended — a PATH that already resolves tmux keeps that binary), the
  *    same rule as `remoteTmuxPathPrologue` in src/shared/ssh.ts; the tmux the macOS app ships
  *    (`Contents/Resources/bin/tmux`) is the last resort, as it is for the desktop's own `findTmux`;
- *  - the desktop's sessions live on the `-L node-terminal` socket (src/core/tmux-naming.ts), and its
- *    generated config is `<userData>/tmux.conf`;
- *  - userData is `~/Library/Application Support/node-terminal` on macOS and
+ *  - a nodeterm running ON the computer keeps its sessions on the `-L node-terminal` socket
+ *    (src/core/tmux-naming.ts), and a desktop that drives the computer over SSH keeps the sessions
+ *    of its SSH projects on `-L nodeterm-rmt` (`remoteTmuxCommand`, src/shared/ssh.ts). Both can be
+ *    there at once, so every session is reached on the socket it was listed on ([TmuxNames.SOCKETS],
+ *    audit A27), and a session that was not listed is looked up on both ([whichSocket]);
+ *  - the desktop app's userData is `~/Library/Application Support/node-terminal` on macOS and
  *    `$XDG_CONFIG_HOME/node-terminal` (default `~/.config/node-terminal`) on Linux: Electron names it
  *    after package.json `name`, and the desktop has no top-level `productName` (the desktop's own
  *    hook shell walks the same dirs, src/core/agents/hook-endpoint-failover-sh.ts). The `nodeterm`
- *    spelling is probed after it as a legacy fallback (audit A02).
+ *    spelling is probed after it as a legacy fallback (audit A02);
+ *  - the Server Edition keeps the same files in its data dir: `~/.nodeterm-server` by default
+ *    (src/server/config.ts), or wherever `--data-dir` / `NODETERM_DATA_DIR` put it. The browse checks
+ *    `$NODETERM_DATA_DIR` when the SSH session happens to carry it, then the default; a server whose
+ *    data dir is elsewhere is simply not found, which the app reports as "not found", never as "no
+ *    nodeterm here".
  */
 object SshScripts {
     const val META_START = "##NT-META"
     const val META_END = "##NT-META-END"
     const val FILE_MARK = "##NT-FILE "
+
+    /** [browse]'s sections after the `projects.list`-shaped part ([HostBrowse] reads them). Each is a
+     *  line of its own; JSON never has a line starting `##`, and session names are checked in sh. */
+    const val RMT_MARK = "##NT-RMT"
+    const val SLICE_MARK = "##NT-SLICE "
+    const val PROJECT_FILE_MARK = "##NT-PROJFILE "
+    const val END_MARK = "##NT-END"
+
+    /** Bounds on what [browse] walks for project files: directories per session path, and files. */
+    const val WALK_DEPTH = 40
+    const val MAX_PROJECT_FILES = 64
 
     /** Single-quote for sh: `'` → `'\''`. */
     fun q(s: String): String = "'" + s.replace("'", "'\\''") + "'"
@@ -42,6 +61,11 @@ object SshScripts {
                  "${'$'}HOME/Library/Application Support/nodeterm" "${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}/nodeterm"; do
           if [ -f "${'$'}d/workspace.json" ]; then NT_UD="${'$'}d"; break; fi
         done
+        if [ -z "${'$'}NT_UD" ]; then
+          for d in ${'$'}{NODETERM_DATA_DIR:+"${'$'}NODETERM_DATA_DIR"} "${'$'}HOME/.nodeterm-server"; do
+            if [ -f "${'$'}d/workspace.json" ] || [ -f "${'$'}d/agent-status.json" ] || [ -f "${'$'}d/install-meta.json" ]; then NT_UD="${'$'}d"; break; fi
+          done
+        fi
     """.trimIndent()
 
     /**
@@ -63,7 +87,23 @@ object SshScripts {
 
     /**
      * Browse: emits a meta block, then EXACTLY the `projects.list` blob shape (workspace.json ·
-     * live `nt-*` sessions · agent-status.json), so the relay and SSH paths share one parser.
+     * live `nt-*` sessions on `node-terminal` · agent-status.json), so the relay and SSH paths share
+     * one parser — then what a desktop that drives this computer over SSH left here (audit A27):
+     *
+     *  - [RMT_MARK]: the `nt-*` sessions on `nodeterm-rmt`, one name per line (checked against the
+     *    shape this app generates before it is printed);
+     *  - [SLICE_MARK]`<projectId>`: each `~/.nodeterm/agent-status-<projectId>.json`, the per-project
+     *    status slice that desktop pushes (src/main/remote-ssh/remote-status-push.ts). There is no
+     *    workspace.json for those projects on this computer: this is their only status;
+     *  - [PROJECT_FILE_MARK]`<dir>`: each `<dir>/.nodeterm/project.json` found by walking up from a
+     *    `nodeterm-rmt` session's start directory (`#{session_path}`, the node's cwd the desktop gave
+     *    `new-session -c`), deduplicated, at most [WALK_DEPTH] levels per path and
+     *    [MAX_PROJECT_FILES] files. An SSH project's canvas lives in `<remoteCwd>/.nodeterm/project.json`,
+     *    and its sessions start in or under that folder;
+     *  - [END_MARK].
+     *
+     * Splitting is by lines in the shell (`IFS` = newline, globbing off), never by a here-document:
+     * this template keeps its indentation, and a here-document's terminator must start its line.
      */
     fun browse(): String = """
         $PRELUDE
@@ -77,6 +117,50 @@ object SshScripts {
         if [ -n "${'$'}NT_TMUX" ]; then "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} list-sessions -F '#{session_name}' 2>/dev/null; fi
         printf '\n%s\n' '${ProjectsParser.STATUS_MARK}'
         if [ -n "${'$'}NT_UD" ]; then cat "${'$'}NT_UD/agent-status.json" 2>/dev/null; fi
+        printf '\n%s\n' '$RMT_MARK'
+        NT_NL=${'$'}(printf '\nx'); NT_NL=${'$'}{NT_NL%x}
+        NT_DIRS=""; NT_NDIRS=0
+        if [ -n "${'$'}NT_TMUX" ]; then
+          NT_RMT=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.REMOTE_SOCKET} list-sessions -F '#{session_name} #{session_path}' 2>/dev/null)
+          set -f; IFS=${'$'}NT_NL
+          for l in ${'$'}NT_RMT; do
+            n=${'$'}{l%% *}
+            case "${'$'}n" in nt-*) ;; *) continue ;; esac
+            case "${'$'}{n#nt-}" in ''|*[!A-Za-z0-9_-]*) continue ;; esac
+            printf '%s\n' "${'$'}n"
+            p=${'$'}{l#* }
+            [ "${'$'}p" = "${'$'}l" ] && continue
+            i=0
+            while [ ${'$'}i -lt $WALK_DEPTH ] && [ ${'$'}NT_NDIRS -lt $MAX_PROJECT_FILES ]; do
+              case "${'$'}p" in /*) ;; *) break ;; esac
+              if [ -f "${'$'}p/.nodeterm/project.json" ]; then
+                case "${'$'}NT_NL${'$'}NT_DIRS${'$'}NT_NL" in
+                  *"${'$'}NT_NL${'$'}p${'$'}NT_NL"*) ;;
+                  *) NT_DIRS="${'$'}NT_DIRS${'$'}NT_NL${'$'}p"; NT_NDIRS=${'$'}((NT_NDIRS + 1)) ;;
+                esac
+              fi
+              [ "${'$'}p" = / ] && break
+              p=${'$'}{p%/*}
+              [ -n "${'$'}p" ] || p=/
+              i=${'$'}((i + 1))
+            done
+          done
+          unset IFS; set +f
+        fi
+        for f in "${'$'}HOME"/.nodeterm/agent-status-*.json; do
+          [ -f "${'$'}f" ] || continue
+          id=${'$'}{f##*/}; id=${'$'}{id#agent-status-}; id=${'$'}{id%.json}
+          case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+          printf '\n%s%s\n' '$SLICE_MARK' "${'$'}id"
+          cat "${'$'}f" 2>/dev/null
+        done
+        set -f; IFS=${'$'}NT_NL
+        for d in ${'$'}NT_DIRS; do
+          printf '\n%s%s\n' '$PROJECT_FILE_MARK' "${'$'}d"
+          cat "${'$'}d/.nodeterm/project.json" 2>/dev/null
+        done
+        unset IFS; set +f
+        printf '\n%s\n' '$END_MARK'
         exit 0
     """.trimIndent()
 
@@ -89,11 +173,20 @@ object SshScripts {
         append("exit 0\n")
     }
 
-    fun hasSession(nodeId: String): String {
-        val target = target(nodeId)
+    /**
+     * Which socket the node's session is on: prints `node-terminal` or `nodeterm-rmt` (the first that
+     * has it, in [TmuxNames.SOCKETS] order — the attribution [browse]'s listing makes), or nothing
+     * when neither does or there is no tmux.
+     */
+    fun whichSocket(nodeId: String): String {
+        val target = q("=" + target(nodeId))
         return """
             $PRELUDE
-            if [ -n "${'$'}NT_TMUX" ] && "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} has-session -t ${q("=$target")} 2>/dev/null; then echo yes; else echo no; fi
+            [ -n "${'$'}NT_TMUX" ] || exit 0
+            for s in ${TmuxNames.SOCKETS.joinToString(" ")}; do
+              if "${'$'}NT_TMUX" -L "${'$'}s" has-session -t $target 2>/dev/null; then printf '%s\n' "${'$'}s"; exit 0; fi
+            done
+            exit 0
         """.trimIndent()
     }
 
@@ -105,28 +198,33 @@ object SshScripts {
      * tmux server's global env (audit A08). A missing session exits [NO_SESSION_EXIT] instead, and
      * the app offers the relay, where the desktop creates it properly. Without `-d`: the desktop's
      * own client must stay attached (`-d` is what "[detached]" dead terminals are made of).
+     *
+     * The same holds on [TmuxNames.REMOTE_SOCKET], and more so: a session the driving desktop creates
+     * there also gets its remote tmux.conf (`-f`) and the hook/account `-e` env, none of which the
+     * phone has.
      */
-    fun attach(nodeId: String): String {
+    fun attach(nodeId: String, socket: String): String {
         val target = target(nodeId)
+        val s = socket(socket)
         return """
             $PRELUDE
             if [ -z "${'$'}NT_TMUX" ]; then echo 'nodeterm: tmux was not found on this computer.' >&2; exit 127; fi
-            "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} has-session -t ${q("=$target")} 2>/dev/null || exit $NO_SESSION_EXIT
+            "${'$'}NT_TMUX" -L $s has-session -t ${q("=$target")} 2>/dev/null || exit $NO_SESSION_EXIT
             TERM=xterm-256color; export TERM
             $LOCALE
-            exec "${'$'}NT_TMUX" -u -L ${TmuxNames.SOCKET} attach-session -t ${q("=$target")}
+            exec "${'$'}NT_TMUX" -u -L $s attach-session -t ${q("=$target")}
         """.trimIndent()
     }
 
     /** [attach]'s exit status when the node's session is not running. */
     const val NO_SESSION_EXIT = 3
 
-    fun killSession(nodeId: String): String {
+    fun killSession(nodeId: String, socket: String): String {
         val target = target(nodeId)
         return """
             $PRELUDE
             [ -n "${'$'}NT_TMUX" ] || exit 127
-            "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} kill-session -t ${q("=$target")}
+            "${'$'}NT_TMUX" -L ${socket(socket)} kill-session -t ${q("=$target")}
         """.trimIndent()
     }
 
@@ -135,13 +233,13 @@ object SshScripts {
      * (`PtyManager.paneCommand`) before it types a resume line. Prints nothing when there is no tmux
      * or no such session.
      */
-    fun paneCommand(nodeId: String): String {
+    fun paneCommand(nodeId: String, socket: String): String {
         // A PANE target, like [sendKeys]: the exact-session form for a pane command is `=name:`.
         val pane = q("=" + target(nodeId) + ":")
         return """
             $PRELUDE
             [ -n "${'$'}NT_TMUX" ] || exit 127
-            "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} display-message -p -t $pane '#{pane_current_command}'
+            "${'$'}NT_TMUX" -L ${socket(socket)} display-message -p -t $pane '#{pane_current_command}'
         """.trimIndent()
     }
 
@@ -149,14 +247,15 @@ object SshScripts {
      * Type into a pane. `-l --` so text is literal and a leading `-` is never an option (the
      * leading-dash hazard documented in tmux-naming.ts). A lone ESC is sent as the `Escape` key.
      */
-    fun sendKeys(nodeId: String, keys: String): String {
+    fun sendKeys(nodeId: String, keys: String, socket: String): String {
         // A PANE target: `=name` alone is refused ("can't find pane", measured on tmux 3.4); the
         // exact-session form for a pane command is `=name:` — the session's current window/pane.
         val pane = q("=" + target(nodeId) + ":")
+        val s = socket(socket)
         val send = when (keys) {
-            "\u001b" -> "\"${'$'}NT_TMUX\" -L ${TmuxNames.SOCKET} send-keys -t $pane Escape"
-            "\r" -> "\"${'$'}NT_TMUX\" -L ${TmuxNames.SOCKET} send-keys -t $pane Enter"
-            else -> "\"${'$'}NT_TMUX\" -L ${TmuxNames.SOCKET} send-keys -t $pane -l -- ${q(keys)}"
+            "\u001b" -> "\"${'$'}NT_TMUX\" -L $s send-keys -t $pane Escape"
+            "\r" -> "\"${'$'}NT_TMUX\" -L $s send-keys -t $pane Enter"
+            else -> "\"${'$'}NT_TMUX\" -L $s send-keys -t $pane -l -- ${q(keys)}"
         }
         return """
             $PRELUDE
@@ -196,6 +295,12 @@ object SshScripts {
     fun readRelayAdvertisement(): String = "cat \"\$HOME/.nodeterm/relay.json\" 2>/dev/null; exit 0"
 
     val PENDING_ID = Regex("^[A-Za-z0-9_-]{1,160}$")
+
+    /** A socket name is spliced into `tmux -L`, so only the two this app knows ever are. */
+    private fun socket(name: String): String {
+        require(name in TmuxNames.SOCKETS) { "unknown tmux socket" }
+        return name
+    }
 
     private fun target(nodeId: String): String {
         val t = TmuxNames.sessionName(nodeId)

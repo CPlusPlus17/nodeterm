@@ -30,6 +30,9 @@ name: Android
 #                         android/): the JDK range and the `npm ci --ignore-scripts` warning (A61, A71)
 #   src/renderer/components/settings/sections/PhoneSection.tsx   DeviceChecklistDocsTest reads the
 #                         label of its JSON -> link QR switch, which the camera-app pairing check names
+#   src/main/remote-ssh/remote-status-push.ts, src/main/remote-ssh/ssh-project.ts, src/server/config.ts
+#                         HostBrowseTest reads them: the status slices' heartbeat and file name, and the
+#                         Server Edition's default data dir, which the direct-SSH browse relies on (A27)
 # To re-derive: `node android/protocol/src/test/interop/bundle-fixture.cjs <out.cjs>
 # android/protocol/src/test/interop/electron-stub.ts` from the repo root writes <out.cjs>.meta.json,
 # whose `inputs` are the bundled files. WorkflowPathFilterTest (android/protocol) fails when one is not
@@ -54,6 +57,9 @@ on:
       - 'docs/android-audit-2026-09.md'
       - 'CONTRIBUTING.md'
       - 'src/renderer/components/settings/sections/PhoneSection.tsx'
+      - 'src/main/remote-ssh/remote-status-push.ts'
+      - 'src/main/remote-ssh/ssh-project.ts'
+      - 'src/server/config.ts'
   pull_request:
     paths:
       - 'android/**'
@@ -70,6 +76,9 @@ on:
       - 'docs/android-audit-2026-09.md'
       - 'CONTRIBUTING.md'
       - 'src/renderer/components/settings/sections/PhoneSection.tsx'
+      - 'src/main/remote-ssh/remote-status-push.ts'
+      - 'src/main/remote-ssh/ssh-project.ts'
+      - 'src/server/config.ts'
   workflow_dispatch:
 
 # One group per ref for every job here, the Kotlin CodeQL job included. Only pull request runs are

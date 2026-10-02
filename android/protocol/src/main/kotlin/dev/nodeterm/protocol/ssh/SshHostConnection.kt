@@ -24,6 +24,7 @@ import dev.nodeterm.protocol.model.KanbanColumn
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.model.TmuxNames
 import dev.nodeterm.protocol.pairing.SshIdentity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -147,23 +148,25 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
 
     override suspend fun listProjects(): ProjectsSnapshot = withContext(Dispatchers.IO) {
         val (_, raw) = run(SshScripts.browse())
-        val metaEnd = raw.indexOf(SshScripts.META_END)
-        val meta = if (metaEnd >= 0) raw.substring(0, metaEnd) else ""
-        val blob = if (metaEnd >= 0) raw.substring(metaEnd + SshScripts.META_END.length).removePrefix("\n") else raw
-        val ud = meta.lineSequence().firstOrNull { it.startsWith("ud=") }?.removePrefix("ud=")?.takeIf { it.isNotBlank() }
-        // No userData dir is not "a computer with no sessions": it means we are looking in the wrong
-        // place (audit A02 shipped exactly that as an empty list). Say so instead.
-        if (ud == null && metaEnd >= 0) throw HostException(NO_USER_DATA)
+        val out = HostBrowse.split(raw)
+        val ud = out.userData
+        // Nothing found is not "a computer with no sessions": it means we are looking in the wrong
+        // place (audit A02 shipped exactly that as an empty list), or at a nodeterm whose data dir we
+        // cannot know (a Server Edition with another --data-dir). Say so instead.
+        if (out.nothingFound) throw HostException(NO_USER_DATA)
         userData = ud
-        val base = ProjectsParser.parseBlob(blob)
-        val wsText = blob.substringBefore(ProjectsParser.PROJECTS_MARK)
+        val base = ProjectsParser.parseBlob(out.blob)
+        val wsText = out.blob.substringBefore(ProjectsParser.PROJECTS_MARK)
         val root = J.obj(J.parse(wsText))
-        val snapshot = if (root != null && J.long(root["version"]) == 3L) {
+        val own = if (root != null && J.long(root["version"]) == 3L) {
             base.copy(projects = resolveIndexV3(root, ud))
         } else {
             base
         }
+        // What a desktop that drives this computer over SSH left here, next to the host's own (A27).
+        val snapshot = HostBrowse.assemble(own, out, System.currentTimeMillis())
         rememberRemoteNodes(snapshot)
+        rememberSessions(snapshot)
         snapshot
     }
 
@@ -226,11 +229,14 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         try {
             return withContext(Dispatchers.IO) {
                 refuseRemoteNode(nodeId)
-                if (run(SshScripts.hasSession(nodeId)).second.trim() != "yes") throw notRunning(nodeId)
+                // Where the session is NOW, on either socket (A27): one exec that is also the
+                // existence check, so a session listed on one socket is never attached on the other.
+                val socket = run(SshScripts.whichSocket(nodeId)).second.trim().takeIf { it in TmuxNames.SOCKETS }
+                    ?: throw notRunning(nodeId)
                 val session = client.startSession()
                 try {
                     session.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
-                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId)))
+                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId, socket)))
                     SshStream(session, cmd, fresh = false, sink = sink).also {
                         opened = it
                         it.start()
@@ -255,6 +261,28 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             .flatMap { p -> p.nodes.map { it.id to p.sshTarget!! } }.toMap()
     }
 
+    /** Session name → tmux socket, from the latest listing ([ProjectsSnapshot.sockets]). */
+    @Volatile private var sockets: Map<String, String> = emptyMap()
+
+    /** Nodes of projects a desktop elsewhere drives over SSH ([ProjectInfo.drivenRemotely]). */
+    @Volatile private var drivenNodes: Set<String> = emptySet()
+
+    private fun rememberSessions(snapshot: ProjectsSnapshot) {
+        sockets = snapshot.sockets
+        drivenNodes = snapshot.projects.filter { it.drivenRemotely }.flatMapTo(HashSet()) { p -> p.nodes.map { it.id } }
+    }
+
+    /**
+     * The socket [nodeId]'s session is on (audit A27): the one the latest listing saw it on, else the
+     * one it is on now ([SshScripts.whichSocket], one exec), else the socket a session of its kind
+     * would be on — where the command then fails as "no such session", which is the truth.
+     */
+    private fun socketFor(nodeId: String): String {
+        sockets[TmuxNames.sessionName(nodeId)]?.let { return it }
+        run(SshScripts.whichSocket(nodeId)).second.trim().takeIf { it in TmuxNames.SOCKETS }?.let { return it }
+        return if (nodeId in drivenNodes) TmuxNames.REMOTE_SOCKET else TmuxNames.SOCKET
+    }
+
     /**
      * A node of one of the desktop's SSH projects lives on ANOTHER host: its tmux session, its
      * pending approvals and its read-acks are all there, not on this computer. Over direct SSH we can
@@ -269,11 +297,17 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         )
     }
 
-    private fun notRunning(nodeId: String) = NeedsRelayException(
-        nodeId,
-        "This session isn't running on the computer right now. Starting it over your network would leave it " +
-            "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer)."
-    )
+    private fun notRunning(nodeId: String): Exception =
+        if (nodeId in drivenNodes) {
+            // Its desktop is not the one behind this connection's relay: there is nothing to offer.
+            HostException(DRIVEN_NOT_RUNNING)
+        } else {
+            NeedsRelayException(
+                nodeId,
+                "This session isn't running on the computer right now. Starting it over your network would leave it " +
+                    "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer)."
+            )
+        }
 
     /**
      * The terminal stream over one exec'd pty channel.
@@ -445,7 +479,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     override suspend fun sendKeys(nodeId: String, keys: String) {
         withContext(Dispatchers.IO) {
             refuseRemoteNode(nodeId)
-            val (code, _) = run(SshScripts.sendKeys(nodeId, keys))
+            val (code, _) = run(SshScripts.sendKeys(nodeId, keys, socketFor(nodeId)))
             if (code != null && code != 0) throw HostException("Couldn't type into the session (tmux exited $code).")
         }
     }
@@ -454,7 +488,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         // A remote node's pane is on ITS host; this computer's tmux has nothing to say about it.
         if (remoteNodes.containsKey(nodeId)) return@withContext null
         try {
-            val (code, out) = run(SshScripts.paneCommand(nodeId))
+            val (code, out) = run(SshScripts.paneCommand(nodeId, socketFor(nodeId)))
             out.trim().takeIf { code == 0 && it.isNotEmpty() && '\n' !in it }
         } catch (e: HostException) {
             null // the transport dropped; `run` has already reported it through onClosed
@@ -466,7 +500,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     /** Kill the node's tmux session (the node stays on the canvas; the desktop shows it as ended). */
     suspend fun killSession(nodeId: String) = withContext(Dispatchers.IO) {
         refuseRemoteNode(nodeId)
-        run(SshScripts.killSession(nodeId))
+        run(SshScripts.killSession(nodeId, socketFor(nodeId)))
     }
 
     /** `~/.nodeterm/relay.json`, when the computer advertises its relay identity (late adoption). */
@@ -502,9 +536,15 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             Thread(r, "nodeterm-ssh-watchdog").apply { isDaemon = true }
         }
 
-        const val NO_USER_DATA = "nodeterm's data wasn't found on this computer over SSH (looked for " +
-            "~/Library/Application Support/node-terminal and ~/.config/node-terminal). Open nodeterm on the computer " +
-            "once, or connect through the relay."
+        const val NO_USER_DATA = "nodeterm's data wasn't found on this computer over SSH. The phone looked for the " +
+            "desktop app's (~/Library/Application Support/node-terminal, ~/.config/node-terminal), the Server Edition's " +
+            "(~/.nodeterm-server), and sessions a desktop runs here over SSH. A Server Edition started with --data-dir " +
+            "or NODETERM_DATA_DIR somewhere else is not found this way. Open nodeterm on the computer once, or connect " +
+            "through the relay."
+
+        /** A driven project's session that is not running (audit A27): only its own desktop starts it. */
+        const val DRIVEN_NOT_RUNNING = "This session isn't running on this computer. It belongs to nodeterm on another " +
+            "computer, which runs it here over SSH: open it there to start it again."
 
         /** OpenSSH-style `SHA256:<unpadded base64>` of the host key blob. */
         fun fingerprint(key: PublicKey): String {

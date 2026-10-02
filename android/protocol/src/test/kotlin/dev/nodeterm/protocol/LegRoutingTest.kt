@@ -6,6 +6,7 @@ import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.LegRouting.Leg
 import dev.nodeterm.protocol.host.LegRouting.RelayLeg
 import dev.nodeterm.protocol.host.TransportKind
+import dev.nodeterm.protocol.model.ProjectInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -29,6 +30,24 @@ class LegRoutingTest {
         for (cap in appVerbs) {
             assertEquals(Leg.Relay, LegRouting.route(cap, TransportKind.SSH, ssh, RelayLeg.AVAILABLE), "$cap")
         }
+    }
+
+    @Test
+    fun `a project another desktop drives over SSH answers only what the machine does (A27)`() {
+        val driven = ProjectInfo("project-drv", "Driven", null, "/srv/drv", null, false, emptyList(), null, drivenRemotely = true)
+        val own = driven.copy(drivenRemotely = false)
+        for (cap in appVerbs) {
+            for (leg in listOf(Leg.Primary, Leg.Relay)) {
+                val refused = assertIs<Leg.Unavailable>(LegRouting.forProject(cap, driven, leg), "$cap via $leg")
+                assertTrue(refused.reason.startsWith(cap.what) && refused.reason.contains("another computer"), refused.reason)
+                assertEquals(leg, LegRouting.forProject(cap, own, leg), "a project of this computer keeps the computer's answer")
+                assertEquals(leg, LegRouting.forProject(cap, null, leg))
+            }
+        }
+        // A held approval is a file on THIS computer, written over SSH: still the primary leg.
+        assertEquals(Leg.Primary, LegRouting.forProject(Capability.ANSWER_APPROVALS, driven, Leg.Primary))
+        // Never "turn on remote access": the relay this phone holds is this computer's, not that desktop's.
+        assertFalse(LegRouting.drivenElsewhere(Capability.NODE_ACTIONS).contains("remote access"))
     }
 
     @Test
@@ -107,13 +126,15 @@ class LegRoutingTest {
         assertTrue(host.contains("enabled = false"), "an unavailable New session is shown disabled, not hidden")
 
         val board = AppSourcePins.ui("BoardTab.kt")
-        assertTrue(board.contains("session.route(Capability.BOARD_WRITES)"))
-        assertTrue(board.contains("session.connectionFor(Capability.BOARD_WRITES)"))
+        // Per project since A27: a project another desktop drives over SSH has its own answer.
+        assertTrue(board.contains("session.route(Capability.BOARD_WRITES, project)"))
+        assertTrue(board.contains("session.connectionFor(Capability.BOARD_WRITES, project = project)"))
         assertFalse(board.contains("ensureConnected().setCardColumn"), "a board write must not go to the SSH leg")
         assertFalse(board.contains("ensureConnected().editCardLabels"), "a label edit must not go to the SSH leg")
 
         val sessions = AppSourcePins.ui("SessionsTab.kt")
-        assertTrue(sessions.contains("session.route(Capability.NODE_ACTIONS)"))
+        assertTrue(sessions.contains("session.route(Capability.NODE_ACTIONS, project)"))
+        assertFalse(sessions.contains("connectionFor(Capability.NODE_ACTIONS)"), "every node action names its project")
         assertFalse(sessions.contains("capabilities?.nodeActions"), "node actions decided from the primary leg alone")
 
         // A session the phone starts is created and registered through the leg that can register it.
@@ -130,5 +151,8 @@ class LegRoutingTest {
         assertTrue(viaRelay.contains("graph.relayGate.decide(hostId, trigger)"))
         assertTrue(viaRelay.contains("requireApproved = requireApproved"))
         assertTrue(Regex("""fun connectionFor\(\s*cap: Capability,\s*trigger: Trigger = Trigger\.USER""").containsMatchIn(conn))
+        // …and decides with the project's answer, the one the screens show (A27).
+        val connectionFor = AppSourcePins.blockAfter(conn.substring(conn.indexOf("suspend fun connectionFor(")), "): HostConnection")
+        assertTrue(connectionFor.contains("route(cap, project)"), connectionFor)
     }
 }

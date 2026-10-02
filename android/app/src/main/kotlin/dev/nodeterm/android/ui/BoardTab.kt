@@ -94,8 +94,9 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     var labeling by remember { mutableStateOf<NodeInfo?>(null) }
     // Board writes are nodeterm the app's (the relay's `projects.*` verbs): on the LAN that is the
     // relay leg opened next to the SSH connection, on a tap (audit A26). Where this phone has no
-    // relay leg the controls stay, disabled, and say why.
-    val boardRoute = session.route(Capability.BOARD_WRITES)
+    // relay leg the controls stay, disabled, and say why; so they do on the board of a project another
+    // desktop drives over SSH, which is that desktop's to write (A27).
+    val boardRoute = session.route(Capability.BOARD_WRITES, project)
     val readOnlyReason = (boardRoute as? LegRouting.Leg.Unavailable)?.reason
 
     if (project == null) {
@@ -104,7 +105,7 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     }
 
     /** The leg that writes the board: the open connection, or the relay leg next to SSH (a tap). */
-    suspend fun boardConnection() = session.connectionFor(Capability.BOARD_WRITES)
+    suspend fun boardConnection() = session.connectionFor(Capability.BOARD_WRITES, project = project)
 
     fun write(label: String, block: suspend () -> Unit) {
         scope.launch {

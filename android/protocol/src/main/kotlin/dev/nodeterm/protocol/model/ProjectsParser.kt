@@ -137,8 +137,19 @@ object ProjectsParser {
             settings = root.o("settings")?.let(::parseSettings),
             usage = root.o("usage")?.let(::parseUsage),
             inbox = root.o("inbox")?.let(::parseInbox),
-            serverVersion = root.o("server")?.s("version")
+            server = root.o("server")?.let(::parseServer)
         )
+    }
+
+    /**
+     * The `server` block (`MirrorServer`). Strings from a file on the host, shown on the phone: each
+     * is kept only when it is short, printable text, so a hand-edited install-meta.json cannot put a
+     * screenful (or control characters) into the host screen.
+     */
+    private fun parseServer(s: JsonObject): MirrorServer? {
+        fun field(key: String) = s.s(key)?.trim()?.takeIf { it.isNotEmpty() && it.length <= 64 && it.none { c -> c.isISOControl() } }
+        return MirrorServer(field("version"), field("commit"), field("installedAt"))
+            .takeIf { it.version != null || it.commit != null || it.installedAt != null }
     }
 
     /** `ObservedClaudeAccount`. A wrong-typed `known` reads as false: the entry then names its dir,

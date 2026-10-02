@@ -1,5 +1,7 @@
 package dev.nodeterm.protocol.host
 
+import dev.nodeterm.protocol.model.ProjectInfo
+
 /**
  * One thing a connection can do beyond browse + attach, as [HostCapabilities] names it. The verbs
  * under each are the host-service ones the relay serves.
@@ -86,6 +88,21 @@ object LegRouting {
             RelayLeg.ROUTE_SSH_ONLY -> Leg.Unavailable(sshOnly(cap))
         }
     }
+
+    /**
+     * Where [cap] goes for something in [project], given where it goes for the computer ([leg],
+     * from [route]). A project a desktop ELSEWHERE drives over SSH ([ProjectInfo.drivenRemotely],
+     * audit A27) is that desktop's: its sessions run on this computer, but its canvas, board and node
+     * actions are nodeterm the app's on the OTHER computer, which neither leg of this one reaches —
+     * this computer's relay would answer for its own canvas. So everything but what the machine does
+     * itself (answering a held approval writes a file here) is unavailable, with that reason.
+     */
+    fun forProject(cap: Capability, project: ProjectInfo?, leg: Leg): Leg =
+        if (project?.drivenRemotely == true && cap != Capability.ANSWER_APPROVALS) Leg.Unavailable(drivenElsewhere(cap)) else leg
+
+    fun drivenElsewhere(cap: Capability) =
+        "${cap.what} isn't available for this project from the phone: it belongs to nodeterm on another computer, " +
+            "which runs its sessions here over SSH. Use nodeterm on that computer."
 
     /** What each capability can reach right now, for a screen deciding several controls at once. */
     fun reach(primary: TransportKind?, primaryCaps: HostCapabilities?, relay: RelayLeg): Map<Capability, Leg> =

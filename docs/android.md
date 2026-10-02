@@ -11,9 +11,11 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
 
 1. **Direct SSH** (the LAN leg). Pairing installs the phone's Ed25519 public key in the computer's
    `~/.ssh/authorized_keys` (`src/main/pairing-service.ts`). Everything after that is POSIX `sh` +
-   tmux on the computer (`protocol/.../ssh/SshScripts.kt`): the desktop's `-L node-terminal` socket,
-   its generated `<userData>/tmux.conf`, `new-session -A` **without `-D`** (the desktop's own client
-   must stay attached). PATH is *appended* with the Homebrew dirs, exactly like
+   tmux on the computer (`protocol/.../ssh/SshScripts.kt`): the `-L node-terminal` socket of a
+   nodeterm running on the computer, and the `-L nodeterm-rmt` socket of a desktop that drives the
+   computer over SSH (audit `A27`, below), each session reached on the socket it was listed on;
+   `attach-session` **without `-d`** (the desktop's own client must stay attached), never
+   `new-session` (`A08`). PATH is *appended* with the Homebrew dirs, exactly like
    `remoteTmuxPathPrologue`, and the macOS app's bundled `Contents/Resources/bin/tmux` is the last
    resort, as it is for the desktop's `findTmux`. Not available on Windows hosts (the QR says
    `"ssh":false`).
@@ -67,6 +69,45 @@ approval code on the screen that asked (the host screen, or Source control), and
 never makes a first handshake. Answering approvals, read-acks, typing keys and ending a session stay
 on SSH.
 
+**A computer a desktop drives over SSH, and the Server Edition (audit `A27`, part a).** The SSH
+browse reads more than the paired desktop's own files. It finds the data dir of a nodeterm running
+on the computer in this order: the desktop app's (`~/Library/Application Support/node-terminal`,
+`$XDG_CONFIG_HOME/node-terminal`, then the legacy `nodeterm` spelling), then the Server Edition's
+(`$NODETERM_DATA_DIR` when the SSH session carries it, then `~/.nodeterm-server`, the default in
+`src/server/config.ts`; a fresh install that has written only `install-meta.json` counts). A server
+started with `--data-dir` elsewhere is not found, and a computer with nothing found reads as "not
+found, here is where the phone looked", never as an empty computer. It also lists the `nt-*`
+sessions on `nodeterm-rmt`, where a desktop ELSEWHERE runs the sessions of its SSH projects, and
+reads what that desktop leaves on this computer, since there is no `workspace.json` for those
+projects here:
+
+- each project's canvas, `<remoteCwd>/.nodeterm/project.json`, found by walking up from each
+  `nodeterm-rmt` session's start directory (`#{session_path}`, the node's cwd the desktop gave
+  `new-session -c`); the SSH mirror writes it with the desktop's project id as `id`;
+- each status slice, `~/.nodeterm/agent-status-<projectId>.json`
+  (`src/main/remote-ssh/remote-status-push.ts`). The desktop re-flushes it at least every
+  `STATUS_HEARTBEAT_MS` (60 s) while connected, so a slice whose `updatedAt` is more than twice that
+  old is **no data**: its states and Inbox cards are dropped, not shown as current. The comparison
+  uses the phone's clock against the desktop's;
+- the sessions themselves. One that no project names is still listed, under "Other sessions on this
+  computer".
+
+These become projects marked `drivenRemotely` (`HostBrowse`, `android/protocol`), after the host's
+own. The host's own index wins: a project id or node it already lists is never listed twice, so a
+node of the paired desktop's OWN SSH projects stays relay-routed (`A09`), even when that desktop
+drives this very computer. What the machine does works on a driven project's sessions over SSH, on
+their own socket: attach (attach-only: a session the driving desktop creates there gets its remote
+tmux.conf and hook env, which the phone cannot give it), keys, the wake line, held approvals and
+read-acks (both are files on this computer, where that desktop's SSH answer path and ack sweep look),
+and ending the tmux session. What needs nodeterm *the app* (a new session, board writes, node actions,
+git) belongs to the desktop elsewhere, which neither leg of this computer reaches, so
+`LegRouting.forProject` makes it unavailable with that reason, and a driven session that is not
+running says it starts from that desktop instead of offering this computer's relay. The status block
+merges the host's own mirror with the fresh slices (the host's entries, settings, usage and `server`
+block win). The Server Edition's `server` block (version, commit, install date) is shown on the
+host screen, above its tabs. Until a computer can be added without pairing (`A27` part b), the
+phone reaches these only on a computer it paired with; see Known gaps.
+
 ## Protocol mapping
 
 The standing phone host still speaks the **legacy relay dialect** (`host-service.ts`
@@ -75,8 +116,8 @@ describes as the future. The Android client implements what the host actually se
 
 | Phone action | Relay (host-service.ts) | Direct SSH |
 |---|---|---|
-| List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob | same blob, from `workspace.json` + `tmux ls` + `agent-status.json`; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`) |
-| Open a terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | `has-session`, then a pty exec of `tmux attach-session` — never `new-session`: a session that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay |
+| List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob | same blob, from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
+| Open a terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
@@ -137,10 +178,18 @@ unchanged.
 - **SSH** — against Apache MINA sshd running every command through a shell, with real tmux on a
   private `TMUX_TMPDIR`: v3 index resolution, attach with keystrokes both ways, cold-start
   detection, literal `send-keys` (a leading `-` is text), answer files, read-acks, host-key pinning.
+  Both sockets (`A27`): a computer with no nodeterm of its own that another desktop drives (its
+  `nodeterm-rmt` sessions, project file and slices, a stale slice dropped, attach / keys / pane read /
+  kill landing on `nodeterm-rmt`, nothing created for a session that is not running), one with both
+  sockets in use (a name on both is the host's own; the paired desktop's own SSH project stays
+  relay-routed), a Server Edition data dir, and a computer where nothing is found.
   No desktop code runs on this leg: the test writes the files the desktop would have (the v3
-  `workspace.json` index and project files, `agent-status.json`, the held request in
-  `~/.nodeterm/pending`), and checks what the phone writes against file names copied from
-  `pending-approvals.ts` and `ack-sweep.ts`.
+  `workspace.json` index and project files, `agent-status.json`, the status slices, the held request
+  in `~/.nodeterm/pending`), and checks what the phone writes against file names copied from
+  `pending-approvals.ts` and `ack-sweep.ts`. `SshScriptsTest` runs the browse under `/bin/sh` with a
+  stand-in tmux for the walk up to project files, the slice names and the Server Edition's data dir;
+  `HostBrowseTest` pins the assembly rules and reads the desktop's heartbeat, slice file name, server
+  data dir and socket names from its sources.
   A command without a pty runs as `/bin/sh -c <cmd>`. One that asks for a pty runs under `script(1)`
   in place of sshd's pty: util-linux's `script -qfec <cmd> /dev/null` on Linux (which runs `<cmd>`
   through `$SHELL`), BSD's `script -q /dev/null /bin/sh -c <cmd>` on macOS. They are told apart by
@@ -170,9 +219,9 @@ The plan and the decisions still open are in [`android-handover.md`](android-han
 
 A test caveat (audit `A64`): the relay leg's `projects.list` blob and mirror now come from the
 desktop's code, but the SSH leg still hand-copies desktop shapes — the v3 index and project files,
-`agent-status.json`, and the `~/.nodeterm/pending` and `acks` files — and nothing tests
-`~/.nodeterm/relay.json`. A desktop change to one of those fails no Android test; it needs the
-matching hand edit in `SshTransportTest`. That is how a wrong userData path (`A02`: the desktop's
+`agent-status.json`, the `agent-status-<projectId>.json` slices, and the `~/.nodeterm/pending` and
+`acks` files — and nothing tests `~/.nodeterm/relay.json`. A desktop change to one of those fails
+no Android test; it needs the matching hand edit in `SshTransportTest`. That is how a wrong userData path (`A02`: the desktop's
 directory is `node-terminal`, not `nodeterm`) once passed its test; the fixture now uses the real
 name, and `SshScriptsTest` runs the prelude under `/bin/sh` against both spellings. The parser unit
 tests (`ModelTest`, `UsagePaceTest`) also feed hand-written blobs, on purpose: they pin how the
@@ -807,6 +856,17 @@ later fix left to a device.
     recognition service (no Google app, say) the mic is not shown, and the keyboard's own voice typing
     still fills the field. *(A59)*
 
+### A computer a desktop drives over SSH
+
+62. Pair with a Linux computer that runs nodeterm and that another computer's nodeterm also uses as an
+    SSH project host. On the same network, the Sessions tab lists that other desktop's project after
+    this computer's own ones, marked "run here over SSH", with its sessions and, while that desktop is
+    connected, their states; quit that desktop and within about two minutes those states read
+    Unknown, while the sessions stay listed. Open one of its sessions and type; answer one of its
+    approvals from the Inbox; end one of its sessions: the other desktop shows it ended. Its New
+    session, board writes and Wake / Refresh / Rename say they belong to the other computer. A node of
+    the paired desktop's own SSH projects still opens through the relay. *(A27, A09)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -820,6 +880,18 @@ later fix left to a device.
 - **`/v1/relay/join`.** The request/response shape is not in this repo (the backend is separate).
   The client sends `{deviceToken, hostId}` and accepts `pairingToken`, `token` or `joinToken` —
   unverified against the live backend.
+- **A computer that is not paired is not reachable yet** (audit `A27`, part b). The browse reads a
+  Server Edition's data dir, both tmux sockets and a driving desktop's status slices, but the app
+  still adds a computer only by pairing, and the Server Edition has no pairing service. So today it
+  helps only on a paired computer (a Linux desktop another desktop also drives over SSH); a headless
+  Server Edition, or a dev host the phone reaches only over SSH, needs the manual "Add SSH server"
+  flow. Push for such a host stays the backend's APNs-only fan-out (see Push). Smaller limits of the
+  browse: a Server Edition with a `--data-dir` elsewhere is not found unless the SSH session carries
+  `NODETERM_DATA_DIR`; a slice's freshness compares the phone's clock with the driving desktop's; on a
+  computer that runs its own nodeterm AND is driven, launch settings come from its own mirror (a
+  driven session's wake line uses its permission mode); a project whose sessions all start outside
+  its folder (a worktree beside it) has no file found, so it is named by its id from its slice, and
+  its plain terminals are listed under "Other sessions on this computer".
 - **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and new sessions
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over

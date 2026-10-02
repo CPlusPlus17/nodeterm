@@ -160,17 +160,18 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                             })
                             // Wake/refresh/rename are nodeterm the app's (`node.*`): on the LAN that is
                             // the relay leg opened next to SSH, on a tap. Where this phone has none they
-                            // stay listed, disabled, with the reason (audit A26).
-                            val blocked = session.route(Capability.NODE_ACTIONS) as? LegRouting.Leg.Unavailable
+                            // stay listed, disabled, with the reason (audit A26) — and so they do for a
+                            // project another desktop drives over SSH, whose app is that desktop (A27).
+                            val blocked = session.route(Capability.NODE_ACTIONS, project) as? LegRouting.Leg.Unavailable
                             if (snapshot.statusOf(node.id)?.hibernated == true) {
                                 DropdownMenuItem(text = { Text("Wake") }, enabled = blocked == null, onClick = {
                                     menuFor = null
-                                    act("Wake") { session.connectionFor(Capability.NODE_ACTIONS).wake(node.id) }
+                                    act("Wake") { session.connectionFor(Capability.NODE_ACTIONS, project = project).wake(node.id) }
                                 })
                             }
                             DropdownMenuItem(text = { Text("Refresh view on computer") }, enabled = blocked == null, onClick = {
                                 menuFor = null
-                                act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS).refresh(node.id) }
+                                act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS, project = project).refresh(node.id) }
                             })
                             DropdownMenuItem(text = { Text("Rename…") }, enabled = blocked == null, onClick = {
                                 menuFor = null
@@ -204,7 +205,9 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
             confirmButton = {
                 TextButton(enabled = title.isNotBlank(), onClick = {
                     renaming = null
-                    act("Rename") { session.connectionFor(Capability.NODE_ACTIONS).rename(node.id, title.trim()) }
+                    act("Rename") {
+                        session.connectionFor(Capability.NODE_ACTIONS, project = snapshot.findNode(node.id)?.first).rename(node.id, title.trim())
+                    }
                 }) { Text("Rename") }
             },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } }
@@ -276,6 +279,16 @@ private fun ProjectHeader(project: ProjectInfo, onSourceControl: () -> Unit) {
             project.sshTarget?.let {
                 Spacer(Modifier.width(8.dp))
                 Text("on $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+            // Its sessions run on this computer, its canvas is a desktop elsewhere's (A27).
+            if (project.drivenRemotely) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "run here over SSH",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
             }
         }
         TextButton(onClick = onSourceControl) { Text("Source control") }
