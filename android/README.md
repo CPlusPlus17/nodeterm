@@ -32,6 +32,7 @@ written for it and tested where the layer allows, and the numbered
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches. On your network the phone opens the relay leg next to SSH for it; with no relay leg (remote access off) the button is disabled and says why |
 | Wake / refresh / rename / end session | relay (end: both) | `node.*` verbs, through the relay leg next to SSH when on your network; over SSH "end" stops the tmux session only |
 | Kanban board, move cards, labels | relay (reads: both) | `projects.ensureBoard/setCardColumn/editCardLabels`; on your network the writes go through the relay leg next to SSH, and are disabled with the reason when there is none |
+| Source control: status, diffs, stage/unstage, commit, push/pull, recent commits | relay | The desktop's typed `git.*` bridge on the project's folder (no free-form git). On your network it goes through the relay leg next to SSH; not for the computer's SSH projects or a project with no folder, which say why |
 | Inbox: approvals, questions, finished turns | ✓ | Held hook approvals are answered deterministically (never with keystrokes); a multi-select question lists its options but is answered in the session; each card shows its node's context % when known |
 | Read-ack (reading a finished session clears it on the computer) | ✓ | `inbox.ack` over the relay, `~/.nodeterm/acks` over SSH |
 | Usage (rate limits per account) | ✓ | From the agent-status mirror, with a pace line ("5h usage pace faster") when the reset time is known |
@@ -100,7 +101,8 @@ are also debuggable, which hands the phone's pairing credentials to anyone with 
   until you run `npm install` or `npm run rebuild` again (`bootstrap-windows.bat` on Windows). The
   SSH tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
 - **`app/`** — the Compose UI on top: pairing, the computers list, a computer's Sessions / Board /
-  Inbox / Usage tabs, the terminal screen, settings, background notifications.
+  Inbox / Usage tabs, the terminal screen, a project's source control, settings, background
+  notifications.
 
 ## Notifications
 

@@ -7,7 +7,9 @@
 //                 serving a FAKE pty/kanban/inbox bridge that records what the phone asked for.
 //                 `projects.list` is NOT faked: the desktop's `buildProjectsListBlob` over a real
 //                 `WorkspaceStore` and a mirror file the real agent-status mirror wrote, all under
-//                 FIXTURE_USERDATA (see seedDesktopState; audit A64).
+//                 FIXTURE_USERDATA (see seedDesktopState; audit A64). Neither is `git.*`: the real
+//                 `GitService` behind the real jail, over a repository in the project's folder (see
+//                 seedGitRepo; audit A29).
 //   mode "pair":  the desktop's real `createPairingService` (src/main/pairing-service.ts) with the
 //                 home dir pointed at a temp dir by the caller (HOME, and USERPROFILE for Windows, see
 //                 InteropHarness.scratchHomeEnv; refused unless `os.homedir()` is FIXTURE_HOME), and a
@@ -23,6 +25,8 @@
 // tsconfig.node.json (audit A67): a desktop interface it implements cannot drift from it unseen.
 // Do not cast what it hands to the desktop code (`as unknown as`, `as never`); a cast turns that
 // check off for the value, and the drift then shows up only at run time.
+import { execFileSync } from 'child_process'
+import fs from 'fs'
 import http from 'http'
 import os from 'os'
 import path from 'path'
@@ -50,6 +54,7 @@ import {
   observedClaudeAccount,
   registerClaudeAccountsSource
 } from '../../../../../src/core/claude-config-dir'
+import { GitService } from '../../../../../src/core/git-service'
 import { buildProjectsListBlob } from '../../../../../src/core/projects-list-blob'
 import { WorkspaceStore } from '../../../../../src/core/workspace-store'
 import { normalizeFor } from '../../../../../src/shared/agents/normalize'
@@ -194,6 +199,35 @@ async function seedDesktopState(): Promise<WorkspaceStore> {
   return store
 }
 
+/**
+ * The project's folder as a git repository the phone's source control works on (audit A29), made the
+ * way a user would make one: an initial commit (the project's own `.nodeterm/project.json` included)
+ * pushed to a bare `origin` beside the folder, then one change of each kind the status reports — a
+ * staged new file, a modified tracked file and an untracked file. Repo-local identity, no signing and
+ * no hooks, so a contributor's global git config cannot decide whether the phone's commit succeeds.
+ */
+function seedGitRepo(dir: string): void {
+  const git = (cwd: string, ...args: string[]): void => {
+    execFileSync('git', args, { cwd, stdio: 'pipe' })
+  }
+  const origin = path.join(path.dirname(dir), 'origin.git')
+  git(path.dirname(dir), 'init', '--bare', '--initial-branch=main', origin)
+  git(dir, 'init', '--initial-branch=main')
+  git(dir, 'config', 'user.name', 'Interop')
+  git(dir, 'config', 'user.email', 'interop@example.test')
+  git(dir, 'config', 'commit.gpgsign', 'false')
+  git(dir, 'config', 'core.hooksPath', path.join(dir, '.git', 'no-hooks'))
+  fs.writeFileSync(path.join(dir, 'README.md'), 'hello\n')
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-m', 'initial')
+  git(dir, 'remote', 'add', 'origin', origin)
+  git(dir, 'push', '-u', 'origin', 'main')
+  fs.writeFileSync(path.join(dir, 'README.md'), 'hello again\n')
+  fs.writeFileSync(path.join(dir, 'staged.txt'), 'staged\n')
+  git(dir, 'add', 'staged.txt')
+  fs.writeFileSync(path.join(dir, 'new.txt'), 'new file\n')
+}
+
 async function runRelay(): Promise<void> {
   // Relay mode writes a workspace and the agent-status mirror under userData: never into the
   // checkout the fixture runs from.
@@ -248,6 +282,10 @@ async function runRelay(): Promise<void> {
   }
 
   const store = await seedDesktopState()
+  // The folder the WorkspaceStore just wrote the project file into (`project.cwd` in projects.list).
+  const [projectDir] = store.localProjectCwds()
+  if (!projectDir) throw new Error('the seeded workspace has no local project folder')
+  seedGitRepo(projectDir)
 
   let session: HostSession | null = null
   const approveNow = (): void => {
@@ -274,6 +312,12 @@ async function runRelay(): Promise<void> {
       attached: (nodeId) => emit({ event: 'viewer-attached', nodeId }),
       detached: (nodeId) => emit({ event: 'viewer-detached', nodeId })
     },
+    // A29: the git bridge both phone hosts serve (`hostBridge.git` in src/main/index.ts is this same
+    // class), jailed like production's: the canvas cwds (none here) plus every local project folder,
+    // read from the store exactly as `workspaceRoots` reads it. `FIXTURE_NO_GIT=1` stands for a
+    // desktop that serves no git bridge.
+    ...(process.env.FIXTURE_NO_GIT === '1' ? {} : { git: new GitService() }),
+    extraRoots: () => store.localProjectCwds(),
     registerNode: async (projectId, node) => {
       emit({ event: 'registerNode', projectId, node })
       return true

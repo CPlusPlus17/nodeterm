@@ -60,10 +60,12 @@ capabilities include the verb, else the relay leg when the phone holds one (a re
 stored device token — often minted while on SSH by late adoption — and a route other than "Only on
 my network"), else unavailable with a reason. The screens ask the same function, so an unavailable
 control is shown **disabled with that reason** (New session, the board's card actions, the session
-menu's wake/refresh/rename), never hidden. The relay dial still goes through `RelayApprovalGate`
-with the caller's trigger: these are taps (`Trigger.USER`), so the first one on a desktop that has
-not pinned the phone shows the approval code on the host screen, and a background path never makes a
-first handshake. Answering approvals, read-acks, typing keys and ending a session stay on SSH.
+menu's wake/refresh/rename), never hidden; the Source control screen (`A29`) says it in place of the
+repository. The relay dial still goes through `RelayApprovalGate` with the caller's trigger: these
+are taps (`Trigger.USER`), so the first one on a desktop that has not pinned the phone shows the
+approval code on the screen that asked (the host screen, or Source control), and a background path
+never makes a first handshake. Answering approvals, read-acks, typing keys and ending a session stay
+on SSH.
 
 ## Protocol mapping
 
@@ -82,6 +84,7 @@ describes as the future. The Android client implements what the host actually se
 | Wake, refresh, rename | `node.wake|refresh|rename` | through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
 | Board | `projects.ensureBoard|setCardColumn|editCardLabels` | reads over SSH; writes through the relay leg opened next to it (`A26`), disabled with the reason when the phone has none |
 | New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
+| Source control (`A29`) | `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd, …}`, `cwd` = the project's folder from `projects.list`; the desktop jails it to its project folders and hands each verb to its `GitService` | through the relay leg opened next to SSH (`A26`); the screen says why when the phone has none. There is no SSH git of its own (see Known gaps) |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
 | Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`, typed through the node's existing session; an older desktop gets attach → wait for paint → write → linger | `tmux send-keys -l` |
@@ -112,9 +115,12 @@ unchanged.
   through a local broker: handshake, SAS agreement, approval wait, `projects.list`, attach with
   snapshot paint (including a >256 KB snapshot whose chunk boundary splits a code point), input,
   resize/`OP.Resized`, exit codes, scroll, detach/destroy, node actions, board verbs (`null` =
-  Ungrouped), `approvals.answer`, `inbox.ack`, registration. What is real is the verb routing and
-  its validation; the pty, board, inbox and node-action bridges behind the verbs are fakes that
-  record what was asked. The `projects.list` blob is the desktop's own: `buildProjectsListBlob`
+  Ungrouped), `approvals.answer`, `inbox.ack`, registration, and the `git.*` verbs. What is real is
+  the verb routing and its validation; the pty, board, inbox and node-action bridges behind the
+  verbs are fakes that record what was asked. The git bridge is not: it is the desktop's own
+  `GitService` (`src/core/git-service.ts`, what `hostBridge.git` hands both phone hosts) behind the
+  production jail, over a repository the fixture makes in the project's folder (`A29`). The
+  `projects.list` blob is the desktop's own: `buildProjectsListBlob`
   (`src/core/projects-list-blob.ts`, which the desktop's `listProjectsOutput` calls too) over a real
   `WorkspaceStore` (it writes the v3 index and the project file, then assembles them) and an
   `agent-status.json` written by the real mirror from Claude hook payloads (audit `A64`).
@@ -296,6 +302,28 @@ the built-in relay address is never stored: "Reset to default" forgets the store
 A phone that stores none follows the default of the build it runs, so storing the default would pin
 it to this build's for good. The address rule and the leave decision are unit-tested; the wiring is
 pinned in the source, and whether the back gesture reaches it is a device check.
+
+`SourceControlTest` and two relay interop tests cover the Source Control screen (`A29`). The app
+already had the client half of the desktop's git bridge (`HostConnection.git`) but no screen used
+it. A project's Source control (from its heading on the Sessions tab, or beside the Board's project
+picker) now shows the status split into staged, changed and untracked files, a file's diff on either
+side, stage and unstage (one file or a whole section), a commit of what is staged, push and pull, and
+the last 50 commits. The folder is the project's `cwd` from `projects.list`; there is no free-form
+git, only the bridge's typed verbs. The interop tests run them through the desktop's real
+`GitService` over a repository in the project's folder, from the status to a pushed commit, and check
+that the bridge's refusals ("cwd is outside the shared project roots." for a folder outside its jail,
+`..` included; "git is not served on this host." for a desktop without the bridge) reach the phone
+as those sentences. A git command that fails on the computer is an answer, not an error: `ok: false`
+with git's own message, which the screen shows as it is. The unit tests pin the reading of each
+reply (a reply of another shape says so instead of showing an empty repository), the diff colouring
+(a `+++` inside a hunk is an added line, not a file header; the view keeps the first 4,000 lines and
+says how many it left out), the parameters each verb sends, and that push and pull wait three
+minutes rather than the usual 30 s, since the desktop sets no limit on them. Whether it can open at
+all is decided before any request (`SourceControlGate`): a project with no folder, one of the
+desktop's SSH projects (its folder is on another machine, and the listing does not carry its path),
+and a computer the phone reaches only over SSH with no relay leg each get their reason on the
+screen. The screen is only type-checked; its wiring (the routing decision, the gate, every call
+through `connectionFor(Capability.GIT)`) is pinned in the source.
 
 `InboxNotificationTextTest` pins what an Inbox notification says (`A52`). An approval's notification
 used to carry the desktop's tool summary (the command's first line, a file path, a fetched URL), and
@@ -581,6 +609,16 @@ later fix left to a device.
     network", the New session button, the card actions and the menu items are shown disabled with a
     reason that matches the case, and none of them opens a relay connection. *(A26)*
 
+### Source control
+
+53. From a project's heading (Sessions) or beside the Board's project picker, open Source control,
+    through the relay and again on the same network (the relay leg next to SSH): the branch, the
+    staged, changed and untracked files and the recent commits match the desktop's Source Control;
+    a file's diff opens and Back closes it; stage, unstage, commit (the message box stays above the
+    keyboard), push and pull act and the desktop shows the result; a push that fails there (no
+    network, a rejected push) shows git's own message. An SSH project and a project with no folder
+    say why instead of opening. *(A29)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -596,6 +634,16 @@ later fix left to a device.
   whose computer has remote access OFF (so it holds no relay leg) cannot do them on the LAN at all,
   where iOS can for a local folder project whose file still fits in one argv string. The controls
   say so instead of vanishing.
+- **Source control is the desktop's git bridge, and only that** (audit `A29`). Over direct SSH the
+  phone has no git of its own: it opens the relay leg next to SSH for it, as for the other app-only
+  verbs, so a phone with no relay leg (remote access off, or the route "Only on my network") cannot
+  use it on the LAN, and says so. An SSH implementation (`git -C <cwd>` over the session, jailed to
+  the project folders like the desktop's `isWithinRoots`) was deliberately not built: it would be a
+  second copy of the bridge's rules on the phone. The bridge serves no branch switch, discard, init,
+  publish, per-commit file list or older history (the desktop's default 50 commits), so the phone
+  offers none of them. The desktop's SSH projects are not reachable from the phone's Source Control:
+  their folder is on another host, the listing does not carry its path, and the bridge's jail is the
+  computer's own project folders.
 - **A desktop mounting a node can still detach a direct-SSH phone.** The desktop leaves `-D` off
   its own tmux client only while a relay-served client of that node is attached (it spawned that
   one itself, so it can see it). A phone attached over direct SSH is detached (exit 0), and so is a

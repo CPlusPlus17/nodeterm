@@ -1,6 +1,10 @@
 package dev.nodeterm.protocol
 
 import dev.nodeterm.protocol.crypto.BoxKeyPair
+import dev.nodeterm.protocol.git.GitDiff
+import dev.nodeterm.protocol.git.GitFileChange
+import dev.nodeterm.protocol.git.GitResult
+import dev.nodeterm.protocol.git.SourceControl
 import dev.nodeterm.protocol.host.CardLabelEdit
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.NewNode
@@ -43,7 +47,9 @@ import kotlin.test.assertTrue
  * local broker. Everything the phone does over the relay goes across this wire at least once. The
  * `projects.list` blob it parses is the desktop's own (`buildProjectsListBlob` over a real
  * `WorkspaceStore` and a mirror file the real agent-status mirror wrote, audit A64); the pty,
- * kanban, inbox and node-action bridges behind the verbs are fakes that record what was asked.
+ * kanban, inbox and node-action bridges behind the verbs are fakes that record what was asked. The
+ * `git.*` verbs are not: they run the desktop's real `GitService` over a repository in the project's
+ * folder (audit A29).
  */
 class RelayInteropTest {
     private val harnesses = ArrayList<InteropHarness>()
@@ -417,6 +423,97 @@ class RelayInteropTest {
             assertEquals(null, ev["agentId"])
             assertEquals(null, ev["ownerProjectId"])
             s.detach()
+        }
+    }
+
+    /**
+     * Audit A29: the phone's Source Control drives the desktop's REAL git bridge — `handleGit` behind
+     * its jail, handing each verb to the real `GitService` (src/core/git-service.ts) — over a git
+     * repository in the project's folder (seedGitRepo in host-fixture.ts). The folder is the one
+     * `projects.list` names, as the app takes it.
+     */
+    @Test
+    fun `source control works the project's repository through the desktop's git bridge`() = runBlocking<Unit> {
+        val h = start()
+        val connected = connect(h)
+        connected.connection.use { conn ->
+            val cwd = connected.first.projects.single().cwd!!
+            val git = SourceControl(conn, cwd)
+
+            val st = git.status()
+            assertTrue(st.hasRepo)
+            assertEquals("main", st.branch)
+            assertTrue(st.hasRemote && st.hasUpstream, "the seed pushed main with -u")
+            assertEquals(0, st.ahead)
+            assertEquals(listOf(GitFileChange("staged.txt", "A", 1, 0)), st.staged)
+            assertEquals(listOf(GitFileChange("README.md", "M", 1, 1)), st.unstaged)
+            assertEquals(listOf("new.txt"), st.untracked.map { it.path })
+
+            // Each side of the diff, and the whole file for an untracked one.
+            val readme = git.diff(st.unstaged.single(), staged = false)
+            assertTrue(GitDiff.Line(GitDiff.Kind.DEL, "-hello") in readme.lines, "${readme.lines}")
+            assertTrue(GitDiff.Line(GitDiff.Kind.ADD, "+hello again") in readme.lines, "${readme.lines}")
+            assertTrue(readme.lines.any { it.kind == GitDiff.Kind.HUNK })
+            assertTrue(GitDiff.Line(GitDiff.Kind.ADD, "+staged") in git.diff(st.staged.single(), staged = true).lines)
+            assertTrue(GitDiff.Line(GitDiff.Kind.ADD, "+new file") in git.diff(st.untracked.single(), staged = false).lines)
+
+            // Stage the untracked file, unstage the staged one: both move.
+            assertEquals(GitResult(true, ""), git.stage(listOf("new.txt")))
+            assertEquals(GitResult(true, ""), git.unstage(listOf("staged.txt")))
+            val moved = git.status()
+            assertEquals(listOf("new.txt"), moved.staged.map { it.path })
+            assertEquals(listOf("staged.txt"), moved.untracked.map { it.path })
+
+            // A git command that fails on the computer is an ANSWER carrying git's own words, not an
+            // RPC error: the screen shows it as it is.
+            val badPath = git.stage(listOf("no-such-file"))
+            assertFalse(badPath.ok)
+            assertTrue(badPath.message.contains("no-such-file"), badPath.message)
+            // The desktop refuses an empty message itself; the phone's button never sends one.
+            assertEquals(GitResult(false, "Commit message is empty."), git.commit("  "))
+
+            val commit = git.commit("Add new.txt from the phone")
+            assertTrue(commit.ok, commit.message)
+            assertTrue(commit.message.contains("Add new.txt from the phone"), commit.message)
+            val after = git.status()
+            assertEquals(1, after.ahead)
+            assertTrue(after.staged.isEmpty())
+
+            val history = git.history()
+            assertEquals(listOf("Add new.txt from the phone", "initial"), history.commits.map { it.subject })
+            val head = history.commits.first()
+            assertEquals("Interop", head.author)
+            assertEquals(head.id.take(head.shortId.length), head.shortId)
+            assertTrue((head.timestampMs ?: 0) > 1_600_000_000_000, "author time in ms: ${head.timestampMs}")
+            assertTrue("main" in head.refs, "${head.refs}")
+            assertTrue(history.hasOutgoingChanges)
+
+            assertEquals(GitResult(true, "Pushed."), git.push())
+            assertEquals(0, git.status().ahead)
+            val pulled = git.pull()
+            assertTrue(pulled.ok, pulled.message)
+            assertFalse(git.history().hasOutgoingChanges)
+        }
+    }
+
+    @Test
+    fun `the git bridge's refusals reach the phone as the host's own sentences`() = runBlocking<Unit> {
+        val h = start()
+        val connected = connect(h)
+        connected.connection.use { conn ->
+            val cwd = connected.first.projects.single().cwd!!
+            // The jail is lexical and resolves `..`: the folder above the project is outside it.
+            for (outside in listOf("/etc", "$cwd/..", "")) {
+                val e = assertFailsWith<HostException> { SourceControl(conn, outside).status() }
+                assertEquals("cwd is outside the shared project roots.", e.message, outside)
+            }
+        }
+
+        val bare = start(extra = mapOf("FIXTURE_NO_GIT" to "1"))
+        val c2 = connect(bare)
+        c2.connection.use { conn ->
+            val e = assertFailsWith<HostException> { SourceControl(conn, c2.first.projects.single().cwd!!).status() }
+            assertEquals("git is not served on this host.", e.message)
         }
     }
 }

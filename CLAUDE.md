@@ -5404,7 +5404,8 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      and `src/main/index.ts`, which names the blob's sources), and `WorkflowPathFilterTest` fails on
      a bundle input the filter misses (audit A63). Running is not testing, so know what is real
      (audit A64): the relay tests run `connectHostSession`'s handshake and verb routing (the pty,
-     board, inbox and node-action bridges behind the verbs are fakes), `createPairingService`, and
+     board, inbox and node-action bridges behind the verbs are fakes; `git.*` runs the real
+     `GitService` over a temp repository in the project's folder, audit A29), `createPairingService`, and
      the `projects.list` blob as the desktop builds it — `buildProjectsListBlob`
      (`src/core/projects-list-blob.ts`, the one assembly `listProjectsOutput` also calls) over a real
      `WorkspaceStore` and an `agent-status.json` the real mirror wrote from hook payloads

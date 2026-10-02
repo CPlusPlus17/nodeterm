@@ -89,6 +89,27 @@ describe('the Android interop fixture is type-checked against the desktop interf
     expect(fixture).toMatch(/\brecordAgentEvent\(/)
   })
 
+  it('serves git.* from the desktop\'s real GitService behind the production jail, never a fake (audit A29)', () => {
+    // The phone's Source Control is checked against what the git bridge really answers: the same
+    // class `hostBridge.git` hands both phone hosts, jailed to the same roots production passes (every
+    // local project folder, `workspaceRoots`). A recording fake here would pass whatever the phone
+    // parses, and a wider jail would hide a refusal the phone has to show.
+    const code = (file: string): string =>
+      readFileSync(file, 'utf8')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .join('\n')
+    const fixture = code(join(INTEROP_DIR, 'host-fixture.ts'))
+    const index = code(join(REPO_ROOT, 'src', 'main', 'index.ts'))
+    expect(index).toMatch(/\bconst gitService = new GitService\(\)/)
+    expect(index).toMatch(/\bgit: gitService\b/)
+    expect(index).toMatch(/\bworkspaceRoots: \(\) => workspaceStore\.localProjectCwds\(\)/)
+    expect(fixture).toMatch(/\{ git: new GitService\(\) \}/)
+    expect(fixture).toMatch(/\bextraRoots: \(\) => store\.localProjectCwds\(\)/)
+    expect(fixture).toMatch(/from '\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/src\/core\/git-service'/)
+  })
+
   it('hands the desktop code nothing through a cast that would switch the type check off', () => {
     const CAST = /\bas\s+(?:unknown\s+as|never|any)\b/
     const offenders: string[] = []

@@ -135,13 +135,16 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                 }
             }
             Spacer(Modifier.width(8.dp))
-            if (readOnlyReason != null) {
-                Text(
-                    "Read-only here. $readOnlyReason",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // The project's source control (audit A29); the screen says why when it cannot open.
+            TextButton(onClick = { nav.push(Route.SourceControl(hostId, project.id)) }) { Text("Source control") }
+        }
+        if (readOnlyReason != null) {
+            Text(
+                "Read-only here. $readOnlyReason",
+                Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         val cards = project.nodes.filter { it.kind == NodeKind.TERMINAL || it.kind == NodeKind.STICKY || it.kind == NodeKind.BROWSER }

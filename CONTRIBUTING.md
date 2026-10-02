@@ -110,7 +110,8 @@ applicable here":
    Android client in the same PR. `./gradlew -p protocol test` (from `android/`, on JDK 17–24,
    after your usual `npm install`) runs the relay leg against this repo's own host code: the handshake
    and host-service's verb routing (`connectHostSession`; the pty, board, inbox and node-action
-   bridges behind the verbs are fakes), pairing (`createPairingService`), and the `projects.list`
+   bridges behind the verbs are fakes, while `git.*` runs the real `GitService` over a temp
+   repository), pairing (`createPairingService`), and the `projects.list`
    blob as the desktop builds it (`buildProjectsListBlob` in `src/core/projects-list-blob.ts` over
    a real `WorkspaceStore` and an `agent-status.json` written by the real mirror). The SSH leg is
    **hand-copied**: `SshTransportTest` writes the v3 `workspace.json` index, the project files,

@@ -211,7 +211,7 @@ private fun ConnectionBanner(state: ConnState, session: HostSession) {
 }
 
 @Composable
-private fun ApprovalCode(sas: String) {
+internal fun ApprovalCode(sas: String) {
     Column(
         Modifier.fillMaxWidth().background(NtColors.panel2).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

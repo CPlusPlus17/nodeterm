@@ -4,6 +4,7 @@ import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.KanbanColumn
 import dev.nodeterm.protocol.model.KanbanLabel
 import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.relay.RelaySocket
 import kotlinx.serialization.json.JsonElement
 import java.io.Closeable
 
@@ -121,10 +122,19 @@ interface HostConnection : Closeable {
     fun setOnClosed(listener: ((String?) -> Unit)?)
 }
 
-enum class GitVerb(val wire: String) {
+/**
+ * The typed `git.*` verbs of the desktop's jailed git bridge (host-service.ts `handleGit`), and how
+ * long the phone waits for each. Push and pull talk to the repository's remote from the computer and
+ * can take minutes on a slow link; the desktop sets no limit of its own, so giving up after the usual
+ * RPC wait would report a failure for a push that is still running there.
+ */
+enum class GitVerb(val wire: String, val timeoutMs: Long = RelaySocket.RPC_TIMEOUT_MS) {
     STATUS("git.status"), DIFF("git.diff"), STAGE("git.stage"), UNSTAGE("git.unstage"),
-    COMMIT("git.commit"), PUSH("git.push"), PULL("git.pull"), HISTORY("git.history")
+    COMMIT("git.commit"), PUSH("git.push", GIT_NETWORK_TIMEOUT_MS), PULL("git.pull", GIT_NETWORK_TIMEOUT_MS), HISTORY("git.history")
 }
+
+/** How long a push or a pull may take on the computer before the phone stops waiting (see [GitVerb]). */
+const val GIT_NETWORK_TIMEOUT_MS = 180_000L
 
 open class HostException(message: String) : Exception(message)
 

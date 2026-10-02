@@ -138,8 +138,8 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
 
     // ---- RPC plumbing ---------------------------------------------------------------------
 
-    private suspend fun call(method: String, params: JsonElement? = null): JsonElement? = try {
-        socket.call(method, params)
+    private suspend fun call(method: String, params: JsonElement? = null, timeoutMs: Long = RelaySocket.RPC_TIMEOUT_MS): JsonElement? = try {
+        socket.call(method, params, timeoutMs)
     } catch (e: RpcException) {
         throw HostException(e.message ?: "Request failed.")
     }
@@ -335,8 +335,10 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         }
     }
 
+    /** `git.*` with `{cwd, …args}`; the host's refusal ("git is not served on this host.", "cwd is
+     *  outside the shared project roots.") arrives as a [HostException] carrying that sentence. */
     override suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement>): JsonElement? =
-        call(verb.wire, JsonObject(args + ("cwd" to JsonPrimitive(cwd))))
+        call(verb.wire, JsonObject(args + ("cwd" to JsonPrimitive(cwd))), verb.timeoutMs)
 
     override fun setOnChanged(listener: (() -> Unit)?) {
         onChanged = listener

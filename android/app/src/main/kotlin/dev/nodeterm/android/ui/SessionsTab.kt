@@ -131,7 +131,9 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
         for (project in projects) {
-            item(key = "p-${project.id}") { ProjectHeader(project) }
+            item(key = "p-${project.id}") {
+                ProjectHeader(project, onSourceControl = { nav.push(Route.SourceControl(hostId, project.id)) })
+            }
             val grouped = project.sessions.groupBy { snapshot.statusOf(it.id)?.bucket ?: SessionBucket.UNKNOWN }
             for (bucket in BUCKET_ORDER) {
                 val rows = grouped[bucket].orEmpty().sortedByDescending { snapshot.statusOf(it.id)?.updatedAt ?: 0 }
@@ -252,16 +254,31 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
     }
 }
 
+/**
+ * A project's heading, with its Source control (audit A29). The entry is offered for every project:
+ * the screen itself says why one cannot have it (no folder on the computer, an SSH project, no relay
+ * leg), rather than a heading that silently lacks it.
+ */
 @Composable
-private fun ProjectHeader(project: ProjectInfo) {
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ProjectHeader(project: ProjectInfo, onSourceControl: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 18.dp), verticalAlignment = Alignment.CenterVertically) {
         ColorDot(parseHex(project.color, NtColors.accent), 12)
         Spacer(Modifier.width(10.dp))
-        Text(project.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        project.sshTarget?.let {
-            Spacer(Modifier.width(8.dp))
-            Text("on $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                project.name,
+                Modifier.weight(1f, fill = false),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            project.sshTarget?.let {
+                Spacer(Modifier.width(8.dp))
+                Text("on $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
         }
+        TextButton(onClick = onSourceControl) { Text("Source control") }
     }
 }
 

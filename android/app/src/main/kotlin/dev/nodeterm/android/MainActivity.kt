@@ -24,16 +24,19 @@ import dev.nodeterm.android.ui.HostsScreen
 import dev.nodeterm.android.ui.NodetermTheme
 import dev.nodeterm.android.ui.PairScreen
 import dev.nodeterm.android.ui.SettingsScreen
+import dev.nodeterm.android.ui.SourceControlScreen
 import dev.nodeterm.android.ui.TerminalScreen
 import dev.nodeterm.protocol.model.BackStack
 
-/** The screens. A plain back stack: five destinations, one deep link (the pairing URL). */
+/** The screens. A plain back stack: six destinations, one deep link (the pairing URL). */
 sealed interface Route {
     data object Hosts : Route
     data class PairHost(val code: String? = null) : Route
     data object Settings : Route
     data class Host(val hostId: String, val tab: Int = 0) : Route
     data class Terminal(val hostId: String, val nodeId: String, val title: String) : Route
+    /** One project's source control on that computer (audit A29). */
+    data class SourceControl(val hostId: String, val projectId: String) : Route
 }
 
 /**
@@ -95,6 +98,7 @@ class Navigator(initial: BackStack<Route>) {
             Route.Settings -> listOf("settings")
             is Route.Host -> listOf("host", r.hostId, r.tab.toString())
             is Route.Terminal -> listOf("terminal", r.hostId, r.nodeId, r.title)
+            is Route.SourceControl -> listOf("git", r.hostId, r.projectId)
         }
 
         private fun decode(parts: List<String>): Route? = when (parts.firstOrNull()) {
@@ -104,6 +108,7 @@ class Navigator(initial: BackStack<Route>) {
             "settings" -> Route.Settings
             "host" -> parts.getOrNull(1)?.let { Route.Host(it, parts.getOrNull(2)?.toIntOrNull() ?: 0) }
             "terminal" -> if (parts.size == 4) Route.Terminal(parts[1], parts[2], parts[3]) else null
+            "git" -> if (parts.size == 3) Route.SourceControl(parts[1], parts[2]) else null
             else -> null
         }
     }
@@ -168,6 +173,7 @@ class MainActivity : ComponentActivity() {
                         when (r) {
                             is Route.Host -> graph.hosts.get(r.hostId) != null
                             is Route.Terminal -> graph.hosts.get(r.hostId) != null
+                            is Route.SourceControl -> graph.hosts.get(r.hostId) != null
                             else -> true
                         }
                     }
@@ -219,6 +225,7 @@ private fun AppContent(nav: Navigator) {
             Route.Settings -> SettingsScreen(nav)
             is Route.Host -> HostScreen(nav, r.hostId, r.tab)
             is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
+            is Route.SourceControl -> SourceControlScreen(nav, r.hostId, r.projectId)
         }
     }
 }
