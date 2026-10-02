@@ -79,6 +79,16 @@ class WorkflowPathFilterTest {
     }
 
     @Test
+    fun `every file the ack consumer fixture is built from runs the workflow`() {
+        assumeTrue(InteropHarness.available("ack-sweep"), "node + esbuild are needed for ack interop tests")
+        val meta = Json.parseToJsonElement(InteropHarness.ackBundleMeta.readText()).jsonObject
+        val inputs = meta.getValue("inputs").jsonObject.keys
+        assertTrue("src/core/ack-sweep.ts" in inputs, "the fixture does not run the actual ack consumer")
+        val required = inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet()
+        assertCovered(required, "bundled into ack-fixture-runner.ts")
+    }
+
+    @Test
     fun `the files the workflow uses without bundling them run it`() {
         // Repo files the protocol tests read (ResumeOfferTest reads a src/shared file, ContributorDocsTest
         // reads CONTRIBUTING.md): each read by a literal path must run the workflow, and a read by a

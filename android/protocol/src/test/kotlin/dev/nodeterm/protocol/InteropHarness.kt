@@ -94,11 +94,22 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             out
         }
 
+        /** The ack filesystem contract has no relay sockets/crypto dependencies. */
+        private val ackBundle: File by lazy {
+            val out = File(repoRoot, "android/protocol/build/interop/ack-fixture.cjs")
+            val proc = ProcessBuilder(bundleCommand(out) + "android/protocol/src/test/interop/ack-fixture-runner.ts")
+                .directory(repoRoot).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "esbuild failed: $log" }
+            out
+        }
+
         /**
          * esbuild's metafile for [bundle], which the bundler writes beside it: its `inputs` are the files
          * the bundle was built from, repo-relative and `/`-separated (audit A63, [WorkflowPathFilterTest]).
          */
         internal val bundleMeta: File by lazy { File(bundle.path + ".meta.json") }
+        internal val ackBundleMeta: File by lazy { File(ackBundle.path + ".meta.json") }
 
         /**
          * Home-directory variables pointing a fixture at [home]. `os.homedir()` reads HOME on POSIX and
@@ -110,11 +121,12 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         fun scratchHomeEnv(home: File): Map<String, String> =
             mapOf("HOME" to home.path, "USERPROFILE" to home.path, "FIXTURE_HOME" to home.path)
 
-        internal fun available(): Boolean {
+        internal fun available(mode: String = "relay"): Boolean {
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
             // The esbuild PACKAGE (its JS API), not the .bin shim the harness no longer runs.
             return node && File(repoRoot, "node_modules/esbuild/package.json").exists() &&
-                File(repoRoot, "node_modules/ws").exists() && File(repoRoot, "node_modules/tweetnacl").exists()
+                (mode == "ack-sweep" || (File(repoRoot, "node_modules/ws").exists() &&
+                    File(repoRoot, "node_modules/tweetnacl").exists()))
         }
 
         /**
@@ -128,8 +140,9 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             readyTimeoutMs: Long = 20_000,
             onSpawn: (Process) -> Unit = {}
         ): InteropHarness {
-            assumeTrue(available(), "node + repo node_modules (npm ci) are needed for interop tests")
-            val pb = ProcessBuilder("node", bundle.path, mode).directory(repoRoot)
+            assumeTrue(available(mode), "node + repo node_modules (npm ci) are needed for interop tests")
+            val fixture = if (mode == "ack-sweep") ackBundle else bundle
+            val pb = ProcessBuilder("node", fixture.path, mode).directory(repoRoot)
             pb.environment().putAll(env)
             val h = InteropHarness(pb.start())
             try {

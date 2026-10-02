@@ -168,6 +168,7 @@ import {
   recordQuestionResult,
   ignoreQuestionHook,
   ackDone,
+  mirrorOwnsNode,
   recordRawToolEvent,
   recordContextUsage,
   setMirrorSettingsProvider,
@@ -2920,7 +2921,11 @@ app.whenReady().then(async () => {
     }
   })
   const ackSweeper = createAckSweeper({
-    handlers: { ackDone, onUnreadClear: (id) => sendToMain(IPC.agentUnreadClear, id) }
+    handlers: {
+      ownsNode: mirrorOwnsNode,
+      ackDone,
+      onUnreadClear: (id) => sendToMain(IPC.agentUnreadClear, id)
+    }
   })
   let remoteAckSweepBusy = false
   const ackSweepTimer = setInterval(() => {

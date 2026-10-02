@@ -2034,6 +2034,17 @@ export function mirrorEntry(nodeId: string): MirrorEntry | undefined {
   return state.get(nodeId)
 }
 
+/** Positive ownership for phone read-acks. Only this process's own mirror is restored here;
+ * remote project slices are written to separate files, never merged into these maps. An old done
+ * card can outlive its expired node entry, so its unresolved inbox event also proves ownership.
+ * Once consumed, resolved history alone must not claim a node that this mirror no longer owns. */
+export function mirrorOwnsNode(nodeId: string): boolean {
+  return (
+    state.has(nodeId) || inboxNodes.has(nodeId) ||
+    inboxEvents.some((event) => event.nodeId === nodeId && !event.resolved)
+  )
+}
+
 /**
  * The nodes the mirror currently believes are `working`, with the identity a synthetic event needs.
  * Read-only peek for the shells — the reconnect resync asks the host about exactly these, because

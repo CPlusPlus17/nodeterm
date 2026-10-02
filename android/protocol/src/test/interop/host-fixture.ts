@@ -21,6 +21,8 @@
 //                 With FIXTURE_LATE_PIN_KEYS it then asks the service, per key, what the standing host
 //                 asks on a relay handshake (`approvePairedRelayKey`, audit A07-late), before and
 //                 after revoking every device.
+//   mode "ack-sweep": the real shared-file consumers (also bundled independently by
+//                 ack-fixture-runner.ts), receiving ownership and a scratch home from the caller.
 //   mode "never-ready": prints nothing and stays alive, so InteropHarnessTest can check that a
 //                 harness whose ready wait fails still kills the process.
 //
@@ -33,6 +35,7 @@
 // Do not cast what it hands to the desktop code (`as unknown as`, `as never`); a cast turns that
 // check off for the value, and the drift then shows up only at run time.
 import { execFileSync } from 'child_process'
+import { runAckSweep } from './ack-fixture'
 import fs from 'fs'
 import http from 'http'
 import os from 'os'
@@ -498,7 +501,7 @@ const mode = process.argv[2]
 if (mode === 'never-ready') {
   setInterval(() => {}, 60_000)
 } else {
-  ;(mode === 'pair' ? runPair() : runRelay()).catch((err) => {
+  ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : runRelay()).catch((err) => {
     emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
     process.exit(1)
   })

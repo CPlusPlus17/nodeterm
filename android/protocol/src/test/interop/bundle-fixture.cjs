@@ -1,7 +1,7 @@
 // Bundles host-fixture.ts for InteropHarness.kt through esbuild's JS API, so the harness only ever
 // spawns `node` (audit A70).
 //
-// Usage (cwd = the repo root): node bundle-fixture.cjs <outfile> <electron stub, repo-relative>
+// Usage (cwd = the repo root): node bundle-fixture.cjs <outfile> <electron stub, repo-relative> [entry]
 //
 // Why not the `esbuild` command: `node_modules/.bin/esbuild` is an npm shim, and on Windows the
 // extensionless one is a sh script beside esbuild.cmd. CreateProcess (what Java's ProcessBuilder
@@ -23,9 +23,9 @@
 const fs = require('fs')
 const path = require('path')
 
-const [outfile, electronStub] = process.argv.slice(2)
+const [outfile, electronStub, entry = 'android/protocol/src/test/interop/host-fixture.ts'] = process.argv.slice(2)
 if (!outfile || !electronStub) {
-  console.error('usage: node bundle-fixture.cjs <outfile> <electron stub, repo-relative>')
+  console.error('usage: node bundle-fixture.cjs <outfile> <electron stub, repo-relative> [entry]')
   process.exit(2)
 }
 
@@ -36,7 +36,7 @@ const esbuild = require(require.resolve('esbuild', { paths: [root] }))
 esbuild
   .build({
     absWorkingDir: root,
-    entryPoints: ['android/protocol/src/test/interop/host-fixture.ts'],
+    entryPoints: [entry],
     bundle: true,
     platform: 'node',
     format: 'cjs',

@@ -67,6 +67,7 @@ import {
   flush as flushAgentStatusMirror,
   recordAgentEvent,
   ackDone,
+  mirrorOwnsNode,
   setMirrorSettingsProvider,
   mirrorClaudeAccount,
   setMirrorServerProvider,
@@ -550,6 +551,7 @@ export async function startServer(
   // SSH projects (v1); a host it hosts writes its own acks here. See core/ack-sweep.ts.
   createAckSweeper({
     handlers: {
+      ownsNode: mirrorOwnsNode,
       ackDone,
       onUnreadClear: (nodeId) => platform.broadcast(IPC.agentUnreadClear, nodeId)
     }

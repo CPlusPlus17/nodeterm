@@ -36,6 +36,7 @@ import { allowMediaPath } from '../media-protocol'
 import { remoteAccountConfigDir, isSupportedClaudeVersion } from '../../core/claude-accounts-core'
 import type { PushGrant } from '../../core/push-grants'
 import { REMOTE_GRANT_SCAN_CMD, parseRemoteGrants } from '../../core/remote-push-grants'
+import { REMOTE_ACK_SWEEP_CMD, remoteAckSweepInput } from '../../core/ack-sweep'
 import { supportsAutoPermissionMode, supportsFullscreenTui } from '../../shared/agents/config'
 import {
   controlPathFor,
@@ -1770,32 +1771,37 @@ export class SshProjectManager {
    * `~/.nodeterm/acks/<nodeId>.seen` on the host it can reach; for a Mac→SSH node that host is the
    * REMOTE one, so the desktop must consume them over the ControlMaster, the local-fs sweep never
    * sees them. One command per connected HOST (deduped by host key, since projects sharing a host
-   * share `$HOME/.nodeterm/acks`) atomically lists + deletes each `.seen` and prints its nodeId; the
+   * share `$HOME/.nodeterm/acks`) receives the union of owned node ids on stdin, consumes only those
+   * files and prints their nodeIds. Files belonging to another desktop stay unread and intact; the
    * returned ids are fed the SAME `ackDone` + unread-clear path a local ack takes. Best-effort, a
    * disconnected/failed project simply contributes nothing. The command is fully literal (no
-   * interpolation), and the returned nodeIds are used only as in-memory map keys (never a path), so
-   * a compromised host can at worst clear an unread badge / resolve a done card it can guess.
+   * interpolation), and returned ids must belong to the allowlist sent to that host.
    */
   async sweepRemoteAcks(): Promise<string[]> {
-    // List then delete each `~/.nodeterm/acks/*.seen`, printing the basename (nodeId). The `break` on
-    // a non-existent first match handles the no-glob case (the pattern stays literal when nothing
-    // matches). Absent dir ⇒ exit 0 (nothing swept).
-    const cmd =
-      'd="$HOME/.nodeterm/acks"; [ -d "$d" ] || exit 0; ' +
-      'for f in "$d"/*.seen; do [ -e "$f" ] || break; ' +
-      'printf "%s\\n" "$(basename "$f" .seen)"; rm -f "$f"; done'
-    const seenHosts = new Set<string>()
-    const out: string[] = []
-    for (const c of this.conns.values()) {
+    // Projects sharing one HOME need one UNION of their owned nodes before host deduplication.
+    const hosts = new Map<string, { conn: Conn; nodeIds: Set<string> }>()
+    for (const [projectId, c] of this.conns) {
       const hk = sshHostKey(c.conn)
-      if (seenHosts.has(hk)) continue
-      seenHosts.add(hk)
+      const host = hosts.get(hk) ?? { conn: c, nodeIds: new Set<string>() }
+      hosts.set(hk, host)
       try {
-        const { code, stdout } = await this.r.run(childArgs(c.conn, c.controlPath, cmd))
+        for (const id of this.r.nodeIdsForProject?.(projectId) ?? []) host.nodeIds.add(id)
+      } catch {
+        // Unknown ownership leaves this project's acks for a later pass.
+      }
+    }
+    const out: string[] = []
+    for (const { conn: c, nodeIds } of hosts.values()) {
+      const input = remoteAckSweepInput(nodeIds)
+      if (!input) continue
+      const owned = new Set(input.trimEnd().split('\n'))
+      try {
+        const { code, stdout } = await this.r.run(
+          childArgs(c.conn, c.controlPath, REMOTE_ACK_SWEEP_CMD), input
+        )
         if (code === 0 && stdout) {
           for (const line of stdout.split('\n')) {
-            const id = line.trim()
-            if (id) out.push(id)
+            if (owned.has(line) && !out.includes(line)) out.push(line)
           }
         }
       } catch {

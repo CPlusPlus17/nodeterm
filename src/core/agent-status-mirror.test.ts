@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import { normalizeCodex, type NormalizedAgentEvent } from '@shared/agents/normalize'
 import { syntheticAnsweredEvent } from './agents/pending-approvals'
+import { createAckSweeper } from './ack-sweep'
 import {
   reduceEntry,
   buildFile,
@@ -14,6 +15,7 @@ import {
   recordContextUsage,
   clearNode,
   ackDone,
+  mirrorOwnsNode,
   flush,
   initAgentStatusMirror,
   setMirrorSettingsProvider,
@@ -2639,5 +2641,58 @@ describe('MirrorEntry.account (observed Claude account)', () => {
     const now = EXPIRE_MS + 100_000
     const doc = buildFile({ stale: { state: 'working', account, updatedAt: now - EXPIRE_MS - 1 } }, now)
     expect(Object.keys(doc.nodes)).toEqual([])
+  })
+})
+
+
+describe('read-ack ownership from the own persisted mirror', () => {
+  let dir: string
+  beforeEach(() => {
+    _resetForTest()
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-ownership-'))
+  })
+  afterEach(() => {
+    _resetForTest()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('owns an expired node’s unresolved done card until it is consumed', () => {
+    const old = Date.now() - EXPIRE_MS - 1
+    const file = path.join(dir, 'agent-status.json')
+    fs.writeFileSync(file, JSON.stringify({
+      nodes: { own: { state: 'done', updatedAt: old } },
+      inbox: { events: [{ id: 'old-1', nodeId: 'own', kind: 'done', title: 'Finished', ts: old }], nodes: {} }
+    }))
+    // Another desktop's project slice is on the same host but is never this mirror's input.
+    fs.writeFileSync(path.join(dir, 'agent-status-foreign-project.json'), JSON.stringify({
+      nodes: { foreign: { state: 'done', updatedAt: Date.now() } }
+    }))
+    initAgentStatusMirror(file)
+    expect(_snapshot().own).toBeUndefined()
+    expect(mirrorOwnsNode('own')).toBe(true)
+    expect(mirrorOwnsNode('foreign')).toBe(false)
+    const ackDir = path.join(dir, 'acks')
+    fs.mkdirSync(ackDir)
+    fs.writeFileSync(path.join(ackDir, 'own.seen'), 'old-1')
+    fs.writeFileSync(path.join(ackDir, 'foreign.seen'), 'foreign-1')
+    const cleared: string[] = []
+    const sweeper = createAckSweeper({ dir: ackDir, handlers: {
+      ownsNode: mirrorOwnsNode, ackDone, onUnreadClear: (id) => cleared.push(id)
+    } })
+    expect(sweeper.sweep()).toEqual(['own'])
+    expect(cleared).toEqual(['own'])
+    expect(fs.existsSync(path.join(ackDir, 'own.seen'))).toBe(false)
+    expect(fs.readFileSync(path.join(ackDir, 'foreign.seen'), 'utf8')).toBe('foreign-1')
+    expect(_inboxSnapshot().events[0].resolved).toBe(true)
+    expect(mirrorOwnsNode('own')).toBe(false)
+  })
+
+  it('owns a live node and relinquishes its resolved inbox history after removal', () => {
+    recordAgentEvent(ev({ nodeId: 'own', state: 'working', newTurn: true }))
+    recordAgentEvent(ev({ nodeId: 'own', state: 'done', lastMessage: 'Finished' }))
+    expect(mirrorOwnsNode('own')).toBe(true)
+    ackDone('own')
+    clearNode('own')
+    expect(mirrorOwnsNode('own')).toBe(false)
   })
 })
