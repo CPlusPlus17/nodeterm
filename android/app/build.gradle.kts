@@ -4,6 +4,21 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// The local beta packager verifies these against the APK before signing it. Normal debug and unsigned
+// release builds keep their existing version when no override is supplied.
+val androidVersionCode = providers.environmentVariable("NODETERM_ANDROID_VERSION_CODE").orNull?.takeIf { it.isNotEmpty() }?.let {
+    require(Regex("[1-9][0-9]{0,9}").matches(it)) { "NODETERM_ANDROID_VERSION_CODE must be a positive integer." }
+    val code = it.toLongOrNull()
+    require(code != null && code <= 2_100_000_000) { "NODETERM_ANDROID_VERSION_CODE exceeds Android's version-code limit." }
+    code.toInt()
+} ?: 1
+val androidVersionName = providers.environmentVariable("NODETERM_ANDROID_VERSION_NAME").orNull?.takeIf { it.isNotEmpty() }?.let {
+    require(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?").matches(it) && it.length <= 100) {
+        "NODETERM_ANDROID_VERSION_NAME must be a version such as 0.1.0 or 0.1.0-beta.1."
+    }
+    it
+} ?: "0.1.0"
+
 android {
     namespace = "dev.nodeterm.android"
     compileSdk = 35
@@ -12,8 +27,8 @@ android {
         applicationId = "dev.nodeterm.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = androidVersionCode
+        versionName = androidVersionName
     }
 
     signingConfigs {
