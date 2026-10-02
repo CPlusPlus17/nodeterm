@@ -1,6 +1,10 @@
 package dev.nodeterm.android.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -30,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -55,6 +60,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.protocol.model.ExternalLink
@@ -64,10 +70,16 @@ import dev.nodeterm.protocol.model.TerminalCopy
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String) {
-    val graph = NodetermApp.graph(LocalContext.current)
+    val context = LocalContext.current
+    val graph = NodetermApp.graph(context)
     val session = remember(hostId) { graph.connections.session(hostId) }
     val controller = remember(hostId, nodeId) { TerminalController(graph, session, nodeId) }
     var draft by remember { mutableStateOf("") }
+    // The mic (audit A59) writes what it hears into the draft and nothing else: it has no way to send.
+    val dictation = remember { DictationController(context.applicationContext) { draft = it } }
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) dictation.start(draft) else dictation.denied()
+    }
 
     // Attached and watching only while the screen is STARTED (audit A18): in the background the
     // relay stream kept the desktop treating the session as watched (Eco shield, and the phone's
@@ -94,6 +106,13 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     }
     DisposableEffect(controller) {
         onDispose { controller.dispose() }
+    }
+    // Nothing listens while the screen is stopped, and the recognizer goes with the screen (A59).
+    LifecycleStartEffect(dictation) {
+        onStopOrDispose { dictation.cancel() }
+    }
+    DisposableEffect(dictation) {
+        onDispose { dictation.dispose() }
     }
 
     Scaffold(
@@ -199,23 +218,63 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                                 TextButton(onClick = { controller.fitHere() }) { Text("Fit this screen") }
                             }
                         }
+                        // Why a dictation ended without words (A59).
+                        dictation.state.message?.let { msg ->
+                            Row(
+                                Modifier.fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = { dictation.dismiss() }) { Text("OK") }
+                            }
+                        }
                     }
                 }
                 KeyRow(controller)
                 // The draft is cleared only once it was sent: while nothing is attached (connecting,
                 // disconnected, ended) Send is disabled and the keyboard's Send leaves the text in place,
                 // with the overlay above saying why (A41). Typing a draft meanwhile stays possible.
-                val send: () -> Unit = { if (controller.submit(draft, enter = true)) draft = "" }
+                // Any change to the draft that is not dictation's ends a dictation (A59): its later
+                // results would bring back text that was sent or deleted.
+                val send: () -> Unit = {
+                    if (controller.submit(draft, enter = true)) {
+                        draft = ""
+                        dictation.edited()
+                    }
+                }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = draft,
-                        onValueChange = { draft = it },
+                        onValueChange = {
+                            draft = it
+                            dictation.edited()
+                        },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Type a command or a prompt") },
+                        placeholder = { Text(if (dictation.active) "Listening…" else "Type a command or a prompt") },
                         maxLines = 4,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = { send() })
                     )
+                    // Hidden where the phone has no speech recognizer; the keyboard's own voice typing
+                    // (where it has one) works in the field either way. Enabled while nothing is
+                    // attached, like typing: a dictated draft waits for Send like a typed one.
+                    if (dictation.available) {
+                        IconButton(onClick = {
+                            when {
+                                dictation.active -> dictation.stop()
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                                    PackageManager.PERMISSION_GRANTED -> dictation.start(draft)
+                                // Asked on the first tap; the answer starts the dictation or says why not.
+                                else -> askMic.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        }) {
+                            Icon(
+                                MicIcon,
+                                if (dictation.active) "Stop dictation" else "Dictate",
+                                tint = if (dictation.active) NtColors.attention else LocalContentColor.current
+                            )
+                        }
+                    }
                     IconButton(onClick = send, enabled = controller.attached) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
                 }
             }

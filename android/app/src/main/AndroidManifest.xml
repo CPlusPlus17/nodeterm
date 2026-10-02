@@ -12,6 +12,19 @@
     <!-- QR pairing. Not required: pasting the pairing code works without a camera. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Dictation into the terminal's input bar (audit A59), asked for on the first tap of the mic.
+         Not required: RECORD_AUDIO implies the microphone feature, which would hide the app from a
+         device without one; there the mic button stays hidden and typing works. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Android 11+ package visibility: without this SpeechRecognizer.isRecognitionAvailable answers
+         false and the recognizer cannot bind to the phone's recognition service (audit A59). -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <!-- Nothing of this app's leaves the phone in a backup or a phone-to-phone transfer (audit A51).
          allowBackup="false" stops cloud backup, and on Android 11 and lower device transfer too (so

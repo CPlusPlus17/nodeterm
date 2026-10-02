@@ -483,6 +483,37 @@ windows (read from Android 15's `PhoneWindow` classes, not measured). The test p
 nothing else asks for the keyboard's inset, and that every Scaffold body with a text field uses it;
 how the screens and the dialogs look with the keyboard up is a device check.
 
+`DictationTest` covers dictation into the terminal's input bar (`A59`). The phone had none: iOS and
+the desktop dictate with on-device Whisper, and Android had only the keyboard's own voice typing,
+which still works in the field. Now a mic button beside Send runs Android's `SpeechRecognizer` and
+writes what it hears into the draft, and never sends it: the draft reaches the pane only on Send,
+the desktop's rule for its own dictation ("nothing auto-submits"). The rules are the pure
+`Dictation` machine. Its phases are idle, listening, partial (words heard so far, shown in the draft
+as they come), finishing and an error with a short sentence. A tap on the mic while listening asks
+for the final result (finishing), and a second tap cancels, so a recognizer that never answers
+cannot keep the button stuck. The final result is an event that fills the draft and returns to idle.
+The draft as it was when the dictation started is kept, and the heard words are appended after a
+space (none after a trailing space or newline). Each partial result replaces the previous one rather
+than piling up, and a blank final result keeps what the partial results showed. Any other change to
+the draft while listening (typing, or Send clearing it) ends the dictation, so its late results
+cannot bring back text that was sent or deleted. Whatever the draft shows when a dictation is
+cancelled or fails stays in it. Each of the 15 `SpeechRecognizer.ERROR_*` codes maps to a failure
+with a short message, and any other code to a generic one; a test reads the codes out of the
+android-all jar the type-check compiles against, and is skipped where that jar is not in the Gradle
+cache (CI). The microphone permission (`RECORD_AUDIO`) is asked for on the first tap. A refusal says
+how to allow it, and the manifest does not require a microphone. The button is hidden when
+`SpeechRecognizer.isRecognitionAvailable` is false, which on Android 11 and later needs the
+manifest's `<queries>` entry for `android.speech.RecognitionService`. The screen cancels a dictation
+when it stops (nothing listens in the background) and releases the recognizer when it goes. No
+language is set (`RecognizerIntent.EXTRA_LANGUAGE` is left out), so the recognizer uses the phone's
+own language: the one the user chose for the phone and its voice input. The desktop's dictation
+likewise pins no language by default (`auto`, Whisper's own detection). A picker would have to come from the recognizer's own supported list
+(`checkRecognitionSupport`, Android 13 and later), not the desktop's Whisper list. The recognizer is
+the phone's recognition service (Google's on most phones), which may send the audio to its servers,
+unlike Whisper. The machine and the error codes are unit-tested; the recognizer's wiring, the
+permission request and the manifest are pinned in the source; how the dictation sounds and behaves
+on a phone is a device check.
+
 ## Device checklist
 
 Nothing in this section has been run. CI builds the APK, but no row of the README's feature table and
@@ -762,6 +793,20 @@ later fix left to a device.
     come back, and kill the process in the background: the screen and its tab come back. *(A55, A05,
     A22, A43, A73)*
 
+### Dictation
+
+61. In a terminal, tap the mic beside Send. The first time, Android asks for the microphone: deny it,
+    and the input bar says how to allow it; tap again and allow it. Speak a sentence: the words show in
+    the draft as you speak, the final words replace them when you stop, and nothing reaches the pane
+    until you tap Send. With text already typed, the dictation is added after it with one space. Tap
+    the mic while speaking: it stops and fills the draft. Type while it listens: the dictation stops
+    and later words do not come back. Start one and say nothing: one line says so ("No speech heard."
+    or "Didn't catch that."), with an OK. In airplane mode, on a phone without offline speech
+    recognition, one line says it could not reach the network. Send the app to the background while
+    it listens: the microphone indicator (Android 12 and later) goes off. On a phone with no speech
+    recognition service (no Google app, say) the mic is not shown, and the keyboard's own voice typing
+    still fills the field. *(A59)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -848,4 +893,13 @@ later fix left to a device.
   pointed at them. Until then the desktop's Android link opens the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.
+- **Dictation is the phone's own recognizer, not Whisper** (audit `A59`). The input bar's mic uses
+  Android's `SpeechRecognizer` (see "What is verified, and how"), which on most phones is Google's
+  service and may send the audio to its servers. iOS and the desktop transcribe on the device with
+  Whisper; running whisper.cpp on the phone would be a native build and model downloads of its own.
+  The Cloud engine iOS and the desktop share (`/v1/transcribe`, multipart WAV and a locale) does not
+  exist on the backend yet (`src/core/speech/cloud-speech.ts` maps its 404 to "not available yet"),
+  so there is nothing for Android to send that request to either. The language is the phone's own,
+  with no picker (the desktop's list is Whisper's; iOS keeps its own, issue #591). The phone
+  keyboard's own voice typing (Gboard's mic, say) also works in the input bar, mic button or not.
 - **Instrumented UI tests** and a store listing do not exist yet.

@@ -26,6 +26,7 @@ written for it and tested where the layer allows, and the numbered
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
 | Terminal (co-attach to the live tmux session) | ✓ | xterm.js renderer, native input bar, special keys, swipe = tmux scroll. Tap a link (also one wrapped over several rows, or an OSC 8 link): the phone names its host and opens it only when you confirm, and only an http(s) one. The Copy chip opens a sheet of the screen's lines and links to select and copy or share. A copy the pane sends itself (OSC 52, e.g. vim's `"+y`) reaches the clipboard too, but tmux's copy-mode is out of easy reach on a touch screen |
+| Dictation into the input bar | ✓ | A mic beside Send: Android's speech recognizer, in the phone's language, writes into the draft and never sends it. The microphone permission is asked on the first tap; no mic shows on a phone without a recognizer. Not the on-device Whisper of iOS and the desktop (see [Known gaps](../docs/android.md#known-gaps)); the keyboard's own voice typing works too |
 | Sleeping (Eco) session opened | ✓ | Through the relay the computer wakes it on open. Over SSH the phone offers the desktop's wake line (`--resume <id>`, + permission mode for Claude only), while a shell owns the pane, typed only on a tap |
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay |
 | Sessions of the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Over direct SSH the phone offers the relay instead |
@@ -103,8 +104,8 @@ are also debuggable, which hands the phone's pairing credentials to anyone with 
   SSH tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
 - **`app/`** — the Compose UI on top: pairing, the computers list (each with its needs-you count),
   a computer's Sessions / Board / Inbox / Usage tabs, the All computers screen (every computer's
-  Inbox and Usage), the terminal screen, a project's source control, settings, background
-  notifications.
+  Inbox and Usage), the terminal screen (with dictation into its input bar), a project's source
+  control, settings, background notifications.
 
 ## Notifications
 
@@ -182,6 +183,11 @@ iOS app does receive the detail, in the push the desktop sends.
   relay with the old box key. The revoke unpinned that key, so the computer shows its approval dialog
   with a code before it lets it in: approve a phone there only while your own phone is showing the
   same code.
+- Dictation (the terminal input bar's mic) goes through the phone's speech recognition service,
+  which on most phones is Google's and may send what you say to its servers; it is not the on-device
+  Whisper of the desktop and iOS. The microphone is used only after a tap on the mic, until the
+  sentence ends or the terminal screen leaves, and the app keeps no audio. Type anything you would
+  rather not send to that service.
 - Nothing of the app's goes into a backup or a phone-to-phone transfer. `allowBackup="false"` stops
   cloud backup, and the manifest's data extraction rules stop the Android 12+ device-to-device
   transfer, which ignores `allowBackup`. A new phone starts unpaired; pair it again.

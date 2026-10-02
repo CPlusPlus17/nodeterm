@@ -66,6 +66,10 @@ tasks.test {
     inputs.dir(rootDir.resolve("../app/src/main/kotlin")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../app/proguard-rules.pro")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../app/build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
+    // The app's manifest (BackupRulesTest, DictationTest) and the type-check's build, whose android-all
+    // pin DictationTest reads the recognizer's error codes from.
+    inputs.file(rootDir.resolve("../app/src/main/AndroidManifest.xml")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../tools/typecheck/build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../.github/workflows/android.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../.github/dependabot.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../settings.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
