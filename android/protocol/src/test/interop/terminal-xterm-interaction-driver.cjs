@@ -36,6 +36,7 @@ let events = []
 win.NodetermBridge = {
   copyLimit: () => 400000, onResize() {}, onInput: data => events.push({ input: data }),
   onReport: data => events.push({ report: data }), onScroll: (up, notches) => events.push({ scroll: { up, notches } }),
+  onScrollStop: () => events.push({ stop: true }),
   onCopy() {}, onCopyTooLarge() {}, onCopySheet() {}, openUrl() {}, onReady() { ready = true }
 }
 const assets = process.argv[3] || path.dirname(scriptPath)
@@ -66,10 +67,13 @@ async function main() {
     await write('\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h')
     terminal._core.coreService.onUserInput(() => events.push({ userOrigin: true }))
     const target = terminal.element.querySelector('.xterm-screen')
-    function touch(type, y) {
+    function touch(type, y, timestamp = 0) {
       const t = { identifier: 1, target, clientX: 30, clientY: y, pageX: 30, pageY: y }
-      target.dispatchEvent(new win.TouchEvent(type, { bubbles: true, cancelable: true,
-        touches: type === 'touchend' ? [] : [t], changedTouches: [t] }))
+      const event = new win.TouchEvent(type, { bubbles: true, cancelable: true,
+        touches: type === 'touchend' ? [] : [t], changedTouches: [t] })
+      Object.defineProperty(event, 'timeStamp', { value: timestamp })
+      now = Math.max(now, timestamp)
+      target.dispatchEvent(event)
     }
     const actions = {
       'touch-only': async () => {},
@@ -111,8 +115,18 @@ async function main() {
       drainFrames()
       results.push({ name, events, notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0) })
     }
+    win.nt.cancelScroll()
+    events = []
+    const start = now + 10
+    touch('touchstart', 500, start)
+    touch('touchmove', 300, start + 50)
+    touch('touchend', 300, start + 55)
+    terminal.blur()
+    await write('\x1b[6n')
+    drainFrames()
+    const kinetic = { events, notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0), duration: now - start - 55 }
     process.stdout.write(JSON.stringify({ rows: terminal.rows, cols: terminal.cols,
-      mouseMode: terminal.modes.mouseTrackingMode, results }) + '\n')
+      mouseMode: terminal.modes.mouseTrackingMode, results, kinetic }) + '\n')
   } finally {
     terminal.dispose()
     dom.window.close()

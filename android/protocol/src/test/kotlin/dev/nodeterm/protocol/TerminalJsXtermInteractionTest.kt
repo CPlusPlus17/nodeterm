@@ -72,5 +72,13 @@ class TerminalJsXtermInteractionTest {
             val inputs = case["events"]!!.jsonArray.mapNotNull { it.jsonObject["input"]?.jsonPrimitive?.content }
             assertEquals(listOf(expected), inputs, "$name keeps its exact bytes on the input path")
         }
+        val kinetic = reply["kinetic"]!!.jsonObject
+        assertTrue(kinetic["notches"]!!.jsonPrimitive.int > 10, "the actual bundle coasts after release")
+        assertTrue(kinetic["notches"]!!.jsonPrimitive.int <= 70)
+        assertTrue(kinetic["duration"]!!.jsonPrimitive.int <= 1016)
+        val kineticEvents = kinetic["events"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(1, kineticEvents.count { "stop" in it }, "focus/query replies preserve the real coast")
+        assertTrue(kineticEvents.any { it["report"]?.jsonPrimitive?.content == "\u001b[O" })
+        assertTrue(kineticEvents.any { it["report"]?.jsonPrimitive?.content == "\u001b[1;1R" })
     }
 }

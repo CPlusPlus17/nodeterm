@@ -57,6 +57,7 @@ let scrolls = []
 let scrollFrames = []
 let inputs = []
 let reports = []
+let scrollStops = []
 let frameNumber = 0
 let frameTime = 0
 let nextFrameId = 1
@@ -95,9 +96,10 @@ const bridge = {
   onReady() {},
   onInput(data) { inputs.push(data) },
   onReport(data) { reports.push(data) },
+  onScrollStop() { scrollStops.push({ frame: frameNumber, time: frameTime }) },
   onScroll(up, notches) {
     scrolls.push([up, notches])
-    scrollFrames.push({ frame: frameNumber, up, notches })
+    scrollFrames.push({ frame: frameNumber, time: frameTime, up, notches })
   }
 }
 
@@ -321,7 +323,8 @@ function actions(items) {
       if (typeof nt[action.nt] !== 'function') fail('unknown nt action ' + action.nt)
       nt[action.nt](...(action.args || []))
     } else if (action.event) {
-      if (action.event === 'touchcancel') dispatch('touchcancel', { touches: [], changedTouches: [] })
+      if (action.event === 'touchstart') dispatch('touchstart', { touches: [touchAt(10, 10)], timeStamp: frameTime })
+      else if (action.event === 'touchcancel') dispatch('touchcancel', { touches: [], changedTouches: [] })
       else if (action.event === 'multitouch') dispatch('touchstart', { touches: [touchAt(10, 10), touchAt(60, 10)] })
       else if (action.event === 'hidden') {
         sandbox.document.visibilityState = 'hidden'
@@ -329,7 +332,8 @@ function actions(items) {
       } else {
         for (const fn of windowListeners[action.event] || []) fn()
       }
-    } else if (action.frame) runFrame()
+    } else if (action.frame) runFrame(action.delay)
+    else if (action.frames) for (let i = 0; i < action.frames; i++) runFrame(action.delay)
     else if (action.timers) {
       const callbacks = timers.splice(0)
       for (const callback of callbacks) callback()
@@ -342,16 +346,16 @@ function actions(items) {
 }
 function runFrame(delay) {
   if (!animationFrames.size) return
-  if (++frameNumber > 100) fail('scroll animation did not drain within 100 frames')
+  if (++frameNumber > 300) fail('scroll animation did not drain within 300 frames')
   frameTime += delay === undefined ? 16 : delay
   const callbacks = Array.from(animationFrames.values())
   animationFrames.clear()
   for (const callback of callbacks) callback(frameTime)
 }
-function drainFrames(firstDelay) {
+function drainFrames(firstDelay, frameDelay) {
   let first = true
   while (animationFrames.size) {
-    runFrame(first ? firstDelay : undefined)
+    runFrame(first ? firstDelay : frameDelay)
     first = false
   }
 }
@@ -362,6 +366,7 @@ for (const tap of input.taps || []) {
   scrollFrames = []
   inputs = []
   reports = []
+  scrollStops = []
   frameNumber = 0
   let prevented = false
   let movePrevented = false
@@ -370,28 +375,33 @@ for (const tap of input.taps || []) {
   const fingers = tap.fingers || 1
   const start = []
   actions(tap.before)
+  if (tap.startTime !== undefined) frameTime = Math.max(frameTime, tap.startTime)
   for (let i = 0; i < fingers; i++) start.push(touchAt(x + i * 50, y))
-  dispatch('touchstart', { touches: start, changedTouches: start, preventDefault() {} })
+  dispatch('touchstart', { touches: start, changedTouches: start, timeStamp: tap.startTime || 0, preventDefault() {} })
   let ex = x
   let ey = y
   for (const move of tap.moves || (tap.move ? [tap.move] : [])) {
     ex = x + move[0]
     ey = y + move[1]
     const moved = []
+    if (move[2] !== undefined) frameTime = Math.max(frameTime, move[2])
     for (let i = 0; i < fingers; i++) moved.push(touchAt(ex + i * 50, ey))
-    dispatch('touchmove', { touches: moved, changedTouches: moved, preventDefault() { movePrevented = true } })
+    dispatch('touchmove', { touches: moved, changedTouches: moved, timeStamp: move[2] || 0,
+      preventDefault() { movePrevented = true } })
   }
+  if (tap.endTime !== undefined) frameTime = Math.max(frameTime, tap.endTime)
   dispatch('touchend', {
     touches: [],
     changedTouches: [touchAt(ex, ey)],
+    timeStamp: tap.endTime || 0,
     preventDefault() {
       prevented = true
     }
   })
   actions(tap.after)
   const scrollsBeforeFrame = scrolls.slice()
-  drainFrames(tap.frameDelay)
-  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs, reports })
+  drainFrames(tap.frameDelay, tap.rafInterval)
+  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs, reports, scrollStops, endedAt: frameTime })
 }
 
 let copySheet = null

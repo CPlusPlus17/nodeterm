@@ -354,6 +354,18 @@
   var scrollFrame = null
   var scrollRequestedAt = 0
   var scrollActive = true
+  var motionSamples = []
+  var lastMotionDelta = 0
+  var gestureNotches = 0
+  var fling = null
+  var FLING_SAMPLE_MS = 120
+  var FLING_RELEASE_MS = 80
+  var FLING_MIN_SPEED = 0.45
+  var FLING_MAX_SPEED = 3
+  var FLING_STOP_SPEED = 0.06
+  var FLING_DECAY_MS = 240
+  var FLING_MAX_MS = 1000
+  var FLING_MAX_PX = 1200
   function cancelScroll() {
     if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
     scrollFrame = null
@@ -361,22 +373,77 @@
     acc = 0
     startY = null
     tapX = null
+    motionSamples = []
+    lastMotionDelta = 0
+    gestureNotches = 0
+    fling = null
+    // A new touch/input/lifecycle barrier must also stop accepted but unsent native movement.
+    // The bridge is harmless before a stream is attached; older page-test stubs may omit it.
+    if (typeof bridge.onScrollStop === 'function') bridge.onScrollStop()
+  }
+  function recordMotion(y, time, delta) {
+    if (!(time > 0) || !isFinite(time)) { motionSamples = []; return }
+    var last = motionSamples[motionSamples.length - 1]
+    if (last && time <= last.time) { motionSamples = [{ y: y, time: time }]; return }
+    // A reversal starts a new velocity sample at the turn, rather than carrying the old fling's
+    // direction into a swipe whose last movement went the other way.
+    if (last && delta * lastMotionDelta < 0) motionSamples = [last]
+    motionSamples.push({ y: y, time: time })
+    while (motionSamples.length > 1 && time - motionSamples[0].time > FLING_SAMPLE_MS) motionSamples.shift()
+    if (delta) lastMotionDelta = delta
+  }
+  function startFling(time) {
+    if (!scrollActive || !gestureNotches || motionSamples.length < 2 || !(time > 0)) return
+    var first = motionSamples[0]
+    var last = motionSamples[motionSamples.length - 1]
+    var elapsed = last.time - first.time
+    if (elapsed <= 0 || time < last.time || time - last.time > FLING_RELEASE_MS) return
+    var speed = (last.y - first.y) / elapsed
+    if (!isFinite(speed) || Math.abs(speed) < FLING_MIN_SPEED) return
+    speed = Math.max(-FLING_MAX_SPEED, Math.min(FLING_MAX_SPEED, speed))
+    var now = performance.now()
+    fling = { speed: speed, started: now, last: now, distance: 0 }
+    scheduleScroll()
+  }
+  function advanceFling(time) {
+    if (!fling) return
+    var dt = Math.min(time - fling.last, FLING_MAX_MS - (fling.last - fling.started))
+    // RAF's timestamp can precede the touchend's performance.now within the same frame. Keep
+    // the fling for the next frame rather than treating that first nonpositive delta as a stop.
+    if (dt <= 0) return
+    // Integrate exponential decay over elapsed time so 30/60/120 Hz produce the same distance.
+    var decay = Math.exp(-dt / FLING_DECAY_MS)
+    var distance = Math.min(Math.abs(fling.speed) * FLING_DECAY_MS * (1 - decay), FLING_MAX_PX - fling.distance)
+    acc += (fling.speed > 0 ? 1 : -1) * distance
+    fling.distance += distance
+    fling.speed *= decay
+    fling.last = time
+    if (Math.abs(fling.speed) < FLING_STOP_SPEED || time - fling.started >= FLING_MAX_MS || fling.distance >= FLING_MAX_PX) fling = null
+    var notches = Math.floor(Math.abs(acc) / scrollStep)
+    if (notches) {
+      var up = acc > 0
+      acc -= (up ? 1 : -1) * notches * scrollStep
+      queueScroll(up, notches)
+    }
   }
   function scheduleScroll() {
-    if (scrollFrame !== null || !pendingScroll.length || !scrollActive) return
+    if (scrollFrame !== null || (!pendingScroll.length && !fling) || !scrollActive) return
     scrollRequestedAt = performance.now()
     scrollFrame = window.requestAnimationFrame(function (time) {
       scrollFrame = null
       // A suspended page must not replay an old swipe after returning or after an input/reset.
       if (time - scrollRequestedAt > 250) { cancelScroll(); return }
+      advanceFling(time)
       var next = pendingScroll[0]
-      if (!next || !scrollActive) return
+      if (!scrollActive) return
       // Both transports clamp to 20. Retain the rest and drain one ordered request per frame,
       // including after touchend, rather than silently losing a fast swipe's distance.
-      var notches = Math.min(20, next.notches)
-      next.notches -= notches
-      if (!next.notches) pendingScroll.shift()
-      bridge.onScroll(next.up, notches)
+      if (next) {
+        var notches = Math.min(20, next.notches)
+        next.notches -= notches
+        if (!next.notches) pendingScroll.shift()
+        bridge.onScroll(next.up, notches)
+      }
       scheduleScroll()
     })
   }
@@ -399,12 +466,14 @@
   })
   host.addEventListener('touchstart', function (e) {
     if (e.touches.length === 1) {
+      cancelScroll()
       startY = e.touches[0].clientY
       acc = 0
       // Measure once per gesture; querying layout on every touchmove would force repeated work.
       scrollStep = measuredScrollStep()
       tapX = e.touches[0].clientX
       tapY = e.touches[0].clientY
+      recordMotion(startY, e.timeStamp, 0)
     } else {
       cancelScroll()
     }
@@ -413,10 +482,13 @@
     if (startY === null || e.touches.length !== 1) return
     var y = e.touches[0].clientY
     if (tapX !== null && (Math.abs(e.touches[0].clientX - tapX) > TAP_SLOP || Math.abs(y - tapY) > TAP_SLOP)) tapX = null
-    acc += y - startY
+    var delta = y - startY
+    recordMotion(y, e.timeStamp, delta)
+    acc += delta
     startY = y
     var notches = Math.floor(Math.abs(acc) / scrollStep)
     if (notches) {
+      gestureNotches += notches
       var up = acc > 0
       acc -= (up ? 1 : -1) * notches * scrollStep
       queueScroll(up, notches)
@@ -428,7 +500,8 @@
     var x = tapX
     var y = tapY
     tapX = null
-    if (x === null || e.touches.length > 0) return
+    if (e.touches.length > 0) { cancelScroll(); return }
+    if (x === null) { startFling(e.timeStamp); return }
     var cell = cellAt(x, y)
     var url = cell ? linkAt(cell.row, cell.col) : null
     if (!url) return
