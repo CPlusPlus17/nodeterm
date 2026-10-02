@@ -35,7 +35,7 @@
 // The screen element sits at (4, 2) with 10×20 px cells; a tap is a touchstart at the cell's centre,
 // touchmoves at offsets in `moves` (or one `move`), and a touchend at the end point. `fingers` > 1
 // starts with that many touches. Actions are {"nt": fn, "args": [...]}, {"event": "blur"|"pagehide"|"hidden"|
-// "touchcancel"|"multitouch"}, {"frame": true}, {"data": text} or {"binary": text}.
+// "touchcancel"|"multitouch"}, {"frame": true}, {"timers": true}, {"data": text} or {"binary": text}.
 // They run before touchstart or after touchend, before the queued
 // animation frames drain deterministically (16ms per frame, or `frameDelay` for the first frame).
 // "scrollsBeforeFrame" catches unbatched calls; "inputs" records bridge.onInput. "opened" lists URLs.
@@ -56,6 +56,7 @@ let frameNumber = 0
 let frameTime = 0
 let nextFrameId = 1
 const animationFrames = new Map()
+const timers = []
 function requestAnimationFrame(callback) {
   const id = nextFrameId++
   animationFrames.set(id, callback)
@@ -218,7 +219,7 @@ const sandbox = {
   window: { NodetermBridge: bridge, requestAnimationFrame, cancelAnimationFrame,
     addEventListener(type, fn) { listen(windowListeners, type, fn) } },
   performance: { now: () => frameTime },
-  setTimeout: () => 0,
+  setTimeout(callback) { timers.push(callback); return timers.length },
   // xterm's default OSC 8 activation asks with confirm(); the page must never get there.
   confirm() {
     confirmCalls++
@@ -307,6 +308,10 @@ function actions(items) {
         for (const fn of windowListeners[action.event] || []) fn()
       }
     } else if (action.frame) runFrame()
+    else if (action.timers) {
+      const callbacks = timers.splice(0)
+      for (const callback of callbacks) callback()
+    }
     else if (action.data !== undefined) createdTerm.dataCallback(action.data)
     else if (action.binary !== undefined) createdTerm.binaryCallback(action.binary)
   }

@@ -125,6 +125,21 @@ class TerminalJsScrollTest {
     }
 
     @Test
+    fun `the delayed submit Enter cancels a swipe begun after the paste`() {
+        val result = run(gesture(0 to 4500) {
+            putJsonArray("before") {
+                add(buildJsonObject {
+                    put("nt", "submit")
+                    put("args", buildJsonArray { add(JsonPrimitive("eA==")); add(JsonPrimitive(true)) })
+                })
+            }
+            putJsonArray("after") { add(buildJsonObject { put("timers", true) }) }
+        }).single()
+        assertTrue(scrolls(result).isEmpty(), "the delayed Enter is an input barrier too")
+        assertEquals(listOf("x", "\r"), result["inputs"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test
     fun `suspending scroll cancels pending work and rejects gestures until attach resumes it`() {
         val results = run(
             gesture(0 to 4500) { putJsonArray("after") { add(ntAction("suspendScroll")) } },

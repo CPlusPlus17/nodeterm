@@ -450,7 +450,7 @@
       cancelScroll()
       var text = b64ToText(b64)
       if (text) term.paste(text)
-      if (enter) setTimeout(function () { bridge.onInput('\r') }, text ? 150 : 0)
+      if (enter) setTimeout(function () { cancelScroll(); bridge.onInput('\r') }, text ? 150 : 0)
     }
   }
 
