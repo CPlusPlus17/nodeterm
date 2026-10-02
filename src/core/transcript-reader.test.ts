@@ -1165,3 +1165,93 @@ describe('command args are capped like tool args', () => {
     })
   })
 })
+
+describe('prompts queued while a turn was running', () => {
+  // Shapes from real claude 2.1.281–2.1.285 transcripts: a prompt sent mid-turn is recorded only as
+  // queue-operation rows plus a `queued_command` attachment, delivered between a tool result and
+  // the final reply of the SAME turn.
+  const queued = (attachment: object): string => JSON.stringify({ type: 'attachment', attachment })
+  const typed = (prompt: unknown): string =>
+    queued({ type: 'queued_command', prompt, commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true })
+  const rows = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'Run sleep 8, then say done sleeping' } }),
+    JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: 'What is 2+2?' }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 8' } }] } }),
+    JSON.stringify({ type: 'queue-operation', operation: 'remove', content: 'What is 2+2?' }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '' }] } }),
+    typed('What is 2+2?'),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done sleeping\n\n4' }] } })
+  ]
+
+  it('shows a typed queued prompt as a user message, where it was delivered', () => {
+    const messages = parseChatMessages(rows)
+
+    expect(messages.map((m) => [m.role, m.parts[0]])).toEqual([
+      ['user', { kind: 'text', text: 'Run sleep 8, then say done sleeping' }],
+      ['assistant', { kind: 'tool', name: 'Bash', arg: 'sleep 8' }],
+      ['user', { kind: 'text', text: 'What is 2+2?' }],
+      ['assistant', { kind: 'text', text: 'done sleeping\n\n4' }]
+    ])
+  })
+
+  it('keys a queued prompt by its line in a paged read, like any other message', () => {
+    const file = Buffer.from(rows.map((r) => r + '\n').join(''))
+    const queuedAt = file.indexOf('{"type":"attachment"')
+
+    const r = parseChatWindow(file, 0)
+
+    const message = r.messages.find((m) => m.role === 'user' && m.parts[0]?.kind === 'text' && m.parts[0].text === 'What is 2+2?')
+    expect(message?.key).toBe(queuedAt)
+  })
+
+  it('accepts a prompt with no origin, and keeps the text blocks of an array prompt', () => {
+    const noOrigin = queued({ type: 'queued_command', prompt: 'older build', commandMode: 'prompt' })
+    const blocks = typed([{ type: 'image' }, { type: 'text', text: 'look at this' }, { type: 'text', text: 'and this' }])
+
+    const messages = parseChatMessages([noOrigin, blocks])
+
+    expect(messages).toEqual([
+      { role: 'user', parts: [{ kind: 'text', text: 'older build' }] },
+      { role: 'user', parts: [{ kind: 'text', text: 'look at this\nand this' }] }
+    ])
+  })
+
+  it('hides queued attachments that are not the user typing', () => {
+    const notification = queued({
+      type: 'queued_command',
+      prompt: '<task-notification>\n<summary>done</summary>\n</task-notification>',
+      commandMode: 'task-notification'
+    })
+    const peer = queued({
+      type: 'queued_command',
+      prompt: '<agent-message from="a1">hi</agent-message>',
+      commandMode: 'prompt',
+      isMeta: true,
+      origin: { kind: 'peer' }
+    })
+    const coordinator = queued({ type: 'queued_command', prompt: 'continue', isMeta: true, origin: { kind: 'coordinator' } })
+    const nonHumanOrigin = queued({ type: 'queued_command', prompt: 'x', commandMode: 'prompt', origin: { kind: 'task-notification' } })
+    const empty = typed('  ')
+    const otherAttachment = queued({ type: 'hook_success', prompt: 'nope', commandMode: 'prompt' })
+
+    const messages = parseChatMessages([notification, peer, coordinator, nonHumanOrigin, empty, otherAttachment])
+
+    expect(messages).toEqual([])
+  })
+
+  it('renders a paste inside a queued prompt the way it renders one in a typed prompt', () => {
+    const row = typed('see\n<pasted_content id="ab12">\none\ntwo\n</pasted_content id="ab12">')
+
+    const [message] = parseChatMessages([row])
+
+    expect(message?.parts[0]).toEqual({ kind: 'text', text: 'see\n\n```\none\ntwo\n```\n' })
+  })
+
+  it('indexes a typed queued prompt for the find bar, and nothing else queued', () => {
+    const notification = queued({ type: 'queued_command', prompt: '<task-notification/>', commandMode: 'task-notification' })
+
+    const lines = parseTranscriptLines([typed('What is 2+2?'), notification].join('\n'))
+
+    expect(lines).toEqual([{ role: 'user', text: 'What is 2+2?' }])
+  })
+})
