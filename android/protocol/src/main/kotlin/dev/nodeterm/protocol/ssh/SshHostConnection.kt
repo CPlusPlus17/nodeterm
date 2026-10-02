@@ -816,6 +816,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             client.timeout = 30_000
             try {
                 client.connect(host, port)
+                // Keys and wheel events are small packets. Nagle otherwise holds later input
+                // behind an unacknowledged packet, adding visible stalls over a mobile VPN.
+                client.socket.tcpNoDelay = true
                 val kp = identity.keyPair
                 client.authPublickey(user, object : KeyProvider {
                     override fun getPrivate(): PrivateKey = kp.private

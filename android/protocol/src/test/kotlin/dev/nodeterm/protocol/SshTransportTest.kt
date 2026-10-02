@@ -269,6 +269,7 @@ class SshTransportTest {
         val sockets = java.util.Collections.synchronizedList(ArrayList<java.net.Socket>())
         val violations = java.util.concurrent.atomic.AtomicInteger()
         @Volatile var poisonAll = false
+        @Volatile var rejectNoDelay = false
 
         private fun check() {
             if (poisonAll) throw IllegalStateException("simulated failure after the cipher advanced")
@@ -279,6 +280,11 @@ class SshTransportTest {
         }
 
         private fun guarded(): java.net.Socket = object : java.net.Socket() {
+            override fun setTcpNoDelay(on: Boolean) {
+                if (on && rejectNoDelay) throw java.net.SocketException("TCP_NODELAY configuration refused")
+                super.setTcpNoDelay(on)
+            }
+
             override fun getOutputStream(): OutputStream {
                 val real = super.getOutputStream()
                 return object : OutputStream() {
@@ -493,6 +499,44 @@ class SshTransportTest {
                 onCommand = null
             }
             assertEquals(0, tmux("has-session", "-t", "=nt-term-a-1").first, "letting go never ends the session")
+        }
+    }
+
+    @Test
+    fun `the connected SSH socket disables packet coalescing for low latency input`() {
+        connect().use { conn ->
+            // Observe the actual default-factory native socket after a real SSH handshake/auth.
+            val field = SshHostConnection::class.java.getDeclaredField("client").apply { isAccessible = true }
+            val client = field.get(conn) as net.schmizz.sshj.SSHClient
+            assertTrue(client.socket.isConnected)
+            assertTrue(client.socket.tcpNoDelay, "small input packets must not wait for an earlier packet's ACK")
+        }
+    }
+
+    @Test
+    fun `low latency input also uses the socket supplied by a custom factory`() = runBlocking<Unit> {
+        val factory = MainThreadGuard()
+        connect(factory = factory).use { conn ->
+            val socket = factory.sockets.single()
+            assertTrue(socket.isConnected)
+            assertTrue(socket.tcpNoDelay, "the custom factory's real connected socket must also disable Nagle")
+            assertTrue(conn.listProjects().projects.isNotEmpty(), "the configured socket still serves SSH commands")
+        }
+    }
+
+    @Test
+    fun `a refused low latency socket option closes the socket before authentication or pinning`() {
+        val factory = MainThreadGuard().apply { rejectNoDelay = true }
+        val pin = MemoryPin()
+        val before = authAttempts.get()
+        try {
+            val failure = assertFailsWith<HostException> { connect(pin, factory) }
+            assertTrue(failure.message.orEmpty().contains("TCP_NODELAY configuration refused"))
+            assertTrue(factory.sockets.single().isClosed, "socket option failure must not leak the connected socket")
+            assertEquals(before, authAttempts.get(), "a socket configuration failure must precede authentication")
+            assertNull(pin.value, "a failed connection must not pin the host key")
+        } finally {
+            factory.sockets.forEach { runCatching { it.close() } }
         }
     }
 
