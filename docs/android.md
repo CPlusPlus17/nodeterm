@@ -401,17 +401,28 @@ higher-code update; JSON or QR pairing is acceptable. The user defers remaining 
 checks until after the hike. No new phone work, runtime change or finding produced this tally
 correction; full release readiness, hosted cellular relay and live-Claude checks remain unverified.
 
+**Prepared update candidate, not installed:** private `0.1.0-beta.7` / code `8` uses source
+`b53610deb3843b59fa6a1bed5bdc5f36da0f5146` and the retained signer. The local AGP release built
+in 47 seconds; R8 and packaging passed. APK SHA-256:
+`5141c6484b422b236a98213731076be621c4d14a55f47c79bfd989fb23609e6a`.
+Proof/artifacts are in ignored `.nodeterm/android-beta-build-7/` and `.nodeterm/android-beta-7/`.
+After the hike, pair on installed beta 6 / code 7 using actual desktop-issued JSON or QR, then
+update in place to code 8 and verify pairing/relay credential survival for item 1. Debug migration
+stays conditional SKIP on this working Pixel. Installed beta 6 at `c4b1f6cf`, its physical proof and
+the seven Pass / 20 Partial / 37 Pending tally remain unchanged; preparation adds no runtime fix,
+finding, phone work or device pass.
+
 Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`, including
 `physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
 `link-checks.json`, `recovery-results.json` and `activity-results.json`. The 64 rows below reconcile
 that physical evidence with the earlier draft ledger. Recorded CI baseline
-`92ab112df0e2b2bad1b77a1adf6b55dfa7c552a8` has all five jobs green in
-[run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440); this does
-not change the APK source or imply full device validation.
+`b53610deb3843b59fa6a1bed5bdc5f36da0f5146` has all five jobs green in
+[run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994); this does
+not change the installed APK source or imply full device validation.
 
 | Item | Result | Evidence or remaining scope |
 |---|---|---|
-| 1 | Partial | Same-signer updates retain manual SSH identity; desktop-issued pairing/relay credentials across a higher-code update pending. Debug migration variant SKIP*. |
+| 1 | Partial | Same-signer updates retain manual SSH identity; after the hike pair on beta 6/code 7, then update to prepared code 8 and check desktop-issued pairing/relay credential survival. Debug migration variant SKIP*. |
 | 2 | Partial | Force-stop retains manual SSH registration/authentication; phone reboot, paired SSH/relay pending. |
 | 3 | Pending | Uninstall/Clear storage variants SKIP* on working installation; disposable setup required. |
 | 4 | Pending | Second-phone transfer/revoke and cloud restore SKIP*; no authorized setup. |

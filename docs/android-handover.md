@@ -30,12 +30,16 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   Seventeen sending chips plus four app-mode arrows and font/rotation complete item 18;
   links/Copy sheet and SSH detach/recovery add partial evidence. Landscape
   with the IME open is 129×1, not a verified usable-height case. The [64-row table](android.md#what-is-verified-and-how)
-  records seven Pass, twenty Partial and 37 Pending items with conditional SKIP variants. The APK
-  source remains `c4b1f6cf`; no new product failure was found. Recorded CI baseline `92ab112d` has all five
-  CI jobs green in [run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440).
+  records seven Pass, twenty Partial and 37 Pending items with conditional SKIP variants. The installed APK
+  source remains `c4b1f6cf`; no new product failure was found. Recorded CI baseline `b53610de` has all five
+  CI jobs green in [run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994).
 - The user defers remaining Pixel release checks until after the hike. Item 18's Pass comes from
   reviewing existing proof against its written requirement, with no new phone work. Item 1 needs
   desktop-issued pairing/relay credentials through a higher-code update; JSON or QR is acceptable.
+- Private `0.1.0-beta.7` / code `8` is prepared from `b53610de` with the retained signer, **not installed**.
+  After the hike, pair on installed beta 6 / code 7, then update in place to code 8 and check
+  credential survival for item 1. Preparation adds no runtime fix or device pass; the tally remains
+  seven Pass / 20 Partial / 37 Pending. Debug migration stays conditional SKIP on this working Pixel.
 - **Live encrypted paste pairing and relay-only browsing work.** The actual Pixel pairs from
   PairingService JSON with remote access enabled, then opens the empty isolated production
   desktop through the hosted relay. The current `/v1/relay/join` request/response is verified
@@ -94,6 +98,22 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
+
+### Same-signer beta-7 update prepared for after-hike item 1 (2026-10-03)
+
+Private `0.1.0-beta.7` / code `8` is prepared, **not installed**, from
+`b53610deb3843b59fa6a1bed5bdc5f36da0f5146`. The local AGP release built in 47 seconds;
+R8 and retained-signer packaging passed. APK SHA-256:
+`5141c6484b422b236a98213731076be621c4d14a55f47c79bfd989fb23609e6a`.
+Private proof is in `.nodeterm/android-beta-build-7/`, artifacts in `.nodeterm/android-beta-7/`.
+Installed beta 6 / code 7 remains at `c4b1f6cf`; its physical evidence and the seven Pass /
+20 Partial / 37 Pending tally are unchanged. No new runtime fix, finding or phone work was added.
+
+After the hike, pair on installed beta 6 using actual desktop-issued JSON or QR, then update in
+place to code 8 and verify that pairing and relay credentials survive. Debug migration remains a
+conditional SKIP on the working Pixel. Recorded historical CI baseline `b53610de` has all five
+jobs green in [run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994);
+the next documentation push requires its own checks and green workflow.
 
 ### Requirement audit corrects item 18; remaining device work deferred (2026-10-03)
 
@@ -689,7 +709,10 @@ readiness requests now. Resume these device steps afterwards.
 **Next work after the hike, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Finish the remaining 64-item checks: QR, cellular relay/SAS, worker/notifications and actual outage/answers.** Code-7 beta is installed on the
+1. **Check paired-update survival, then the remaining 64-item QR, cellular relay/SAS, worker/notification and outage/answer gates.** After the hike,
+   pair on installed beta 6 / code 7 with actual desktop-issued JSON or QR, then install the
+   prepared same-signer beta 7 / code 8 in place and verify pairing/relay credentials survive
+   (item 1). Debug migration stays conditional SKIP on the working Pixel. Code-7 beta is installed on the
    intended Pixel; earlier betas verify manual SSH authentication, project listing, input,
    font/keyboard resizing and pre-attach tmux history. Code 7 now reopens SSH with the retained
    key/pin and verifies continuous drag/coast/Esc. The user confirms final beta-6/code-7 cellular
@@ -883,8 +906,9 @@ Verified:
   keyboard-focus states, process-kill tab/back-stack restoration and synthetic shipped-hook
   Approve/Deny/expiry). Copy sheet,
   links and SSH background/detach recovery have additional partial evidence; the 64-row table
-  records exact scope. The unchanged code-7 APK remains installed, and recorded CI baseline `92ab112d`
-  passed all five CI jobs in run `37071299440`. Remaining device checks are deferred until after the hike.
+  records exact scope. The unchanged code-7 APK remains installed, and recorded CI baseline `b53610de`
+  passed all five CI jobs in run `37073041994`. Code 8 is prepared, not installed; remaining device
+  checks, starting with pairing on code 7 then updating to code 8, are deferred until after the hike.
 - Encrypted paste pairing and forced relay-only browse on the real Pixel succeed against the
   actual hosted backend and production desktop source `58a202be` in an isolated private home.
   The current `{deviceToken, hostId}` join request and accepted reply are verified beyond interop.
@@ -1107,7 +1131,9 @@ actual outage/notification/answer behavior and the full device checklist remain 
    actual outage/notification/answer behavior and the full checklist remain open.
    Requirement-audited real Pixel QA completes items 18/19/21/22/24/38/39 and adds partial copy/link/
    SSH recovery proof; see the 64-row table. Background am kill restores Inbox tab and host back stack.
-   The same source c4b1f6cf APK is installed; recorded CI baseline 92ab112d passed all five jobs in CI 37071299440.
+   The same source c4b1f6cf APK is installed; recorded CI baseline b53610de passed all five jobs in CI 37073041994.
+   Same-signer beta 7/code 8 is prepared but not installed: after the hike pair on installed beta 6
+   using desktop-issued JSON or QR, then update in place to code 8 and verify pairing/relay credentials.
    Live /v1/relay/join accepts the current client shape against production desktop source 58a202be
    in an isolated home; actual relay terminal input and shipped-hook Approve/Deny/expiry now pass.
    The hook producer is synthetic, not a live Claude CLI/account or requested Bash execution;

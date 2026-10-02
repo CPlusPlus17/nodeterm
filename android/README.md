@@ -47,7 +47,7 @@ application, leaves copy mode and resolves the question. Item 41 stays Partial: 
 direct-SSH and target-guard variants lack device proof. No live Claude CLI/account was used.
 QR/scanner, cellular relay, SAS denial/revoke, remaining node actions, remaining question routes,
 notifications
-remain open. Recorded CI baseline `92ab112d` has all five jobs green in [run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440).
+remain open. Recorded CI baseline `b53610de` has all five jobs green in [run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994).
 Only disposable fixture resources were removed and the phone returned to regular Sessions;
 cleanup does not establish the full revoke matrix. **Final beta-6/code-7 cellular check:** with
 WireGuard enabled and Wi-Fi off, the user confirms "Connects and scrolls smoothly" in their usual
@@ -60,6 +60,16 @@ The user defers remaining Pixel release checks until after the hike. The require
 item 18's Pass without new phone work; viewport/Fit remains item 23's open scope. Item 1 requires
 desktop-issued pairing/relay credentials through a higher-code update, using JSON or QR. Full
 release readiness, hosted cellular relay and live-Claude checks remain unverified.
+
+Private `0.1.0-beta.7` / code `8` is **prepared, not installed**, from
+`b53610deb3843b59fa6a1bed5bdc5f36da0f5146`, using the retained signer. Local AGP built in
+47 seconds; R8 and packaging passed. APK SHA-256:
+`5141c6484b422b236a98213731076be621c4d14a55f47c79bfd989fb23609e6a`.
+Ignored proof/artifacts are in `.nodeterm/android-beta-build-7/` and `.nodeterm/android-beta-7/`.
+After the hike, pair on installed beta 6 / code 7 using desktop-issued JSON or QR, then update in
+place to code 8 and check pairing/relay credential survival for item 1. Debug migration stays
+conditional SKIP on the working Pixel. Installed beta 6 and the seven Pass / 20 Partial /
+37 Pending tally are unchanged; preparation adds no runtime fix or device pass.
 
 ## What it does
 
