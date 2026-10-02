@@ -11,12 +11,18 @@
 // WHAT JUDGES. The bytes on the application's stdin — not tmux's exit status, which is exactly the
 // thing that lies in two of the cases below (a key eaten by copy mode, a key typed into another
 // session by prefix matching: both exit 0).
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { execFileSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { remoteTmuxSendKeysArgs } from './remote-ssh/control-master'
 import { makeTmuxTmpdir } from './tmux-test-socket'
+import { sendBackgroundTmuxKeys } from './pty-manager'
+
+// The local delivery is exported from the manager so it can be judged on a real interpreter,
+// without loading node-pty's Electron native binding or spawning an attached painter.
+vi.mock('node-pty', () => ({ spawn: () => { throw new Error('quick answers must not spawn a PTY') } }))
+vi.mock('./native-windows-pane', () => ({ NativeWindowsPane: class {} }))
 
 /** A private socket — never `TMUX_SOCKET`/`nodeterm-rmt`, which carry live user sessions. */
 const SOCKET = `nt-rsk-test-${process.pid}`
@@ -108,8 +114,8 @@ function recorderPane(session: string): string {
  * still yields an answer — an empty one — instead of a hang.
  */
 const MARK = '<<NTEND>>'
-function drain(session: string, out: string): string {
-  tmux(['-L', SOCKET, 'send-keys', '-t', `=${session}:`, '-l', '--', MARK])
+function drain(session: string, out: string, pane = `=${session}:`): string {
+  tmux(['-L', SOCKET, 'send-keys', '-t', pane, '-l', '--', MARK])
   waitFor(() => fs.readFileSync(out, 'utf8').includes(MARK), `${session} to receive the marker`)
   const all = fs.readFileSync(out, 'utf8')
   return all.slice(0, all.lastIndexOf(MARK))
@@ -199,5 +205,64 @@ suite('REAL tmux: a quick answer typed over the master reaches the remote pane',
     const neighbour = recorderPane('nt-rsk-prefixed')
     tmux(['-L', SOCKET, 'send-keys', '-t', 'nt-rsk-prefix', '-H', '31'])
     expect(drain('nt-rsk-prefixed', neighbour)).toBe('1')
+  })
+})
+
+/** The local manager's SAME delivery, using the private server rather than a desktop socket. */
+async function sendLocal(session: string, keys: string): Promise<boolean> {
+  return sendBackgroundTmuxKeys(session, keys, async (args) => {
+    try {
+      const stdout = tmux(['-L', SOCKET, ...args])
+      return { ok: true, body: stdout.trimEnd().split('\n') }
+    } catch {
+      return { ok: false, body: [] }
+    }
+  })
+}
+
+suite('REAL tmux: a local quick answer reaches the app rather than copy mode or another node', () => {
+  it('delivers digits, ESC and Enter byte for byte', async () => {
+    const session = 'nt-local-answer'
+    const out = recorderPane(session)
+    expect(await sendLocal(session, '2\u001b\r')).toBe(true)
+    expect(drain(session, out)).toBe('2\u001b\r')
+  })
+
+  it.each(['emacs', 'vi'])('leaves %s copy mode before typing an answer', async (keys) => {
+    const session = `nt-local-copy-${keys}`
+    const out = recorderPane(session)
+    tmux(['-L', SOCKET, 'set-option', '-w', '-t', `=${session}:`, 'mode-keys', keys])
+    tmux(['-L', SOCKET, 'copy-mode', '-t', `=${session}:`])
+    expect(await sendLocal(session, '3')).toBe(true)
+    expect(drain(session, out)).toBe('3')
+    expect(tmux(['-L', SOCKET, 'display-message', '-p', '-t', `=${session}:`, '#{pane_in_mode}']).trim())
+      .toBe('0')
+  })
+
+  it('refuses a missing session whose name is a prefix of a real neighbour', async () => {
+    const out = recorderPane('nt-local-neighbour')
+    expect(await sendLocal('nt-local-neigh', '1')).toBe(false)
+    expect(drain('nt-local-neighbour', out)).toBe('')
+  })
+
+  it('keeps the original pane when desktop selection changes after its probe', async () => {
+    const session = 'nt-local-switch'
+    const out = recorderPane(session)
+    const original = tmux(['-L', SOCKET, 'display-message', '-p', '-t', `=${session}:`, '#{pane_id}']).trim()
+    const otherOut = path.join(work, `${session}.other.bytes`)
+    const other = tmux([
+      '-L', SOCKET, 'split-window', '-d', '-P', '-F', '#{pane_id}', '-t', original,
+      `${binDir}/recorder ${otherOut}`
+    ]).trim()
+    waitFor(() => fs.existsSync(`${otherOut}.ready`), 'the other pane recorder')
+    tmux(['-L', SOCKET, 'copy-mode', '-t', original])
+
+    expect(await sendBackgroundTmuxKeys(session, '2', async (args) => {
+      const stdout = tmux(['-L', SOCKET, ...args])
+      if (args[0] === 'display-message') tmux(['-L', SOCKET, 'select-pane', '-t', other])
+      return { ok: true, body: stdout.trimEnd().split('\n') }
+    })).toBe(true)
+    expect(drain(session, out, original)).toBe('2')
+    expect(drain(session, otherOut, other)).toBe('')
   })
 })

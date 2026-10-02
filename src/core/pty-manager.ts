@@ -858,6 +858,46 @@ export const SHADOW_CMD_TIMEOUT_MS = 5_000
 export const BACKGROUND_WRITE_LINGER_MS = 10_000
 
 /**
+ * A quick answer must reach the application's stdin, including when somebody scrolled the pane
+ * into copy mode. Keep every tmux command separate: control-mode replies are one block per
+ * command, so a command list would desynchronise the client's positional reply queue.
+ * Exported so the same delivery can be measured against a real tmux without a native PTY.
+ */
+export async function sendBackgroundTmuxKeys(
+  target: string,
+  data: string,
+  command: (args: string[]) => Promise<{ ok: boolean; body: string[] } | null>,
+  onUnconfirmed?: () => void
+): Promise<boolean> {
+  if (!data || !isSessionName(target)) return false
+  // A pane target needs the trailing colon. Without '=', a missing node can prefix-match a
+  // neighbouring session and report success after typing its answer into the wrong agent.
+  const selected = `=${target}:`
+  try {
+    const probe = await command(['display-message', '-p', '-t', selected, '#{pane_id} #{pane_in_mode}'])
+    const identity = probe?.body.length === 1 ? /^(%[0-9]+) ([01])$/.exec(probe.body[0]) : null
+    if (!probe?.ok || !identity) {
+      // An empty/unexpected control-mode reply may belong to the initial attach or another lost
+      // command. Retire that channel before a later answer can reuse its uncertain reply queue.
+      onUnconfirmed?.()
+      return false
+    }
+    // Pin the resolved pane across awaits: somebody selecting a different pane/window on the
+    // desktop between the probe and the answer must not redirect a phone's approval key.
+    const pane = identity[1]
+    if (identity[2] === '1') {
+      if (!(await command(['send-keys', '-t', pane, '-X', 'cancel']))?.ok) return false
+    }
+    // Splitting is safe here: the validated target contains no whitespace and the payload was
+    // reduced to hexadecimal bytes by the production encoder.
+    return (await command(encodeSendKeysHex(pane, data).split(' ')))?.ok ?? false
+  } catch {
+    // A lost reply may follow a completed write. Never resend the keys on a different channel.
+    return false
+  }
+}
+
+/**
  * Manages all live PTY processes and bridges them to the renderer over IPC.
  *
  * On macOS/Linux with tmux available, each terminal node attaches to a persistent
@@ -1047,6 +1087,9 @@ export class PtyManager {
   private shared: { client: ControlModeClient; persistKey: string } | null = null
   /** Disposes `shared` once no background write has needed it for `BACKGROUND_WRITE_LINGER_MS`. */
   private sharedLinger: ReturnType<typeof setTimeout> | null = null
+  /** Serialize complete background deliveries per node: probe/cancel/send must keep stream chunks
+   * in arrival order. A slow pane must not hold up answers to unrelated nodes. */
+  private backgroundWrites = new Map<string, Promise<boolean>>()
   /** The child-process seam for shadow clients. Undefined in production, where `ControlModeClient`
    *  uses `child_process` (see tmux-control-client.ts); tests inject a fake spawner. */
   private readonly controlSpawn: ControlSpawn | undefined
@@ -1378,9 +1421,8 @@ export class PtyManager {
    * Type `data` into a node whose PAINTER pty client is gone, without spawning one.
    *
    * The fallthrough, in order:
-   *  1. **the painter**, if the node is on screen after all — the session's own pty, exactly as a
-   *     keystroke from its terminal. (A caller holding a stale session id can land here; it is the
-   *     same NODE either way, which is what the caller asked for.)
+   *  1. **the live session**, if the node is on screen after all — a tmux side-call, so copy mode
+   *     cannot swallow a quick answer. Native and session-host PTYs keep their direct write.
    *  2. **the node's own shadow**, if one is already up. Never attaches one: a shadow exists to be
    *     re-used by whoever attached it, and a write does not need a session-scoped client.
    *  3. **the shared control client** (`sharedClientFor`) — one `tmux -C` child for the whole
@@ -1397,15 +1439,38 @@ export class PtyManager {
    *    is a name we have no claim to (a remote node's local orphan, another machine's idea of it, a
    *    session someone else made). An unknown key is not evidence of a session.
    *  - a node whose record says `remote`: its tmux is on the far host. Reaching it means the
-   *    project's ControlMaster (`remoteTmuxPasteArgs`), not this channel; refusing is the honest
-   *    answer until that exists.
+   *    project's ControlMaster (`backgroundWriteOver`), never this local channel.
    */
   async backgroundWrite(persistKey: string, data: string): Promise<boolean> {
+    if (!data) return false
+    const previous = this.backgroundWrites.get(persistKey) ?? Promise.resolve(false)
+    const writing = previous.then(() => this.backgroundWriteNow(persistKey, data)).catch(() => false)
+    this.backgroundWrites.set(persistKey, writing)
+    try {
+      return await writing
+    } finally {
+      if (this.backgroundWrites.get(persistKey) === writing) this.backgroundWrites.delete(persistKey)
+    }
+  }
+
+  private async backgroundWriteNow(persistKey: string, data: string): Promise<boolean> {
     // Nothing to type — and `encodeSendKeysHex` would build a `send-keys -H ` with no bytes after
     // it, which is a command line worth not sending.
     if (!data) return false
-    const live = this.sessionByPersistKey(persistKey)
+    const live = this.liveSessionForPersistKey(persistKey)
     if (live) {
+      if (live.sshRemote) return this.backgroundWriteOver(persistKey, data, live.sshRemote)
+      if (live.persistKey && !live.sessionHost) {
+        if (!this.tmuxPath) return false
+        const tmuxPath = this.tmuxPath
+        return sendBackgroundTmuxKeys(sessionName(persistKey), data, async (args) => {
+          const { stdout } = await runAsync(tmuxPath, ['-L', TMUX_SOCKET, ...args], {
+            encoding: 'utf-8',
+            timeout: PROBE_TIMEOUT_MS
+          })
+          return { ok: true, body: stdout.trimEnd().split('\n') }
+        })
+      }
       try {
         live.proc.write(data)
       } catch {
@@ -1419,10 +1484,8 @@ export class PtyManager {
     }
     const settings = this.getSettings()
     if (!this.tmuxPath || !settings.tmuxEnabled) return false
-    // The kill switch, and the reason it sits BELOW tier 1: the painter is the session's own pty,
-    // which exists with or without this feature — gating it would turn "no control clients" into
-    // "background writes stop working", which is a different setting. Below here, every tier needs
-    // a `tmux -C` child, so this one check covers both of them (`shadowAttach` carries the other).
+    // The kill switch sits BELOW tier 1: live writes need no control client. Below here, every tier
+    // needs a `tmux -C` child, so this check covers both of them (`shadowAttach` carries the other).
     if (!settings.ptyShadowClients) return false
     const known = this.released.get(persistKey)
     if (!known || known.remote) return false
@@ -1431,17 +1494,32 @@ export class PtyManager {
     // 12), and this line reaches a tmux server holding every session on the socket. `sessionName`
     // cannot produce anything else today — which is exactly why this stays cheap.
     if (!isSessionName(target)) return false
-    const line = encodeSendKeysHex(target, data)
+    const line = (args: string[]): string =>
+      args.map((arg) => (arg === '#{pane_id} #{pane_in_mode}' ? "'#{pane_id} #{pane_in_mode}'" : arg))
+        .join(' ')
     const shadow = this.shadows.get(persistKey)
     // ALIVE, not merely present: `dispose()` is silent (it fires no `onExit`), so a shadow retired
     // by whoever was handed it leaves its entry behind, and a dead client can deliver nothing.
     // Falling through to tier 3 does not violate the never-retry rule either — a client that is not
     // running rejects `command()` BEFORE writing a byte (tmux-control-client.ts), so the keys it
     // refused cannot also have reached tmux.
-    if (shadow?.alive) return (await this.shadowCommand(persistKey, line))?.ok ?? false
+    if (shadow?.alive)
+      return sendBackgroundTmuxKeys(
+        target,
+        data,
+        (args) => this.shadowCommand(persistKey, line(args)),
+        () => {
+          if (this.shadows.get(persistKey) === shadow) this.shadowDispose(persistKey)
+        }
+      )
     const client = this.sharedClientFor(persistKey)
     if (!client) return false
-    return (await this.controlCommand(client, line, () => this.sharedDispose(client)))?.ok ?? false
+    return sendBackgroundTmuxKeys(
+      target,
+      data,
+      (args) => this.controlCommand(client, line(args), () => this.sharedDispose(client)),
+      () => this.sharedDispose(client)
+    )
   }
 
   /**

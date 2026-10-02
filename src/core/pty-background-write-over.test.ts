@@ -6,6 +6,7 @@
 // line, nothing ever aimed at this machine's tmux, and `false` — never a throw, never a retry — for
 // every way it can fail.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+vi.mock('./native-windows-pane', () => ({ NativeWindowsPane: class {} }))
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform } from './platform-fake'
 import { sessionName } from './tmux-naming'
