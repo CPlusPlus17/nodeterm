@@ -41,10 +41,15 @@ there, and the QR does not carry them. A desktop that predates the field, a Wind
 leg) and one that could not read its keys send none, and the first connect is then trust on first
 use as before. Either way the pin is saved only once the server has accepted the phone's key (audit
 `A49`): a machine that merely answers at the paired address and refuses us never becomes the pin. A
-key that differs from the pin (or, before the first pin, from every key the pairing named) is never
-used over SSH. In `Auto` the connect then goes on to the relay (`SshFallback`, audit `A74`), which
-authenticates the computer on its own (the relay host key from pairing, then the SAS approval), and
-the host screen keeps a warning up while connected that way; the relay dial still goes through
+server that presents a host certificate (sshd's `HostCertificate`, which sshj negotiates whenever it is
+offered) is matched and pinned by the key the certificate certifies (`hostKeyFingerprint`), which is how
+OpenSSH fingerprints a certificate and what the desktop reports, so a certificate reissued for the same
+key is not a changed key; a pin an older build took from the certificate itself still matches it and
+is rewritten as the key at the next connect (review of `A74-refresh`). A key that differs from the
+pin (or, before the first pin, from every key the pairing named) is never used over SSH. In `Auto`
+the connect then goes on to the relay (`SshFallback`, audit `A74`), which authenticates the computer
+on its own (the relay host key from pairing, then the SAS approval), and the host screen keeps a
+warning up while connected that way; the relay dial still goes through
 `RelayApprovalGate`, so a background check never makes a first relay handshake because of it. "Only
 on my network" stops with the warning. The usual cause is benign: the LAN leg dials the DHCP address
 the computer last reported (at pairing, or since through the relay, below), and another SSH-running
@@ -66,16 +71,25 @@ what the computer says about its own SSH leg now: `{ output, lan: { host?, sshHo
 reader as the sealed `/pair` answer; the keys are re-read at most once a minute, the address on every
 answer; never on Windows, which has no SSH leg). The phone updates the paired computer from it
 (`LanRefresh`, applied by `HostSession` after the primary relay connection's listings): a different
-address replaces `PairedHost.host`, and the reported keys become the anchors, replacing a pin that is
-not among them, so the next SSH connect must present one of the computer's current keys and pins it
-once it has authenticated. A pin among them stays; no reported keys (an older desktop, keys it could
-not read) leave the pin and the anchors alone. This is safe because the relay authenticates the
-computer on its own (end-to-end encrypted to the box key pinned at pairing, served only once approved).
+address replaces `PairedHost.host`, and the reported keys become the anchors. The pin gives way only to
+a key the computer CONFIRMS (review of `A74-refresh`): when the SSH leg of the connect that opened this
+relay connection was refused a host key (`HostKeyChangedException.actual`, which `SshFallback` hands on
+as `TryRelay.refusedHostKey`) and that key is among the reported ones, the pin is dropped, so the next
+SSH connect must present one of the computer's current keys and pins it once it has authenticated.
+That covers a reinstall (new keys) and an sshd that stopped serving the pinned key while its `.pub`
+stays on disk, so the computer still reports it. A pin is never dropped merely for being missing from
+the report: the report is what nodeterm on the computer could read of its sshd's keys, not what sshd
+serves, and a pin the phone has not seen fail is one that works. No reported keys (an older desktop,
+keys it could not read) leave the pin and the anchors alone. The cost of asking for a refusal first: a
+computer reinstalled while the phone was away is refused once more at its next connect on the network,
+which goes on to the relay, and that relay connection confirms the key for the connect after it. This
+is safe because the relay authenticates the computer on its own (end-to-end encrypted to the box key
+pinned at pairing, served only once approved).
 Nothing that came over SSH ever refreshes these facts (`LanRefresh.afterListing` refuses an SSH
 listing, and an SSH listing never carries the field), and neither does the relay held next to a live
 SSH connection (`viaRelay`), where the LAN leg as recorded has just authenticated. While the host
-screen shows a changed-key warning, a refresh that moved the address or replaced the pin adds a
-sentence saying so. The field sits beside the blob, not inside it, so the blob stays the shape a phone
+screen shows a changed-key warning, a refresh that moved the address or confirmed the refused key adds
+a sentence saying so. The field sits beside the blob, not inside it, so the blob stays the shape a phone
 on direct SSH reads off the host, and an iOS app that does not read `lan` sees the reply it always saw
 (a follow-up for @eneskirca in nodeterm-ios).
 
@@ -303,7 +317,9 @@ unchanged.
   field beside it is the desktop's own `createHostLanReporter` over the test's interfaces and
   host-key dir (`A74-refresh`): the phone parses the address and keys, and a record that pins a key
   the computer no longer has is refused by a real MINA server before the refresh and accepted (and
-  pinned) after it; a desktop that sends no field changes nothing.
+  pinned) after it, once the report confirms the key that server was refused; a pin the computer
+  still reports but its sshd no longer serves gives way the same way; a desktop that sends no field
+  changes nothing.
 - **Relay security** — scripted-host tests for: no re-key after ready, reflected boxes (own role)
   dropped, replayed/reordered sequence numbers dropped, boxes under a foreign key dropped.
 - **Pairing** — against the desktop's real `createPairingService` with HOME in a temp dir: the
@@ -446,10 +462,14 @@ such a run from standing still (a test runs one).
 An SSH test pins that a server which completes the key exchange and then refuses the phone's key
 (or user) leaves the host-key pin empty (`A49`), and that a first connect to a server whose key the
 pairing did not name is refused before the phone's key is offered, while one whose key it named
-connects and pins exactly that key (`A49-anchor`; a host certificate matches by the key it
-certifies). `HostKeyAnchorsTest` checks that sshj fingerprints GitHub's published host keys exactly as
-OpenSSH prints them (`src/main/ssh-host-keys.test.ts` checks the desktop's reader against the same
-pair), the parsing and the record, and that a plaintext answer's keys are ignored.
+connects and pins exactly that key (`A49-anchor`). `HostCertificatePinTest` runs a MINA sshd that
+presents a host certificate: the phone matches the pairing and pins by the key it certifies (not the
+certificate's own fingerprint, which the desktop never reports), a reissued certificate for the same
+key connects with that pin, and a pin an older build took from the certificate itself still connects
+and is rewritten as the key (review of `A74-refresh`). `HostKeyAnchorsTest` checks that sshj
+fingerprints GitHub's published host keys exactly as OpenSSH prints them
+(`src/main/ssh-host-keys.test.ts` checks the desktop's reader against the same pair), the parsing
+and the record, and that a plaintext answer's keys are ignored.
 `SshFallbackTest` pins what follows a failed SSH leg (`A74`): a changed key goes on to the relay in
 Auto with a warning, stops on the SSH-only route, and its text names "Only through the relay" rather
 than only re-pairing; a key the computer never reported is sent to the relay without the promise
@@ -457,8 +477,10 @@ that pairing again trusts it (review of `A49-anchor`). `HostKeyAnchorsTest` also
 source, that its pin (`ConnectionManager.pinFor`) hands the verifier the anchors its record keeps and
 that the SSH dial uses that pin: the interface's default (no anchors) would compile without it.
 `LanRefreshTest` pins the refresh (`A74-refresh`): only a relay listing counts,
-only a dialable IPv4 is taken, reported keys replace a pin not among them and keep one that is, no
-keys leave the pin alone, and a computer added by its SSH address or paired relay-only is untouched.
+only a dialable IPv4 is taken, the pin gives way only to a refused key the computer reports (also when
+the pin is still among them) and never merely for missing from the report, no keys leave the pin
+alone, and a computer added by its SSH address or paired relay-only is untouched; `SshFallbackTest`
+pins that the relay leg is handed the refused key.
 The app's use of them (the relay dial behind `RelayApprovalGate`, the warning on the host screen,
 the refresh after each primary relay listing, whose order in the source is pinned) is only
 type-checked.
@@ -869,13 +891,17 @@ later fix left to a device.
     Automatic the phone refuses SSH, connects through the relay and keeps a warning on the host
     screen that names "Only through the relay"; on "Only on my network (SSH)" it stops with the
     warning. Do the same once between pairing and the first connect: the phone says the key is not
-    one the computer reported, and pins nothing. With a current desktop, regenerate its host keys
-    (or move it to another address on the LAN) while the phone is away, connect through the relay,
-    then come back: the next connect on the network dials the new address and accepts the new key
-    without pairing again, and the host screen's warning (when one was up) says what changed. On a
-    Linux computer, make sshd serve only a key the desktop cannot see (a `HostKey` outside
-    `/etc/ssh` with no `.pub` beside it) and pair: the phone refuses SSH, connects through the relay
-    on Automatic, and its warning says that pairing again changes this only if the keys changed.
+    one the computer reported, and pins nothing. With a current desktop, move it to another address
+    on the LAN while the phone is away and connect through the relay, then come back: the next
+    connect on the network dials the new address. Regenerate its host keys instead: the next connect
+    on the network is refused and goes on to the relay, and the host screen's warning adds that the
+    computer confirmed the key its SSH server presented; the connect after that (once the relay
+    connection has ended) accepts the new key without pairing again. With sshd serving a host
+    certificate, the pin is the certified key (`ssh-keygen -lf` of its `.pub`), and a renewed
+    certificate connects silently. On a Linux computer, make sshd serve only a key the desktop
+    cannot see (a `HostKey` outside `/etc/ssh` with no `.pub` beside it) and pair: the phone refuses
+    SSH, connects through the relay on Automatic, and its warning says that pairing again changes
+    this only if the keys changed.
     *(A49, A74)*
 12. On cellular, off the LAN: connect through the relay. The desktop shows the SAS dialog and the phone
     shows the same code; approve. Reconnect later: no second prompt. On another pairing press Deny: the
@@ -1291,12 +1317,12 @@ later fix left to a device.
   address, which trusts on first use and has no relay or push (its screen's `ssh-keygen` command
   reads only `/etc/ssh`, so compare the fingerprint with `ssh-keyscan localhost | ssh-keygen -lf -`
   on the computer instead). The iOS app does not read the field yet. The relay refresh
-  (`A74-refresh`) takes the same reader's answer as the truth: on a computer whose sshd serves a key
-  the reader misses, it drops a pin that works (one trusted on first use with an older desktop) and
-  the phone then uses the relay in Auto, as a fresh pairing there would. The refreshed address is the
-  QR's `pickLanIPv4`, the first non-internal IPv4 adapter: on a computer with several (Ethernet and
-  Wi-Fi, a VPN), it is whichever the OS lists first, which may not be the one the phone can reach;
-  the relay then still serves. The refresh needs a relay connection, so a phone that only ever uses
+  (`A74-refresh`) does not take the reader's answer as the truth about the pin: it drops one only for a
+  key the SSH leg was refused that the reader also names, so a pin that works (one trusted on first use
+  with an older desktop, on a computer whose sshd serves a key the reader misses) is kept. The
+  refreshed address is the QR's `pickLanIPv4`, the first non-internal IPv4 adapter: on a computer
+  with several (Ethernet and Wi-Fi, a VPN), it is whichever the OS lists first, which may not be the
+  one the phone can reach; the relay then still serves. The refresh needs a relay connection, so a phone that only ever uses
   "Only on my network" keeps the pairing's address and keys, and the iOS app does not read `lan` yet.
 - **No signed release build** (audit `A50`). The only APK there is to install is the debug build,
   and AGP marks every debug build debuggable: anyone with adb access to the unlocked phone while USB

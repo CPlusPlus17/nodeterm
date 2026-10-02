@@ -38,7 +38,9 @@ data class PairedHost(
     /**
      * `SHA256:…` of the SSH host key, pinned by the first connect that authenticated. When
      * [sshHostKeyAnchors] is not empty that connect had to present one of them; otherwise it was trust
-     * on first use.
+     * on first use. For a host certificate, the key it certifies
+     * ([dev.nodeterm.protocol.ssh.SshHostConnection.hostKeyFingerprint]); an older build pinned the
+     * certificate itself, which the next connect to that server re-spells.
      */
     val sshHostKeyFingerprint: String?,
     /** When it was paired, or added by address. */

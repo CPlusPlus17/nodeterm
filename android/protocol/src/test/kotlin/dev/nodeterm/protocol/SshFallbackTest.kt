@@ -35,6 +35,25 @@ class SshFallbackTest {
         assertTrue(next.error.contains(SshFallback.REPAIR_NOTE), next.error)
     }
 
+    /**
+     * Review of A74-refresh: the key the server presented goes on with the relay leg, so that relay
+     * connection's report can confirm it as the computer's own ([dev.nodeterm.protocol.ssh.LanRefresh]).
+     * Text alone dropped it, and a pin still among the reported keys then never gave way.
+     */
+    @Test
+    fun `the relay leg is handed the key the SSH server was refused for, and only that`() {
+        val next = assertIs<Next.TryRelay>(SshFallback.afterFailure(changed, relayAllowed = true, relayConfigured = true))
+        assertEquals("SHA256:whoever-has-the-address-now", next.refusedHostKey)
+        val notReported = HostKeyNotPairedException(listOf("SHA256:reported"), "SHA256:presented")
+        assertEquals(
+            "SHA256:presented",
+            assertIs<Next.TryRelay>(SshFallback.afterFailure(notReported, relayAllowed = true, relayConfigured = true)).refusedHostKey
+        )
+        // Any other failure says nothing about the computer's key.
+        val down = HostException("Couldn't connect over SSH to dev@10.0.0.2:22 (timeout).")
+        assertNull(assertIs<Next.TryRelay>(SshFallback.afterFailure(down, relayAllowed = true, relayConfigured = true)).refusedHostKey)
+    }
+
     @Test
     fun `Only on my network keeps the hard stop, and names the way out`() {
         val next = SshFallback.afterFailure(changed, relayAllowed = false, relayConfigured = true)

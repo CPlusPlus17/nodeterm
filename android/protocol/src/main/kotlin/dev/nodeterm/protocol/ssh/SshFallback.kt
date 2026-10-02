@@ -23,8 +23,11 @@ object SshFallback {
         /**
          * Go on to the relay leg. [error] joins what is shown if that fails too; [warning] is shown
          * even when it succeeds (a changed host key must not disappear behind a working relay).
+         * [refusedHostKey] is the key the SSH server presented when it was refused for it
+         * ([HostKeyChangedException.actual]): what the relay's report may confirm as the computer's own
+         * ([LanRefresh], review of A74-refresh). Null for any other failure.
          */
-        data class TryRelay(val error: String, val warning: String? = null) : Next
+        data class TryRelay(val error: String, val warning: String? = null, val refusedHostKey: String? = null) : Next
 
         /** Try nothing else: fail with [message]. */
         data class Stop(val message: String) : Next
@@ -36,8 +39,10 @@ object SshFallback {
 
     /**
      * A reinstalled computer's new key is trusted again once the computer itself confirms it through the
-     * relay ([LanRefresh], audit A74-refresh: a current nodeterm does so on every relay connect), or by
-     * pairing it again. Neither is the only way out, and neither trusts whatever answered at the address.
+     * relay ([LanRefresh], audit A74-refresh: a current nodeterm reports its keys on every relay listing,
+     * and the relay connect that follows this refusal hands the refused key over as
+     * [Next.TryRelay.refusedHostKey]), or by pairing it again. Neither is the only way out, and neither
+     * trusts whatever answered at the address.
      */
     const val REPAIR_NOTE = "If the computer was reinstalled, the phone trusts its new key once the computer confirms it " +
         "through the relay (nodeterm on the computer must be up to date), or when you pair it again."
@@ -107,7 +112,8 @@ object SshFallback {
                 else -> Next.TryRelay(
                     error = "On your network: $fact To reach it through the relay only, $RELAY_ONLY_SETTING $note",
                     warning = "$fact The phone connected through the relay instead, which checks the computer's " +
-                        "identity separately. To stop trying your network for it, $RELAY_ONLY_SETTING $note"
+                        "identity separately. To stop trying your network for it, $RELAY_ONLY_SETTING $note",
+                    refusedHostKey = error.actual
                 )
             }
         }

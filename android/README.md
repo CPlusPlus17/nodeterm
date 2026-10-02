@@ -218,9 +218,12 @@ iOS app does receive the detail, in the push the desktop sends.
   same keys; the relay still reaches it (see Known gaps in `docs/android.md`).
 - Over the relay (and only there) a current desktop also reports its LAN address and SSH host keys
   as they are now, and the phone updates the computer from that: the address it dials on your
-  network, and a pin the computer's current keys no longer include (the next connect then has to
-  present one of them). So a moved address or a reinstalled computer's new key needs no new pairing.
-  Nothing learned over SSH ever changes them.
+  network, and the pin, but only for a key the phone was just refused on your network that the
+  computer confirms is one of its own (the next connect then has to present one of its keys). A pin
+  that still works is kept, even when the computer does not list it. So a moved address or a
+  reinstalled computer's new key needs no new pairing; the new key is accepted on the connect after
+  the one that met it. Nothing learned over SSH ever changes them. A host certificate is pinned as the
+  key it certifies, so a renewed certificate is not a changed key.
 - A computer added by its SSH address has no pairing behind its first connect, so compare the
   fingerprint the Add screen shows with the computer's own (the screen gives the `ssh-keygen`
   command). A changed key stops it; forget it and add it again only if you know why it changed. To

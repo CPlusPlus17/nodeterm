@@ -70,10 +70,19 @@ import javax.net.SocketFactory
  * key is none of them is refused during the key exchange, before this phone's key is offered. With no
  * anchors (an older or Windows desktop, keys it could not read, a computer added by its SSH address)
  * the first server that accepts our key becomes the pin: trust on first use.
+ *
+ * What is pinned is [SshHostConnection.hostKeyFingerprint]: for a host certificate, the key it
+ * certifies, never the certificate itself (review of A74-refresh).
  */
 interface HostKeyPin {
     /** The pinned fingerprint, or null until a connect has authenticated with this phone's key. */
     fun pinned(): String?
+
+    /**
+     * Called with the authenticated server's key when nothing is pinned, and once more to re-spell a
+     * pin an older build took from a host certificate's own fingerprint as the key that certificate
+     * certifies (the same key; review of A74-refresh). Both only after the server accepted our key.
+     */
     fun pin(fingerprint: String)
 
     /** The fingerprints the first connect must present one of, from pairing; empty = trust on first use. */
@@ -720,7 +729,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
 
         private const val MAX_CAUSE_DEPTH = 16
 
-        /** OpenSSH-style `SHA256:<unpadded base64>` of the host key blob. */
+        /**
+         * `SHA256:<unpadded base64>` of the key blob as sshj encodes it: for a certificate, the
+         * certificate's own blob. What names a host key is [hostKeyFingerprint].
+         */
         fun fingerprint(key: PublicKey): String {
             val blob = Buffer.PlainBuffer().putPublicKey(key).compactData
             val digest = MessageDigest.getInstance("SHA-256").digest(blob)
@@ -728,13 +740,18 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
 
         /**
-         * Whether a presented host key (fingerprint [fp]) is one of [anchors]. A host CERTIFICATE (sshd's
-         * `HostCertificate`, which sshj prefers when offered) also matches by the key it certifies: the
-         * desktop names its plain `.pub` keys, and the server proves it holds that key's private half in
-         * the key exchange either way.
+         * The fingerprint that names a presented host key, as OpenSSH prints it: for a host CERTIFICATE
+         * (sshd's `HostCertificate`, which sshj negotiates whenever the server offers one), the key it
+         * certifies, which is how OpenSSH fingerprints a certificate too; for a plain key, [fingerprint].
+         * It is what the desktop reports (it reads the plain `.pub` files, at pairing and in every relay
+         * report), so a certificate matches the pairing's keys and the relay's report by it, and it is
+         * what is pinned (review of A74-refresh): pinning the certificate's own blob made the pin a key
+         * the computer never reports, so every relay report seemed to say the key had changed, and a
+         * certificate reissued for the same key (they are often short-lived) would have been a changed
+         * key. The server proves it holds that key's private half in the key exchange either way.
          */
-        internal fun matchesAnchor(anchors: List<String>, fp: String, key: PublicKey): Boolean =
-            fp in anchors || (key is Certificate<*> && runCatching { fingerprint(key.key) }.getOrNull()?.let { it in anchors } == true)
+        fun hostKeyFingerprint(key: PublicKey): String =
+            (key as? Certificate<*>)?.let { cert -> runCatching { fingerprint(cert.key) }.getOrNull() } ?: fingerprint(key)
 
         fun connect(
             host: String,
@@ -755,9 +772,12 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             // The key this connection's server presented, held until authentication proves it is
             // the computer we paired with; only then does it become the pin (audit A49).
             var presented: String? = null
+            // A pin an older build took from a host certificate's own blob, which this server's
+            // certificate matched: re-spelled as the certified key once we are in (review of A74-refresh).
+            var certPin: String? = null
             client.addHostKeyVerifier(object : HostKeyVerifier {
                 override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
-                    val fp = fingerprint(key)
+                    val fp = hostKeyFingerprint(key)
                     // One server per connection: a re-key must present the same key as the first
                     // exchange, pinned or not.
                     val expected = pin.pinned() ?: presented
@@ -766,7 +786,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                             // Not pinned yet: a key the pairing named, if it named any (A49-anchor).
                             // Refused here, during the key exchange, so a stranger never sees our key.
                             val anchors = pin.anchors()
-                            if (anchors.isEmpty() || matchesAnchor(anchors, fp, key)) {
+                            if (anchors.isEmpty() || fp in anchors) {
                                 presented = fp
                                 true
                             } else {
@@ -776,6 +796,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                         }
                         expected == fp -> {
                             presented = fp
+                            true
+                        }
+                        key is Certificate<*> && expected == fingerprint(key) -> {
+                            presented = fp
+                            certPin = expected
                             true
                         }
                         else -> {
@@ -800,7 +825,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 // Authenticated: this server accepted the key the pairing installed, so its host key
                 // is the computer's. A server that refused us never got here and pinned nothing.
                 val seen = presented
-                if (seen != null && pin.pinned() == null) pin.pin(seen)
+                val pinned = pin.pinned()
+                if (seen != null && (pinned == null || (pinned == certPin && pinned != seen))) pin.pin(seen)
                 client.connection.keepAlive.keepAliveInterval = KEEPALIVE_INTERVAL_SEC
                 (client.connection.keepAlive as? KeepAliveRunner)?.maxAliveCount = KEEPALIVE_MAX_MISSED
             } catch (e: Exception) {
