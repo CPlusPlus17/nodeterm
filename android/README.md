@@ -11,7 +11,9 @@ it is talking to.
 > private minified beta is installed on the Pixel 10 Pro (Android 17 / API 37); manual SSH lists real
 > projects and basic terminal input works. The code-3 update fixes the one-row viewport and exposes
 > pre-attach tmux history (`A85`). The user confirms the host terminal opens with Wi-Fi off over
-> mobile-data WireGuard. QR/code pairing, relay, reconnect/background/answer behavior and the full device pass remain unverified. The plan and what is still open are in
+> mobile-data WireGuard. Real SSH background/detach recovery and Inbox/back-stack restoration now have device proof;
+> Encrypted paste pairing and live hosted relay browsing also work. QR pairing, cellular relay,
+> actual outage/answer behavior and the full device pass remain unverified. The plan and what is still open are in
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
 > [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
 
@@ -20,12 +22,39 @@ reopened on the intended Pixel with its retained key/pin at 56×48. `c4b1f6cf` t
 screen behind changing text, fixing beta 5's detached touch target. Code 7 passes 658 protocol tests and
 release/R8/signing checks. A held touch stops coast at a stable 56×25 keyboard-open viewport;
 earlier resizing tap checks were inconclusive. The user confirms normal dragging and coasting
-both work now. Latest mobile/lifecycle checks, FPS and custom bindings remain open.
+both work now. Latest mobile/remaining lifecycle checks, FPS and custom bindings remain open.
+
+**New real Pixel QA:** complete checklist passes are **19, 21, 22, 24, 38 and 39**: Unicode rendering,
+large/invalid OSC52 handling, all three keyboard-focus states, and background-process tab/back-stack
+restoration and the shipped managed-hook Approve/Deny/expiry lifecycle. The hook producer is
+synthetic; no live Claude CLI/account or requested Bash execution was involved. Seventeen sending
+chips plus four app-mode arrows, font/rotation, wrapped/OSC8 links,
+Copy-sheet Unicode/Share and real SSH recovery have partial evidence. Landscape with IME open
+was 129×1; usable-height and larger-client Fit checks remain open. The [64-row result table](../docs/android.md#what-is-verified-and-how)
+records six Pass, twenty-one Partial and 37 Pending items with conditional SKIP variants. This is the
+unchanged beta-6/code-7 APK. Encrypted PairingService JSON paste and **Only through the relay**
+browse succeed against production desktop source `58a202be`, with the actual hosted API/relay;
+the current `/v1/relay/join` shape is verified beyond interop tests. Remote access was already
+enabled, so this pairing approves the phone without a first SAS prompt. The desktop uses an
+isolated home and real SecretService encrypted credential storage; no user credentials were copied.
+The phone also attaches and sends echo input through the relay to an owned real PTY, created by
+production preload/Canvas events rather than phone New session. Latest checks pass all 658
+protocol tests in 63 suites (54 seconds) and offline app `compileKotlin` (5 seconds).
+Mounted relay single-select answers and multi-select Open-session/input reach the synthetic
+application and its actual PostToolUse/mirror. A one-tap answer from copy mode also reaches the
+application, leaves copy mode and resolves the question. Item 41 stays Partial: offscreen/released,
+direct-SSH and target-guard variants lack device proof. No live Claude CLI/account was used.
+QR/scanner, cellular relay, SAS denial/revoke, remaining node actions, remaining question routes,
+notifications and newest-mobile checks
+remain open. Recorded CI baseline `58a202be` has all five jobs green in [run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975).
+Only disposable fixture resources were removed and the phone returned to regular Sessions;
+cleanup does not establish the full revoke matrix. Latest beta-6 mobile WireGuard testing awaits
+the user's assistance. The next documentation push still requires its own checks and green CI.
 
 ## What it does
 
-The APK is built by CI. Manual SSH and basic terminal input have partial real-device evidence;
-the feature rows below still require the full device pass. ✓ means the code is written for it and
+The APK is built by CI. The signed minified beta has real Pixel terminal/copy/keyboard and partial
+SSH/link/lifecycle evidence; the feature rows below still require the full device pass. ✓ means the code is written for it and
 tested where the layer allows, and the numbered
 [device checklist](../docs/android.md#device-checklist) is what will check it.
 
@@ -77,7 +106,8 @@ observed CI repair. Any later push still requires its own green workflow.
 3. Turn the phone's Wi-Fi off. Open a terminal over mobile data, send a harmless command, answer a
    question and a held approval, then reconnect after briefly enabling airplane mode. Confirm the
    answers on the computer. For SSH, keep the VPN active and confirm the route stays SSH; for the
-   relay route this also checks the live relay join contract, still unverified here.
+   relay route this checks cellular connectivity and action/recovery behavior; the current live
+   join contract already passed the controlled relay-only browse check.
 4. Keep the computer awake, nodeterm running, and the intended project/session mounted and awake.
    For the relay route, keep remote access on. Offscreen Sleeping sessions remain a known relay gap. Background
    notifications use Android's periodic worker and may take longer than 15 minutes; there is no FCM.
@@ -237,8 +267,8 @@ The user subsequently confirmed more movement but reported missing momentum; the
 kinetic-scroll work above addresses that remaining gap.
 
 The original workspace holds the input provenance in `.nodeterm/android-beta-build-1/` and the
-first finished APK/checksum/metadata in `.nodeterm/android-beta-1/`. QR/code pairing, relay and
-mobile reconnect/background/answer checks remain open. The initial full protocol run passed 603 of 605 tests; the two SSH
+first finished APK/checksum/metadata in `.nodeterm/android-beta-1/`. At that first-beta checkpoint,
+QR/code pairing, relay and mobile reconnect/background/answer checks remained open. The initial full protocol run passed 603 of 605 tests; the two SSH
 harness-isolation failures (`A84`) are fixed in tests only (`1d6b04cc`). The earlier A84 full rerun passed
 all 606 tests with zero failures, errors or skips, and both harness mutations were caught. CI was waived for the first local build;
 every newly requested push still requires green Android workflow verification. Actions
@@ -464,8 +494,10 @@ iOS app does receive the detail, in the push the desktop sends.
   accept, the relay box secret and the relay device token. A signed, non-debuggable release build
   has been built and privately signed through the [private-beta path](#private-beta). Its wrong-test-device
   installation was removed; the intended Pixel now has the same private beta, with `run-as` denied.
-  Basic SSH input, font/keyboard resizing and pre-attach tmux history work; relay and the full
-  device pass remain unverified. Keep USB and wireless debugging off when not using them.
+  Real Pixel SSH/input/font/history, clipboard and keyboard checks work; six complete checklist
+  items pass, and encrypted paste pairing/live relay browse/input plus synthetic shipped-hook
+  Approve/Deny/expiry and mounted relay question/copy-mode answers also work. QR/cellular-relay/SAS/worker
+  and remaining device variants remain unverified. Keep USB and wireless debugging off when not using them.
 - **If someone else may have had adb access, pairing again is not enough.** The phone keeps its SSH
   key, its relay box key and its relay device id through a re-pair, so each computer would trust the
   same keys again. Give the phone a new identity before it pairs:

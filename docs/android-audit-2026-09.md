@@ -69,7 +69,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 🟡 private minified beta updated on intended Pixel preserving SSH identities; basic SSH/history proof, full validation open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 🟡 code-7 Pixel retains SSH identity; device items 19/21/22/24/38/39 pass, paste pairing/live relay browse-input and synthetic shipped-hook approval lifecycle verified, full QR/cellular-relay/worker validation open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -1648,6 +1648,44 @@ update preserved host configuration, SSH key/pin and notification permission, an
 viewport/history failure (`A85`), including font/keyboard resize, Esc and draft input. QR/code
 pairing, relay, reconnect/background/answer behavior and full 64-item phone validation leave `A50`
 partly open; the user confirms Wi-Fi-off mobile-data WireGuard terminal access.
+
+**Beta-6 device follow-up (2026-10-02):** the unchanged minified code-7 APK at source
+`c4b1f6cf1009f293a658b6331d2ed1ab80aa36c6` passes complete checklist items 19/21/22/24/38/39:
+real SSH Unicode rendering, exact 90000-character clipboard/150000-and-450000 size refusals,
+silent invalid OSC52 with clipboard preserved, all three keyboard-focus states, and background
+process-kill Inbox/back-stack restoration, plus the synthetic shipped-hook lifecycle detailed below.
+All 17 sending chips plus four app-mode arrows,
+font/rotation, Copy-sheet exact Unicode/Share/modal isolation, wrapped/OSC8 links and SSH
+background/detach recovery add partial evidence. Landscape with IME open was 129×1; usable-height
+and larger-client Fit remain unverified. The 450000 pre-bridge cap is distinct JVM/JS evidence,
+not inferred from a phone toast. Browser/Copy-sheet Open and offer interactions, airplane/outage,
+QR/cellular-relay/notification, latest mobile, custom bindings/FPS and remaining variants stay open.
+Encrypted paste pairing and a forced relay-only browse of an isolated production desktop
+(`58a202be`, real SecretService credential storage) now pass against the live hosted API/relay;
+the current `/v1/relay/join` contract is verified beyond interop. Remote access was enabled at
+pairing, so no first SAS prompt is expected; QR/scanner, cellular relay, SAS denial/revoke and
+remaining node/action behavior remain open. No user-profile credentials were copied into the private home.
+The phone then attaches through the relay and sends echo input to an owned real PTY seeded through
+production preload/Canvas events; phone New session/folder-picker are not tested. Item 39 now passes:
+the shipped managed hook returns actual allow/deny JSON in 17.596/6.571 seconds, and a 45-second
+expiry returns empty; the late Approve visibly reports timeout and opens the owned terminal without
+false success. The producer is synthetic, with no live Claude CLI/account or requested Bash execution.
+Mounted relay single-select one-tap, multi-select Open-session/input and copy-mode answers also
+reach the actual synthetic application and its shipped PostToolUse hook/mirror. In the copy-mode
+case, the exact owned pane is in mode before PreToolUse; option 3 arrives, mode becomes false,
+and the mirror becomes working with its question resolved. Item 41 remains Partial: offscreen/
+released/direct-SSH/target-guard device variants and notification questions remain open.
+No live Claude CLI/account was used. Latest required checks pass all 658 protocol
+tests in 63 suites (54 seconds) plus offline app `compileKotlin` (5 seconds).
+Only disposable fixture resources were cleaned up and the phone returned to regular Sessions;
+scoped cleanup is not a full device/backend revoke check. Latest beta-6 mobile WireGuard recheck
+awaits the user. No new product finding was observed.
+The [64-row record](android.md#what-is-verified-and-how) has six Pass, twenty-one Partial and
+37 Pending items with named conditional SKIP variants; `A50` remains partial. Private synthetic
+proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Recorded CI baseline `58a202be` has all
+five jobs green in [run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975).
+QA-driver coordinates/side-Back and Compose class assumptions are not product findings. No
+production/host contract changed and no new audit finding is added.
 
 ## A51
 

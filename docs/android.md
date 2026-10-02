@@ -296,6 +296,173 @@ unchanged.
 
 ## What is verified, and how
 
+**Latest real Pixel checklist follow-up (2026-10-02/03):** six complete items pass: **19, 21, 22,
+24, 38 and 39**. Twenty-one items have partial evidence and 37 remain pending; conditional SKIP variants
+below do not pass or close their parent item. This uses the unchanged installed minified
+`0.1.0-beta.6` / code `7`, source `c4b1f6cf1009f293a658b6331d2ed1ab80aa36c6`. The intended
+Pixel 10 Pro runs Android 17 / API 37 and Vanadium WebView `154.0.8037.92.0`. The real Linux
+SSH-driven host runs Fedora 44, kernel `7.2.7-200.fc44` x86_64, OpenSSH server `10.2p1-14` and
+tmux `3.7c`; the running desktop nodeterm version is not recorded. These tests use owned synthetic
+terminal content through the real sshd, not the JVM/SSH fixture or a simulated phone. No private
+hostnames, addresses, keys or clipboard contents are recorded here.
+
+All 17 sending key chips and four application-cursor arrow checks reached the owned pane in
+order. A+ changed 56×48 to 52×45; A− restored 56×48, with the connection alive. Rotation retained
+the draft and connection: landscape with the IME open was 129×1, and portrait returned to 56×25.
+This does not establish more than one row when landscape has usable room; that geometry case
+remains open. For each of the three keyboard-chip focus states, the keyboard stayed open and
+actual software `a` plus Enter reached the pane rather than the native draft.
+
+The 90000-character synthetic OSC52 clipboard matched exactly. Both 150000 and 450000 were
+refused with the app's size message, with clipboard unchanged and no crash (PNG toasts were
+visually checked). This phone result establishes visible refusal; the 450000 pre-bridge cap
+remains distinct bounded JVM/JS evidence. Invalid base64, missing separator, read query,
+overlong selection and invalid UTF8 were silent and preserved the known synthetic clipboard.
+The Copy sheet copied three exact Unicode lines (lower box border plus fixture lines A/B);
+the system Share chooser preserved selection, and modal interactions emitted zero mouse events.
+Sheet link/Open variants remain open. Wrapped HTTPS/HTTP links offered the complete 324/323-character
+URL from first/middle/last rows, including `/end`; link Copy worked. OSC8 HTTPS was offered while
+file/JavaScript links were ignored. Browser Open and URL-offer interaction/scroll variants remain
+open, so items 54–56 are partial.
+
+Backgrounding a real SSH terminal detached its client; foregrounding reattached and retained the
+draft. Detaching only the owned tmux client triggered automatic reconnect, again retaining the
+draft. Armed Ctrl plus draft `c` delivered exactly Ctrl-C with no Enter. Airplane-mode/outage and
+disabled-input states remain untested. A background `am kill` restored Inbox tab and the host
+back stack; a force-stop/reopen retained manual SSH registration/authentication with no host-key
+prompt. QR pairing, cellular relay/SAS denial/revoke, notifications, latest mobile-VPN, custom wheel bindings and FPS remain
+open. Driver coordinate expectations, side-Back navigation and Compose class names were corrected
+in the QA helpers; they are not product findings.
+
+**Live production pairing/relay follow-up:** pasting the actual desktop PairingService JSON
+succeeds through its encrypted exchange with remote access already enabled. The fixture host is
+added alongside the retained manual SSH host. Choosing **Only through the relay** in Settings
+opens the isolated desktop's empty Sessions workspace with **"Through the relay · end-to-end
+encrypted"**. This is the shipped Pixel app against the real hosted API and
+`wss://relay.nodeterm.dev`, so the current `{deviceToken, hostId}` request to `POST /v1/relay/join`
+and its accepted response have actual backend proof, beyond interop tests. The desktop runs
+production source `58a202be` inside a private bwrap home overlay with real DBus SecretService
+encrypted credential storage; no user-profile credentials were copied. Pairing while remote
+access is enabled already approves this phone, so no SAS prompt is expected on this path.
+Initial Automatic SSH browsing listed the real sshd's files but opened no real node; the route was
+changed to relay-only before any node action. A later owned project/plain terminal was seeded
+through the actual production preload and Canvas event; the phone attached through the relay,
+and its harmless echo input reached that real PTY. This verifies relay terminal attach/input,
+not phone New session or the folder picker. Private proof is `relay-terminal.json` and
+`relay-input-capture.json` (`hasExpectedEcho: true`). QR/scanner, cellular relay, SAS denial/revoke
+and the remaining node/action matrix stay open. Initial phone UI proof is `relay-first-connect.json`.
+
+**Held-hook approval lifecycle (item 39):** a synthetic application invokes the desktop's shipped
+managed Claude hook, scoped to the owned node, private home and authenticated hook endpoint.
+Pixel Inbox Approve returns its actual allow JSON in 17.596 seconds; Deny returns deny JSON in
+6.571 seconds. A 45-second hold expires with empty output; a later Approve visibly says
+"The request timed out on computer. Answer it in session." and opens the owned terminal,
+without false success. This passes the held-hook lifecycle with an explicit producer limit:
+no live Claude CLI/account or requested Bash execution was involved. Private desktop proof
+is in `hook-qa-*.jsonl`. Latest required checks pass all 658 protocol tests in 63 suites with
+zero failures/errors/skips (54 seconds), plus offline app `compileKotlin` (5 seconds).
+
+**Relay question follow-up (item 41, partial):** on the desktop-mounted owned terminal, one tap
+on Green sends option `2` to the actual synthetic application; its real PostToolUse hook resolves
+the desktop mirror question. A multi-select card lists read-only options with "Choose several —
+answer in session" and Open session; opening the owned terminal and sending `2` plus Enter from
+the phone input bar reaches the application and PostToolUse confirms it. For a separate single
+question, the exact owned tmux pane is in copy mode before PreToolUse. One tap on Blue sends
+option `3`; the application receives it, copy mode is false, and the mirror becomes working with
+that question resolved after actual PostToolUse. These use the shipped hooks and synthetic
+application, not a live Claude CLI/account. Private `hook-qa-*.jsonl` and phone
+`relay-single-before/after`, `relay-multi-refreshed/multi-terminal/multi-input`, and
+`relay-copy-question-before/after` proof record the outcomes. Offscreen/released panes, direct SSH,
+missing/prefix-collision targets and notification questions are not device verified; regression
+tests cover the transport/target guards. Item 41 stays Partial.
+
+Cleanup forgot only the disposable fixture host and returned the phone to regular Sessions;
+only the owned SSH fixture session and isolated desktop/CDP were stopped. Scoped fixture-device
+revoke/stop/remote-access-off cleanup left zero fixture devices; it does not pass a full device
+revocation or establish a backend revoke result. Latest beta-6 mobile WireGuard testing awaits
+the user's assistance. No new product finding or production change resulted from these checks.
+
+Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`, including
+`physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
+`link-checks.json`, `recovery-results.json` and `activity-results.json`. The 64 rows below reconcile
+that physical evidence with the earlier draft ledger. Recorded CI baseline
+`58a202be84a6e07e0684584f978bb6346b3c3b52` has all five jobs green in
+[run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975); this does
+not change the APK source or imply full device validation.
+
+| Item | Result | Evidence or remaining scope |
+|---|---|---|
+| 1 | Partial | Same-signer updates retain manual SSH identity; QR pairing persistence pending. Debug migration variant SKIP*. |
+| 2 | Partial | Force-stop retains manual SSH registration/authentication; phone reboot, paired SSH/relay pending. |
+| 3 | Pending | Uninstall/Clear storage variants SKIP* on working installation; disposable setup required. |
+| 4 | Pending | Second-phone transfer/revoke and cloud restore SKIP*; no authorized setup. |
+| 5 | Partial | Minified SSH/copy/link/Copy sheet, encrypted paste pairing and hosted relay browse work; worker/exception/debug variants pending. |
+| 6 | Pending | Linux QR pairing pending; macOS/Windows variants SKIP*. |
+| 7 | Partial | Actual PairingService JSON paste succeeds; camera/deep link and camera-denial fallback pending. |
+| 8 | Partial | Remote-access-enabled pairing permits first relay connection without SAS; denial/revoke/SAS variants pending, older desktop SKIP*. |
+| 9 | Pending | Pairing timeout, cancellation and expired/used code pending. |
+| 10 | Partial | Manual SSH lists 17 projects; paired Automatic grouping/activity/context pending. |
+| 11 | Pending | Named-key, LAN refresh and certificate/refusal matrix pending; macOS variant SKIP*. |
+| 12 | Partial | Real hosted relay join/browse succeeds on relay-only route; cellular/SAS and token-request interruption pending. |
+| 13 | Pending | 15-minute unapproved-host background check pending. |
+| 14 | Pending | Actual host/network loss deadline and relay fallback pending. |
+| 15 | Pending | Repeated Back-before-connect cancellation pending. |
+| 16 | Partial | Relay-only route takes effect and disposable fixture host is forgotten; other routes and two-paired-host matrix pending. |
+| 17 | Pending | Late relay adoption and background authorization pending. |
+| 18 | Partial | SSH 17 chips + 4 app-mode arrows, soft input/font/rotation and real relay echo input work; full route/geometry matrix pending. |
+| 19 | Pass | Rounded borders, accents, CJK and emoji rendered on real SSH. |
+| 20 | Partial | Continuous drag/coast/Esc/new-touch stop and small OSC52 work; full copy-mode/report/reversal matrix pending. |
+| 21 | Pass | 90000 chars copied exactly; 150000/450000 refused with size toast, no crash. Bridge boundary is JVM evidence. |
+| 22 | Pass | Invalid base64/separator/query/selection/UTF8 silent; known clipboard preserved exactly. |
+| 23 | Partial | Portrait font/IME resize works; landscape usable-height and larger-client Fit case pending. |
+| 24 | Pass | All three keyboard-chip focus states stay open; actual software a+Enter reaches pane, draft unchanged. |
+| 25 | Partial | Background/detach recovery preserves draft; Ctrl+c is exact with no Enter. Airplane/disabled states pending. |
+| 26 | Pending | Renderer kill/crash matrix pending; root/DevTools trigger variant SKIP*. |
+| 27 | Partial | Real SSH background detach/foreground reattach verified; relay sizing/refresh variant pending. |
+| 28 | Partial | Owned-client detach auto-reconnect verified; actual desktop-mount/relay variant pending. |
+| 29 | Pending | Sleeping-session wake paths pending. |
+| 30 | Pending | Desktop reboot/resume/account/permission paths pending. |
+| 31 | Pending | Desktop SSH-project relay routing pending. |
+| 32 | Pending | Linux new-session/managed-account paths pending; Windows variant SKIP*. |
+| 33 | Pending | Back/background during new-session launch pending. |
+| 34 | Pending | Project/account removal while new-session dialog open pending. |
+| 35 | Pending | Wake/refresh/rename/end from phone pending. |
+| 36 | Pending | Board mutations pending. |
+| 37 | Pending | Board project/tab/scroll persistence pending. |
+| 38 | Pass | Background am kill restores Inbox tab and host back stack. |
+| 39 | Pass | Actual shipped managed hook returns allow/deny and expiry opens terminal without false success; synthetic producer, no live Claude/Bash execution. |
+| 40 | Pending | Subagent approval while parent waits pending. |
+| 41 | Partial | Mounted relay single/multi/Open session and copy-mode answer reach synthetic application/PostToolUse; offscreen/released/SSH/target variants pending. |
+| 42 | Pending | Unread/read-ack ownership and sweep matrix pending. |
+| 43 | Pending | Background notification arrival/deep-link matrix pending. |
+| 44 | Partial | Notification grant persists; deny/re-enable pending. Fresh-denial variant SKIP*. |
+| 45 | Pending | Live-notification suppression/delivery matrix pending. |
+| 46 | Pending | Notification deduplication/dual-host matrix pending. |
+| 47 | Pending | Lock-screen privacy/settings matrix pending. |
+| 48 | Pending | Usage/context-meter correspondence pending. |
+| 49 | Pending | Settings persistence and API-address validation pending. |
+| 50 | Partial | Portrait terminal IME fit verified; Pair/Settings/dialog layouts pending. Android 8–14 variant SKIP*. |
+| 51 | Pending | Phone theme matrix pending; tablet/foldable variant SKIP*. |
+| 52 | Pending | Relay-assisted actions and remote-access toggles pending. |
+| 53 | Pending | Source-control branch/status/diff/stage/commit/push/pull/conflict/hook matrix pending. |
+| 54 | Partial | Wrapped HTTP/HTTPS full URL and Copy verified; Open/browser/offer interaction variants pending. |
+| 55 | Partial | HTTP(S) OSC8 offered, file/JavaScript ignored; Open pending. Windows/external-mouse variant SKIP*. |
+| 56 | Partial | Three exact Unicode lines copied; Share/selection and modal mouse isolation verified; sheet links/Open pending. |
+| 57 | Pending | Notification approval actions pending; Android 8–11 variant SKIP*. |
+| 58 | Pending | Notification question actions pending. |
+| 59 | Pending | Already-handled/expired/unreachable notification answers and repeated-tap behavior pending. |
+| 60 | Pending | Two-computer Inbox/Usage/approval/state matrix pending. |
+| 61 | Pending | Dictation/service/permission/edit/offline matrix pending. |
+| 62 | Pending | Separate desktop-driven Linux host matrix pending. |
+| 63 | Partial | Manual SSH auth/pin/list/input work; headless Server Edition and failure/fish variants pending. |
+| 64 | Pending | Separate driven-host read-ack/key-change/Forget matrix pending. |
+
+*SKIP is limited to the named unavailable variant: no disposable debug/migration or destructive
+reinstall profile; no second phone/cloud-restore setup; no macOS/Windows/older desktop; no
+root-capable renderer-crash setup; no fresh notification-denial profile; no Android 8–14 or
+8–11 comparison device, tablet/foldable or Windows/external-mouse setup. Applicable core checks
+remain pending and these variants must be revisited when their prerequisites are available.
+
 **Current stable-touch correction (`A89`, 2026-10-02):** beta 5 still stops during continuous
 swiping and the user must lift to continue. Its controlled phone history shows no coast after the ADB
 swipe command completes. Real xterm reproduces the cause: redraw replaces the touched text
@@ -513,12 +680,15 @@ and the fixed test source was restored before that rerun. The user authorized th
 instead of requiring CI for the first beta; each newly requested push still requires green Android
 workflow verification.
 
-Device results are partial: item 1 has first-install evidence and item 5 has install,
-non-debuggable, initial-launch and basic direct-SSH/terminal-input evidence on the intended Pixel.
-Manual SSH key/pin/project checks also cover parts of items 10 and 63. No complete item has passed.
-The private update preserved manual SSH registration and its identities; pre-attach tmux history
-is visible in the controlled test window. QR/code pairing, relay,
-mobile reconnect/background/answer behavior and the full 64-item pass remain open. The current complete
+Device results remain partial overall, with complete passes for items 19, 21, 22, 24, 38 and 39 in
+the latest record above. Items 1/5/10/63 retain install/minified/manual-SSH evidence, and current
+key/font/rotation, copy/link, mounted-relay question/copy-mode answers and SSH lifecycle results
+cover additional partial items. The private
+update preserved manual SSH registration and its identities; pre-attach tmux history is visible.
+Paste pairing, live hosted relay browsing/terminal input and the item-39 held-hook lifecycle are verified.
+QR pairing, cellular relay,
+actual network-outage/answer behavior, latest mobile-VPN and the full
+64-item pass remain open. The current complete
 protocol run after the stable-touch correction passed all 658 tests, as recorded above. Use the
 [private-beta procedure](../android/README.md#private-beta), which accepts same-build local
 APK/R8/source/version/hash provenance with `buildOrigin: "local"`.
@@ -869,7 +1039,9 @@ Blink ignores `focus()` on the element that already has focus, which is the usua
 and then asks `InputMethodManager` for the keyboard, after the next frame, so the focus change has
 been processed first. The page half runs the real `terminal.js` in node against a textarea stub that
 follows Blink's rule. The Android half cannot run on a JVM, so the test pins its order in the source.
-Whether the keyboard comes up, and stays up, is a device check.
+The signed-beta Pixel follow-up passes checklist item 24: the keyboard comes up and stays up
+in all three focus states, with actual software input reaching the pane rather than the draft.
+Other Android/device variants remain untested.
 
 `SettingsLeaveTest` covers leaving Settings (`A44`). The system back (gesture or button) used to pop
 the screen without storing the edited phone name or relay API address; only the top-bar arrow stored
@@ -1140,7 +1312,12 @@ still loses continued swipe/release events (`A89`). Code 7 received a same-signe
 app data and notification permission; SSH reopened with the retained key/pin at 56×48. Controlled
 continuous drag, coast and Esc stopping pass; a held touch stops coast at a stable 56×25 viewport.
 Earlier IME-resizing touch checks were inconclusive; the user confirms normal drag/coast both
-work now. Reversal/lifecycle/mobile and full checklist checks remain open. No complete item below has passed. Run these
+work now. The latest signed-beta follow-up completes items 19, 21, 22, 24, 38 and 39; all other items
+are Partial or Pending as recorded in the 64-row table above, with named conditional SKIP variants.
+Real SSH background/detach recovery, encrypted paste pairing, relay-only hosted browse/input and
+the synthetic shipped-hook lifecycle are verified;
+outage/cellular-relay/mobile and remaining lifecycle
+checks stay open. Run these
 on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
 the route (network or relay). Write the results into "What is verified, and how" above, and turn each
@@ -1532,6 +1709,11 @@ later fix left to a device.
 
 ## Known gaps
 
+The current `/v1/relay/join` contract is verified against the live hosted backend: the Pixel's
+encrypted paste pairing and forced relay-only browse succeed against production desktop source
+`58a202be`. The backend is a separate repo; cellular relay, SAS denial/revoke, interruptions and
+the wider relay action matrix remain device checks.
+
 - **A pairing that recorded no relay key still asks once on the relay** (audit `A07-late`). The
   desktop approves a late-adopting phone by the box key its pairing recorded from the sealed `/pair`
   body. A pairing made by a phone that does not send `boxPublicKey` (the iOS app, until it adopts the
@@ -1546,9 +1728,6 @@ later fix left to a device.
   can read them; Android's per-kind control is its two notification channels. What the app does have
   (`A25`): the notifications it posts itself carry Approve / Deny and a question's options, and their
   tap opens the session.
-- **`/v1/relay/join`.** The request/response shape is not in this repo (the backend is separate).
-  The client sends `{deviceToken, hostId}` and accepts `pairingToken`, `token` or `joinToken` —
-  unverified against the live backend.
 - **A computer added by its SSH address is SSH only, and has no push** (audit `A27`, part b). "Add
   SSH server" reaches a headless Server Edition or a dev host the phone reaches only over SSH, but
   only where the phone can open an SSH connection to it (the same network, or a VPN): there is no
@@ -1683,7 +1862,13 @@ later fix left to a device.
   658 protocol tests pass. Code 7 reopens SSH with its retained key/pin and verifies controlled
   continuous drag/coast/Esc. A held touch stops coast at a stable 56×25 viewport; earlier
   IME-resizing touch checks were inconclusive. The user confirms normal drag/coast both work.
-  Reversal/lifecycle/mobile, FPS/custom bindings and the full device pass remain open.
+  The latest real Pixel QA passes six complete items (19/21/22/24/38/39), plus partial key/font,
+  copy/link and SSH recovery checks. Encrypted paste pairing, live relay browse/terminal input and
+  shipped-hook Approve/Deny/expiry and mounted relay question/copy-mode answers work; the hook
+  producer/application are synthetic, with no live Claude execution. Offscreen/released/direct-SSH/
+  target-guard device variants remain open.
+  QR/cellular-relay/SAS/worker, real outage, latest mobile,
+  reversal/remaining lifecycle, FPS/custom bindings and the full device pass remain open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.
