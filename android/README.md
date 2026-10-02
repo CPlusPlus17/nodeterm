@@ -6,18 +6,20 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-> **Status (2026-10-02): private beta built; intended-phone installation and connection checks pending.** CI builds the debug APK, and the release blockers
+> **Status (2026-10-02): private beta updated on the intended Pixel; basic SSH and pre-attach tmux history work.** CI builds the debug APK, and the release blockers
 > and medium bugs an audit found are fixed on this branch and tested where the code allows. The
-> private minified beta was installed and cold-started on an MI8 test device (Android 15 / API 35),
-> then removed when the user identified it as the wrong phone. Its newly authorized SSH key was removed.
-> Pairing, terminal use, mobile data and the full device pass remain unverified. The plan and what is still open are in
+> private minified beta is installed on the Pixel 10 Pro (Android 17 / API 37); manual SSH lists real
+> projects and basic terminal input works. The code-3 update fixes the one-row viewport and exposes
+> pre-attach tmux history (`A85`). The user confirms the host terminal opens with Wi-Fi off over
+> mobile-data WireGuard. QR/code pairing, relay, reconnect/background/answer behavior and the full device pass remain unverified. The plan and what is still open are in
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
 > [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
 
 ## What it does
 
-The APK is built by CI, but **no row below has been checked on a device yet**: ✓ means the code is
-written for it and tested where the layer allows, and the numbered
+The APK is built by CI. Manual SSH and basic terminal input have partial real-device evidence;
+the feature rows below still require the full device pass. ✓ means the code is written for it and
+tested where the layer allows, and the numbered
 [device checklist](../docs/android.md#device-checklist) is what will check it.
 
 | | Android | Notes |
@@ -45,23 +47,26 @@ written for it and tested where the layer allows, and the numbered
 
 ## Before using it away from your computer
 
-The full device pass is still outstanding. Installation and the first cold start were checked on
-the wrong test device, then that installation was removed; the intended phone remains uninstalled.
-The user's intended connection is to this Linux host over their WireGuard VPN.
-The latest local fixes (`A78`–`A84`) have not
+The full device pass is still outstanding. The intended Pixel has the private beta and basic SSH
+listing/input works. Its corrected code-3 update (`A85`) fills a 52×45 viewport and shows pre-attach
+tmux history after swiping; font and keyboard changes resize the host correctly. The user's intended connection is to this Linux host over their
+WireGuard VPN; the user confirms its terminal opens over mobile data with Wi-Fi off.
+The latest local fixes (`A78`–`A85`) have not
 been verified by CI; a previous CI APK does not include them. A local build is authorized for this
 first private beta.
 
 1. Prepare and install the [private beta](#private-beta) below from a successful local build or CI
    run of the current branch. The desktop must also include the host-side fixes you want to test. Future private beta
    updates use the same private signer and a higher version code, preserving pairings.
-2. At the computer, turn on remote access in Settings → Phone, pair, and open the computer in the
+2. For a VPN/SSH route, connect the VPN, use Add SSH server and compare the host-key fingerprint
+   with the computer. For the relay route, turn on remote access in Settings → Phone, pair, and open the computer in the
    app. If either screen asks for a first relay approval, compare and approve its code there.
 3. Turn the phone's Wi-Fi off. Open a terminal over mobile data, send a harmless command, answer a
    question and a held approval, then reconnect after briefly enabling airplane mode. Confirm the
-   answers on the computer. This also checks the live relay join contract, still unverified here.
-4. Keep the computer awake, nodeterm running, remote access on, and the intended project/session
-   mounted and awake. Offscreen Sleeping sessions remain a known relay gap. Background
+   answers on the computer. For SSH, keep the VPN active and confirm the route stays SSH; for the
+   relay route this also checks the live relay join contract, still unverified here.
+4. Keep the computer awake, nodeterm running, and the intended project/session mounted and awake.
+   For the relay route, keep remote access on. Offscreen Sleeping sessions remain a known relay gap. Background
    notifications use Android's periodic worker and may take longer than 15 minutes; there is no FCM.
 5. Record these results, then finish the [64-item device checklist](../docs/android.md#device-checklist).
    A successful build or cold start alone does not verify pairing, input or connectivity on the phone.
@@ -88,8 +93,9 @@ fails CI rather than a first release (R8 reports the missing class), and so does
 script checks when it stops matching (the WebView bridge, the worker, BouncyCastle's provider tables,
 one exception name). A keep that NEW reflection needs is not detected, because R8 renames or drops
 such code without a word; add the keep and a line in `tools/check-r8-output.sh`. None of this proves
-a minified APK works on the intended phone. This session checked installation and cold start on
-the wrong test device, then removed the installation and its newly authorized SSH key.
+a minified APK fully works on the intended phone. The private beta has listed actual projects and
+delivered basic terminal input over SSH; the corrected update exposes pre-attach tmux history.
+The full device pass remains open.
 
 ## Private beta
 
@@ -104,12 +110,36 @@ Computers screen, Pair button and Settings with no crash markers. Installed meta
 `com.android.webview` `144.0.7559.76`. The user then identified this as the wrong phone. Only the
 newly installed app and its test UI dump were removed; its newly authorized SSH key was removed
 and the host's `authorized_keys` was restored byte-for-byte. It had no paired host, and no SSH
-connection was attempted. Installation and pairing on the intended phone remain open; the intended
-route is this Linux host through the user's WireGuard VPN.
+connection was attempted. The same code-2 beta is now installed on the intended Pixel 10 Pro,
+Android 17 / API 37, Vanadium WebView `154.0.8037.92.0`. The user granted notifications normally;
+`run-as` is denied. Manual Add SSH server connects to this Linux host, with the authorized phone
+key preserving existing authorized entries and the Ed25519 pin matching its public key. The app lists 17
+actual projects and a harmless terminal command entered on the phone executed in a controlled
+temporary tmux window. The intended route is this host through the user's WireGuard VPN; the user
+confirms its terminal opens over mobile data with Wi-Fi off. That code-2 terminal was one row (`A85`), and swiping did not expose old
+history. The fix in `febe022a` supplies `MATCH_PARENT` WebView layout parameters; its Gradle
+wiring guard and two mutations pass. Actual beta `0.1.0-beta.2` (code `3`) passed its offline AGP
+release build in 45 seconds, retained-signer verification and in-place update. Host configuration,
+SSH key/pin and notification grant stayed intact. The controlled terminal now fills 52×45, and a
+downward swipe entered tmux copy mode and visibly showed rows printed before update/attach.
+Inputs/logs are in `.nodeterm/android-beta-build-2/`; APK/checksum/metadata are in
+`.nodeterm/android-beta-2/`. APK SHA-256:
+`a022a399e23c81607a4a3664862b964ad781f0a589ab77dda902b4c2dc597eca`.
+A− restores 56×48, the keyboard changes it to 56×25 and hiding the keyboard returns 56×48.
+Esc leaves copy mode, and Send executes a second harmless draft command with its whole output line.
+Only the owned temporary test window was removed; the original window/process and intended-phone
+configuration remain.
+
+**User-reported mobile check:** with WireGuard enabled and Wi-Fi off, the user confirmed that the
+intended Linux host's terminal opens over mobile data. This is separate from the ADB-assisted LAN
+checks above. Mobile reconnect, approvals/questions, background behavior and the full 64-item
+checklist remain open.
+
+History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link tests with zero skips. Both JavaScript swipe-direction/disabled-scroll mutations, the real-SSH wheel-direction mutation and the two native layout-policy mutations were caught; production sources were restored. **Final verification:** all 609 protocol tests passed in 59 suites with zero failures, errors or skips (52 seconds); the offline app `compileKotlin` passed (7 seconds).
 The original workspace holds the input provenance in `.nodeterm/android-beta-build-1/` and the
-finished APK/checksum/metadata in `.nodeterm/android-beta-1/`. Pairing, terminal and mobile-data
-checks remain open. The initial full protocol run passed 603 of 605 tests; the two SSH
-harness-isolation failures (`A84`) are fixed in tests only (`1d6b04cc`). The final full rerun passed
+first finished APK/checksum/metadata in `.nodeterm/android-beta-1/`. QR/code pairing, relay and
+mobile reconnect/background/answer checks remain open. The initial full protocol run passed 603 of 605 tests; the two SSH
+harness-isolation failures (`A84`) are fixed in tests only (`1d6b04cc`). The earlier A84 full rerun passed
 all 606 tests with zero failures, errors or skips, and both harness mutations were caught. CI was waived for this local build; no current CI
 pass is claimed. Actions
 artifacts on a public repository are downloadable by other signed-in users, so they contain only
@@ -122,15 +152,15 @@ unsigned build inputs and checks.
    `android/`, select the beta versions, build with the pinned wrapper, and check the R8 keeps:
 
    ```sh
-   NODETERM_ANDROID_VERSION_CODE=2 \
-   NODETERM_ANDROID_VERSION_NAME=0.1.0-beta.1 \
+   NODETERM_ANDROID_VERSION_CODE=3 \
+   NODETERM_ANDROID_VERSION_NAME=0.1.0-beta.2 \
      ./gradlew :app:assembleRelease --stacktrace
    sh tools/check-r8-output.sh app/build/outputs/mapping/release
    ```
 
    After both commands succeed, record the actual APK/R8 hashes in `beta-build-inputs.json`. The
    packager requires these keys; `buildOrigin: "local"` distinguishes this from CI. From the same
-   `android/` directory, the following records version `2` / `0.1.0-beta.1`:
+   `android/` directory, the following records version `3` / `0.1.0-beta.2`:
 
    ```sh
    python3 - <<'PYTHON'
@@ -144,8 +174,8 @@ unsigned build inputs and checks.
        'schemaVersion': 1,
        'buildOrigin': 'local',
        'sourceRevision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-       'versionCode': 2,
-       'versionName': '0.1.0-beta.1',
+       'versionCode': 3,
+       'versionName': '0.1.0-beta.2',
        'unsignedApkSha256': sha(apk),
        'r8MappingSha256': sha(r8 / 'mapping.txt'),
        'r8SeedsSha256': sha(r8 / 'seeds.txt'),
@@ -193,7 +223,7 @@ unsigned build inputs and checks.
      --store-password-file /private/path/store-password \
      --key-password-file /private/path/key-password \
      --expected-signer-sha256 YOUR_CERTIFICATE_SHA256 \
-     --version-code 2 --version-name 0.1.0-beta.1 \
+     --version-code 3 --version-name 0.1.0-beta.2 \
      --source-revision FULL_COMMIT_SHA_FROM_BETA_BUILD_INPUTS \
      --build-tools-dir "$ANDROID_HOME/build-tools/36.0.0" \
      --output-dir /private/path/nodeterm-beta-1
@@ -333,8 +363,9 @@ iOS app does receive the detail, in the push the desktop sends.
   app use it, so that is enough to pull the phone's pairing credentials: the SSH private key your computers
   accept, the relay box secret and the relay device token. A signed, non-debuggable release build
   has been built and privately signed through the [private-beta path](#private-beta). Its wrong-test-device
-  installation was removed; intended-phone installation remains open.
-  Cold start is confirmed; pairing, terminal use and the full device pass remain unverified. Keep USB and wireless debugging off when not using them.
+  installation was removed; the intended Pixel now has the same private beta, with `run-as` denied.
+  Basic SSH input, font/keyboard resizing and pre-attach tmux history work; relay and the full
+  device pass remain unverified. Keep USB and wireless debugging off when not using them.
 - **If someone else may have had adb access, pairing again is not enough.** The phone keeps its SSH
   key, its relay box key and its relay device id through a re-pair, so each computer would trust the
   same keys again. Give the phone a new identity before it pairs:

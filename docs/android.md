@@ -316,9 +316,54 @@ APK SHA-256: `39afa15f15219536e3de1a462f2e5018515847a43684093eef18d95faf5e7fb4`.
 its test UI dump were removed. The phone's newly authorized SSH public key was removed, restoring
 the host's `authorized_keys` byte-for-byte to its pre-change state. The MI8 had no paired host and
 no SSH connection was attempted. The device evidence above remains first-launch evidence for that
-test device only. Installation and pairing on the intended phone remain open; the user's target
-is this Linux host over their WireGuard VPN. This partially addresses `A50`: the signed artifact
-and test-device launch are verified, while intended-phone installation and full validation remain open.
+test device only. The subsequent intended-phone results are below. The user's target is this
+Linux host over their WireGuard VPN; full validation remains open under `A50`.
+
+**Intended phone, initial beta:** the user supplied the intended phone's ADB endpoint. The Pixel
+10 Pro runs Android 17 / API 37 with Vanadium WebView `154.0.8037.92.0`. Private beta
+`0.1.0-beta.1` (code `2`) installed, the user granted notifications through Android's normal dialog,
+and `run-as` was refused on the non-debuggable build. Its SSH public key was authorized while
+preserving existing authorized entries. Through Add SSH server, the app connected to this Linux host;
+the pinned Ed25519 fingerprint matches the host's public key. It lists 17 actual projects, and a
+harmless `echo` sentinel entered from the phone executed in a controlled temporary tmux window.
+This is manual direct-SSH registration/authentication, not verification of QR/code or relay pairing.
+
+The initial terminal still advertises only 52/56 columns by one row despite a large visible
+viewport, including after changing the font (`A85`). Chromium treats a WebView's `WRAP_CONTENT`
+height as zero CSS layout height, despite its large native bounds. The local fix supplies explicit
+`MATCH_PARENT` layout parameters before loading the terminal page (`febe022a`); the real Gradle
+`TerminalWebViewLayoutTest` wiring guard passes, and two layout-policy mutations were caught in a
+temporary source mirror. The actual `0.1.0-beta.2` (code `3`) from
+`febe022ad2fc373f27ac11d9ad5f130f36f027a5` passed its offline AGP release build in 45 seconds and was
+signed with the retained certificate; signature, alignment and same-build provenance were verified.
+Inputs/logs are in `.nodeterm/android-beta-build-2/`; finished APK/checksum/metadata are in
+`.nodeterm/android-beta-2/`. APK SHA-256:
+`a022a399e23c81607a4a3664862b964ad781f0a589ab77dda902b4c2dc597eca`.
+An independent artifact review verified v2/v3 signatures with the same retained certificate,
+all APK/provenance hashes, 16 KiB ZIP alignment and 16 KiB load-segment alignment for all four
+native libraries.
+
+Updating the Pixel with `adb install -r` succeeded and preserved its host configuration, phone SSH
+key, host-key pin and notification grant. The app reopened the intended Linux host over SSH. The
+controlled terminal now reports 52×45 instead of 52×1 and fills its viewport. A downward swipe
+entered tmux copy mode at position 82; a screenshot visibly showed the pre-attach ready/sentinel
+and marker rows 001–039, from 120 rows printed before the update/attach. The layout fix restores
+this pre-attach tmux history without any production SSH-scroll change. A− restored font size 13
+and a 56×48 terminal; showing the soft keyboard resized it to 56×25 with native bounds
+`[0,396][1280,1462]`, and hiding the keyboard restored 56×48. The Esc chip left tmux copy mode
+(`pane_in_mode=0`). Sending a second unique `echo` marker through the updated beta's draft executed
+and displayed the entire output line. The app returned to Sessions; only the owned temporary test
+window was removed, with the previous window restored and its original Python process still alive.
+The intended phone's app, SSH key and configuration remain. Device checks and controlled screenshots
+are retained in `.nodeterm/android-beta-build-2/`, including `device-checks.json`. The full phone
+pass remains pending; the subsequent user-reported mobile connection is below.
+
+**User-reported mobile check:** with WireGuard enabled and Wi-Fi off, the user confirmed that the
+intended Linux host's terminal opens over mobile data. This is separate from the ADB-assisted LAN
+checks above. Mobile reconnect, approvals/questions, background behavior and the full 64-item
+checklist remain open.
+
+History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link tests with zero skips. Both JavaScript swipe-direction/disabled-scroll mutations, the real-SSH wheel-direction mutation and the two native layout-policy mutations were caught; production sources were restored. **Final verification:** all 609 protocol tests passed in 59 suites with zero failures, errors or skips (52 seconds); the offline app `compileKotlin` passed (7 seconds).
 
 The full desktop type-check and 679 desktop tests passed, with three platform skips. The offline
 Gradle app type-check passed, and 23 Python beta-tool tests passed with real SDK APK/signature
@@ -327,17 +372,18 @@ The real Gradle protocol run executed 605 tests: 603 passed, two real-SSH tests 
 The two initial SSH failures were test-harness isolation faults (`A84`): a Fedora login-shell
 command-not-found handler delays the literal `-R` command, and an earlier no-exit-status test leaves
 Escape in the shared pane's Readline state, corrupting the next `echo` into `cho`. The test-only fix
-in `1d6b04cc`
-isolates a fresh non-login pane and initialization environment per test. The final full protocol
-rerun passed all 606 tests with zero failures, errors or skips; both harness mutations were caught,
+in `1d6b04cc` isolates a fresh non-login pane and initialization environment per test. That earlier
+full protocol rerun passed all 606 tests with zero failures, errors or skips; both harness mutations were caught,
 and the fixed test source was restored before that rerun. Current GitHub Actions verification
 remains open; the user authorized this local build instead of requiring CI for the first beta.
 
-Device results are partial and apply only to the wrong MI8 test device: item 1 has first-install
-evidence; item 5 has install, non-debuggable
-and initial-launch evidence. Neither complete item has passed. There has
-been no pairing, update-between-betas, terminal, SSH/relay, mobile-data or full 64-item device pass.
-First cold start reaching a permission dialog does not establish those features. Use the
+Device results are partial: item 1 has first-install evidence and item 5 has install,
+non-debuggable, initial-launch and basic direct-SSH/terminal-input evidence on the intended Pixel.
+Manual SSH key/pin/project checks also cover parts of items 10 and 63. No complete item has passed.
+The private update preserved manual SSH registration and its identities; pre-attach tmux history
+is visible in the controlled test window. QR/code pairing, relay,
+mobile reconnect/background/answer behavior and the full 64-item pass remain open. The final complete protocol
+run after the added layout/history tests passed all 609 tests, as recorded above. Use the
 [private-beta procedure](../android/README.md#private-beta), which accepts same-build local
 APK/R8/source/version/hash provenance with `buildOrigin: "local"`.
 
@@ -389,8 +435,9 @@ A verified local AGP build is now also authorized; its same-build unsigned APK, 
 provenance use the same required fields, with `buildOrigin: "local"`. The CI path selects those inputs;
 the beta checks require protocol/release success, desktop type-check and delivery/ack tests, and
 real-tool packaging regressions. Local packaging verifies the expected private signer, release
-manifest, R8 keeps, alignment and checksum. **The actual corrected release is signed; its wrong-test-device
-installation was removed, and intended-phone installation and validation remain pending.** Packaging fixture APKs prove the tool's gates only; the
+manifest, R8 keeps, alignment and checksum. **The actual corrected release is signed and installed
+on the intended Pixel; the code-3 update preserves identities, resizes with font/keyboard changes
+and exposes pre-attach tmux history. The remaining full phone validation is pending.** Packaging fixture APKs prove the tool's gates only; the
 actual APK and partial phone results are recorded above. `A50` stays partly open until the full
 phone pass.
 
@@ -399,8 +446,9 @@ the original workspace's ignored `.nodeterm/android-beta-signing/`, outside the 
 checkout. The directory is `0700` and every file `0600`; passwords stay in separate local files.
 The private-key entry, certificate fingerprint and distinction from the public debug certificate
 are verified. Source exports contain none of these private files. Preserve a private backup for
-future APK updates. The first signed APK was tested on the wrong MI8 and removed; current CI,
-intended-phone installation and the full phone pass remain open.
+future APK updates. The wrong MI8 installation was removed; the same first signed APK is now on
+the intended Pixel and updated in place to the code-3 sizing fix. Current CI and the full phone
+pass remain open.
 
 Beta tooling checks pass 22 real SDK packaging fixture tests plus one selected-version environment
 test (12 cases), with 13 packaging mutations and one version-validation bypass caught. Seven CI
@@ -498,9 +546,10 @@ from a string) builds green without its keep. It needs its own keep and a line i
 `tools/check-r8-output.sh`. `R8RulesTest` re-derives the classes Android lacks from the jars the
 protocol module ships to the app, and requires a keep for every WorkManager worker in the app sources.
 The debug APK stays unminified. CI attaches unsigned release inputs; the private-beta path signs
-them locally. The app has no instrumented tests. The actual private minified APK installed and
-cold-started on the wrong test device, then was removed. Intended-phone installation, connections
-and terminal behavior remain unverified; the
+them locally. The app has no instrumented tests. The actual private minified APK is installed on
+the intended Pixel and has listed real projects and delivered basic terminal input over SSH.
+The corrected code-3 update resizes for font/keyboard changes and exposes pre-attach tmux history. Remaining
+relay and device behavior are unverified; the
 [device checklist](#device-checklist) below is what the full device pass has to run. An audit of the code found release blockers; the fixed ones are
 marked in its index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md).
 The plan and the decisions still open are in [`android-handover.md`](android-handover.md).
@@ -942,11 +991,13 @@ on a phone is a device check.
 
 ## Device checklist
 
-Partial installation/startup evidence is recorded in "What is verified, and how": the private
-minified beta installed and cold-started on an MI8 (Android 15 / API 35), which the user then
-identified as the wrong phone. That installation and its newly authorized SSH key were removed;
-the intended phone has not been installed or paired. No complete item below has
-passed: items 1 and 5 include further update, pairing and runtime checks that remain open. Run these
+Partial results are recorded in "What is verified, and how": the private minified beta is installed
+on the intended Pixel 10 Pro (Android 17 / API 37, Vanadium WebView `154.0.8037.92.0`), with manual
+SSH key/pin authentication, 17 real projects listed and basic terminal input executed. The wrong
+MI8 installation and its newly authorized SSH key were removed. The terminal-sizing/history
+failure `A85` is fixed in code-3 beta, with a 52×45 viewport and pre-attach tmux history visible after
+swiping. The update preserved SSH registration/key/pin and notification permission. No complete
+item below has passed. Run these
 on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
 the route (network or relay). Write the results into "What is verified, and how" above, and turn each
@@ -1067,7 +1118,7 @@ later fix left to a device.
 19. Non-ASCII renders over SSH: Claude's rounded borders, accented letters, CJK, emoji. *(A03)*
 20. Swipe to scroll the tmux history. A copy the pane makes reaches Android's clipboard (OSC 52) with a
     "Copied N lines" toast: in tmux's copy-mode (Ctrl, then b, then [ from the key row and the input
-    bar), or from an application such as vim (`"+y`). *(A65)*
+    bar), or from an application such as vim (`"+y`). *(A65, A85)*
 21. A large OSC 52 copy. In the pane, run
     `printf '\033]52;c;%s\a' "$(head -c 150000 /dev/zero | tr '\0' x | base64 | tr -d '\n')"`
     (the desktop's tmux passes an application's OSC 52 on): the phone says it is too large to copy and
@@ -1077,8 +1128,10 @@ later fix left to a device.
 22. Invalid OSC 52 is ignored silently: a payload that is not base64, one with no `;`, a `?` read
     query, and a selection field longer than 16 characters copy nothing, show nothing and leave the
     clipboard as it was. *(A53)*
-23. "Sized to another screen · Fit this screen" appears when the desktop's view of the session is
-    larger, and Fit works. *(A65)*
+23. The terminal uses its visible viewport height on initial open, after changing font size and
+    with the keyboard shown/hidden; its host receives more than one row when the viewport has room.
+    "Sized to another screen · Fit this screen" appears when the desktop's view of the session is
+    larger, and Fit works. *(A65, A85)*
 24. The ⌨ chip raises the soft keyboard, and it stays up, in three states: right after the terminal
     opens, before the page was ever touched; after tapping the terminal and then dismissing the
     keyboard (the page's input already has focus); and while the input bar has focus. The keys then
@@ -1472,8 +1525,9 @@ later fix left to a device.
   credentials: the SSH key its computers accept, the relay box secret and the relay device token.
   android/README.md says so under Security. A private beta now has a local signing/verification
   tool and opt-in versioned unsigned CI inputs, documented in the README; its key and signed APK
-  stay off Actions. The first private minified APK installed and cold-started on the wrong test
-  phone, then was removed; intended-phone installation and full validation remain open.
+  stay off Actions. The first private minified APK is installed on the intended Pixel and basic
+  SSH listing/input works. The code-3 update fixes sizing/history (`A85`) and preserves identities;
+  full validation remains open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.

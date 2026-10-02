@@ -69,7 +69,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 🟡 private signed minified beta built; wrong-test-device launch verified then removed; intended-phone install/full validation open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 🟡 private minified beta updated on intended Pixel preserving SSH identities; basic SSH/history proof, full validation open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -104,6 +104,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; full checks pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
+| [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
 
 ## A01
 
@@ -1634,9 +1635,15 @@ the empty Computers screen, Pair button and Settings appear with no crash marker
 signed-artifact preparation and part of checklist item 5 on that test device. The user identified
 the MI8 as the wrong phone, so only the newly installed app and its test UI dump were removed;
 its newly authorized SSH key was removed and host `authorized_keys` restored byte-for-byte.
-No host had been paired and no SSH connection attempted. The intended phone still needs
-installation and pairing to this Linux host over the user's WireGuard VPN. Terminal, mobile-data
-preflight and full 64-item phone validation leave `A50` partly open.
+No host had been paired and no SSH connection attempted. The intended Pixel 10 Pro now has the
+same signed beta; it runs Android 17 / API 37 with Vanadium WebView `154.0.8037.92.0`, accepted
+notifications through the normal dialog, and refuses `run-as`. Manual SSH uses the authorized phone
+key with existing keys preserved and a matching Ed25519 host pin, lists 17 real projects and
+delivers a harmless sentinel in a controlled temporary test window. The actual code-3 private
+update preserved host configuration, SSH key/pin and notification permission, and fixes the one-row
+viewport/history failure (`A85`), including font/keyboard resize, Esc and draft input. QR/code
+pairing, relay, reconnect/background/answer behavior and full 64-item phone validation leave `A50`
+partly open; the user confirms Wi-Fi-off mobile-data WireGuard terminal access.
 
 ## A51
 
@@ -2464,8 +2471,10 @@ The corrected actual release and final offline `:app:assembleRelease` succeeded;
 warnings are gone, and every R8 runtime keep passed. That APK was privately signed, verified,
 installed and cold-started on an MI8 (Android 15 / API 35), then removed when it was identified as
 the wrong phone. Its newly authorized SSH key was removed; no host was paired or SSH connection
-attempted. These results establish the build fix, while intended-phone installation and the full
-phone pass remain open under `A50`. The test-only `A84` fix passed all 606 protocol tests. The compatibility sources are linked from the guard:
+attempted. The same beta is subsequently installed on the intended Pixel with basic manual SSH
+proof, and its corrected code-3 update verifies `A85` sizing/pre-attach tmux history. These results
+establish the build fix; the full phone pass stays open under `A50`.
+The test-only `A84` fix passed all 606 protocol tests. The compatibility sources are linked from the guard:
 [Android Kotlin support](https://developer.android.com/build/kotlin-support) and
 [AGP 8.10 release notes](https://developer.android.com/build/releases/agp-8-10-0-release-notes).
 
@@ -2489,3 +2498,47 @@ leading-dash and missing-exit-status assertions. Both isolation mutations were c
 source was restored, and the final full rerun passed all 606 tests with zero failures, errors or
 skips. This was not an observed phone/APK failure; production app source and the `fa71cb08` APK
 build are unchanged.
+
+## A85
+
+**WebView WRAP_CONTENT layout parameters collapse the terminal's CSS viewport to one row (device verification, 2026-10-02).**
+
+- Severity: **medium**; effort: small; area: terminal; kind: bug
+- Location: `android/app/src/main/kotlin/dev/nodeterm/android/ui/TerminalController.kt`, `createWebView`
+
+On the intended Pixel 10 Pro (Android 17 / API 37, Vanadium WebView `154.0.8037.92.0`), private beta
+`0.1.0-beta.1` / code `2` opens a large native terminal view but advertises 52/56 columns by one
+row, despite native bounds `[0,396][1280,2448]`. The one-row height persists after a font change.
+Manual SSH authentication, real project
+listing and a harmless command in a controlled temporary test tmux window work; swipe does not
+enter copy mode or expose old history in this one-row state.
+
+The WebView lacked explicit layout parameters, so AndroidView supplied `WRAP_CONTENT`.
+[Chromium's AwLayoutSizer](https://chromium.googlesource.com/chromium/src/+/HEAD/android_webview/java/src/org/chromium/android_webview/AwLayoutSizer.java)
+sets forced zero layout height from that height policy. Large measured native bounds therefore
+do not establish a nonzero CSS viewport, and FitAddon clamps terminal rows to one.
+
+The minimal fix in `febe022a` sets both layout dimensions to `MATCH_PARENT` before loading the
+terminal page; CSS and JavaScript are unchanged. The real Gradle `TerminalWebViewLayoutTest`
+wiring guard passes, and the height-`WRAP_CONTENT` and removed-assignment mutations are caught in a
+temporary source mirror. Actual retained-signer beta `0.1.0-beta.2` / code `3` from
+`febe022ad2fc373f27ac11d9ad5f130f36f027a5` passed its offline AGP build (45 seconds), signature,
+alignment/provenance verification and in-place update. Its host configuration, SSH key/pin and
+notification grant survived. The controlled terminal now fills 52×45, and a downward swipe enters
+tmux copy mode at position 82. A screenshot visibly shows the pre-attach ready/sentinel and marker
+rows 001–039 from 120 rows printed before update/attach. History is restored by the native layout
+fix; no production SSH-scroll change was needed. A− restores font 13 and 56×48, the soft keyboard
+changes it to 56×25, and hiding the keyboard restores 56×48. Esc leaves copy mode; a second
+harmless draft command executes with its whole output line visible. The owned temporary test
+window alone was removed, with the previous window/process intact and intended-phone app/key/config
+retained.
+
+**User-reported mobile check:** with WireGuard enabled and Wi-Fi off, the user confirmed that the
+intended Linux host's terminal opens over mobile data. This is separate from the ADB-assisted LAN
+checks above. Mobile reconnect, approvals/questions, background behavior and the full 64-item
+checklist remain open.
+
+History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link tests with zero skips. Both JavaScript swipe-direction/disabled-scroll mutations, the real-SSH wheel-direction mutation and the two native layout-policy mutations were caught; production sources were restored. **Final verification:** all 609 protocol tests passed in 59 suites with zero failures, errors or skips (52 seconds); the offline app `compileKotlin` passed (7 seconds).
+
+Checklist items 20 and 23
+cover history and viewport sizing without adding or removing any of the 64 items.
