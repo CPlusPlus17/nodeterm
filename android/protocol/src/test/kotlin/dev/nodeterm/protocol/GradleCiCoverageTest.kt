@@ -1,6 +1,7 @@
 package dev.nodeterm.protocol
 
 import java.io.File
+import java.util.Properties
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -104,6 +105,14 @@ class GradleCiCoverageTest {
     @Test
     fun `private beta checks require the beta branch or opt in and tested unsigned release inputs`() {
         betaPolicy(read(androidWorkflow))
+    }
+
+    @Test
+    fun `the release shrinker supports the declared Kotlin compiler and Gradle wrapper`() {
+        androidToolchain(
+            read(File(InteropHarness.repoRoot, "android/build.gradle.kts")),
+            read(File(InteropHarness.repoRoot, "android/gradle/wrapper/gradle-wrapper.properties")),
+        )
     }
 
     @Test
@@ -367,6 +376,41 @@ class GradleCiCoverageTest {
 
         private fun indent(line: String) = line.length - line.trimStart().length
         private fun skip(line: String) = line.isBlank() || line.trimStart().startsWith("#")
+
+        /**
+         * Kotlin 2.2 metadata requires R8 8.10.21, bundled in AGP 8.10; AGP 8.9 could finish a
+         * release while reporting metadata parsing errors. AGP 8.10 requires Gradle 8.11.1.
+         * Sources: https://developer.android.com/build/kotlin-support and
+         * https://developer.android.com/build/releases/agp-8-10-0-release-notes
+         * Extend this check from the release notes when either plugin moves to another minor.
+         */
+        internal fun androidToolchain(build: String, wrapper: String) {
+            fun version(raw: String): List<Int> {
+                assertTrue(Regex("[0-9]+\\.[0-9]+\\.[0-9]+").matches(raw), "unsupported toolchain version: $raw")
+                return raw.split('.').map(String::toInt)
+            }
+            fun plugin(id: String): List<Int> {
+                val declaration = Regex("""id\(["']${Regex.escape(id)}["']\)\s+version\s+["']([^"']+)["']""")
+                    .findAll(stripComments(build)).toList()
+                assertEquals(1, declaration.size, "expected one literal version for plugin $id")
+                return version(declaration.single().groupValues[1])
+            }
+            fun atLeast(actual: List<Int>, minimum: List<Int>): Boolean = actual.zip(minimum)
+                .firstOrNull { (a, b) -> a != b }?.let { (a, b) -> a > b } ?: true
+
+            val kotlin = plugin("org.jetbrains.kotlin.android")
+            assertEquals(listOf(2, 2), kotlin.take(2), "update the R8 compatibility check for this Kotlin minor")
+            val agp = plugin("com.android.application")
+            assertTrue(atLeast(agp, listOf(8, 10, 0)), "Kotlin 2.2 requires AGP 8.10 or newer for supported R8 metadata")
+            assertEquals(listOf(8, 10), agp.take(2), "verify the Gradle minimum for this AGP minor and extend this check")
+            val properties = Properties().apply { load(wrapper.reader()) }
+            val distribution = properties.getProperty("distributionUrl").orEmpty()
+            val gradle = Regex("""/gradle-([0-9]+\.[0-9]+\.[0-9]+)-(?:bin|all)\.zip$""")
+                .find(distribution)?.groupValues?.get(1)?.let(::version)
+                ?: throw AssertionError("the wrapper must declare a stable Gradle distribution: $distribution")
+            assertEquals(8, gradle[0], "verify AGP 8.10 compatibility before moving to another Gradle major")
+            assertTrue(atLeast(gradle, listOf(8, 11, 1)), "AGP 8.10 requires Gradle 8.11.1 or newer")
+        }
 
         /** CI prepares verified release inputs; local signing never becomes a public artifact. */
         internal fun betaPolicy(yaml: String) {
