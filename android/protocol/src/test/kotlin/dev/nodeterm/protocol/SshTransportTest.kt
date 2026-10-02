@@ -37,6 +37,7 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import kotlin.test.assertIs
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.TestInstance
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -73,6 +74,9 @@ class SshTransportTest {
     private lateinit var ptyScript: PtyScript
     private val identity = SshIdentity.generate()
     private var port = 0
+    // An explicit non-login POSIX shell: a developer's login profiles can install a slow command-
+    // not-found handler, and their Readline config can change how the tested bytes are interpreted.
+    private val paneShell = arrayOf("/usr/bin/env", "ENV=", "BASH_ENV=", "INPUTRC=/dev/null", "/bin/sh")
     /** Every public key the server was asked to accept, ours or not. */
     private val authAttempts = java.util.concurrent.atomic.AtomicInteger()
 
@@ -84,9 +88,10 @@ class SshTransportTest {
     // so an exported one pointed these tests at a real Server Edition's data dir.
     private fun childEnv(): Map<String, String> = System.getenv().filterKeys {
         it != "TMUX" && it != "TMUX_PANE" && it != "LANG" && it != "LANGUAGE" && !it.startsWith("LC_") &&
-            !it.startsWith("NODETERM_")
+            !it.startsWith("NODETERM_") && it !in setOf("ENV", "BASH_ENV", "INPUTRC", "SHELLOPTS", "BASHOPTS") &&
+            !it.startsWith("BASH_FUNC_")
     } +
-        mapOf("HOME" to home.path, "TMUX_TMPDIR" to tmuxDir.path, "XDG_CONFIG_HOME" to File(home, ".config").path)
+        mapOf("HOME" to home.path, "TMUX_TMPDIR" to tmuxDir.path, "XDG_CONFIG_HOME" to File(home, ".config").path, "SHELL" to "/bin/sh")
 
     private fun tmux(vararg args: String): Pair<Int, String> = tmuxOn("node-terminal", *args)
 
@@ -199,6 +204,18 @@ class SshTransportTest {
         root.deleteRecursively()
     }
 
+    @BeforeEach
+    fun resetPrimaryPane() {
+        // Tests deliberately send Escape, leave partial input and alter PATH. Even a failed test
+        // must not leave those bytes or shell settings for the next test in this shared session.
+        val (code, out) = tmux("respawn-pane", "-k", "-t", "=nt-term-a-1:", "-c", File(repo, "sub").path, *paneShell)
+        assertEquals(0, code, out)
+        val token = "ready_${System.nanoTime()}"
+        assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "-l", "--", "printf 'fixture_%s\\n' '$token'").first)
+        assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "Enter").first)
+        assertTrue(waitForPane("node-terminal", "nt-term-a-1", "fixture_$token").contains("fixture_$token"), "the fresh shell must be ready")
+    }
+
     private val repo get() = File(root, "repo")
 
     private fun layOutDesktop() {
@@ -235,7 +252,7 @@ class SshTransportTest {
         )
         File(ud, "tmux.conf").writeText("set -g status off\n")
         File(repo, "sub").mkdirs()
-        val (code, out) = tmux("-f", File(ud, "tmux.conf").path, "new-session", "-d", "-s", "nt-term-a-1", "-c", File(repo, "sub").path)
+        val (code, out) = tmux("-f", File(ud, "tmux.conf").path, "new-session", "-d", "-s", "nt-term-a-1", "-c", File(repo, "sub").path, *paneShell)
         assertEquals(0, code, out)
     }
 
@@ -329,6 +346,28 @@ class SshTransportTest {
                 if (System.currentTimeMillis() > end) throw AssertionError("'$needle' never appeared: ${synchronized(out) { out.toString(Charsets.UTF_8) }.takeLast(400)}")
                 Thread.sleep(50)
             }
+        }
+    }
+
+    @Test
+    fun `a fresh test pane drops pending input and shell startup settings`() {
+        val init = File(home, "unexpected-shell-init.sh").apply { writeText("echo startup_leaked\n") }
+        try {
+            assertEquals(0, tmux("set-environment", "-g", "ENV", init.path).first)
+            assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "-l", "--", "PATH=/no-test-commands; export PATH").first)
+            assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "Enter").first)
+            assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "-l", "--", "echo leftover_").first)
+            assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "Escape").first)
+            resetPrimaryPane()
+            assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "-l", "--", "[ -x /bin/sh ] && command -v sh >/dev/null && printf 'isolated_%s\\n' yes").first)
+            assertEquals(0, tmux("send-keys", "-t", "=nt-term-a-1:", "Enter").first)
+            val pane = waitForPane("node-terminal", "nt-term-a-1", "isolated_yes")
+            assertTrue(pane.contains("isolated_yes"), pane)
+            assertFalse(pane.contains("leftover_"), pane)
+            assertFalse(pane.contains("startup_leaked"), pane)
+        } finally {
+            tmux("set-environment", "-gu", "ENV")
+            init.delete()
         }
     }
 
@@ -681,7 +720,7 @@ class SshTransportTest {
         // and hook env, which an attach from the phone would not. A live server on each socket, so
         // "missing" is a missing SESSION, not a socket nobody listens on.
         try {
-            assertEquals(0, tmuxOn("nodeterm-rmt", "-f", "/dev/null", "new-session", "-d", "-s", "nt-keep-rmt").first)
+            assertEquals(0, tmuxOn("nodeterm-rmt", "-f", "/dev/null", "new-session", "-d", "-s", "nt-keep-rmt", *paneShell).first)
             for (socket in listOf("node-terminal", "nodeterm-rmt")) {
                 val (code, _) = run {
                     val pb = ProcessBuilder(ptyScript.argv(SshScripts.attach("term-y-8", socket))).directory(home)
@@ -889,7 +928,7 @@ class SshTransportTest {
         )
         val elsewhere = File(root, "elsewhere").apply { mkdirs() }
         for ((name, dir) in listOf("nt-term-r-1" to File(remoteRepo, "sub"), "nt-term-r-2" to remoteRepo, "nt-term-g-1" to elsewhere)) {
-            val (code, out) = tmuxOn("nodeterm-rmt", "-f", "/dev/null", "new-session", "-d", "-s", name, "-c", dir.path)
+            val (code, out) = tmuxOn("nodeterm-rmt", "-f", "/dev/null", "new-session", "-d", "-s", name, "-c", dir.path, *paneShell)
             assertEquals(0, code, out)
         }
     }
@@ -1044,9 +1083,9 @@ class SshTransportTest {
                 """{"version":1,"rev":1,"savedAt":"x","id":"p2","name":"Server again","color":"#000","viewport":{"x":0,"y":0,"zoom":1},
                    "nodes":[{"id":"term-b-2","kind":"terminal","title":"Remote","color":"#000","group":null,"position":{"x":0,"y":0},"size":{"width":1,"height":1}}]}"""
             )
-            assertEquals(0, tmuxOn("nodeterm-rmt", "new-session", "-d", "-s", "nt-term-b-2", "-c", selfSsh.parentFile.path).first)
+            assertEquals(0, tmuxOn("nodeterm-rmt", "new-session", "-d", "-s", "nt-term-b-2", "-c", selfSsh.parentFile.path, *paneShell).first)
             // A name on BOTH sockets is the host's own session (first wins, as the desktop's sweep does).
-            assertEquals(0, tmuxOn("nodeterm-rmt", "new-session", "-d", "-s", "nt-term-a-1", "-c", root.path).first)
+            assertEquals(0, tmuxOn("nodeterm-rmt", "new-session", "-d", "-s", "nt-term-a-1", "-c", root.path, *paneShell).first)
             connect().use { conn ->
                 val snap = conn.listProjects()
                 assertEquals(
