@@ -3,16 +3,20 @@ package dev.nodeterm.protocol.relay
 import dev.nodeterm.protocol.model.J
 import dev.nodeterm.protocol.model.J.l
 import dev.nodeterm.protocol.model.J.s
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import java.io.IOException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 class RelayApiException(message: String, val status: Int? = null) : Exception(message)
 
@@ -35,8 +39,14 @@ data class RelayDevice(val deviceToken: String, val hostId: String, val exp: Lon
  */
 class RelayApi(
     val apiBase: String = DEFAULT_API_BASE,
-    private val client: OkHttpClient = OkHttpRelayTransport.defaultClient
+    private val client: OkHttpClient = defaultHttpClient,
+    /** Bounds the entire request, including a response body that keeps trickling bytes. */
+    private val deadlineMs: Long = DEFAULT_DEADLINE_MS
 ) {
+    init {
+        require(deadlineMs > 0) { "the relay HTTP deadline must be positive" }
+    }
+
     suspend fun join(deviceToken: String, hostId: String): RelayJoin {
         val body = post("/v1/relay/join", buildJsonObject {
             put("deviceToken", deviceToken)
@@ -65,31 +75,62 @@ class RelayApi(
         return RelayDevice(token, body.s("hostId") ?: "", body.l("exp") ?: 0)
     }
 
-    private suspend fun post(path: String, json: JsonObject): JsonObject = withContext(Dispatchers.IO) {
+    private suspend fun post(path: String, json: JsonObject): JsonObject = suspendCancellableCoroutine { cont ->
         val req = Request.Builder()
             .url(apiBase.trimEnd('/') + path)
             .post(json.toString().toRequestBody(JSON))
             .build()
-        try {
-            client.newCall(req).execute().use { res ->
-                val text = res.body?.string().orEmpty()
-                if (!res.isSuccessful) {
-                    val msg = J.obj(J.parse(text))?.let { it.s("error") ?: it.s("message") }
-                    throw RelayApiException(
-                        "The relay refused the request (HTTP ${res.code})" + (msg?.let { ": $it" } ?: "."),
-                        res.code
-                    )
-                }
-                J.obj(J.parse(text)) ?: throw RelayApiException("The relay answered with something that is not JSON.")
+        val call = client.newCall(req)
+        // The WebSocket client deliberately has no read deadline. HTTP needs its own finite one,
+        // including when a caller supplies a client: otherwise roaming can wedge token minting.
+        call.timeout().timeout(deadlineMs, TimeUnit.MILLISECONDS)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                cont.resumeWithException(unreachable(e))
             }
-        } catch (e: IOException) {
-            throw RelayApiException("Couldn't reach the relay: ${e.message ?: e.javaClass.simpleName}")
-        }
+
+            override fun onResponse(call: Call, response: Response) {
+                // Keep cancellation tied to the call until the body has been consumed and closed.
+                // Reading in OkHttp's callback also keeps blocking I/O off the phone's main thread.
+                cont.resumeWith(runCatching {
+                    try {
+                        response.use { res ->
+                            val text = res.body?.string().orEmpty()
+                            if (!res.isSuccessful) {
+                                val msg = J.obj(J.parse(text))?.let { it.s("error") ?: it.s("message") }
+                                throw RelayApiException(
+                                    "The relay refused the request (HTTP ${res.code})" + (msg?.let { ": $it" } ?: "."),
+                                    res.code
+                                )
+                            }
+                            J.obj(J.parse(text)) ?: throw RelayApiException("The relay answered with something that is not JSON.")
+                        }
+                    } catch (e: IOException) {
+                        throw unreachable(e)
+                    }
+                })
+            }
+        })
     }
+
+    private fun unreachable(e: IOException) =
+        RelayApiException("Couldn't reach the relay: ${e.message ?: e.javaClass.simpleName}")
 
     companion object {
         const val DEFAULT_API_BASE = "https://api.nodeterm.dev"
         const val DEFAULT_RELAY_URL = "wss://relay.nodeterm.dev"
+        const val DEFAULT_DEADLINE_MS = 30_000L
+
+        /** Finite HTTP timeouts; the long-lived WebSocket keeps its separate client. */
+        internal val defaultHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
+                .callTimeout(DEFAULT_DEADLINE_MS, TimeUnit.MILLISECONDS)
+                .build()
+        }
         private val JSON = "application/json".toMediaType()
     }
 }
