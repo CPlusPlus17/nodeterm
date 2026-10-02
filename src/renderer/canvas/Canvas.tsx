@@ -603,7 +603,7 @@ import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
 import { useHostedPending } from '../state/hostedPending'
 import { hostedInfoFor, isHostedReadOnly, useHostedTeams } from '../state/hostedTeams'
-import { buildContextLinkNote, buildNotePushMessage, classifyLink, hiddenLinkIds, linkIdsCoveredByRopes, pairKey, planBridges, type LinkEndpoint } from '../lib/noteLink'
+import { appendBridgeEdges, bridgeToEdge, buildContextLinkNote, contextLinkForEdge, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, isCurrentLinkDirection, linkIdsCoveredByRopes, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint } from '../lib/noteLink'
 import {
   deliveriesToRetire,
   launchesToFire,
@@ -2813,26 +2813,43 @@ export function Canvas() {
       const sel = !!e.selected
       const isNote = stickyIds.has(e.source)
       const stroke = sel ? '#ffffff' : accent
-      const baseLabel = isNote ? '🗒 note' : '⇄ context'
+      const arrow = { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 }
+      // Arrowheads point at the side that READS, as a note link's does (it ends at the terminal).
+      // A context link is two-way unless it names a one-way reader (issue #852).
+      const readers = isNote ? [e.target] : linkReadPairs(edgeToBridge(e)).map((p) => p.reader)
+      const oneWay = !isNote && readers.length < 2
+      const baseLabel = isNote
+        ? '🗒 note'
+        : readers.length === 0
+          ? '⊘ context (invalid direction)'
+          : oneWay ? '→ context (one-way)' : '⇄ context'
       return {
         ...e,
         type: 'floating',
         // Context and note links meet the node at its bridge handles (left/right dots) — the point
         // the user dragged from — never at the top or bottom.
         data: { anchor: 'horizontal' },
-        label: sel ? `${baseLabel} — ⌫ to remove` : baseLabel,
+        label: sel
+          ? `${baseLabel} — ⌫ to remove${isNote ? '' : ' · right-click for direction'}`
+          : baseLabel,
         labelStyle: { fill: stroke, fontSize: 11, fontWeight: 600 },
         ...labelBg,
         style: { stroke, strokeWidth: sel ? 3.5 : 2 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 },
-        // Context links are bidirectional (arrowheads both ends); note links flow one way.
-        ...(isNote
-          ? {}
-          : { markerStart: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 } })
+        ...(readers.includes(e.target) ? { markerEnd: arrow } : {}),
+        ...(readers.includes(e.source) ? { markerStart: arrow } : {})
       }
     })
-    const ropeCoversLink = new Set(
-      linkEdges.filter((e) => hiddenLinks.has(e.id)).map((e) => pairKey(e.source, e.target))
+    // The covered link's label, by pair, so a selected rope still says which way its hidden
+    // context link reads (issue #852) — the rope's own arrow shows lineage, not reading.
+    const ropeCoversLink = new Map(
+      linkEdges.filter((e) => hiddenLinks.has(e.id)).map((e) => {
+        const n = linkReadPairs(edgeToBridge(e)).length
+        const label =
+          n === 2
+            ? '⇄ context · ⌫ to remove'
+            : `${n === 1 ? '→ context (one-way)' : '⊘ context (invalid direction)'} · ⌫ to remove`
+        return [pairKey(e.source, e.target), label] as const
+      })
     )
     // Ropes: colour from the source's agent, dashed + ⏳ while the target still waits on the
     // source, white + a removal hint while selected, clay + flowing while the target is a driven
@@ -2856,7 +2873,7 @@ export function Canvas() {
         const label = v.waiting
           ? `${WAIT_LABEL} · ⌫ to stop waiting`
           : ropeCoversLink.has(pairKey(e.source, e.target))
-            ? '⇄ context · ⌫ to remove'
+            ? `${ropeCoversLink.get(pairKey(e.source, e.target))} · right-click for direction`
             : '⌫ to remove'
         return {
           ...base,
@@ -3204,7 +3221,7 @@ export function Canvas() {
     // installEpoch assigns nodesRef: the setters land on a later render, and a peer's edge op
     // arriving in between would otherwise be built from the PREVIOUS project's edges and then
     // overwrite this load's queued value (see the ref declarations for the render-time half).
-    const loadedBridges: Edge[] = (project.bridges ?? []).map((b) => ({ id: b.id, source: b.source, target: b.target }))
+    const loadedBridges: Edge[] = (project.bridges ?? []).map(bridgeToEdge)
     linkEdgesRef.current = loadedBridges
     setLinkEdges(loadedBridges)
     // A wait with no rope is a wait nothing on screen explains. Ropes for `--after` are written by
@@ -3437,7 +3454,9 @@ export function Canvas() {
         publishableScene(
           {
             nodes: flowToNodeStates(flow, retainInitial),
-            bridges: bridges.map(toBridgeLink),
+            // Bridges keep their one-way `reader` (issue #852): a peer applies what is cast, and a
+            // three-id bridge would widen a one-way link back to both-read on every teammate.
+            bridges: bridges.map(edgeToBridge),
             ropes: ropes.map(toBridgeLink)
           },
           ephIds
@@ -3481,7 +3500,7 @@ export function Canvas() {
           id,
           flowToNodeStates(nodesRef.current, sessionForProject(nodesProjectIdRef.current ?? '').source !== 'relay'),
           viewportRef.current,
-          linkEdgesRef.current.map(toBridgeLink),
+          linkEdgesRef.current.map(edgeToBridge),
           controlEdgesRef.current.map(toBridgeLink)
         )
   }, [])
@@ -3865,11 +3884,7 @@ export function Canvas() {
           source: e.source,
           target: e.target
         })),
-        liveBridges: linkEdgesRef.current.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target
-        }))
+        liveBridges: linkEdgesRef.current.map(edgeToBridge)
       })
       const adopted = adoptNodesSilently(plan.added)
       // Only when the merge actually moved something: a fresh array of identical edges re-renders
@@ -3883,7 +3898,7 @@ export function Canvas() {
         setControlEdges(ropes)
       }
       if (plan.bridgesChanged) {
-        const bridges: Edge[] = plan.bridges.map((b) => ({ id: b.id, source: b.source, target: b.target }))
+        const bridges: Edge[] = plan.bridges.map(bridgeToEdge)
         linkEdgesRef.current = bridges
         setLinkEdges(bridges)
       }
@@ -4369,7 +4384,7 @@ export function Canvas() {
         // gate above keys on (`mutationKey` leaves the kind out).
         const prevBridges = linkEdgesRef.current
         const prevRopes = controlEdgesRef.current
-        const base = { bridges: prevBridges.map(toBridgeLink), ropes: prevRopes.map(toBridgeLink) }
+        const base = { bridges: prevBridges.map(edgeToBridge), ropes: prevRopes.map(toBridgeLink) }
         const next = applyEdgeMutationToScene(base, mutation)
         // Nothing to do — a remove for an edge we do not have, or the edge we already hold (every
         // Server Edition tab re-casts a server-written edge): no setState, no markDirty, no save.
@@ -4384,9 +4399,13 @@ export function Canvas() {
         }
         if (next.bridges !== base.bridges) {
           // No `type`: a bridge carries none in state — `displayEdges` makes every link `floating`.
-          const edges = next.bridges.map(
-            (b) => keep(prevBridges, b) ?? { id: b.id, source: b.source, target: b.target }
-          )
+          // A bridge is also kept only while its one-way `reader` (issue #852) is unchanged: a peer
+          // flipping the direction must reach this canvas, not be swallowed as "same three ids".
+          const edges = next.bridges.map((b) => {
+            const held = keep(prevBridges, b)
+            if (!held) return bridgeToEdge(b)
+            return edgeToBridge(held).reader === b.reader ? held : { ...bridgeToEdge(b), selected: held.selected }
+          })
           linkEdgesRef.current = edges
           setLinkEdges(edges)
         }
@@ -4623,6 +4642,21 @@ export function Canvas() {
     [agentIdOf]
   )
 
+  // One-shot discovery note into an idle agent endpoint that can now read `otherId` (skip a node
+  // mid-turn so we don't interrupt it). Claude gets the skill pointer; codex/gemini the CLI inline.
+  const announceContextLink = useCallback(
+    async (selfId: string, otherId: string) => {
+      if (useAgentStatus.getState().byId[selfId]?.state === 'working') return
+      const title = (nodesRef.current.find((n) => n.id === otherId)?.data.title as string) || 'a linked node'
+      const { shimPath } = await window.nodeTerminal.contextLink.info()
+      void api.pty.sendText(
+        selfId,
+        buildContextLinkNote(agentIdOf(selfId), title, shimPath)
+      ).then(reportTextDelivery)
+    },
+    [agentIdOf]
+  )
+
   // Draw a link: context (two agent nodes read each other) or note (sticky text becomes
   // the terminal's context).
   const onConnect = useCallback(
@@ -4649,21 +4683,11 @@ export function Canvas() {
       )
       markDirty()
       const status = useAgentStatus.getState().byId
-      const titleOf = (id: string) =>
-        (nodes.find((n) => n.id === id)?.data.title as string) || 'a linked node'
       if (kind === 'context') {
         // Discovery: tell each idle endpoint it is now linked (skip a node mid-turn so we
         // don't interrupt it). Claude gets the skill pointer; codex/gemini get the CLI inline.
-        const note = async (selfId: string, otherId: string) => {
-          if (status[selfId]?.state === 'working') return
-          const { shimPath } = await window.nodeTerminal.contextLink.info()
-          void api.pty.sendText(
-            selfId,
-            buildContextLinkNote(agentIdOf(selfId), titleOf(otherId), shimPath)
-          ).then(reportTextDelivery)
-        }
-        void note(source, target)
-        void note(target, source)
+        void announceContextLink(source, target)
+        void announceContextLink(target, source)
         return
       }
       // Note link: push the note text once into the terminal — agent sessions only.
@@ -4679,7 +4703,69 @@ export function Canvas() {
       )
       if (msg) void api.pty.sendText(target, msg).then(reportTextDelivery)
     },
-    [linkEndpointOf, agentIdOf, setLinkEdges, markDirty, nodes]
+    [linkEndpointOf, agentIdOf, setLinkEdges, markDirty, nodes, announceContextLink]
+  )
+
+  // Right-click a context link: pick its direction (issue #852) or remove it. Direction is a
+  // property of the persisted bridge (`reader`), and the link map main authorizes reads from is
+  // rebuilt from it by useContextLinkSync — so a flip changes who may read immediately, exactly as
+  // drawing or removing a link does. An endpoint that GAINS read access gets the same one-shot
+  // discovery note a freshly drawn link sends; one that loses it gets nothing, like a removal.
+  // Note links (sticky → terminal) are one-way by nature and get no menu.
+  const onEdgeContextMenu = useCallback(
+    (e: React.MouseEvent, edge: Edge) => {
+      // A rope drawn over a context link (open-agent / spawn-team / --after) hides that link and
+      // keeps the pixels, so its right-click must reach the covered link by endpoint pair — the
+      // same rule the removal paths use. A rope with nothing under it gets no menu.
+      const link = contextLinkForEdge(edge.id, linkEdgesRef.current, controlEdgesRef.current)
+      if (!link) return
+      const viaRope = link.id !== edge.id
+      const nodeOf = (id: string) => nodesRef.current.find((n) => n.id === id)
+      if (nodeOf(link.source)?.type === 'sticky' || nodeOf(link.target)?.type === 'sticky') return
+      e.preventDefault()
+      const titleOf = (id: string) => (nodeOf(id)?.data.title as string) || id
+      const current = edgeToBridge(link)
+      const setReader = (reader: string | null) => {
+        const next = withLinkReader(current, reader)
+        setLinkEdges((es) =>
+          es.map((x) => (x.id === link.id ? { ...bridgeToEdge(next), selected: x.selected } : x))
+        )
+        markDirty()
+        for (const id of gainedReaders(current, next)) {
+          void announceContextLink(id, id === next.source ? next.target : next.source)
+        }
+      }
+      const a = titleOf(link.source)
+      const b = titleOf(link.target)
+      const option = (label: string, reader: string | null) => {
+        const active = isCurrentLinkDirection(current, reader)
+        return {
+          label: `${active ? '✓ ' : ''}${label}`,
+          onClick: () => setReader(reader),
+          ...(active ? { disabled: true, hint: 'Current direction' } : {})
+        }
+      }
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { type: 'label', label: 'Context link — who reads whom' },
+          option(`${a} ⇄ ${b} (both read)`, null),
+          option(`${a} reads ${b} only`, link.source),
+          option(`${b} reads ${a} only`, link.target),
+          { type: 'separator' },
+          {
+            label: viaRope ? 'Remove context link (keeps the rope)' : 'Remove link',
+            danger: true,
+            onClick: () => {
+              setLinkEdges((es) => es.filter((x) => x.id !== link.id))
+              markDirty()
+            }
+          }
+        ]
+      })
+    },
+    [setLinkEdges, markDirty, announceContextLink]
   )
 
   // Of these ropes, the ones that are NOT live waits. A waiting rope's removal means "stop waiting
@@ -4768,8 +4854,10 @@ export function Canvas() {
 
   // The RENDERED epoch, not the ref: in a project switch's window the ref already names the incoming
   // project while `nodes` / `linkEdges` are still the outgoing one's (see useNodesEpoch), and this map
-  // authorizes context reads.
-  useContextLinkSync({ projectId: renderedProjectId, nodes, edges: linkEdges })
+  // authorizes context reads. Persisted-shape bridges: the one-way `reader` (issue #852) lives in
+  // edge.data on the canvas.
+  const linkBridges = useMemo(() => linkEdges.map(edgeToBridge), [linkEdges])
+  useContextLinkSync({ projectId: renderedProjectId, nodes, edges: linkBridges })
   // Phone chat: tell the core's agent-status mirror which session each node was last running, for
   // nodes it learned nothing about this run (see useMirrorIdentitySeed).
   useMirrorIdentitySeed()
@@ -13781,13 +13869,14 @@ export function Canvas() {
       const bridgeTo = (
         fromId: string,
         targetIds: string[],
-        lookup: (id: string) => LinkEndpoint | null = ctlLinkEndpointOf
+        lookup: (id: string) => LinkEndpoint | null = ctlLinkEndpointOf,
+        options: { oneWay?: boolean } = {}
       ) => {
         // Off canvas the existing edges are the OWNING project's persisted `bridges` — React
         // Flow's array belongs to whatever the human is looking at, so deduping against it would
         // let a link be drawn twice (or refuse one that does not exist yet).
         const existing = offCanvas ? (offCanvas.project.bridges ?? []) : linkEdgesRef.current
-        const plan = planBridges(fromId, targetIds, lookup, [...existing, ...drawn])
+        const plan = planBridges(fromId, targetIds, lookup, [...existing, ...drawn], options)
         if (plan.edges.length) {
           drawn.push(...plan.edges)
           if (offCanvas) {
@@ -13796,7 +13885,7 @@ export function Canvas() {
             useProjects.getState().appendCanvasLinks(offCanvas.project.id, { bridges: plan.edges })
             void writeDisk()
           } else {
-            setLinkEdges((es) => [...es, ...plan.edges])
+            setLinkEdges((es) => appendBridgeEdges(es, plan.edges))
             markDirty()
           }
         }
@@ -14481,7 +14570,10 @@ export function Canvas() {
               reply({ ok: false, error: `link: --from ${from}: ${LINK_ENDPOINT_NOT_FOUND}` })
               return
             }
-            const { linked, skipped } = bridgeTo(from, targets)
+            // `--one-way` (issue #852): only --from reads the targets. Valueless flag — the shim
+            // sends it as `arg.one-way=` (present, empty).
+            const oneWay = 'one-way' in args
+            const { linked, skipped } = bridgeTo(from, targets, undefined, { oneWay })
             if (linked.length === 0) {
               reply({
                 ok: false,
@@ -14494,7 +14586,9 @@ export function Canvas() {
               : ''
             reply({
               ok: true,
-              message: `linked ${from} ↔ ${linked.join(', ')}${note}`,
+              message: oneWay
+                ? `linked one-way: ${from} reads ${linked.join(', ')}${note}`
+                : `linked ${from} ↔ ${linked.join(', ')}${note}`,
               result: { from, linked, skipped }
             })
             return
@@ -18530,6 +18624,7 @@ export function Canvas() {
           onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
           onEdgeDoubleClick={onEdgeDoubleClick}
+          onEdgeContextMenu={onEdgeContextMenu}
           onMove={onMove}
           onMoveStart={onCanvasMoveStart}
           onMoveEnd={onCanvasMoveEnd}

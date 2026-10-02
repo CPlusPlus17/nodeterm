@@ -777,6 +777,12 @@ export interface BridgeLink {
   id: string
   source: string
   target: string
+  /**
+   * Context links only (issue #852): the ONE endpoint allowed to read the other. Absent = both
+   * read each other, which is every link persisted before the field existed. A value naming
+   * neither endpoint authorizes nobody (fail closed) — see `linkReadPairs` in canvas-link.ts.
+   */
+  reader?: string
 }
 
 /** Where a column sits in a card's lifecycle (see @shared/kanban-category). A closed set; an

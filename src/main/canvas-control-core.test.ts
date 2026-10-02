@@ -1618,3 +1618,10 @@ describe('open-project --name limit in the agent-facing text (issue #940)', () =
     expect(squash(buildCanvasControlInstructions('/tmp/nodeterm.sh'))).toContain(sentence)
   })
 })
+
+describe('one-way context links (issue #852) — agent-facing docs', () => {
+  it('both canvas-control surfaces document link --one-way', () => {
+    expect(buildCanvasControlInstructions('/x/nodeterm.sh')).toContain('--one-way')
+    expect(buildCanvasSkillBody('/x/nodeterm.sh')).toContain('--one-way')
+  })
+})

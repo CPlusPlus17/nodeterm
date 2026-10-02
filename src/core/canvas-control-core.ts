@@ -963,6 +963,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  on demand (nodeterm linked-context CLI). `--from` defaults to you; nothing is pushed into the',
     '  linked sessions. Agent sessions you open, and the stations you name in `--after`, are already',
     '  linked — nothing to `link`. Use `link` only for nodes you did not open, or to link two OTHER nodes.',
+    '  `--one-way` makes each new link one-way: `--from` (you, by default) reads the `--to` nodes, and',
+    '  they cannot read it back. The human can flip or reset a link\'s direction from its right-click menu.',
     `  Both endpoints must be in your project. A missing endpoint reports: ${LINK_ENDPOINT_NOT_FOUND}.`,
     '  This does not reveal whether the id exists in another project.',
     '  On Server Edition the ownership rule is stricter: every endpoint must be a node you opened',
@@ -1559,7 +1561,9 @@ ${reportOutcomeDocLines().join('\n')}
   pushed into the linked sessions — reading is on demand, so linking never interrupts anyone.
   Agent sessions you open (\`open-claude\`/\`open-agent\`/\`spawn-team\`) and the stations you name in
   \`--after\` are already linked — nothing to \`link\`. Use \`link\` only for nodes you did not open,
-  or to link two OTHER nodes together.
+  or to link two OTHER nodes together. Add \`--one-way\` to make each new link one-way: \`--from\`
+  (you, by default) reads the \`--to\` nodes and they cannot read it back. The human can flip or
+  reset a link's direction from its right-click menu.
   Both endpoints must be in your project. A missing endpoint reports: ${LINK_ENDPOINT_NOT_FOUND}.
   This does not reveal whether the id exists in another project.
   On Server Edition the ownership rule is stricter: every endpoint must be a node you opened

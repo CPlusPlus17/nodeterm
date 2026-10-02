@@ -4893,6 +4893,30 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `~/.gemini/GEMINI.md`. On connect an idle-gated one-line note is injected into each endpoint
   (claude → skill pointer; codex/gemini → inline CLI command via `contextLink.info()`).
   (Replaced the earlier MCP-based bridge.)
+  **One-way links (issue #852):** a context bridge may carry `reader` (`BridgeLink.reader`, the ONE
+  endpoint allowed to read the other); absent = both read, which is every pre-#852 link, so old
+  `project.json` files load unchanged. The rule is `linkReadPairs` (`shared/canvas-link.ts`), and
+  `buildLinkMap` is where it BITES: the non-reading side gets no map entry, so main serves it no
+  document and the resolver refuses it — enforcement is at the read, not in the discovery note. A
+  `reader` naming neither endpoint, or any present non-string value, authorizes nobody (fail closed)
+and is carried VERBATIM through every conversion — dropping it as "absent" would widen it to two-way
+on the next save. Set it from the context-link
+  edge's right-click menu (both / A reads B / B reads A; arrowheads point at the reader — a rope
+drawn over a hidden link resolves it by endpoint pair via `contextLinkForEdge`) or with
+  `link --one-way` (`--from` reads). On the canvas it rides `edge.data.reader`; every bridge↔edge
+  conversion goes through `bridgeToEdge`/`edgeToBridge` (renderer/lib/noteLink.ts; CLI-planned
+bridges enter live state only via `appendBridgeEdges`) and the server
+  merge keeps it (`serverChange.edgeRef`) — a field-by-field `{id, source, target}` copy silently
+  turns a one-way link two-way again. A flip that GRANTS read access sends the same one-shot
+  discovery note a new link sends; losing access sends nothing, like removing a link. Note: the
+  premise "every submit triggers a full read" does not hold — nothing reads on submit; the linked
+  agent reads only when it decides to run the skill/shim. What one-way removes is the other side's
+  PERMISSION and its discovery note. **Team sync carries it too**: an `edge-upsert` of kind
+  `bridge` keeps `reader` through the diff, the shape gate, the reflector's sanitize and the peer's
+  apply (`edgeFields`/`sameEdge` in `shared/canvas-mutations.ts`), and a flip alone is a change. A
+  three-id copy there never cast a flip and landed a cast one-way link on the peer as both-read,
+  which the peer then saved and published back. A malformed reader on the wire REFUSES the op
+  (never dropped — dropping widens), and a rope never carries one.
   **Note links:** a sticky note can be connected to ANY terminal node (one-way, sticky →
   terminal). On connect, agent sessions get a one-shot idle-gated push of the note text
   (`buildNotePushMessage`, single-line, truncated at 2000 chars); plain terminals get no
