@@ -330,7 +330,7 @@ draft. Detaching only the owned tmux client triggered automatic reconnect, again
 draft. Armed Ctrl plus draft `c` delivered exactly Ctrl-C with no Enter. Airplane-mode/outage and
 disabled-input states remain untested. A background `am kill` restored Inbox tab and the host
 back stack; a force-stop/reopen retained manual SSH registration/authentication with no host-key
-prompt. QR pairing, cellular relay/SAS denial/revoke, notifications, latest mobile-VPN, custom wheel bindings and FPS remain
+prompt. QR pairing, cellular relay/SAS denial/revoke, notifications, custom wheel bindings and FPS remain
 open. Driver coordinate expectations, side-Back navigation and Compose class names were corrected
 in the QA helpers; they are not product findings.
 
@@ -379,8 +379,16 @@ tests cover the transport/target guards. Item 41 stays Partial.
 Cleanup forgot only the disposable fixture host and returned the phone to regular Sessions;
 only the owned SSH fixture session and isolated desktop/CDP were stopped. Scoped fixture-device
 revoke/stop/remote-access-off cleanup left zero fixture devices; it does not pass a full device
-revocation or establish a backend revoke result. Latest beta-6 mobile WireGuard testing awaits
-the user's assistance. No new product finding or production change resulted from these checks.
+revocation or establish a backend revoke result. No new product finding or production change
+resulted from these checks.
+
+**Final beta-6 cellular WireGuard check (user-confirmed, 2026-10-03):** with WireGuard enabled
+and Wi-Fi off, the user reports "Connects and scrolls smoothly" in their usual terminal on
+beta 6 / code 7, confirming connection and smooth scrolling. This is regular manual SSH over cellular VPN,
+not hosted cellular relay. It adds evidence to item 20, which remains Partial; the full scroll,
+QR/cellular-relay/worker, outage and other 64-item variants remain open. No runtime fix or phone
+command accompanied this check. The latest required protocol task passes in 50 seconds and
+offline app `compileKotlin` in 1 second; the preceding 54/5-second QA results remain historical.
 
 Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`, including
 `physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
@@ -411,7 +419,7 @@ not change the APK source or imply full device validation.
 | 17 | Pending | Late relay adoption and background authorization pending. |
 | 18 | Partial | SSH 17 chips + 4 app-mode arrows, soft input/font/rotation and real relay echo input work; full route/geometry matrix pending. |
 | 19 | Pass | Rounded borders, accents, CJK and emoji rendered on real SSH. |
-| 20 | Partial | Continuous drag/coast/Esc/new-touch stop and small OSC52 work; full copy-mode/report/reversal matrix pending. |
+| 20 | Partial | Drag/coast/Esc/new-touch stop and small OSC52 work; user confirms smooth beta-6 cellular-WireGuard SSH scrolling, full matrix pending. |
 | 21 | Pass | 90000 chars copied exactly; 150000/450000 refused with size toast, no crash. Bridge boundary is JVM evidence. |
 | 22 | Pass | Invalid base64/separator/query/selection/UTF8 silent; known clipboard preserved exactly. |
 | 23 | Partial | Portrait font/IME resize works; landscape usable-height and larger-client Fit case pending. |
@@ -492,7 +500,8 @@ command; the script then waited 1.2 seconds before issuing CANCEL. The last posi
 588.8 ms; final position 100 remained unchanged through CANCEL. Earlier tap/DOWN checks opened
 the IME and rebased positions; those results were inconclusive, not additional failures.
 After normal terminal use, the user confirmed “Both work now” for continuous dragging and coast.
-The primary `A86` drag/coast complaint is resolved; reversal/lifecycle, mobile-beta-6, FPS/custom
+The primary `A86` drag/coast complaint is resolved. The final beta-6 cellular WireGuard SSH check
+confirms connection and smooth scrolling; reversal/lifecycle, FPS/custom
 bindings and the full 64-item pass remain open. After testing, Esc and Header Back returned to
 Sessions and detached the owned client; only the exact owned `nt-term-000android-scroll-20261002-c` session and owned phone UI
 XML were removed. Private proof, including `device-summary.json`, is in
@@ -687,7 +696,7 @@ cover additional partial items. The private
 update preserved manual SSH registration and its identities; pre-attach tmux history is visible.
 Paste pairing, live hosted relay browsing/terminal input and the item-39 held-hook lifecycle are verified.
 QR pairing, cellular relay,
-actual network-outage/answer behavior, latest mobile-VPN and the full
+actual network-outage/answer behavior and the full
 64-item pass remain open. The current complete
 protocol run after the stable-touch correction passed all 658 tests, as recorded above. Use the
 [private-beta procedure](../android/README.md#private-beta), which accepts same-build local
@@ -1316,7 +1325,7 @@ work now. The latest signed-beta follow-up completes items 19, 21, 22, 24, 38 an
 are Partial or Pending as recorded in the 64-row table above, with named conditional SKIP variants.
 Real SSH background/detach recovery, encrypted paste pairing, relay-only hosted browse/input and
 the synthetic shipped-hook lifecycle are verified;
-outage/cellular-relay/mobile and remaining lifecycle
+outage/cellular-relay and remaining lifecycle
 checks stay open. Run these
 on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
@@ -1867,7 +1876,9 @@ the wider relay action matrix remain device checks.
   shipped-hook Approve/Deny/expiry and mounted relay question/copy-mode answers work; the hook
   producer/application are synthetic, with no live Claude execution. Offscreen/released/direct-SSH/
   target-guard device variants remain open.
-  QR/cellular-relay/SAS/worker, real outage, latest mobile,
+  The user also confirms beta-6/code-7 connection and smooth scrolling over cellular WireGuard
+  with Wi-Fi off on regular manual SSH; cellular hosted relay is untested.
+  QR/cellular-relay/SAS/worker, real outage,
   reversal/remaining lifecycle, FPS/custom bindings and the full device pass remain open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in

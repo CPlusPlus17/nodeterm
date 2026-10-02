@@ -18,7 +18,9 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   copy mode and remained out for 1.4 seconds. `c4b1f6cf` fixes beta 5's detached text-span touch
   target by targeting the stable screen. A held touch stops coast in a stable 56×25 keyboard-open
   viewport; earlier resizing tap checks were inconclusive. The user confirms normal dragging and
-  coasting both work now. Latest mobile/remaining lifecycle checks, FPS and custom bindings remain open.
+  coasting both work now. The final beta-6 cellular WireGuard SSH check with Wi-Fi off confirms
+  connection and smooth scrolling.
+  Remaining lifecycle checks, FPS and custom bindings remain open.
 - **Latest real Pixel checklist QA:** complete passes are **19/21/22/24/38/39**. Unicode renders;
   90000 clipboard characters match exactly, 150000/450000 are refused, and invalid OSC52 is silent
   with clipboard preserved. All three keyboard-focus states send real software input to the pane.
@@ -41,7 +43,8 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 - Mounted relay single/multi-select and copy-mode questions now have actual synthetic-application/
   shipped PostToolUse/mirror proof; item 41 is Partial. Offscreen/released/direct-SSH/target-guard
   device variants remain open. Cleanup forgot only the fixture host, stopped owned resources and
-  returned the phone to regular Sessions. Latest beta-6 mobile WireGuard recheck awaits the user.
+  returned the phone to regular Sessions. The user confirms beta 6 / code 7 connects and scrolls
+  smoothly there over cellular WireGuard; hosted cellular relay remains untested.
 - Current checks pass **658 protocol tests in 63 suites, zero failures/errors/skips** (54 seconds),
   plus offline app `compileKotlin` (5 seconds). Thirty-five JS, eleven new native and three CSS
   mutations were caught (49 total). The strengthened new-touch regression passes seven kinetic tests.
@@ -58,8 +61,8 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   The intended Pixel received a same-signer update preserving app data; notification permission
   is confirmed. SSH reopened with its retained key/pin, and controlled continuous drag/coast/Esc
   checks pass. New-touch stopping passes at a stable 56×25 viewport; lifecycle stopping,
-  mobile-beta-6 checks, FPS and custom wheel bindings remain open; normal drag/coast now have
-  user confirmation.
+  FPS and custom wheel bindings remain open; normal drag/coast have earlier user confirmation.
+  The final cellular WireGuard SSH check confirms connection and smooth scrolling.
   Private proof is in `.nodeterm/android-beta-build-6/`, artifacts in `.nodeterm/android-beta-6/`.
 - Historical beta `0.1.0-beta.4` / code `5` built locally from
   `3cffb49d8cf64932260e914b42b3883331d0352d`, using the retained signer.
@@ -88,6 +91,17 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### Final cellular WireGuard check confirmed by the user (2026-10-03)
+
+With WireGuard enabled and Wi-Fi off, the user confirms beta 6 / code 7 "Connects and scrolls
+smoothly" in their usual manual-SSH terminal, confirming connection and smooth scrolling. This verifies the
+regular cellular VPN route; hosted cellular relay remains untested. Item 20 stays Partial and
+the table stays six Pass / 21 Partial / 37 Pending. QR/scanner, cellular relay/SAS, worker/
+notifications, actual outage and the rest of the 64-item matrix remain the next gates. No runtime
+fix or phone command accompanied this check. Latest required protocol/offline app tasks pass in
+50/1 seconds; the preceding 54/5-second QA checks are historical. Recorded green CI baseline stays `58a202be`;
+each subsequent documentation push still needs required checks and its own green workflow.
+
 ### Mounted relay questions and scoped cleanup verified (2026-10-03)
 
 On the desktop-mounted owned terminal, tapping single-select Green delivers actual application
@@ -107,8 +121,8 @@ twenty-one Partial and 37 Pending, with conditional SKIP variants.
 Cleanup forgot only the disposable fixture host, returned the phone to its regular Sessions,
 removed only the owned SSH fixture session, and stopped only the owned isolated desktop/CDP.
 Fixture-device revoke/stop/remote-access-off cleanup left zero fixture devices; this is not a full
-device revocation or backend assertion. Latest beta-6 mobile WireGuard testing remains pending
-the user's assistance. APK/source/hash are unchanged; recorded CI baseline `58a202be` has all
+device revocation or backend assertion. The final user-confirmed beta-6 cellular WireGuard SSH
+check is recorded above. APK/source/hash are unchanged; recorded CI baseline `58a202be` has all
 five jobs green. The forthcoming documentation push needs its own checks and CI verification.
 
 ### Real relay terminal and shipped-hook approval lifecycle verified (2026-10-02)
@@ -184,7 +198,7 @@ zero. Browser Open/offer-interaction and Copy-sheet links/Open remain pending. L
 IME open was 129×1 and portrait returned to 56×25; usable landscape height and larger-client Fit
 remain untested. Real SSH background detach/foreground reattach and owned-client detach
 recovery preserve the draft; armed Ctrl+c is exact with no Enter. Airplane/outage and disabled
-states, QR/cellular-relay/notifications, latest mobile, custom bindings/FPS and remaining checklist variants
+states, QR/cellular-relay/notifications, custom bindings/FPS and remaining checklist variants
 stay open. Driver coordinates/side-Back/Compose class assumptions are helper issues, not findings.
 
 No APK, production or interop contract changed. Latest pushed
@@ -245,7 +259,8 @@ session was killed; Sessions was refreshed and owned phone UI XML removed. The p
 
 **User confirmation:** after normal terminal use, the user answered “Both work now” for continuous
 dragging and coast. This resolves the primary drag/coast complaint under `A86`; reversal/lifecycle
-checks, mobile-beta-6 checks, custom wheel bindings, FPS and the full 64-item pass remain open.
+checks, custom wheel bindings, FPS and the full 64-item pass remain open. The user's final beta-6
+cellular WireGuard SSH connection and smooth scrolling check is confirmed; hosted cellular relay is untested.
 `A88` (`f5fd3821`) passes 39 tests per real SDK 36/37 and ten new tool mutations; CI4 failed
 private packaging. [Run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
 at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming the
@@ -648,10 +663,23 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Finish remaining beta-6 scroll/device checks (`A86`, `A89`).** Code 7 is built/signed and
+1. **Finish the remaining 64-item checks: QR, cellular relay/SAS, worker/notifications and actual outage/answers.** Code-7 beta is installed on the
+   intended Pixel; earlier betas verify manual SSH authentication, project listing, input,
+   font/keyboard resizing and pre-attach tmux history. Code 7 now reopens SSH with the retained
+   key/pin and verifies continuous drag/coast/Esc. The user confirms final beta-6/code-7 cellular
+   WireGuard connection and smooth scrolling with Wi-Fi off on regular manual SSH.
+   Before leaving the computer, check needed answers, actual airplane/outage recovery and relay/
+   notification behavior. Six complete items now pass (19/21/22/24/38/39); the 64-row table records
+   remaining Partial/Pending items and conditional SKIP variants. Turn every actual failure into a
+   finding. Paste pairing/hosted relay browse/input and synthetic shipped-hook approval lifecycle
+   now work; mounted relay questions add partial proof. QR/cellular-relay/SAS/remaining question
+   variants and the full checklist remain open. Future
+   private betas retain the same signer and increase the version code above the installed beta.
+2. **Finish remaining beta-6 scroll matrix (`A86`, `A89`).** Code 7 is built/signed and
    installed. SSH reopening with retained key/pin, continuous dragging, coast and Esc now pass
    on the intended Pixel, and the user confirms normal drag/coast both work. Real SSH background/
-   detach recovery is also verified; finish reversal, remaining lifecycle and latest mobile-VPN checks.
+   detach recovery and final cellular WireGuard SSH connection and smooth scrolling are also verified; finish reversal
+   and remaining lifecycle checks.
    The dimension-stable 56×25 held-touch check also passes;
    earlier keyboard-resizing touch checks were inconclusive. Beta 5
    stopped mid-swipe; `c4b1f6cf` targets the stable screen and its bundle regression covers real
@@ -663,18 +691,6 @@ section before starting, since the verifier corrections take precedence):
    at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
    observed CI repair. Each subsequent push still needs its own green workflow.
    Push is authorized: run required checks before each push and confirm Android CI afterward.
-2. **Remaining device checks, starting with reconnect, background behavior and needed answers.** Code-7 beta is installed on the
-   intended Pixel; earlier betas verify manual SSH authentication, project listing, input,
-   font/keyboard resizing and pre-attach tmux history. Code 7 now reopens SSH with the retained
-   key/pin and verifies continuous drag/coast/Esc. The user confirms earlier Wi-Fi-off mobile-data
-   WireGuard terminal access; the latest beta still needs a mobile recheck.
-   Before leaving the computer, check needed answers, actual airplane/outage recovery and relay/
-   notification behavior. Six complete items now pass (19/21/22/24/38/39); the 64-row table records
-   remaining Partial/Pending items and conditional SKIP variants. Turn every actual failure into a
-   finding. Paste pairing/hosted relay browse/input and synthetic shipped-hook approval lifecycle
-   now work; mounted relay questions add partial proof. QR/cellular-relay/SAS/remaining question
-   variants and the full checklist remain open. Future
-   private betas retain the same signer and increase the version code above the installed beta.
 3. **Pick a remaining known gap.** Batch D and E are done; do not repeat their completed work.
    Remaining examples: relay cellular/SAS-denial/revoke checks, offscreen Sleeping nodes and non-Claude
    permission flags. Read-ack ownership is locally fixed in `A82`; finish its device verification.
@@ -855,7 +871,8 @@ Verified:
 - Mounted relay single-select, multi-select Open-session/input and copy-mode answers reach the
   actual synthetic application and shipped PostToolUse/mirror. Item 41 stays Partial; remaining
   transport/target device variants stay open. Only disposable fixture resources were cleaned up,
-  and the phone returned to regular Sessions; latest mobile recheck awaits the user.
+  and the phone returned to regular Sessions; the final cellular WireGuard SSH check is now
+  user-confirmed: "Connects and scrolls smoothly" in beta 6 / code 7.
 
 **Not verified:**
 
@@ -864,12 +881,13 @@ Verified:
   mobile-data WireGuard access are verified. Current real SSH background/detach recovery and
   process-kill restoration, paste pairing, hosted relay browse/input and the synthetic shipped-hook
   approval lifecycle are verified; QR, cellular relay, SAS denial/revoke, actual outage/notification/
-  remaining question/copy-mode routes/target variants, latest
-  mobile recheck and the full 64-item checklist remain unverified. Beta 4 lacked momentum; beta 5 lost
+  remaining question/copy-mode routes/target variants and the full 64-item checklist remain
+  unverified. Beta 4 lacked momentum; beta 5 lost
   continuous touch events. `A89` corrects that target lifetime. New-touch stopping passes with a
   held touch at a stable 56×25 viewport; earlier keyboard-resizing checks were inconclusive.
   The user confirms normal drag/coast both work. Reversal/remaining lifecycle checks, custom wheel
-  bindings, mobile-beta-6 checks and FPS remain open under `A86`.
+  bindings and FPS remain open under `A86`; the final beta-6 manual-SSH cellular WireGuard
+  connection and smooth scrolling check is user-confirmed, separate from untested cellular hosted relay.
 - Release/minified builds on a device. R8 runs for release in CI (`A37`: `assembleRelease` plus
   `tools/check-r8-output.sh`). The first private minified APK is signed and installed on the intended
   Pixel; direct-SSH crypto/browse/basic input and code-3 `A85` sizing/history work. Remaining
@@ -1039,7 +1057,9 @@ corrected beta-6/code-7 source c4b1f6cf built/signed/updated on the intended Pix
 with the retained key/pin at 56×48; controlled continuous drag, post-command coast and Esc stopping
 pass. New-touch stopping also passes with a held touch at a stable 56×25 viewport; earlier
 keyboard-resizing touch checks were inconclusive. The user confirms normal drag/coast both work;
-reversal/lifecycle, latest mobile, custom bindings and FPS remain open. All 658 protocol tests in 63 suites
+reversal/lifecycle, custom bindings and FPS remain open. Final beta-6 manual-SSH cellular WireGuard
+connection and smooth scrolling with Wi-Fi off are user-confirmed; cellular hosted relay is untested.
+All 658 protocol tests in 63 suites
 and offline app type-check pass; 35 JS, eleven native and three CSS mutations are caught. A88 in f5fd3821 handles the actual SDK 37 V3.0 Signer
 label; 39 Python tests per SDK 36/37 and ten new mutations pass, but CI4 failed private packaging
 and follow-up run 37061593216 at c37798b6495b4b68df379d0ae80887c23104b66d completed all five
@@ -1050,8 +1070,8 @@ were removed. The user confirms terminal access over mobile-data WireGuard with 
 Encrypted paste pairing and hosted relay browse now work. QR pairing, cellular relay/SAS variants,
 actual outage/notification/answer behavior and the full device checklist remain open.
 
-1. Finish A86 reversal/remaining lifecycle/latest mobile-VPN checks, then actual outage, relay
-   background behavior, needed answers and all 64 device items on the intended Pixel in
+1. Finish remaining QR/cellular-relay/worker, outage/answer and all 64 device items, then A86
+   reversal/remaining lifecycle/FPS/custom-binding checks on the intended Pixel in
    docs/android.md (#device-checklist). Record results in "What is verified" and turn every failure
    into a finding. Code-3 build/sign/update, identity persistence, SSH browse/input, font/keyboard
    resizing and pre-attach tmux history are verified; all 658 protocol tests and the offline app
@@ -1067,8 +1087,9 @@ actual outage/notification/answer behavior and the full device checklist remain 
    phone New session, remaining node actions, question/copy-mode route/target variants and
    notification checks stay open. Mounted relay single/multi/copy-mode application/PostToolUse proof
    is recorded; item 41 stays Partial. Cleanup returned the phone to regular Sessions and removed
-   only disposable fixture resources; latest beta-6 mobile WireGuard recheck awaits the user.
-   User confirms drag/coast work; latest mobile, remaining lifecycle, FPS/custom bindings remain open. Future
+   only disposable fixture resources. The user confirms final beta-6/code-7 usual-terminal
+   connection and smooth scrolling over cellular WireGuard with Wi-Fi off; cellular hosted relay
+   remains untested. Remaining lifecycle and FPS/custom bindings stay open. Future
    private betas retain the same signer and use a higher version code.
 2. Reconcile newer branch work before changing code, then pick from the remaining known gaps.
    Batch D and E are done. The user authorized this local build instead of Actions and has now

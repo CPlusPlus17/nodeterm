@@ -22,7 +22,7 @@ reopened on the intended Pixel with its retained key/pin at 56×48. `c4b1f6cf` t
 screen behind changing text, fixing beta 5's detached touch target. Code 7 passes 658 protocol tests and
 release/R8/signing checks. A held touch stops coast at a stable 56×25 keyboard-open viewport;
 earlier resizing tap checks were inconclusive. The user confirms normal dragging and coasting
-both work now. Latest mobile/remaining lifecycle checks, FPS and custom bindings remain open.
+both work now. Remaining lifecycle checks, FPS and custom bindings remain open.
 
 **New real Pixel QA:** complete checklist passes are **19, 21, 22, 24, 38 and 39**: Unicode rendering,
 large/invalid OSC52 handling, all three keyboard-focus states, and background-process tab/back-stack
@@ -45,11 +45,15 @@ application and its actual PostToolUse/mirror. A one-tap answer from copy mode a
 application, leaves copy mode and resolves the question. Item 41 stays Partial: offscreen/released,
 direct-SSH and target-guard variants lack device proof. No live Claude CLI/account was used.
 QR/scanner, cellular relay, SAS denial/revoke, remaining node actions, remaining question routes,
-notifications and newest-mobile checks
+notifications
 remain open. Recorded CI baseline `58a202be` has all five jobs green in [run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975).
 Only disposable fixture resources were removed and the phone returned to regular Sessions;
-cleanup does not establish the full revoke matrix. Latest beta-6 mobile WireGuard testing awaits
-the user's assistance. The next documentation push still requires its own checks and green CI.
+cleanup does not establish the full revoke matrix. **Final beta-6/code-7 cellular check:** with
+WireGuard enabled and Wi-Fi off, the user confirms "Connects and scrolls smoothly" in their usual
+manual-SSH terminal, confirming connection and smooth scrolling. Cellular hosted relay remains untested;
+item 20 stays Partial and the full 64-item pass remains open. No runtime change or phone command
+was needed. Latest required protocol/offline app tasks pass in 50/1 seconds; the next documentation
+push still requires green CI.
 
 ## What it does
 
@@ -217,7 +221,9 @@ updates; a fast swipe kept moving for about 799 ms after its ADB command complet
 left copy mode for the following 1.4 seconds. A held touch stops coast at a stable 56×25 viewport,
 with position unchanged through CANCEL after 1.2 seconds. Earlier keyboard-resizing touch checks
 were inconclusive. The user confirms normal continuous dragging and coast both work now.
-Reversal/lifecycle, mobile-beta-6, FPS/custom-binding checks and full device validation remain open
+The final user check also confirms beta-6 manual-SSH connection and smooth scrolling on cellular WireGuard with
+Wi-Fi off; cellular hosted relay remains untested. Reversal/lifecycle, FPS/custom-binding checks
+and full device validation remain open
 in the [handover](../docs/android-handover.md#progress-log).
 Testing returned the app to Sessions, detached the owned client and removed only its exact owned
 tmux session and phone UI XML; private `device-summary.json` records cleanup.

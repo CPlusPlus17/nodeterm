@@ -105,7 +105,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
-| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; reversal/lifecycle/mobile/FPS/custom bindings remain open · Scroll responsiveness is poor despite reachable tmux history |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; cellular WireGuard SSH connection and smooth scrolling confirmed; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; reversal/lifecycle/FPS/custom bindings remain open · Scroll responsiveness is poor despite reachable tmux history |
 | [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
@@ -1659,7 +1659,7 @@ font/rotation, Copy-sheet exact Unicode/Share/modal isolation, wrapped/OSC8 link
 background/detach recovery add partial evidence. Landscape with IME open was 129×1; usable-height
 and larger-client Fit remain unverified. The 450000 pre-bridge cap is distinct JVM/JS evidence,
 not inferred from a phone toast. Browser/Copy-sheet Open and offer interactions, airplane/outage,
-QR/cellular-relay/notification, latest mobile, custom bindings/FPS and remaining variants stay open.
+QR/cellular-relay/notification, custom bindings/FPS and remaining variants stay open.
 Encrypted paste pairing and a forced relay-only browse of an isolated production desktop
 (`58a202be`, real SecretService credential storage) now pass against the live hosted API/relay;
 the current `/v1/relay/join` contract is verified beyond interop. Remote access was enabled at
@@ -1678,8 +1678,11 @@ released/direct-SSH/target-guard device variants and notification questions rema
 No live Claude CLI/account was used. Latest required checks pass all 658 protocol
 tests in 63 suites (54 seconds) plus offline app `compileKotlin` (5 seconds).
 Only disposable fixture resources were cleaned up and the phone returned to regular Sessions;
-scoped cleanup is not a full device/backend revoke check. Latest beta-6 mobile WireGuard recheck
-awaits the user. No new product finding was observed.
+scoped cleanup is not a full device/backend revoke check. On 2026-10-03 the user confirms the
+final beta-6/code-7 usual manual-SSH terminal "Connects and scrolls smoothly", confirming connection
+and smooth scrolling with WireGuard enabled and Wi-Fi off over cellular. Cellular hosted relay remains
+untested. Item 20 remains Partial; no runtime change, phone command or new product finding resulted.
+Latest required protocol/offline app tasks pass in 50/1 seconds; earlier 54/5-second results are historical.
 The [64-row record](android.md#what-is-verified-and-how) has six Pass, twenty-one Partial and
 37 Pending items with named conditional SKIP variants; `A50` remains partial. Private synthetic
 proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Recorded CI baseline `58a202be` has all
@@ -2694,7 +2697,9 @@ Controlled Pixel continuous dragging, post-command coast and Esc stopping now pa
 touch also stops coast at a stable 56×25 viewport (see `A89`).
 
 The user confirms normal continuous dragging and coast “Both work now”, resolving the primary
-complaint. **Still open:** reversal/lifecycle and latest mobile-VPN checks.
+complaint. Separately, the user's final beta-6 cellular WireGuard SSH check confirms connection
+and smooth scrolling.
+**Still open:** reversal/lifecycle, custom wheel bindings and FPS.
 Earlier new-touch checks opened the IME and resized tmux, so those results were inconclusive.
 Custom tmux wheel bindings and FPS remain open. Existing checklist item 20 covers these checks;
 the checklist remains 64 items.
@@ -2839,4 +2844,6 @@ owned tmux session and phone UI XML were removed. Private evidence, including
 `device-summary.json`, is in `.nodeterm/android-beta-build-6/` and `.nodeterm/android-beta-6/`.
 No host verb, payload, mirror or SSH-visible file contract changed; no iOS fixture change is owed.
 The user confirms normal continuous dragging and coast both work now. Reversal/lifecycle,
-mobile-beta-6 checks, custom wheel bindings, FPS and the full device pass remain open.
+custom wheel bindings, FPS and the full device pass remain open. The user confirms final beta-6
+connection and smooth scrolling on cellular WireGuard with Wi-Fi off over regular manual SSH;
+cellular hosted relay remains untested.
