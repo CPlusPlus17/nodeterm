@@ -2123,6 +2123,8 @@ app.whenReady().then(async () => {
     initNodeTokens({ canvases: () => workspaceStore.persistedCanvases() })
   } catch (error) {
     console.warn('[node-identity] no secret — hook identity unavailable, running legacy', error)
+    // Issue #1088: a verified-only refusal must be able to say the cause is this instance.
+    hookServer.setNodeIdentityUnavailable(error)
   }
   // Probes the CLI for `--remote`, installs the launcher, and publishes the construction-time
   // answer. MUST stay after the secret above and before the window: it is what unblocks

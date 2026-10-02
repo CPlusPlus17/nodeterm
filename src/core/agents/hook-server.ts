@@ -335,6 +335,23 @@ export { REPORT_OUTCOME_CONTROL_REFUSAL }
 /** The flat refusal for an unverified `issues` / `prs` read (core/github/control-read.ts). */
 export const GITHUB_READ_CONTROL_REFUSAL = 'GitHub lane read refused.'
 
+/**
+ * Issue #1088: appended to a verified-only refusal when THIS INSTANCE has no node-auth secret, so no
+ * session on the machine can ever be `verified`. The flat refusals deliberately carry no per-node
+ * diagnosis (advice to a prober), but this is not one: it is a fact about the instance that no
+ * caller can change, and leaving it out made the refusal permanent AND causeless — the reporter
+ * had only a `console.warn` in a log they could not see. It names no token and no restart, because
+ * neither helps; the cause is fixed on the machine, then NodeTerm is restarted.
+ */
+export function identityUnavailableNote(reason: string | null): string {
+  const why = reason ? ` (${reason.replace(/\s+/g, ' ').trim().slice(0, 200)})` : ''
+  return (
+    `Node identity is unavailable in this NodeTerm instance: it could not load its node-identity key at startup${why}, ` +
+    'so no session on this machine can be verified and restarting a node will not help. ' +
+    'Fix the cause and restart NodeTerm; details are in its log under [node-identity].'
+  )
+}
+
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-terminal') return 'Terminal command refused.'
@@ -456,6 +473,8 @@ export class HookServer {
   private endpointPath = ''
   private publishedEndpoint = ''
   private nodeAuthSecret: Buffer | null = null
+  /** Why the shell could not arm a secret, when it tried and failed (see `setNodeIdentityUnavailable`). */
+  private nodeIdentityUnavailableReason: string | null = null
   /**
    * `settings.hookIdentityStrict`, read LIVE (a getter, not a snapshot) so flipping it in Settings
    * takes effect on the next request rather than the next launch. `undefined` — the default, and
@@ -634,6 +653,17 @@ export class HookServer {
   setNodeAuthSecret(secret: Uint8Array): void {
     if (secret.byteLength < 32) throw new Error('Invalid NodeTerm node-auth secret')
     this.nodeAuthSecret = Buffer.from(secret)
+    this.nodeIdentityUnavailableReason = null
+  }
+
+  /**
+   * The shell's boot-time arming FAILED (issue #1088). Recorded so a verified-only refusal can say
+   * the cause is the instance, not the node — see `identityUnavailableNote`. Both shells call it
+   * from the catch around their arming; a later successful `setNodeAuthSecret` supersedes it.
+   */
+  setNodeIdentityUnavailable(reason: unknown): void {
+    this.nodeIdentityUnavailableReason =
+      reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'unknown error'
   }
 
   /** True once a valid secret is set; false before, and after a failed load (nothing was set). The
@@ -651,6 +681,7 @@ export class HookServer {
   /** Test seam only: this server is a module singleton, so its secret otherwise leaks across tests. */
   clearNodeAuthSecretForTests(): void {
     this.nodeAuthSecret = null
+    this.nodeIdentityUnavailableReason = null
   }
 
   /**
@@ -811,7 +842,9 @@ export class HookServer {
           // plain terminals keep their existing policy. Both shells and transports use this gate.
           const commandOpen = verb === 'open-terminal' && args.cmd !== undefined
           if ((requiresVerified.has(verb) || commandOpen) && verdict !== 'verified') {
-            const refusal = verifiedRefusalFor(verb)
+            const refusal = this.identityAvailable()
+              ? verifiedRefusalFor(verb)
+              : `${verifiedRefusalFor(verb)} ${identityUnavailableNote(this.nodeIdentityUnavailableReason)}`
             if (wantsText) {
               res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
               res.end(`${refusal}\n`)

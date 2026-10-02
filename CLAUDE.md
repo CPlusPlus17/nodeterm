@@ -3126,6 +3126,16 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     reconnecting terminals. These changes share the core listener in Desktop and Server Edition;
     the mobile wire protocol and node-identity rules are unchanged.
 
+  - **No keyring is not "no identity" (#1088).** Electron 42 on a Linux session without Secret
+    Service/kwallet picks `basic_text` and `safeStorage.encryptString` THROWS (measured under xvfb).
+    The desktop secret load used to reject on every boot ⇒ no node token was ever written ⇒ `send` /
+    `settings` refused forever with no visible cause. The loader now falls back to the Server
+    Edition's raw 0600 `node-auth-key.bin` when it cannot seal and no sealed key exists (a sealed key
+    it merely cannot unseal still rejects — rotating it orphans codex thread records), and both shells
+    record a failed arming via `hookServer.setNodeIdentityUnavailable`, which a verified-only refusal
+    then names. A secret that cannot be stored must degrade to the weaker store, never to a feature
+    that is silently off.
+
   Enforcement is dated (`NODE_IDENTITY_STRICT_AFTER`, 2026-10-13, read through `isStrictInstant` so a
   clock years ahead cannot enter strict mode early) with a `settings.hookIdentityStrict` escape hatch
   in Settings → Agents. **Trust on first proof latches a node the moment it authenticates, so it
