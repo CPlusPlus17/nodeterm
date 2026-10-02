@@ -340,7 +340,7 @@ class LiveNotificationsTest {
         // announcing live through its pushes until the connection dropped or the worker ran, while the
         // copy promises live notifications only for the computer on screen. Like the reconnect.
         val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection)")
-        AppSourcePins.assertInOrder(adopt, "if (watchers > 0) scope.launch {", "refreshNow()")
+        AppSourcePins.assertInOrder(adopt, "if (isWatched) scope.launch {", "delay(1_500)", "refreshNow()")
         assertTrue(adopt.contains("c.setOnChanged { if (isWatched) scope.launch { refreshNow() } }"), adopt)
         assertEquals(1, Regex("""\.setOnChanged\b""").findAll(connections).count(), "another connection re-lists on its pushes")
     }

@@ -46,6 +46,10 @@ import kotlinx.serialization.json.JsonPrimitive
  *    nothing about the request.
  *  - **Never retried.** An answer that may or may not have arrived is said to be unconfirmed
  *    ([Outcome.UNCONFIRMED]), never sent again: a second `1` lands in whatever the pane shows by then.
+ *    That includes the run WorkManager starts again on its own after an interrupted one ([answerOnce]).
+ *  - **Keys only for a card the computer still lists** ([QuickActions]): a notification can stay in the
+ *    shade for hours after its card was settled and dropped from the desktop's feed, while the node
+ *    blocks on a newer prompt; its Approve must not answer that one.
  */
 object InboxNotificationActions {
     /** Android shows at most three actions on a notification. */
@@ -101,6 +105,14 @@ object InboxNotificationActions {
      * the pairing installed a key and the route allows SSH), or through a relay leg that has already
      * approved this phone ([relayLeg] and [relayApproved]). A notification action uses only these; an
      * open connection may be reused whatever it is, since reusing it makes no handshake.
+     *
+     * The SSH leg counts whether or not the phone is on the computer's network right now, which it
+     * cannot know before it dials. So a computer paired with an SSH key always gets the answers, and
+     * one tapped away from its network goes through the relay if that has approved this phone, or
+     * else ends as [Outcome.UNREACHABLE] with nothing sent. Only a computer reached through the relay
+     * alone, which has not approved this phone, gets Open; but the listing that raised the
+     * notification normally came over that relay and so approved it, and in practice the answers are
+     * offered and it is the tap that ends as [Outcome.NOT_APPROVED], if the approval was lost since.
      */
     fun reachableQuietly(sshLeg: Boolean, relayLeg: Boolean, relayApproved: Boolean): Boolean =
         sshLeg || (relayLeg && relayApproved)
@@ -235,6 +247,62 @@ object InboxNotificationActions {
             // The relay leg never refuses a node that way; if it did, it sent nothing.
             Attempt.NeedsRelay -> Outcome.UNREACHABLE
             Attempt.Unconfirmed -> Outcome.UNCONFIRMED
+        }
+    }
+
+    /**
+     * One computer as an answer from a notification reaches it ([answerOnce]): the app's HostSession,
+     * whose every dial is the background one ([RelayApprovalGate.Trigger.BACKGROUND]), which never
+     * makes a first relay handshake.
+     */
+    interface QuietRoute {
+        /** A connection to the computer is open already: reusing it makes no handshake. */
+        val connected: Boolean
+
+        /** [InboxNotificationActions.reachableQuietly] for the computer, now. */
+        fun reachableQuietly(): Boolean
+
+        /**
+         * Runs [block] holding the computer's connection, which other users share (a second answer, the
+         * background check, a screen): it is closed afterwards only when none of them still uses it
+         * ([ConnectionUsers]).
+         */
+        suspend fun hold(block: suspend () -> Outcome): Outcome
+
+        /** The computer's connection ([perform]'s `connect`). */
+        suspend fun connect(): HostConnection
+
+        /** The relay leg next to it ([perform]'s `viaRelay`). */
+        suspend fun viaRelay(): HostConnection
+    }
+
+    /**
+     * The whole answer a notification's work gives, in this order:
+     *
+     *  1. A run that is not the work's first ([runAttempt] > 0, WorkManager's run attempt count) sends
+     *     nothing and says the answer is unconfirmed. WorkManager runs work again when it was
+     *     interrupted rather than finished: the system stopped the job, or the process died while it
+     *     ran (the work is set back to enqueued at the next start, possibly hours later). The first run
+     *     may have sent the answer, and nothing records whether it did; a second `1` would land in
+     *     whatever the pane shows by then.
+     *  2. [route] null: the computer is no longer paired ([Outcome.NOT_PAIRED]).
+     *  3. Holding the connection ([QuietRoute.hold]) for the rest: with no connection open and no quiet
+     *     reach, [Outcome.NOT_APPROVED] and nothing is dialed; else [perform].
+     */
+    suspend fun answerOnce(
+        action: Action,
+        event: InboxEvent,
+        runAttempt: Int,
+        route: QuietRoute?,
+        connectBudgetMs: Long = CONNECT_BUDGET_MS,
+        answerBudgetMs: Long = ANSWER_BUDGET_MS
+    ): Outcome {
+        if (runAttempt > 0) return Outcome.UNCONFIRMED
+        if (!action.answers) return Outcome.OPEN_SESSION
+        val r = route ?: return Outcome.NOT_PAIRED
+        return r.hold {
+            if (!r.connected && !r.reachableQuietly()) Outcome.NOT_APPROVED
+            else perform(action, event, { r.connect() }, { r.viaRelay() }, connectBudgetMs, answerBudgetMs)
         }
     }
 

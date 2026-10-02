@@ -156,6 +156,31 @@ class QuickActionsTest {
     }
 
     @Test
+    fun `keys are not typed for a card the fresh feed no longer lists`() = runBlocking<Unit> {
+        // The review of A25: the desktop drops events after 6 h and trims its feed to 50, keeping only
+        // each node's newest unresolved ask, so a card settled long ago disappears while its node
+        // blocks on a NEWER prompt in the same state. A key carries no identity of the prompt it
+        // answers: `1` here would approve the newer prompt.
+        val stale = card(id = "e1", pendingId = null)
+        val newer = card(id = "e2", pendingId = null)
+        val blocked = FakeConn(snapshot(AgentState.BLOCKED, newer))
+        assertEquals(QuickActions.Result.OPEN_SESSION, QuickActions.answerApproval(blocked, stale, allow = true))
+        assertEquals(QuickActions.Result.OPEN_SESSION, QuickActions.answerApproval(blocked, stale, allow = false))
+        assertEquals(emptyList(), blocked.keys)
+        val question = card(id = "q1", kind = InboxKind.QUESTION, pendingId = null, options = listOf("yes", "no"))
+        val otherQuestion = card(id = "q2", kind = InboxKind.QUESTION, pendingId = null, options = listOf("a", "b"))
+        val waiting = FakeConn(snapshot(AgentState.WAITING, otherQuestion))
+        assertEquals(QuickActions.Result.OPEN_SESSION, QuickActions.answerQuestion(waiting, question, 0))
+        // No feed at all is no evidence either.
+        assertEquals(QuickActions.Result.OPEN_SESSION, QuickActions.answerQuestion(FakeConn(snapshot(AgentState.WAITING)), question, 0))
+        assertEquals(emptyList(), waiting.keys)
+        // The node moved on: settled, whatever the feed lists.
+        val working = FakeConn(snapshot(AgentState.WORKING))
+        assertEquals(QuickActions.Result.ALREADY_HANDLED, QuickActions.answerApproval(working, stale, allow = true))
+        assertEquals(emptyList(), working.keys)
+    }
+
+    @Test
     fun `a ticketed approval this host cannot answer opens the session, never keys`() = runBlocking<Unit> {
         val approval = card()
         val conn = FakeConn(snapshot(AgentState.WAITING, approval), answerApprovals = false)

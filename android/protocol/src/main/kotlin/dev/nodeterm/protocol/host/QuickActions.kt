@@ -28,6 +28,16 @@ import dev.nodeterm.protocol.model.QuestionChoices
  * src/core/pending-question.test.ts), so a ticketed answer is judged by its CARD, and the host
  * refuses it ("gone") once the hook's hold has ended.
  *
+ * Keys also need the fresh feed to still LIST the card, unresolved (the review of audit A25). A key
+ * carries no identity of the prompt it answers, so a card the feed no longer lists is no evidence
+ * that the prompt on screen is still its own: the desktop drops every event after 6 hours and trims
+ * its feed to 50 events, keeping only the newest unresolved ask of each node, so a card settled long
+ * ago (or an older ask the node has since moved past) disappears while the node blocks on a NEWER
+ * prompt in the same state. A notification left in the shade, or a card on a screen that is not
+ * re-listed, outlives that, and its `1` would approve the newer prompt. Such a card goes to the
+ * session ([Result.OPEN_SESSION]): whether it was handled is not known, and the session shows what is
+ * really on screen. A ticket keeps its node-state fallback: the host refuses a ticket whose hold ended.
+ *
  * There is deliberately NO "Always allow" here (audit A56), although iOS types `2` for it
  * (docs/hook-reply-approvals.md, "Digit `2`/Always allow keeps using send-keys"). That line is the
  * only place the repo states the digit: no desktop code types it, and no captured prompt pins it.
@@ -49,7 +59,7 @@ object QuickActions {
     suspend fun answerApproval(conn: HostConnection, event: InboxEvent, allow: Boolean): Result {
         if (event.kind != InboxKind.APPROVAL) return Result.OPEN_SESSION
         if (event.pendingId != null) return answerTicket(conn, event, allow)
-        if (!stillWaiting(conn, event, AgentState.BLOCKED)) return Result.ALREADY_HANDLED
+        keysRefusal(conn, event, AgentState.BLOCKED)?.let { return it }
         if (!answersApproval(event)) return Result.OPEN_SESSION
         return typeOrOpen(conn, event, if (allow) "1" else "\u001b")
     }
@@ -72,7 +82,7 @@ object QuickActions {
     suspend fun answerQuestion(conn: HostConnection, event: InboxEvent, optionIndex: Int): Result {
         val choices = QuestionChoices.of(event) as? QuestionChoices.Answer ?: return Result.OPEN_SESSION
         if (optionIndex !in choices.rows.indices || optionIndex > 8) return Result.OPEN_SESSION
-        if (!stillWaiting(conn, event, AgentState.WAITING)) return Result.ALREADY_HANDLED
+        keysRefusal(conn, event, AgentState.WAITING)?.let { return it }
         return typeOrOpen(conn, event, (optionIndex + 1).toString())
     }
 
@@ -105,13 +115,18 @@ object QuickActions {
         Result.OPEN_SESSION
     }
 
-    /** The KEYS gate: the node shows exactly [expected], and the card has not been settled. */
-    private suspend fun stillWaiting(conn: HostConnection, event: InboxEvent, expected: AgentState): Boolean {
+    /**
+     * The KEYS gate: null when the keys may be typed, else what to answer instead. The node must show
+     * exactly [expected] (else [Result.ALREADY_HANDLED]), and the fresh feed must list the card,
+     * unresolved: a settled card is [Result.ALREADY_HANDLED], and one the feed no longer lists is
+     * [Result.OPEN_SESSION], since the prompt on screen may be a newer one (see the class comment).
+     */
+    private suspend fun keysRefusal(conn: HostConnection, event: InboxEvent, expected: AgentState): Result? {
         val snap = conn.listProjects()
-        val status = snap.statusOf(event.nodeId) ?: return false
-        if (status.state != expected) return false
-        val fresh = freshCard(snap, event)
-        return fresh == null || !fresh.resolved
+        val status = snap.statusOf(event.nodeId) ?: return Result.ALREADY_HANDLED
+        if (status.state != expected) return Result.ALREADY_HANDLED
+        val fresh = freshCard(snap, event) ?: return Result.OPEN_SESSION
+        return if (fresh.resolved) Result.ALREADY_HANDLED else null
     }
 
     /**

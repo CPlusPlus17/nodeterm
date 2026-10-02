@@ -13,8 +13,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import dev.nodeterm.android.AppGraph
 import dev.nodeterm.android.NodetermApp
+import dev.nodeterm.android.conn.HostSession
+import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.InboxNotificationActions
 import dev.nodeterm.protocol.host.InboxNotificationActions.Outcome
 import dev.nodeterm.protocol.host.InboxNotificationActions.Request
@@ -60,16 +61,20 @@ class InboxActionReceiver : BroadcastReceiver() {
  * code the desktop shows (RelayApprovalGate, audit A05). A connection already open is reused; else
  * the SSH leg or a relay that has already approved this phone; else the notification says to open
  * the app, which connects as the user. The answer is [dev.nodeterm.protocol.host.QuickActions]',
- * with its re-checks, through [InboxNotificationActions.perform]. It is never retried: one that may
+ * with its re-checks, through [InboxNotificationActions.answerOnce]. It is never retried: one that may
  * have arrived is reported as unconfirmed, and a second `1` would land in whatever the pane shows by
- * then.
+ * then. That covers the runs WorkManager starts again on its own after an interrupted one
+ * ([runAttemptCount] above 0): they send nothing. The connection is shared with the other
+ * background jobs and the screens, and closed afterwards only when none of them uses it
+ * ([HostSession.inBackground]).
  */
 class InboxActionWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val request = Request.decode(inputData.getString(KEY_REQUEST)) ?: return Result.success()
         val graph = NodetermApp.graph(applicationContext)
         val outcome = try {
-            if (graph.hosts.get(request.hostId) == null) Outcome.NOT_PAIRED else answer(graph, request)
+            val session = if (graph.hosts.get(request.hostId) == null) null else graph.connections.session(request.hostId)
+            InboxNotificationActions.answerOnce(request.action, request.event, runAttemptCount, session?.let(::quietRoute))
         } catch (e: CancellationException) {
             // Stopped by the system mid-way: whether the answer arrived is not known.
             InboxNotifier.settle(applicationContext, request, Outcome.UNCONFIRMED)
@@ -79,21 +84,13 @@ class InboxActionWorker(context: Context, params: WorkerParameters) : CoroutineW
         return Result.success()
     }
 
-    private suspend fun answer(graph: AppGraph, request: Request): Outcome {
-        val session = graph.connections.session(request.hostId)
-        val watched = session.isWatched
-        try {
-            if (session.connection == null && !session.reachableQuietly()) return Outcome.NOT_APPROVED
-            return InboxNotificationActions.perform(
-                request.action,
-                request.event,
-                connect = { session.ensureConnected(RelayApprovalGate.Trigger.BACKGROUND) },
-                viaRelay = { session.viaRelay(RelayApprovalGate.Trigger.BACKGROUND) }
-            )
-        } finally {
-            // Don't hold a socket open in the background for a screen nobody is looking at.
-            if (!watched && !session.isWatched) session.disconnect()
-        }
+    /** The computer as the answer reaches it: every dial the background one, which never makes a first relay handshake. */
+    private fun quietRoute(session: HostSession) = object : InboxNotificationActions.QuietRoute {
+        override val connected: Boolean get() = session.connection != null
+        override fun reachableQuietly(): Boolean = session.reachableQuietly()
+        override suspend fun hold(block: suspend () -> Outcome): Outcome = session.inBackground(block)
+        override suspend fun connect(): HostConnection = session.ensureConnected(RelayApprovalGate.Trigger.BACKGROUND)
+        override suspend fun viaRelay(): HostConnection = session.viaRelay(RelayApprovalGate.Trigger.BACKGROUND)
     }
 
     /** Android 11 and lower run expedited work as a foreground service, which needs a notification. */

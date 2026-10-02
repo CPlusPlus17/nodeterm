@@ -138,13 +138,19 @@ session's events for the next check.
 Tapping a notification opens that session's terminal; Back from it lands on the computer's Inbox. An
 approval's notification carries **Approve** and **Deny**, and a question's carries its options when it
 has at most three ("Option 1", "Option 2", …, or their text with **Show details in notifications**
-on), wherever the Inbox card could answer it in one tap: a held Claude approval or a Claude prompt, a
-single-select question. Anything else carries **Open**. An answer needs an unlocked phone (Android 12
-and later ask for the unlock; on older versions the notification says to unlock first). It goes over
-your network or through a relay that has already approved this phone, never through a first relay
-connection, for the same reason as the background check, and otherwise the notification offers Open.
-The notification then says how it went ("Approved.", "Already handled.", or why nothing was sent, with
-a tap that opens the session), and an answer is never sent twice.
+on), wherever the Inbox card could answer it in one tap: a held approval (any agent's) or a Claude
+prompt, a single-select question. Anything else carries **Open**. An answer needs an unlocked phone
+(Android 12 and later ask for the unlock; on older versions the notification says to unlock first).
+It goes over your network or through a relay that has already approved this phone, never through a
+first relay connection, for the same reason as the background check. The phone cannot tell in
+advance whether it is on the computer's network, so a computer paired with an SSH key always gets
+the answers: tapped away from that network, the answer goes through the relay if it has approved
+this phone, and otherwise is not sent ("couldn't reach"). The notification then says how it went
+("Approved.", "Already handled.", or why nothing was sent, with a tap that opens the session). An
+answer is sent at most once: if Android interrupts it and runs it again, the second run sends nothing
+and the notification says the answer could not be confirmed. A notification left in the shade after
+its request was settled and dropped from the computer's list (after 6 hours, or 50 later events)
+types nothing into whatever prompt the session shows by then: it says to answer in the session.
 
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
 and the phone remembers the ones it has announced, you have read or you had on screen for a day

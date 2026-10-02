@@ -4,6 +4,7 @@ import dev.nodeterm.android.AppGraph
 import dev.nodeterm.android.data.RoutePreference
 import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.ConnectionUsers
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.InboxNotificationActions
@@ -74,12 +75,23 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     private val mutex = Mutex()
     @Volatile private var conn: HostConnection? = null
     private var pollJob: Job? = null
-    private var watchers = 0
+
+    /** The screens that show this computer and the background jobs on its connection (review of A25). */
+    private val users = ConnectionUsers()
 
     val connection: HostConnection? get() = conn
 
     /** A screen is showing this computer right now (so its connection is worth keeping open). */
-    val isWatched: Boolean get() = synchronized(this) { watchers > 0 }
+    val isWatched: Boolean get() = users.watched
+
+    /**
+     * Runs [block] as a background user of this computer's connection: the periodic Inbox check, or an
+     * answer given from a notification (the review of audit A25). They share the connection with each
+     * other and with the screens, so it is closed when [block] ends only if no screen shows this
+     * computer and no other background job still runs on it ([ConnectionUsers]): don't hold a socket
+     * open in the background for a screen nobody is looking at, but never close it under another job.
+     */
+    suspend fun <T> inBackground(block: suspend () -> T): T = users.hold({ disconnect() }, block)
 
     /**
      * What of this computer is on screen: its Inbox tab, and the sessions open in a terminal, as far
@@ -351,7 +363,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             if (conn === c) {
                 conn = null
                 _state.value = ConnState.Failed("Disconnected" + (reason?.let { " ($it)" } ?: "") + ".")
-                if (watchers > 0) scope.launch {
+                if (isWatched) scope.launch {
                     delay(1_500)
                     refreshNow()
                 }
@@ -489,7 +501,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      */
     @Synchronized
     fun startWatching() {
-        watchers++
+        users.watch()
         if (pollJob == null) {
             pollJob = scope.launch {
                 // Opening the computer is the user asking; the polls after it are the app's own.
@@ -505,8 +517,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 
     @Synchronized
     fun stopWatching() {
-        watchers = (watchers - 1).coerceAtLeast(0)
-        if (watchers == 0) {
+        if (users.unwatch()) {
             pollJob?.cancel()
             pollJob = null
         }

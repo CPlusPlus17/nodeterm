@@ -290,8 +290,11 @@ cover an approval answered after the hook's hold ended (`A06`), and the desktop 
 generated SSH answer command under a real `/bin/sh`. `QuickActionsTest` pins which node state each
 Inbox quick answer needs (`A38`): a ticketed approval is judged by its card, so it is answered while
 the node still shows WAITING for a held question; keys are typed only for a ticketless approval on a
-BLOCKED node or a question on a WAITING one. `QuestionChoicesTest` pins what a question card shows
-(`A57`): a single-select question keeps its answer buttons, while a multi-select one lists its options
+BLOCKED node or a question on a WAITING one, and only while the fresh listing still lists the card
+unresolved. A card the computer's feed has dropped (it keeps an event 6 hours, and trims its feed to
+50 events, keeping only each node's newest unresolved ask) opens the session instead: a key carries no
+identity of the prompt it answers, and the node may be blocked on a newer one by then (the review of
+`A25`). `QuestionChoicesTest` pins what a question card shows (`A57`): a single-select question keeps its answer buttons, while a multi-select one lists its options
 numbered and read-only under "Choose several — answer in the session." beside "Open session", and
 `QuickActions` never types into it. The card's drawing is pinned in the source and only type-checked.
 `UsagePaceTest` pins the Usages pace line (`A58`): no line
@@ -528,20 +531,34 @@ through an explicit, immutable PendingIntent. The receiver takes the actions off
 per event. The work connects the way the background check does and never makes a first relay
 handshake, since the user tapped but is not looking at the app to compare the desktop's code (`A05`):
 it reuses a connection already open, or takes the SSH leg or a relay that has already approved this
-phone; otherwise the notification says to open the app. The answer is `QuickActions`', with its
-re-checks (still unresolved, the node-state rules, the ticketed path of `A38`), and it is never sent
-twice. The notification then says how it went. "Approved.", "Denied.", "Answered with option N." and
-"Already handled." go away after 10 s; a timed-out hold, a request only the session can answer, an
-answer not sent (and why) and one that could not be confirmed stay, and their tap opens the session.
+phone; otherwise the notification says to open the app. The phone cannot tell whether it is on a
+computer's network before it dials, so a computer paired with an SSH key always gets the answers; one
+tapped away from its network goes through a relay that has already approved this phone, or is not
+sent ("couldn't reach"). Open replaces the answers only for a computer reached through the relay
+alone that has not approved this phone; the listing that raised the notification normally came over
+that relay and approved it. The answer is `QuickActions`', with its re-checks (still unresolved, the
+node-state rules, the ticketed path of `A38`, and keys only for a card the computer still lists, since
+a notification outlives the card in the desktop's feed), and it is sent at most once: a run
+WorkManager starts again by itself after an interrupted one (the system stopped the work, or the
+process died during it) sends nothing and says the answer could not be confirmed
+(`InboxNotificationActions.answerOnce`, on the run attempt count). The answer, the background check
+and the screens share one connection per computer, which is closed when a background job ends only if
+no other job and no screen still uses it (`ConnectionUsers`). The notification then says how it went.
+"Approved.", "Denied.", "Answered with option N." and "Already handled." go away after 10 s; a
+timed-out hold, a request only the session can answer, an answer not sent (and why) and one that could
+not be confirmed stay, and their tap opens the session.
 The app does not open the session by itself at that point: Android 12 forbids starting an activity
 from a notification's receiver or service (a "trampoline"), and Android 10 forbids starting one from
 the background, so the notification says "Tap to …" instead. An answering action needs an unlocked
 phone: Android 12 and later ask for the unlock before they send it (`setAuthenticationRequired`);
 Android 11 and lower send it from a locked screen, so there the receiver refuses and says to unlock.
 The plan, the answer run against `QuickActions` (every answer the plan offers is one `QuickActions`
-sends), the outcomes and the hand-off's encoding are unit-tested; the PendingIntents, the receiver, the
-work, its dial trigger and the tap's route are pinned in the source, and whether the actions show and
-answer on a phone is a device check.
+sends, and none is typed for a card the feed dropped), the work's whole run (a rerun sends nothing,
+every dial happens while the connection is held), the outcomes and the hand-off's encoding are
+unit-tested, and `ConnectionUsersTest` covers the shared connection (two overlapping jobs close it
+once, after the last); the PendingIntents, the receiver, the work, its dial trigger and the tap's
+route are pinned in the source, and whether the actions show and answer on a phone is a device
+check.
 
 `AllComputersTest` covers the All computers screen and the needs-you counts (`A55`). iOS merges its
 Agents feed across every paired connection and shows one Usages section per connection that reports
@@ -911,9 +928,11 @@ later fix left to a device.
     *(A25, A57)*
 59. Answer from a notification something already answered on the desktop: "Already handled.". Answer a
     held approval after its hold expired: the notification says it timed out, and its tap opens the
-    session. Away from the desktop's network, on a computer this phone has never connected to through
-    the relay, a new approval's notification offers Open rather than Approve, and nothing appears on
-    the desktop. Tapping Approve twice quickly sends one answer. *(A25, A05, A06)*
+    session. Pair a computer with remote access off, let it raise an approval's notification on the
+    same network, then leave that network (mobile data) and tap Approve: the notification reads
+    "Not sent: couldn't reach …", and nothing appears on the desktop; with remote access on (and the
+    phone approved for it at the scan), the same tap answers it through the relay. Tapping Approve twice quickly sends one answer, and Approve on
+    two notifications of one computer a few seconds apart answers both. *(A25, A05, A06)*
 
 ### All computers
 

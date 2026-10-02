@@ -297,14 +297,13 @@ class InboxWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         if (!graph.hosts.notificationsEnabled || !InboxNotifier.canPost(applicationContext)) return Result.success()
         for (host in graph.hosts.hosts.value) {
             val session = graph.connections.session(host.id)
-            val watched = session.isWatched
             // BACKGROUND: never a first relay handshake — that would raise the desktop's approval
             // dialog with nobody at the phone to compare the code (audit A05). A listing that arrives
             // announces its new events itself (HostSession.refreshNow → InboxNotifier.announce, the
             // path the live refresh takes too, audit A73); a failed one has nothing new to announce.
-            withTimeoutOrNull(45_000) { session.refreshNow(RelayApprovalGate.Trigger.BACKGROUND) }
-            // Don't hold a socket open in the background for a screen nobody is looking at.
-            if (!watched && !session.isWatched) session.disconnect()
+            // As a background user: the connection is closed afterwards unless a screen or an answer
+            // from a notification still uses it (the review of A25).
+            session.inBackground { withTimeoutOrNull(45_000) { session.refreshNow(RelayApprovalGate.Trigger.BACKGROUND) } }
         }
         return Result.success()
     }

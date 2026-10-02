@@ -324,6 +324,28 @@ class NotificationActionsTest {
     }
 
     @Test
+    fun `a notification whose card the desktop's feed dropped types nothing into the prompt on screen now`() = runBlocking<Unit> {
+        // The review of A25. A notification stays in the shade with its actions for hours; the desktop
+        // drops an event after 6 h and trims its feed to 50 events, keeping each node's newest
+        // unresolved ask only. So: e1 answered on the desktop, then dropped; the node blocks on a newer
+        // prompt e2. The old Approve (its details naming e1's command) must not type `1` into e2.
+        val old = ev(pendingId = null)
+        val newer = ev(pendingId = null, id = "e2")
+        val blocked = FakeConn(snapshot(AgentState.BLOCKED, newer))
+        for (action in plan(old)) {
+            assertEquals(Outcome.OPEN_SESSION, InboxNotificationActions.perform(action, old, { blocked }, { error("unused") }), "${action.verb}")
+        }
+        assertEquals(emptyList(), blocked.typed)
+        // The same for a question's digit into another picker.
+        val q = question("a", "b")
+        val waiting = FakeConn(snapshot(AgentState.WAITING, question("c", "d").copy(id = "e2")))
+        for (action in plan(q)) {
+            assertEquals(Outcome.OPEN_SESSION, InboxNotificationActions.perform(action, q, { waiting }, { error("unused") }), "${action.label}")
+        }
+        assertEquals(emptyList(), waiting.typed)
+    }
+
+    @Test
     fun `a computer that cannot be reached is reported, and nothing is sent`() = runBlocking<Unit> {
         val event = ev()
         var relayDialed = false
@@ -405,6 +427,86 @@ class NotificationActionsTest {
             viaRelay = { error("Open dialed the relay") }
         )
         assertEquals(Outcome.OPEN_SESSION, outcome)
+    }
+
+    // --- The work's whole run ----------------------------------------------------------------------
+
+    /**
+     * The computer as [InboxNotificationActions.answerOnce] reaches it: [conn] for every dial, which
+     * must happen while the connection is held.
+     */
+    private class FakeRoute(
+        private val conn: HostConnection,
+        override val connected: Boolean = false,
+        private val quiet: Boolean = true
+    ) : InboxNotificationActions.QuietRoute {
+        var holds = 0
+        var holding = false
+        var dials = 0
+        var dialedOutsideHold = false
+
+        override fun reachableQuietly(): Boolean = quiet
+        override suspend fun hold(block: suspend () -> Outcome): Outcome {
+            holds++
+            holding = true
+            try {
+                return block()
+            } finally {
+                holding = false
+            }
+        }
+        override suspend fun connect(): HostConnection = dial()
+        override suspend fun viaRelay(): HostConnection = dial()
+        private fun dial(): HostConnection {
+            if (!holding) dialedOutsideHold = true
+            dials++
+            return conn
+        }
+    }
+
+    @Test
+    fun `the first run answers while it holds the shared connection`() = runBlocking<Unit> {
+        val event = ev()
+        val conn = FakeConn(snapshot(AgentState.BLOCKED, event))
+        val route = FakeRoute(conn)
+        assertEquals(Outcome.APPROVED, InboxNotificationActions.answerOnce(plan(event)[0], event, runAttempt = 0, route = route))
+        assertEquals(listOf<Pair<String?, Boolean>>(event.pendingId to true), conn.answered)
+        assertEquals(1, route.holds)
+        assertEquals(1, route.dials)
+        assertFalse(route.dialedOutsideHold, "dialed on a connection another job may close")
+    }
+
+    @Test
+    fun `a run WorkManager starts again sends nothing and says the answer is unconfirmed`() = runBlocking<Unit> {
+        // The review of A25: WorkManager runs again work that was interrupted rather than finished (a
+        // system stop, or the process dying mid-run, re-enqueued at the next start). The first run may
+        // have sent the answer; a second `1` would land in whatever the pane shows by then.
+        val event = ev(pendingId = null)
+        for (attempt in listOf(1, 2, 5)) {
+            val conn = FakeConn(snapshot(AgentState.BLOCKED, event))
+            val route = FakeRoute(conn)
+            assertEquals(Outcome.UNCONFIRMED, InboxNotificationActions.answerOnce(plan(event)[0], event, attempt, route))
+            assertEquals(0, route.holds, "attempt $attempt touched the connection")
+            assertEquals(0, route.dials, "attempt $attempt dialed")
+            assertEquals(emptyList(), conn.typed)
+            // Even for a computer forgotten since: the first run may have answered it.
+            assertEquals(Outcome.UNCONFIRMED, InboxNotificationActions.answerOnce(plan(event)[0], event, attempt, route = null))
+        }
+    }
+
+    @Test
+    fun `a forgotten computer, or one without quiet reach, is not dialed`() = runBlocking<Unit> {
+        val event = ev()
+        assertEquals(Outcome.NOT_PAIRED, InboxNotificationActions.answerOnce(plan(event)[0], event, 0, route = null))
+        val conn = FakeConn(snapshot(AgentState.BLOCKED, event))
+        val unapproved = FakeRoute(conn, quiet = false)
+        assertEquals(Outcome.NOT_APPROVED, InboxNotificationActions.answerOnce(plan(event)[0], event, 0, unapproved))
+        assertEquals(0, unapproved.dials)
+        assertEquals(emptyList(), conn.answered)
+        // A connection already open makes no handshake: it is reused.
+        val open = FakeRoute(conn, connected = true, quiet = false)
+        assertEquals(Outcome.APPROVED, InboxNotificationActions.answerOnce(plan(event)[0], event, 0, open))
+        assertFalse(open.dialedOutsideHold)
     }
 
     // --- The tap's hand-off -------------------------------------------------------------------------
@@ -545,22 +647,46 @@ class NotificationActionsTest {
 
     @Test
     fun `an answer from a notification never makes a first relay handshake, and is never retried`() {
-        val work = AppSourcePins.blockAfter(actions, "private suspend fun answer(")
+        // The run is answerOnce's (tested above against fakes): its run attempt count, so a run
+        // WorkManager starts again sends nothing, and the computer as the background dials reach it.
+        val doWork = AppSourcePins.blockAfter(actions, "override suspend fun doWork()")
         AppSourcePins.assertInOrder(
-            work,
-            "val watched = session.isWatched",
-            "if (session.connection == null && !session.reachableQuietly()) return Outcome.NOT_APPROVED",
-            "InboxNotificationActions.perform(",
-            "connect = { session.ensureConnected(RelayApprovalGate.Trigger.BACKGROUND) }",
-            "viaRelay = { session.viaRelay(RelayApprovalGate.Trigger.BACKGROUND) }",
-            "if (!watched && !session.isWatched) session.disconnect()"
+            doWork,
+            "InboxNotificationActions.answerOnce(request.action, request.event, runAttemptCount, session?.let(::quietRoute))",
+            "InboxNotifier.settle(applicationContext, request, outcome)",
+            "return Result.success()"
+        )
+        assertFalse("retry" in doWork, "an unconfirmed answer must not be sent again")
+        val route = AppSourcePins.blockAfter(actions, "private fun quietRoute(session: HostSession)")
+        AppSourcePins.assertInOrder(
+            route,
+            "override val connected: Boolean get() = session.connection != null",
+            "override fun reachableQuietly(): Boolean = session.reachableQuietly()",
+            "override suspend fun hold(block: suspend () -> Outcome): Outcome = session.inBackground(block)",
+            "override suspend fun connect(): HostConnection = session.ensureConnected(RelayApprovalGate.Trigger.BACKGROUND)",
+            "override suspend fun viaRelay(): HostConnection = session.viaRelay(RelayApprovalGate.Trigger.BACKGROUND)"
         )
         // Every dial in the file is the background one; USER would release a hold and show a code.
         assertFalse(Regex("""Trigger\.(USER|AUTO)""").containsMatchIn(actions), "a notification action dials as the user at the app")
-        assertFalse(Regex("""ensureConnected\(\s*\)|viaRelay\(\s*\)""").containsMatchIn(actions), "a dial with the default trigger")
-        val doWork = AppSourcePins.blockAfter(actions, "override suspend fun doWork()")
-        assertFalse("retry" in doWork, "an unconfirmed answer must not be sent again")
-        AppSourcePins.assertInOrder(doWork, "InboxNotifier.settle(applicationContext, request, outcome)", "return Result.success()")
+        assertFalse(Regex("""\.(ensureConnected|viaRelay)\(\s*\)""").containsMatchIn(actions), "a dial with the default trigger")
+    }
+
+    @Test
+    fun `the background jobs share a computer's connection, and only the last one closes it`() {
+        // The review of A25: each job closed the shared connection whenever no screen watched, under
+        // another job still answering on it. The counting is ConnectionUsers' (ConnectionUsersTest).
+        val session = AppSourcePins.app("conn/ConnectionManager.kt")
+        assertTrue(
+            session.contains("suspend fun <T> inBackground(block: suspend () -> T): T = users.hold({ disconnect() }, block)"),
+            "HostSession.inBackground is not ConnectionUsers.hold"
+        )
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(session, "fun startWatching()"), "users.watch()")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(session, "fun stopWatching()"), "if (users.unwatch()) {", "pollJob?.cancel()")
+        val check = AppSourcePins.blockAfter(notifier, "override suspend fun doWork()")
+        AppSourcePins.assertInOrder(check, "session.inBackground {", "session.refreshNow(RelayApprovalGate.Trigger.BACKGROUND)")
+        for ((name, src) in listOf("the answer" to actions, "the background check" to check)) {
+            assertFalse(".disconnect()" in src, "$name closes the shared connection itself")
+        }
     }
 
     @Test
