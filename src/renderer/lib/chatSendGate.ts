@@ -76,15 +76,19 @@ export function chatComposerPlaceholder({
   refusal,
   agentLabel,
   chip,
-  answerOnCard = false
+  answerOnCard = false,
+  screen = null
 }: {
   readonly: boolean
   refusal: ChatSendRefusal
   agentLabel: string
   chip: string
   answerOnCard?: boolean
+  /** The pane's SCREEN says the agent's own UI owns the keyboard (`screenBlockedSentence`). */
+  screen?: ScreenBlock | null
 }): string {
   if (readonly) return "Can't write to this session"
+  if (screen !== null) return screenBlockedSentence(screen, agentLabel, chip)
   switch (refusal) {
     case 'working':
       return `${agentLabel} is working…`
@@ -108,4 +112,23 @@ export function chatComposerPlaceholder({
     case null:
       return `Message ${agentLabel}…  (Enter to send, Shift+Enter for a new line)`
   }
+}
+
+/** Why the pane's screen refuses input: one of the agent's own dialogs, or no input box. */
+export type ScreenBlock = 'dialog' | 'no-prompt'
+
+/**
+ * The one sentence for a screen refusal — the composer's placeholder and the notice in the thread
+ * both use it. Harness dialogs (folder trust, `/model`, setup questions) are answered in the
+ * terminal: their options are not ours to guess, and the trust prompt's default is "No, exit".
+ */
+export function screenBlockedSentence(block: ScreenBlock, agentLabel: string, chip: string): string {
+  if (block === 'dialog') {
+    return chip
+      ? `${agentLabel} is showing a dialog — press ${chip} to answer it in the terminal`
+      : `${agentLabel} is showing a dialog — switch back to the terminal to answer it`
+  }
+  return chip
+    ? `${agentLabel}'s input box isn't on screen — press ${chip} to check the terminal`
+    : `${agentLabel}'s input box isn't on screen — switch back to the terminal to check it`
 }

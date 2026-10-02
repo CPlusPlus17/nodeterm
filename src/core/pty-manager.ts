@@ -1,4 +1,5 @@
-import type { TextDeliveryResult } from '../shared/text-delivery'
+import type { ChatPromptBlocked, ChatPromptResult, TextDeliveryResult } from '../shared/text-delivery'
+import { claudeScreenBlocksInput, readClaudeScreen } from '../shared/agents/claude-screen'
 import os from 'os'
 import fs from 'fs'
 import path from 'path'
@@ -152,6 +153,7 @@ import { clearNode as clearNodeAgentStatus } from './agent-status-mirror'
 import {
   capabilityAgentId,
   hasSharedIdentity,
+  readsScreenDialogs,
   setCustomAgentBaseResolver,
   vanillaEnvStripPattern,
   type AgentId
@@ -927,6 +929,13 @@ export const SHADOW_CMD_TIMEOUT_MS = 5_000
  * shorter it lives the smaller the window in which anything has to reason about it at all.
  */
 export const BACKGROUND_WRITE_LINGER_MS = 10_000
+
+/** The chat view's screen check for Claude (shared/agents/claude-screen.ts): a refusal, or null. */
+function screenGate(screen: string): ChatPromptBlocked | null {
+  const read = readClaudeScreen(screen)
+  if (!claudeScreenBlocksInput(read)) return null
+  return { blocked: 'screen', dialog: read.kind === 'dialog' ? read.text : null }
+}
 
 /**
  * Manages all live PTY processes and bridges them to the renderer over IPC.
@@ -1961,6 +1970,11 @@ export class PtyManager {
     )
     platform().handle(IPC.ptySendText, (persistKey: string, text: string, enter?: boolean) =>
       this.sendText(persistKey, text, enter === undefined ? undefined : { enter })
+    )
+    platform().handle(IPC.ptySendChatPrompt, (persistKey: string, text: string, agentId: unknown) =>
+      // `agentId` crosses a process boundary: it only picks the screen reader, and a non-string
+      // picks none (plain `sendText`), never a wrong one.
+      this.sendChatPrompt(persistKey, text, typeof agentId === 'string' ? agentId : '')
     )
     platform().handle(IPC.ptyTmuxStatus, () => this.tmuxStatus())
     platform().handle(IPC.ptyPaneCommand, (persistKey: string) => this.paneCommand(persistKey))
@@ -5348,6 +5362,24 @@ export class PtyManager {
       // rather than throwing, precisely so the sweep cannot be skipped by an early exit.
       return false
     }
+  }
+
+  /**
+   * A prompt from the ⌘M chat view. For an agent whose screen we can read (`readsScreenDialogs`),
+   * refused before anything is written when the agent's own UI owns the keyboard: such dialogs
+   * (the folder-trust prompt, `/model`, one-time setup questions) fire no hook, so the chat view's
+   * state gate cannot see them, and a paste into one swallowed the text while its Enter answered
+   * the dialog. An empty capture (no session, a failed read) is not evidence of a dialog: the
+   * prompt is sent exactly as before. There is no second look before the Enter — `sendText`
+   * submits in the same step. Everything else is `sendText`, unchanged.
+   */
+  async sendChatPrompt(persistKey: string, text: string, agentId: string): Promise<ChatPromptResult> {
+    if (readsScreenDialogs(agentId)) {
+      const screen = await this.captureSession(persistKey)
+      const refused = screen === '' ? null : screenGate(screen)
+      if (refused !== null) return refused
+    }
+    return this.sendText(persistKey, text)
   }
 
   /**

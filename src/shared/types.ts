@@ -1,4 +1,4 @@
-import type { TextDeliveryResult } from './text-delivery'
+import type { ChatPromptResult, TextDeliveryResult } from './text-delivery'
 import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
@@ -1310,6 +1310,10 @@ export interface PtyApi {
    *  false if unavailable; `pasted-not-submitted` means input was accepted but Enter was not
    *  confirmed written. Surface it without automatically resending. True is not an app receipt. */
   sendText(persistKey: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult>
+  /** Submit a prompt from the ⌘M chat view. For an agent whose screen can be read
+   *  (`readsScreenDialogs`), refused BEFORE anything is written when the agent's own dialog owns the
+   *  keyboard (`ChatPromptBlocked`) — such dialogs fire no hook. Otherwise the `sendText` contract. */
+  sendChatPrompt(persistKey: string, text: string, agentId: string): Promise<ChatPromptResult>
   /** Is tmux available on this host (else the silent plain-shell fallback), plus a suggested
    *  install command for the "tmux not found" banner. */
   tmuxStatus(): Promise<TmuxStatus>
