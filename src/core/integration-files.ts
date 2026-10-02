@@ -7,7 +7,7 @@
 // A path with no receipt (written by a build from before receipts) is ours by NAME — the skill dirs
 // carry nodeterm's own names — so the next enabled reconcile rewrites it and records the receipt.
 import { createHash } from 'crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync } from 'fs'
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, rmdirSync } from 'fs'
 import path from 'path'
 import { writeManagedHookFileAtomic } from './agents/hooks/install-helper'
 import { mergeInstructionFile } from './agents/hooks/settings-file'
@@ -72,18 +72,41 @@ export class ReceiptStore {
   }
 }
 
+/** The file at `p` if it is a plain regular file; null when nothing is there; 'not-regular' for a
+ *  link, directory, FIFO or anything unreadable. ONE descriptor serves the check and the read (no
+ *  stat-then-read on a path, which a swap in between could defeat). O_NOFOLLOW refuses a symlink at
+ *  the name and O_NONBLOCK keeps a FIFO from hanging the open; fstat then judges what we hold.
+ *  Where the platform has no O_NOFOLLOW (Windows) the open follows a link, so the name is lstat'ed
+ *  AFTER the open and must be a plain file that is the very file we hold (same dev + ino, when the
+ *  filesystem reports one). Same shape as `readAlertSound` in alert-sounds.ts. */
 function readIfRegular(p: string): string | null | 'not-regular' {
-  let st
+  let fd: number
   try {
-    st = lstatSync(p)
-  } catch {
-    return null
+    fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return 'not-regular'
+    // A dangling link is still something at the name (the open followed it on Windows).
+    try {
+      lstatSync(p)
+      return 'not-regular'
+    } catch {
+      return null
+    }
   }
-  if (!st.isFile()) return 'not-regular'
   try {
-    return readFileSync(p, 'utf8')
+    const st = fstatSync(fd, { bigint: true })
+    if (!st.isFile()) return 'not-regular'
+    const named = lstatSync(p, { bigint: true })
+    if (!named.isFile() || (st.ino !== 0n && (named.dev !== st.dev || named.ino !== st.ino))) return 'not-regular'
+    return readFileSync(fd, 'utf8')
   } catch {
     return 'not-regular'
+  } finally {
+    try {
+      closeSync(fd)
+    } catch {
+      /* already closed */
+    }
   }
 }
 
@@ -166,25 +189,20 @@ export function stripMarkerBlock(existing: string, markers: { start: string; end
 export function stripLegacyBlocks(file: string): 'written' | 'unchanged' | 'failed' {
   const strip = (existing: string): string =>
     stripMarkerBlock(stripMarkerBlock(existing, CANVAS_CONTROL_MARKERS), LINKED_CONTEXT_MARKERS)
-  let st
-  try {
-    st = lstatSync(file)
-  } catch {
-    return 'unchanged'
-  }
   // A regular file that held NOTHING but our blocks was ours (an older build created it to hold
   // them): remove it rather than leave an empty AGENTS.md behind. Re-read right before the unlink.
-  if (st.isFile()) {
-    try {
-      const before = readFileSync(file, 'utf8')
-      const after = strip(before)
-      if (after !== before && after.trim() === '') {
-        if (readFileSync(file, 'utf8') !== before) return 'unchanged'
+  const before = readIfRegular(file)
+  if (before === null) return 'unchanged'
+  if (before !== 'not-regular') {
+    const after = strip(before)
+    if (after !== before && after.trim() === '') {
+      if (readIfRegular(file) !== before) return 'unchanged'
+      try {
         rmSync(file, { force: true })
-        return 'written'
+      } catch {
+        return 'failed'
       }
-    } catch {
-      return 'failed'
+      return 'written'
     }
   }
   // Everything else through the guarded transaction (link + mode kept, an unreadable file left
