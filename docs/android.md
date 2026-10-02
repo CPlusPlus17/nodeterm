@@ -296,7 +296,54 @@ unchanged.
 
 ## What is verified, and how
 
-**Scroll update (`A86`):** after checkpoint `cf0487a3`, the user reports poor responsiveness on
+**Current scrolling correction (`A86`, `A87`, 2026-10-02):** the user reports that installed
+beta 3 still has both lag and too little movement, on Wi-Fi and mobile-data VPN. Its controlled
+gain/reversal/Esc results below did not establish satisfactory feel. `3cffb49d` restores one
+measured text row per wheel notch and separates automatic xterm focus/mouse/query replies from
+user input: reports preserve queued movement; keys, paste and IME input still cancel it. Frame
+batching, lossless ordered chunks, stream retirement and SSH TCP_NODELAY remain. Real bundled
+xterm interaction regressions pass; 22 JavaScript and nine actor/native-wiring mutations were
+caught. All 646 protocol tests in 62 suites passed with zero failures, errors or skips (50 seconds), and the
+offline app `compileKotlin` passed (8 seconds). `A86` remains open until intended-Pixel and user
+follow-up establish the correction's actual feel; no kinetic fling is implemented.
+
+**Beta-4 delivery:** `0.1.0-beta.4` / code `5` built locally from
+`3cffb49d8cf64932260e914b42b3883331d0352d` with the retained signer.
+The code-5 local AGP release built in 48 seconds and passed every R8 keep. Retained-signer
+packaging verified non-debuggable APK metadata (minSdk 26, targetSdk 35), signature, alignment
+and source/hash provenance. APK SHA-256:
+`c64d6a8dea9621265f23a679104149e511ecd243fbdfa53ced401f4cb4f0f6b5`.
+The intended Pixel updated in place, preserving manual SSH configuration/key/pin and granted
+notifications; the installed app remains non-debuggable. Its owned 56×48 terminal now reaches
+positions 25, 45, 70, 100, 130 on the same five 1000-native-pixel/350-ms swipes, versus beta 3's
+5, 10, 15, 20, 25. Each gesture produces 4–6 observed host-position changes, reversal moves
+130 to 110, and the actual Esc chip leaves copy mode. Private inputs/proof are in
+`.nodeterm/android-beta-build-4/` and the APK/checksum/metadata in `.nodeterm/android-beta-4/`.
+These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel;
+corrected-beta user follow-up remains open under `A86`.
+
+**Phone trace limits:** the controlled beta-3 trace records one bridge invocation per gesture and
+roughly one content presentation per gesture. Invocation begins 84–90 ms after touchstart; first
+presentations occur 170–196 ms after touchstart, as temporal correlation without an SSH/action flow.
+Presented Chromium scroll events measure roughly 36–56 ms; the >1-second aggregate mostly counts
+no-paint termination. Sparse FrameTimeline data and non-damaging scroll-jank events establish no
+terminal FPS or renderer cause. There are no named JavaScript/native methods or scheduler/V8
+measurements, and the parser reports unknown newer extension fields. The trace supports comparing
+delivered updates after the fix, not a claim that WebView spends a second painting.
+
+The matching beta-4 trace records 42 bridge invocations versus 12, 26 content commits versus 12,
+and 25 distinct presentations versus 11 over twelve gestures. First invocations occur at 25–36 ms
+versus 84–90 ms; this supports more frequent delivered updates, without establishing terminal FPS
+or end-to-end SSH latency. Both traces and queries are retained in the private beta-4 evidence.
+
+**Packaging verifier (`A88`):** `fed68fb3` accepts SDK-range certificate labels from newer
+`apksigner` reports while still requiring one pinned certificate and a verified v2 signature;
+signing now explicitly enables v2. All 32 Python packaging tests and ten mutations passed locally.
+The observed CI packaging failure requires a successful subsequent workflow before its CI repair
+is verified. Every requested push owes green Android workflow verification; `A68` remains deferred
+and no PR is requested.
+
+**Historical beta-3 scroll update (`A86`):** after checkpoint `cf0487a3`, the user reports poor responsiveness on
 both Wi-Fi and mobile-data VPN. Controlled SSH/tmux measurements found amplified wheel steps,
 fast-swipe clipping and some TCP_NODELAY-sensitive latency; a bounded desktop DOM replay showed
 no backlog at that load. The implemented mitigations match drag distance to stock tmux's five-row
@@ -316,8 +363,9 @@ Sessions and refreshed; only the owned test session was removed, with user panes
 Private proof/screenshot/installed-package checks are in `.nodeterm/android-beta-build-3/`,
 including `device-checks.json`. These establish drag gain/order/input cancellation, not FPS
 or perceived smoothness. The tiny isolated UI-frame samples are not a WebView renderer trace.
-Actual updated-beta Wi-Fi/mobile-VPN feel/rendering and custom wheel bindings remain unverified; kinetic fling is not
-implemented. The [finding](android-audit-2026-09.md#a86) records the evidence and limits. Push is
+The user subsequently reports that beta 3 still lags and moves too little. Those historical
+checks verify gain/order/cancellation, not satisfactory feel; the current correction is above.
+Custom wheel bindings and kinetic fling remain open. The [finding](android-audit-2026-09.md#a86) records the evidence and limits. Push is
 authorized, each requested push requires green Android workflow verification, no PR is requested
 and `A68` stays deferred.
 
@@ -409,7 +457,7 @@ Manual SSH key/pin/project checks also cover parts of items 10 and 63. No comple
 The private update preserved manual SSH registration and its identities; pre-attach tmux history
 is visible in the controlled test window. QR/code pairing, relay,
 mobile reconnect/background/answer behavior and the full 64-item pass remain open. The current complete protocol
-run after the scroll mitigations passed all 638 tests, as recorded above. Use the
+run after the report-routing correction passed all 646 tests, as recorded above. Use the
 [private-beta procedure](../android/README.md#private-beta), which accepts same-build local
 APK/R8/source/version/hash provenance with `buildOrigin: "local"`.
 
@@ -1147,7 +1195,7 @@ later fix left to a device.
 20. Swipe to scroll the tmux history. A copy the pane makes reaches Android's clipboard (OSC 52) with a
     "Copied N lines" toast: in tmux's copy-mode (Ctrl, then b, then [ from the key row and the input
     bar), or from an application such as vim (`"+y`). Record slow/fast drag gain, reversal and
-    movement after finger lift. *(A65, A85, A86)*
+    movement after finger lift and automatic focus/mouse reports during a drag. *(A65, A85, A86, A87)*
 21. A large OSC 52 copy. In the pane, run
     `printf '\033]52;c;%s\a' "$(head -c 150000 /dev/zero | tr '\0' x | base64 | tr -d '\n')"`
     (the desktop's tmux passes an application's OSC 52 on): the phone says it is too large to copy and
@@ -1558,7 +1606,9 @@ later fix left to a device.
   SSH listing/input works. The code-3 update fixes sizing/history (`A85`) and preserves identities;
   code-4 scroll mitigations pass protocol/type-check and local AGP/R8/signing checks, and its
   in-place update verifies identity persistence, reduced drag gain, reversal and Esc cancellation.
-  Perceived smoothness, renderer timing and full validation remain open.
+  The user reports that beta 3 still lags and moves too little; `A87` corrects automatic-report
+  cancellation and restores responsive gesture gain. Beta-4 delivery and controlled movement pass
+  in the current verification record above; actual user feel remains open; full validation remains open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.

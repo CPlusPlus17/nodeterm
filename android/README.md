@@ -15,14 +15,14 @@ it is talking to.
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
 > [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
 
-**Scroll update (`A86`):** the user reports slow scrolling on both Wi-Fi and mobile-data VPN.
-Mitigations now match drag distance to stock tmux's five-row wheel steps, batch movement by frame,
-preserve fast-swipe distance, serialize scroll/input and enable SSH TCP_NODELAY. All 638 protocol
-tests and the offline app type-check pass; 30 mutations were caught. Private beta
-`0.1.0-beta.3` / code `4` has built/signed locally and updated the intended Pixel in place, preserving
-SSH identities/configuration and notification permission. Controlled phone swipes verify reduced
-drag gain, reversal and Esc cancellation. Actual perceived smoothness/rendering and custom wheel bindings remain
-unverified; kinetic fling is not implemented. See the [finding](../docs/android-audit-2026-09.md#a86).
+**Scrolling remains open (`A86`, `A87`):** the user reports both lag and too little movement on
+installed beta 3, on Wi-Fi and mobile-data VPN. `3cffb49d` restores one measured row per wheel notch
+and routes automatic focus/mouse/query replies separately so they preserve queued movement;
+keys, paste and IME input still cancel it. Ordered frame batching and SSH TCP_NODELAY remain.
+All 646 protocol tests in 62 suites pass with zero failures, errors or skips; the offline app
+type-check passes (8 seconds). Twenty-two JavaScript and nine actor/wiring mutations were caught.
+Beta 4 / code 5 built, signed and updated on the intended phone; actual user feel is pending below; no FPS improvement or
+kinetic fling is claimed. See [A87](../docs/android-audit-2026-09.md#a87).
 
 ## What it does
 
@@ -60,11 +60,12 @@ The full device pass is still outstanding. The intended Pixel has the private be
 listing/input works. Its corrected code-3 update (`A85`) fills a 52×45 viewport and shows pre-attach
 tmux history after swiping; font and keyboard changes resize the host correctly. The user's intended connection is to this Linux host over their
 WireGuard VPN; the user confirms its terminal opens over mobile data with Wi-Fi off.
-The latest local fixes (`A78`–`A86`) have not
-been verified by CI; a previous CI APK does not include them. A local build is authorized for this
-first private beta. The user has now authorized pushing this branch; every requested push requires
-green Android workflow verification, with no PR requested and `A68` deferred. Verify the code-4 scroll update on the intended
-phone for perceived smoothness before treating its responsiveness as resolved.
+The user authorized local builds and pushing this branch. Each requested push requires green
+Android workflow verification, with no PR requested and `A68` deferred. The beta-3 controlled
+scroll checks did not satisfy the user; verify the corrected beta on the intended phone before
+calling responsiveness resolved. `fed68fb3` repairs newer-SDK signing-report parsing with 32 local
+Python tests and ten mutations; the observed CI failure still requires a successful subsequent
+workflow to verify its repair in Actions.
 
 1. Prepare and install the [private beta](#private-beta) below from a successful local build or CI
    run of the current branch. The desktop must also include the host-side fixes you want to test. Future private beta
@@ -148,7 +149,7 @@ checklist remain open.
 
 History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link tests with zero skips. Both JavaScript swipe-direction/disabled-scroll mutations, the real-SSH wheel-direction mutation and the two native layout-policy mutations were caught; production sources were restored. **Beta-2 verification:** all 609 protocol tests passed in 59 suites with zero failures, errors or skips (52 seconds); the offline app `compileKotlin` passed (7 seconds).
 
-**A86 beta update:** private `0.1.0-beta.3` / code `4` from
+**Historical A86 beta-3 update:** private `0.1.0-beta.3` / code `4` from
 `40c4ee49592e2f92fc7e6e9b548ba88a33b1e2d3` built locally in 49 seconds, passed every R8 keep
 and retained-signer packaging. Signature, alignment and source/hash provenance passed, with all
 149 ZIP payloads unchanged by signing. APK SHA-256:
@@ -159,12 +160,37 @@ swipes finish at history position 25 versus beta 2's 85; reversal moves 25 to 20
 copy mode. The phone returned to Sessions and refreshed; only the owned test session was removed,
 with user panes untouched. Private proof/screenshot/package checks are in
 `.nodeterm/android-beta-build-3/`, including `device-checks.json`. These verify drag gain/order/input
-cancellation, not perceived smoothness or FPS. Current restored-source
-checks pass all 638 protocol tests in 61 suites with zero failures, errors or skips (51 seconds),
+cancellation, not perceived smoothness or FPS. The user subsequently reports both lag and too
+little movement; the current `A87` correction supersedes this gain policy. At that checkpoint,
+restored-source checks passed all 638 protocol tests in 61 suites with zero failures, errors or skips (51 seconds),
 and the final offline app `compileKotlin` (7 seconds). Thirty SSH/JavaScript/actor/wiring mutations were
-caught. Actual updated-beta Wi-Fi/mobile-VPN feel, phone renderer timing, custom wheel bindings and
-kinetic fling remain open under `A86`. Push is authorized; each requested push requires green
+caught. The later controlled phone trace records sparse updates and does not establish terminal FPS.
+Actual corrected-beta feel, custom wheel bindings and kinetic fling remain open under `A86`. Push is authorized; each requested push requires green
 Android workflow verification.
+The matching phone trace records 42 bridge invocations versus 12 and 25 distinct presentations
+versus 11 over twelve gestures; first invocations occur at 25–36 ms versus 84–90 ms. These show
+more delivered updates, without establishing terminal FPS or end-to-end SSH latency.
+
+**Current beta-4 correction:** source `3cffb49d8cf64932260e914b42b3883331d0352d`, version
+`0.1.0-beta.4` / code `5`, retains the same signer. All 646 protocol tests in 62 suites pass with
+zero failures, errors or skips; offline app `compileKotlin` passes (8 seconds). Real xterm
+focus/mouse/query reports preserve gestures, while actual keyboard/paste/IME input cancels them;
+22 JavaScript and nine actor/native-wiring mutations were caught. `fed68fb3` verifies newer SDK
+signer labels without relaxing the expected-certificate/v2 policy; 32 Python tests and ten
+mutations pass locally. Successful CI confirmation remains required for that observed workflow failure.
+The code-5 local AGP release built in 48 seconds and passed every R8 keep. Retained-signer
+packaging verified non-debuggable APK metadata (minSdk 26, targetSdk 35), signature, alignment
+and source/hash provenance. APK SHA-256:
+`c64d6a8dea9621265f23a679104149e511ecd243fbdfa53ced401f4cb4f0f6b5`.
+The intended Pixel updated in place, preserving manual SSH configuration/key/pin and granted
+notifications; the installed app remains non-debuggable. Its owned 56×48 terminal now reaches
+positions 25, 45, 70, 100, 130 on the same five 1000-native-pixel/350-ms swipes, versus beta 3's
+5, 10, 15, 20, 25. Each gesture produces 4–6 observed host-position changes, reversal moves
+130 to 110, and the actual Esc chip leaves copy mode. Private inputs/proof are in
+`.nodeterm/android-beta-build-4/` and the APK/checksum/metadata in `.nodeterm/android-beta-4/`.
+These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel;
+corrected-beta user follow-up remains open under `A86`.
+
 The original workspace holds the input provenance in `.nodeterm/android-beta-build-1/` and the
 first finished APK/checksum/metadata in `.nodeterm/android-beta-1/`. QR/code pairing, relay and
 mobile reconnect/background/answer checks remain open. The initial full protocol run passed 603 of 605 tests; the two SSH
