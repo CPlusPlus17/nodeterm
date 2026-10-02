@@ -1208,18 +1208,6 @@ class SshTransportTest {
     }
 
     @Test
-    fun `a host certificate matches the pairing by the key it certifies (A49-anchor)`() {
-        val inner = server.keyPairProvider.loadKeys(null).first().public
-        val innerFp = SshHostConnection.fingerprint(inner)
-        val cert = com.hierynomus.sshj.userauth.certificate.Certificate.getBuilder<java.security.PublicKey>().publicKey(inner).build()
-        assertTrue(SshHostConnection.matchesAnchor(listOf(innerFp), "SHA256:the-certificate-itself", cert))
-        assertFalse(SshHostConnection.matchesAnchor(listOf("SHA256:" + "B".repeat(43)), "SHA256:the-certificate-itself", cert))
-        // A plain key matches by its own fingerprint only.
-        assertTrue(SshHostConnection.matchesAnchor(listOf(innerFp), innerFp, inner))
-        assertFalse(SshHostConnection.matchesAnchor(listOf("SHA256:" + "B".repeat(43)), innerFp, inner))
-    }
-
-    @Test
     fun `a key the computer does not know is refused`() {
         assertFailsWith<HostException> {
             SshHostConnection.connect("127.0.0.1", port, "dev", SshIdentity.generate(), MemoryPin()).close()

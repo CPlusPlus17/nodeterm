@@ -113,6 +113,35 @@ class HostKeyAnchorsTest {
         assertIs<SshFallback.Next.Stop>(SshFallback.afterFailure(e, relayAllowed = false, relayConfigured = true))
     }
 
+    /**
+     * The app's side of the anchors (review of A49-anchor), which only a device runs and so is pinned in
+     * the source. [dev.nodeterm.protocol.ssh.HostKeyPin.anchors] has a default (none: trust on first use),
+     * so an app pin that drops its override, or reads another field, still compiles, type-checks and
+     * passes every protocol test, while every phone silently goes back to trust on first use.
+     */
+    @Test
+    fun `the app's pin hands the verifier the keys its record keeps, and every SSH dial uses that pin`() {
+        val connections = AppSourcePins.app("conn/ConnectionManager.kt")
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(connections, "private fun pinFor(host: PairedHost)"),
+            "override fun pinned(): String? = graph.hosts.get(host.id)?.sshHostKeyFingerprint",
+            "override fun pin(fingerprint: String) = graph.hosts.update(host.id) { it.copy(sshHostKeyFingerprint = fingerprint) }",
+            "override fun anchors(): List<String> = graph.hosts.get(host.id)?.sshHostKeyAnchors.orEmpty()"
+        )
+        // The paired computer's SSH dial goes through that pin, read fresh from the record each time.
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(connections, "private suspend fun connectLocked(trigger: Trigger)"),
+            "SshHostConnection.connect(",
+            "host.host, host.port, host.user, graph.sshIdentity, pinFor(host),"
+        )
+        assertEquals(1, Regex("""SshHostConnection\.connect\(""").findAll(connections).count(), "one SSH dial, the pinned one")
+        // And the record carries what the sealed answer named: pairing stores PairedHost.from's record
+        // as it is (a `.copy(...)` on that line could drop the anchors again).
+        val pair = AppSourcePins.ui("PairScreen.kt")
+        assertTrue(pair.lines().any { it.trim() == "val host = PairedHost.from(p, result)" }, "PairScreen keeps PairedHost.from's record")
+        AppSourcePins.assertInOrder(pair, "val host = PairedHost.from(p, result)", "graph.hosts.upsert(host)")
+    }
+
     @Test
     fun `a plaintext pairing answer's host keys are ignored`() = runBlocking<Unit> {
         // A clear answer could have been rewritten on the LAN; the desktop never sends the field there,

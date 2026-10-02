@@ -240,7 +240,10 @@ types nothing into whatever prompt the session shows by then: it says to answer 
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
 and the phone remembers, for each computer, the ones it has announced, you have read or you had on
 screen for a day after it last saw them (longer when the computer's clock runs ahead), so nothing
-still eligible is forgotten. Forgetting a computer forgets that too; pairing it again keeps it.
+still eligible is forgotten. Forgetting a computer forgets that too; pairing it again keeps it. One
+event can reach the phone through two computers: a paired desktop lists the sessions of its SSH
+projects, and so does the SSH server they run on when you added that one too. It is still one event:
+announcing, reading or looking at it under either computer counts for both.
 
 A notification names the session, the computer and the kind of event ("Needs you — build-bot",
 "Needs approval"), but not the event's own text: the command, file or question, or the agent's last
@@ -275,9 +278,9 @@ iOS app does receive the detail, in the push the desktop sends.
 
   A computer without Pro cannot revoke the old relay device token at the relay (that request is
   signed with the Pro entitlement), so whoever took it may still reach that computer through the
-  relay with the old box key. The revoke unpinned that key, so the computer shows its approval dialog
-  with a code before it lets it in: approve a phone there only while your own phone is showing the
-  same code.
+  relay with the old box key. The revoke unpinned that key, so the computer refuses it without a
+  dialog until nodeterm there restarts, and after that shows its approval dialog with a code before it
+  lets it in: approve a phone there only while your own phone is showing the same code.
 - Dictation (the terminal input bar's mic) goes through the phone's speech recognition service,
   which on most phones is Google's and may send what you say to its servers; it is not the on-device
   Whisper of the desktop and iOS. The microphone is used only after a tap on the mic, until the
@@ -298,12 +301,18 @@ iOS app does receive the detail, in the push the desktop sends.
   older desktop names none, and the first connect is then trust on first use. Either way the key is
   pinned on the first connect that authenticates (a server that refuses the phone's key is never
   pinned). A changed key is never used over SSH; in Auto the phone goes on to the relay, which
-  verifies the computer separately, and shows a warning.
+  verifies the computer separately, and shows a warning. If the computer's SSH server uses a host key
+  nodeterm on the computer cannot read (one with no readable `.pub` beside it, or one named only in a
+  config file that only root can read), SSH to it stays refused even after pairing again, which re-reads the
+  same keys; the relay still reaches it (see Known gaps in `docs/android.md`).
 - Over the relay (and only there) a current desktop also reports its LAN address and SSH host keys
   as they are now, and the phone updates the computer from that: the address it dials on your
-  network, and a pin the computer's current keys no longer include (the next connect then has to
-  present one of them). So a moved address or a reinstalled computer's new key needs no new pairing.
-  Nothing learned over SSH ever changes them.
+  network, and the pin, but only for a key the phone was just refused on your network that the
+  computer confirms is one of its own (the next connect then has to present one of its keys). A pin
+  that still works is kept, even when the computer does not list it. So a moved address or a
+  reinstalled computer's new key needs no new pairing; the new key is accepted on the connect after
+  the one that met it. Nothing learned over SSH ever changes them. A host certificate is pinned as the
+  key it certifies, so a renewed certificate is not a changed key.
 - A computer added by its SSH address has no pairing behind its first connect, so compare the
   fingerprint the Add screen shows with the computer's own (the screen gives the `ssh-keygen`
   command). A changed key stops it; forget it and add it again only if you know why it changed. To

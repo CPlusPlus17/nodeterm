@@ -121,6 +121,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         val route = graph.hosts.route(hostId)
         val errors = ArrayList<String>()
         var sshWarning: String? = null
+        var refusedHostKey: String? = null
 
         if (route != RoutePreference.RELAY_ONLY && host.sshAvailable) {
             _state.value = ConnState.Connecting(if (host.manual) "Connecting over SSH…" else "Connecting on your network…")
@@ -136,6 +137,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     ).also { dialed = it }
                 }
                 _sshWarning.value = null
+                sshRefusal = null
                 adopt(ssh)
                 adoptInBackground(ssh)
                 return ssh
@@ -158,6 +160,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     is SshFallback.Next.TryRelay -> {
                         errors += next.error
                         sshWarning = next.warning
+                        refusedHostKey = next.refusedHostKey
                     }
                 }
             }
@@ -184,6 +187,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     graph.relayGate.onConnected(hostId)
                     _snapshot.value = connected.first
                     _sshWarning.value = sshWarning
+                    sshRefusal = refusedHostKey?.let { SshRefusal(connected.connection, it) }
                     refreshLanLeg(connected.connection, connected.first)
                     adopt(connected.connection)
                     return connected.connection
@@ -324,7 +328,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * The primary connection when it already IS the relay; otherwise one opened next to it and kept
      * until [disconnect]. [trigger] goes to [RelayApprovalGate]: a user's tap releases a held
      * approval and, the first time, the desktop's approval code is reported through [onStatus] (and
-     * [relayApproval]); a background caller never makes a first handshake.
+     * [relayApproval]); a background caller never makes a first handshake that would raise the
+     * dialog (only one with a computer whose pairing answered `relayApproved`, audit A07-late).
      */
     suspend fun viaRelay(trigger: Trigger = Trigger.USER, onStatus: (RelayConnectStatus) -> Unit = {}): HostConnection {
         conn?.takeIf { it.kind == TransportKind.RELAY }?.let { return it }
@@ -393,26 +398,37 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         override fun anchors(): List<String> = graph.hosts.get(host.id)?.sshHostKeyAnchors.orEmpty()
     }
 
+    /** The host key the SSH leg was refused in the connect that opened [connection] (review of A74-refresh). */
+    private class SshRefusal(val connection: HostConnection, val hostKey: String)
+
+    /**
+     * Set by [connectLocked] when the SSH leg was refused for its host key and the relay leg then
+     * connected: the key that server presented, which that relay connection's listings may confirm as
+     * the computer's own ([LanRefresh]). Tied to the connection, so a later one never inherits it.
+     */
+    @Volatile private var sshRefusal: SshRefusal? = null
+
     /**
      * Update this computer's LAN leg from what it said beside a RELAY listing (audit A74-refresh,
-     * [LanRefresh]): its current address, and its SSH host keys, which replace a pin that is not among
-     * them. [LanRefresh.afterListing] refuses a listing that came over SSH, which is the leg these
-     * facts check. Recomputed inside the store's update so it applies to the record as it is then
-     * (a late adoption may be writing the relay block at the same moment). Takes effect at the next
-     * SSH dial: [connectLocked] and [pinFor] read the record fresh. When the relay is in use because
-     * the SSH leg failed, the warning that says so gains a sentence about what changed. Never throws:
-     * a record that could not be saved is not a failed listing.
+     * [LanRefresh]): its current address and SSH host keys, and, when this connect's SSH leg was
+     * refused a key the computer now names as its own, a pin that no longer lets it in.
+     * [LanRefresh.afterListing] refuses a listing that came over SSH, which is the leg these facts
+     * check. Recomputed inside the store's update so it applies to the record as it is then (a late
+     * adoption may be writing the relay block at the same moment). Takes effect at the next SSH dial:
+     * [connectLocked] and [pinFor] read the record fresh. When the relay is in use because the SSH leg
+     * failed, the warning that says so gains a sentence about what changed. Never throws: a record that
+     * could not be saved is not a failed listing.
      *
      * Only for the PRIMARY connection, never for the relay held next to a live SSH one ([viaRelay]):
      * there the LAN leg as recorded has just authenticated, which says more than a report does (a
-     * computer with two adapters may report the other one, and one whose key list misses the key sshd
-     * serves would otherwise drop a pin that works).
+     * computer with two adapters may report the other one).
      */
     private fun refreshLanLeg(c: HostConnection, listed: ProjectsSnapshot) {
         runCatching {
             val before = graph.hosts.get(hostId) ?: return
-            val result = LanRefresh.afterListing(before, c.kind, listed) ?: return
-            graph.hosts.update(hostId) { current -> LanRefresh.afterListing(current, c.kind, listed)?.host ?: current }
+            val refused = sshRefusal?.takeIf { it.connection === c }?.hostKey
+            val result = LanRefresh.afterListing(before, c.kind, listed, refused) ?: return
+            graph.hosts.update(hostId) { current -> LanRefresh.afterListing(current, c.kind, listed, refused)?.host ?: current }
             val warning = _sshWarning.value
             val note = LanRefresh.note(result)
             if (warning != null && note != null && !warning.contains(note)) _sshWarning.value = "$warning $note"

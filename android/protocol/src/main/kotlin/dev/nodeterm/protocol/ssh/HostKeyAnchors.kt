@@ -14,7 +14,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * server that accepts the phone's key, as before.
  *
  * The form is OpenSSH's and sshj's (`SshHostConnection.fingerprint`): `SHA256:` and the unpadded
- * standard base64 of the SHA-256 of the key blob, 43 characters.
+ * standard base64 of the SHA-256 of the key blob, 43 characters. A server presenting a host
+ * certificate matches by the key it certifies (`SshHostConnection.hostKeyFingerprint`).
  */
 object HostKeyAnchors {
     /** The most fingerprints kept. sshd serves three or four; the desktop sends at most as many. */

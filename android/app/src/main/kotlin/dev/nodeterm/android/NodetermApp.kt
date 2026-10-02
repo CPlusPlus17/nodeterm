@@ -32,7 +32,7 @@ class AppGraph(context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val connections = ConnectionManager(this)
 
-    /** Who may dial a computer's relay, and when (never a first handshake from the background). */
+    /** Who may dial a computer's relay, and when (never a dialog-raising first handshake from the background). */
     val relayGate = RelayApprovalGate(hosts::relayApproved, hosts::setRelayApproved)
 
     /** The phone's persistent relay identity — the key every paired desktop PINS. */

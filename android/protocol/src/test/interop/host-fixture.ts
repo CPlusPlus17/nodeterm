@@ -248,6 +248,14 @@ async function runRelay(): Promise<void> {
   const approveAfter = Number(process.env.FIXTURE_APPROVE_AFTER_MS ?? '0')
   // "Deny" on the desktop: standing-host.ts removes the pooled session, which closes it.
   const rejectAfter = Number(process.env.FIXTURE_REJECT_AFTER_MS ?? '-1')
+  // The standing host's SILENT decision (standing-host.ts onPeerReady: the pin store read and, for a
+  // paired phone it has not pinned yet, the late pin, A07-late) takes this long, and is handed to
+  // connectHostSession as the promise it returns, as standing-host.ts does. FIXTURE_DECIDE=approve
+  // approves when it settles (a pinned key, or a pairing that recorded it); anything else settles
+  // without approving, which is the dialog's case (FIXTURE_APPROVE_AFTER_MS then stands for the
+  // human). Unset: onPeerReady decides nothing and returns nothing, as before.
+  const decideAfter = Number(process.env.FIXTURE_DECIDE_AFTER_MS ?? '-1')
+  const decideApproves = process.env.FIXTURE_DECIDE === 'approve'
   // A snapshot over the 256 KB chunk size, made of 3-byte code points so a chunk boundary splits
   // one: the reassembler must join BYTES before decoding.
   const bigSnapshot = 'SNAP-' + '€'.repeat(100_000) + '-END'
@@ -410,6 +418,14 @@ async function runRelay(): Promise<void> {
       emit({ event: 'peer-ready', sas: s.sas(), pub: s.peerPublicKeyB64() })
       if (approveAfter >= 0) setTimeout(approveNow, approveAfter)
       if (rejectAfter >= 0) setTimeout(() => (emit({ event: 'rejected' }), session?.close()), rejectAfter)
+      if (decideAfter < 0) return
+      return new Promise<void>((resolve) =>
+        setTimeout(() => {
+          if (decideApproves) approveNow()
+          emit({ event: 'decided', approved: decideApproves })
+          resolve()
+        }, decideAfter)
+      )
     },
     onClose: () => emit({ event: 'host-close' })
   })

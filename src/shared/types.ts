@@ -3417,6 +3417,15 @@ export interface PairedDevice {
 export type DeviceRevokeServerOutcome = 'ok' | 'failed' | 'skipped'
 
 /**
+ * The relay leg of a device revoke (audit A07-revoke): the phone's relay key unpinned on the standing
+ * host and the relay sessions it had open closed (remote/revocation.ts's persisted/killed).
+ * 'ok' = both done; 'unpin-failed' = the pin could not be written away, so it may survive and the
+ * phone would be let in again without a dialog: the device is kept LISTED and `local` is false, so
+ * Revoke can be retried; 'cut-unconfirmed' = unpinned, but closing a session it had open failed.
+ */
+export type DeviceRevokeRelayOutcome = 'ok' | 'unpin-failed' | 'cut-unconfirmed'
+
+/**
  * Both legs of a device revoke, reported independently so a half-finished removal can never render
  * as a clean one (the same discipline as remote/revocation.ts's persisted/killed).
  */
@@ -3425,6 +3434,11 @@ export interface DeviceRevokeResult {
   local: boolean
   /** Whether the phone's Pro entitlement was taken back on the relay backend. */
   server: DeviceRevokeServerOutcome
+  /**
+   * Present only when the relay leg ran: the pairing recorded the phone's relay key and no other
+   * listed pairing of that phone keeps it. Absent from an older main process.
+   */
+  relay?: DeviceRevokeRelayOutcome
 }
 
 /** Phone-pairing (nodeterm iOS "scan a QR" flow) bridge. */
@@ -3463,8 +3477,9 @@ export interface PairingApi {
   /** List paired devices from ~/.nodeterm/agent.json (never includes the token). */
   listDevices(): Promise<PairedDevice[]>
   /**
-   * Revoke a device: remove its registry entry, delete its authorized_keys line, and take its Pro
-   * entitlement back on the relay backend. Never rejects for a leg that failed — read the result.
+   * Revoke a device: remove its registry entry, delete its authorized_keys line, unpin its relay key
+   * and close the relay sessions it has open, and take its Pro entitlement back on the relay
+   * backend. Never rejects for a leg that failed — read the result.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
 }

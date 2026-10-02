@@ -101,16 +101,24 @@ describe('readSshHostKeyFingerprints', () => {
     const keys = tempDir()
     const own = ed25519Line()
     const agentHeld = ed25519Line()
+    const unsuffixed = ed25519Line()
     writeFileSync(path.join(keys, 'custom_key.pub'), `${own}\n`)
     writeFileSync(path.join(keys, 'agent_key.pub'), `${agentHeld}\n`)
+    writeFileSync(path.join(keys, 'other_key.pub'), `${unsuffixed}\n`)
     writeFileSync(path.join(etcSsh, 'sshd_config'), `HostKey ${path.join(keys, 'custom_key')}\n`)
     mkdirSync(path.join(etcSsh, 'sshd_config.d'))
     // A public key named directly (sshd takes one when the private key is held by an agent).
     writeFileSync(path.join(etcSsh, 'sshd_config.d', '10-agent.conf'), `HostKey ${path.join(keys, 'agent_key.pub')}\n`)
-    writeFileSync(path.join(etcSsh, 'sshd_config.d', 'ignored.txt'), `HostKey ${path.join(keys, 'nope')}\n`)
+    // A drop-in without the `.conf` suffix: sshd reads it when its Include globs the whole directory,
+    // and a key it serves from there must be named, or the phone refuses SSH (review of A49-anchor).
+    writeFileSync(path.join(etcSsh, 'sshd_config.d', '20-keys'), `HostKey ${path.join(keys, 'other_key')}\n`)
+    // A drop-in naming a key that is not there, and a directory among them: nothing, and no failure.
+    writeFileSync(path.join(etcSsh, 'sshd_config.d', '30-missing.conf'), `HostKey ${path.join(keys, 'nope')}\n`)
+    mkdirSync(path.join(etcSsh, 'sshd_config.d', '40-dir'))
     expect(await readSshHostKeyFingerprints([etcSsh])).toEqual([
       sshFingerprintOfPublicKeyLine(own),
-      sshFingerprintOfPublicKeyLine(agentHeld)
+      sshFingerprintOfPublicKeyLine(agentHeld),
+      sshFingerprintOfPublicKeyLine(unsuffixed)
     ])
   })
 

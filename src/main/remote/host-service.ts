@@ -1284,6 +1284,17 @@ export function relayAllowed(): boolean {
 // --- shared host session (interactive host + standing phone host) ------------
 
 /**
+ * The longest a freshly bridged peer's requests are held while an async `onPeerReady` decides
+ * without the human (connectHostSession). The decision is a few local disk reads and at most one
+ * pin write (whose rename retries add up to about 0.3 s on Windows), so this is generous; a
+ * decision stuck past it (a hung disk) degrades to the answer every request got before holding
+ * existed, "Awaiting host approval.". Far under the phone's own request timeout (30 s on Android).
+ */
+export const PEER_DECISION_HOLD_MS = 5_000
+/** Requests beyond this many, while holding, are answered at once (a peer flooding the hold). */
+export const PEER_DECISION_HOLD_MAX = 32
+
+/**
  * A live host<->client relay session: the bridged relay socket plus its RPC/frame handlers and
  * canvas mirror, gated by an approval flag. Both the interactive remote host and the standing
  * phone host build one of these; they differ only in how a freshly-bridged peer is approved
@@ -1364,8 +1375,14 @@ export interface HostSessionOptions {
    * A peer completed the E2EE handshake and awaits an approval decision. The caller inspects the
    * session (sas / peerPublicKeyB64) and either approves immediately (pin-once) or prompts the
    * host human, later calling `approve()`.
+   *
+   * May return a promise for a decision it makes WITHOUT the human (the standing host reads its pin
+   * store and may pin a paired phone's key, all on disk): until it settles, or until `approve()`,
+   * the peer's requests are HELD rather than refused (see PEER_DECISION_HOLD_MS). It settles once
+   * the session is approved or handed to the human; a request held until then is answered as if it
+   * had arrived then. A plain `void` (the interactive host) holds nothing.
    */
-  onPeerReady(session: HostSession): void
+  onPeerReady(session: HostSession): void | Promise<void>
   /** The relay socket dropped (client/relay gone). */
   onClose(): void
 }
@@ -1379,6 +1396,33 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
   // Approval gate: a freshly-bridged peer serves NO pty/fs RPCs or input frames until approved,
   // so a leaked/guessed pairing cannot grant silent access. Reset on every (re)connect.
   let approved = false
+  // Requests held while an async `onPeerReady` is still making its silent decision (review of
+  // A07-late). The host fires onReady the moment it confirms the handshake, so the phone's first
+  // request can arrive one relay round trip later, while the standing host is still reading its
+  // pin store (and, for a paired phone it has not pinned yet, reading agent.json and writing the
+  // pin). Answering that request "Awaiting host approval." told the phone a human had to approve
+  // it: a background check (Android RelayConnector with requireApproved) gives up on the first such
+  // answer and forgets that this computer approved it. Held instead, the request is answered once
+  // the decision is in: served when it approved, "Awaiting host approval." when it went to the
+  // human. Never held longer than PEER_DECISION_HOLD_MS or beyond PEER_DECISION_HOLD_MAX requests:
+  // past either, the answer is the one this gave before.
+  let deciding = false
+  let held: RpcRequest[] = []
+  let holdTimer: ReturnType<typeof setTimeout> | null = null
+  function stopHolding(): RpcRequest[] {
+    if (holdTimer) {
+      clearTimeout(holdTimer)
+      holdTimer = null
+    }
+    deciding = false
+    const queue = held
+    held = []
+    return queue
+  }
+  /** The decision is in (approved, handed to the human, or out of time): answer what was held, in order. */
+  function releaseHeld(): void {
+    for (const req of stopHolding()) handleRpc(req)
+  }
   let handlers: HostHandlers | null = null
   let canvasSync: HostCanvasSync | null = null
   let unsubCanvas: (() => void) | null = null
@@ -1407,6 +1451,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
       approved = true
       // Flush the current canvas now that the device is trusted.
       pushCurrentCanvas()
+      // Serve what the peer asked while the decision was being made, before anything it asks next.
+      releaseHeld()
     },
     isApproved() {
       return approved
@@ -1423,6 +1469,7 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
         broadcastTimer = null
       }
       approved = false
+      stopHolding() // nothing held is answered on a session being torn down
       unsubCanvas?.()
       unsubCanvas = null
       handlers?.closeAll()
@@ -1441,32 +1488,57 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
       // Bridge established. Require approval before serving ANYTHING — including canvas state
       // (which carries workspace metadata). Nothing is pushed until approve() flushes it.
       approved = false
-      opts.onPeerReady(session)
+      // Hold from before the call, so an approve() made synchronously inside it releases nothing
+      // that is later held again.
+      deciding = true
+      let decision: unknown
+      try {
+        decision = opts.onPeerReady(session)
+      } catch (err) {
+        releaseHeld()
+        throw err
+      }
+      if (!deciding) return // approve() already ran, inside the call
+      if (decision instanceof Promise) {
+        holdTimer = setTimeout(releaseHeld, PEER_DECISION_HOLD_MS)
+        holdTimer.unref?.()
+        decision.then(releaseHeld, releaseHeld) // a failed decision answers as one that went to the human
+      } else {
+        releaseHeld() // a synchronous decision: nothing to wait for
+      }
     },
     onRpc: (req) => {
-      // Until approved, refuse every request — pty/fs RPCs, client mutations, AND canvas
-      // snapshots (canvas:request). An unapproved device gets nothing but the approval prompt.
-      if (!approved) {
-        if (req.id) socket.respond(req.id, false, { message: 'Awaiting host approval.' })
+      if (deciding && held.length < PEER_DECISION_HOLD_MAX) {
+        held.push(req)
         return
       }
-      // A client asking for a fresh canvas snapshot → re-push the current one (read-only).
-      if (req.method === CANVAS_REQUEST_METHOD) {
-        canvasSync?.broadcastCurrent()
-        return
-      }
-      if (canvasSync?.handleRpc(req)) return
-      handlers?.onRpc(req)
+      handleRpc(req)
     },
     onFrame: (frame) => {
       if (approved) handlers?.onFrame(frame)
     },
     onClose: () => {
       approved = false
+      stopHolding()
       handlers?.closeAll()
       opts.onClose()
     }
   })
+  function handleRpc(req: RpcRequest): void {
+    // Until approved, refuse every request — pty/fs RPCs, client mutations, AND canvas
+    // snapshots (canvas:request). An unapproved device gets nothing but the approval prompt.
+    if (!approved) {
+      if (req.id) socket.respond(req.id, false, { message: 'Awaiting host approval.' })
+      return
+    }
+    // A client asking for a fresh canvas snapshot → re-push the current one (read-only).
+    if (req.method === CANVAS_REQUEST_METHOD) {
+      canvasSync?.broadcastCurrent()
+      return
+    }
+    if (canvasSync?.handleRpc(req)) return
+    handlers?.onRpc(req)
+  }
   // Confine the client's fs.* access to the cwds of the host's currently-shared canvas nodes.
   handlers = createHostHandlers(
     opts.pty,

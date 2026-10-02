@@ -206,4 +206,25 @@ describe('pinApprovedDeviceIf: the late pin of a paired phone (audit A07-late)',
     await Promise.all([pin, unpin])
     expect(await loadApprovedDevices()).toEqual({ pubkeys: [] })
   })
+
+  it('an update that changes nothing writes nothing (review of A07-late)', async () => {
+    // The standing host asks on every unpinned handshake; a "no", or a key already pinned, must not
+    // cost a write (and its rename retries) before the phone is answered, nor fail on one.
+    const target = path.join(userData, 'remote-approved-devices.json')
+    expect(await pinApprovedDeviceIf('phone', async () => false)).toBe(false)
+    await expect(fs.stat(target)).rejects.toMatchObject({ code: 'ENOENT' }) // still no file at all
+    await saveApprovedDevices({ pubkeys: ['phone'] })
+    const writes = vi.spyOn(fs, 'writeFile')
+    const renames = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('fixture'), { code: 'EACCES' }))
+    expect(await pinApprovedDeviceIf('phone', async () => true)).toBe(true)
+    expect(await pinApprovedDeviceIf('other', async () => false)).toBe(false)
+    await updateApprovedDevices((s) => unpinDevice(s, 'never-pinned'))
+    expect(writes).not.toHaveBeenCalled()
+    expect(renames).not.toHaveBeenCalled()
+    // A real change still writes, and still reports a failed write.
+    await expect(pinApprovedDeviceIf('other', async () => true)).rejects.toThrow('fixture')
+    expect(writes).toHaveBeenCalled()
+    vi.restoreAllMocks()
+    expect(await loadApprovedDevices()).toEqual({ pubkeys: ['phone'] })
+  })
 })

@@ -28,6 +28,7 @@ import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.LanRefresh
 import dev.nodeterm.protocol.ssh.LanReport
+import dev.nodeterm.protocol.ssh.SshFallback
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import net.schmizz.sshj.common.Buffer
 import net.schmizz.sshj.common.KeyType
@@ -52,6 +53,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -195,6 +197,38 @@ class RelayInteropTest {
         }
         assertTrue(System.currentTimeMillis() - t0 < 10_000, "it did not wait out the approval window")
         assertTrue(statuses.none { it is RelayConnectStatus.AwaitingApproval }, "no code shown for a dial nobody watches")
+    }
+
+    @Test
+    fun `a background dial is not turned away while the computer approves it on its own`() {
+        // Review of A07-late: the standing host decides silently whether a phone is approved (its pin
+        // store, and for a paired phone whose key pairing recorded, the late pin, which writes it),
+        // and the phone's first request can arrive while that is still on disk. The desktop holds it
+        // until the decision instead of answering "Awaiting host approval.", which a background check
+        // reads as "a human must approve this phone": it gives up and forgets it was approved.
+        val h = start(approveAfterMs = -1, extra = mapOf("FIXTURE_DECIDE_AFTER_MS" to "600", "FIXTURE_DECIDE" to "approve"))
+        val statuses = ArrayList<RelayConnectStatus>()
+        val connected = connect(h, statuses = statuses, requireApproved = true)
+        connected.connection.use {
+            assertTrue(connected.first.projects.isNotEmpty(), "served the listing it asked for while the host decided")
+            assertTrue(statuses.none { it is RelayConnectStatus.AwaitingApproval }, "no code shown: $statuses")
+            assertTrue(h.awaitEvent("decided")["approved"]!!.jsonPrimitive.content.toBoolean())
+            h.awaitEvent("approved")
+        }
+    }
+
+    @Test
+    fun `a background dial still gives up when the computer's decision is to ask the human`() {
+        // The hold ends with the decision: a phone the host hands to its dialog hears "Awaiting host
+        // approval." then, exactly as before, and a background dial does not wait on the human.
+        val decideMs = 600L
+        val h = start(approveAfterMs = -1, extra = mapOf("FIXTURE_DECIDE_AFTER_MS" to decideMs.toString(), "FIXTURE_DECIDE" to "ask"))
+        val t0 = System.currentTimeMillis()
+        assertFailsWith<RelayApprovalRequiredException> { connect(h, requireApproved = true) }
+        val elapsed = System.currentTimeMillis() - t0
+        assertFalse(h.awaitEvent("decided")["approved"]!!.jsonPrimitive.content.toBoolean())
+        assertTrue(elapsed >= decideMs - 100, "answered only once the host had decided (after ${elapsed} ms)")
+        assertTrue(elapsed < 10_000, "it did not wait on the human")
     }
 
     @Test
@@ -695,13 +729,23 @@ class RelayInteropTest {
         )
         // Before the refresh the server's new key is a changed key: refused over SSH, pin untouched.
         val before = RecordPin(record)
-        assertFailsWith<HostKeyChangedException> { SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, before).close() }
+        val changed = assertFailsWith<HostKeyChangedException> { SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, before).close() }
         assertEquals(oldFp, before.record.sshHostKeyFingerprint)
+        // The app goes on to the relay with the key it was refused, as SshFallback hands it on.
+        val refused = assertIs<SshFallback.Next.TryRelay>(SshFallback.afterFailure(changed, relayAllowed = true, relayConfigured = true)).refusedHostKey
+        assertEquals(serverFp, refused)
 
         // A listing over SSH carries no report, and one that did would still not count.
-        assertNull(LanRefresh.afterListing(record, TransportKind.SSH, connected.first))
-        val refreshed = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, connected.first))
-        assertTrue(refreshed.addressChanged && refreshed.keysReplaced)
+        assertNull(LanRefresh.afterListing(record, TransportKind.SSH, connected.first, refused))
+        // A report alone moves the address and the anchors, never a pin the phone has not seen fail
+        // (review of A74-refresh: the report is what the desktop could read, not what sshd serves).
+        val unrefused = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, connected.first, refusedHostKey = null))
+        assertEquals(oldFp, unrefused.host.sshHostKeyFingerprint)
+        assertNull(unrefused.confirmedKey)
+        // The key the SSH leg was refused, confirmed by the computer: the pin gives way to it.
+        val refreshed = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, connected.first, refused))
+        assertTrue(refreshed.addressChanged)
+        assertEquals(serverFp, refreshed.confirmedKey)
         assertEquals("192.168.77.20", refreshed.host.host)
         assertNull(refreshed.host.sshHostKeyFingerprint)
         assertEquals(listOf(serverFp), refreshed.host.sshHostKeyAnchors)
@@ -711,7 +755,46 @@ class RelayInteropTest {
         SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, after).close()
         assertEquals(serverFp, after.record.sshHostKeyFingerprint)
         // The record now says what the computer says: the next listing changes nothing.
-        assertNull(LanRefresh.afterListing(after.record, TransportKind.RELAY, connected.first), "nothing left to refresh")
+        assertNull(LanRefresh.afterListing(after.record, TransportKind.RELAY, connected.first, refused), "nothing left to refresh")
+    }
+
+    /**
+     * Review of A74-refresh: the desktop reports every `ssh_host_*_key.pub` on disk, whether sshd serves
+     * it or not. When sshd stops serving the pinned key (its `HostKey` line removed, `HostKeyAlgorithms`
+     * narrowed) and the `.pub` stays, the pin is still among the reported keys while the server presents
+     * another one of them. Dropping a pin only when it was missing from the report left SSH refused
+     * there for good; the key the SSH leg was refused, confirmed by the computer, is what lets it in.
+     */
+    @Test
+    fun `a pin the computer still reports but sshd no longer serves gives way to the key it serves (A74-refresh)`() = runBlocking<Unit> {
+        val identity = SshIdentity.generate()
+        val (sshd, servedKey) = sshServer(identity)
+        val unserved = net.i2p.crypto.eddsa.KeyPairGenerator().generateKeyPair().public
+        val unservedFp = SshHostConnection.fingerprint(unserved)
+        val servedFp = SshHostConnection.fingerprint(servedKey)
+        val h = start(extra = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to hostKeyDir("ed25519" to unserved, "ecdsa" to servedKey).path))
+        val connected = connect(h)
+        val reported = assertNotNull(connected.first.lan).sshHostKeyFingerprints
+        connected.connection.use { assertEquals(setOf(unservedFp, servedFp), reported.toSet()) }
+        // Paired while sshd served the ed25519 key: the pairing named the same two keys, and the first
+        // connect pinned that one.
+        val record = PairedHost(
+            id = "dev-1", name = "Box", host = "127.0.0.1", port = sshd.port, user = "dev", sshAvailable = true,
+            hostKeyB64 = h.str("hostPublicKeyB64"), relay = null, sshHostKeyFingerprint = unservedFp, pairedAt = 1,
+            sshHostKeyAnchors = reported
+        )
+        val changed = assertFailsWith<HostKeyChangedException> { SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, RecordPin(record)).close() }
+        val refused = assertIs<SshFallback.Next.TryRelay>(SshFallback.afterFailure(changed, relayAllowed = true, relayConfigured = true)).refusedHostKey
+        assertEquals(servedFp, refused)
+
+        // The pin is among the reported keys, so a report alone keeps it, and SSH stays refused.
+        assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, connected.first, refusedHostKey = null))
+        val refreshed = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, connected.first, refused))
+        assertNull(refreshed.host.sshHostKeyFingerprint)
+        assertEquals(servedFp, refreshed.confirmedKey)
+        val after = RecordPin(refreshed.host)
+        SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, after).close()
+        assertEquals(servedFp, after.record.sshHostKeyFingerprint)
     }
 
     @Test
@@ -727,23 +810,23 @@ class RelayInteropTest {
         // Same keys, new lease: only the address moves.
         val moved = connect(start(extra = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to hostKeyDir("ecdsa" to serverKey).path, "FIXTURE_LAN_ADDRESS" to "192.168.1.6")))
         moved.connection.use {
-            val r = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, moved.first))
+            val r = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, moved.first, refusedHostKey = null))
             assertEquals(record.copy(host = "192.168.1.6", sshHostKeyAnchors = listOf(serverFp)), r.host)
-            assertFalse(r.keysReplaced)
+            assertNull(r.confirmedKey)
         }
 
         // A desktop with no readable keys and no LAN address (offline Wi-Fi) reports nothing at all.
         val silent = connect(start())
         silent.connection.use {
             assertNull(silent.first.lan)
-            assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, silent.first))
+            assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, silent.first, refusedHostKey = null))
         }
 
         // A desktop that predates the field: the same, and the listing is what it always was.
         val older = connect(start(extra = mapOf("FIXTURE_NO_LAN" to "1", "FIXTURE_LAN_ADDRESS" to "10.0.0.9")))
         older.connection.use {
             assertNull(older.first.lan)
-            assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, older.first))
+            assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, older.first, refusedHostKey = null))
             assertEquals("Demo", older.first.projects.single().name)
         }
     }

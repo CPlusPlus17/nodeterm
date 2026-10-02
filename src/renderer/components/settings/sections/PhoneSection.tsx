@@ -132,8 +132,21 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
       // Additive, not exclusive: both legs can fail at once (an unwritable ~/.ssh while offline),
       // and being told only half of that leaves the other half to be discovered by accident.
       const notes: string[] = []
-      if (!result.local) {
+      if (result.relay === 'unpin-failed') {
+        // The phone's relay key may still be pinned, which would let it back in with no approval
+        // code, so main kept the device listed (`local` is false) for this retry (A07-revoke).
+        notes.push(
+          `Couldn’t take “${device.name}”’s remote access away on this machine, so it is still listed — try again.`
+        )
+      } else if (!result.local) {
         notes.push(`Couldn’t remove “${device.name}” from this machine — try again.`)
+      }
+      if (result.relay === 'cut-unconfirmed') {
+        // Unpinned, so it cannot come back; a session whose close failed may still be half open.
+        // Quitting nodeterm closes every relay connection it has.
+        notes.push(
+          `A remote session “${device.name}” had open could not be confirmed closed — quit and reopen nodeterm to be sure it has ended.`
+        )
       }
       if (result.server === 'failed') {
         // Deliberately not "pair it and remove it again": that used to be the whole advice, and it
@@ -148,6 +161,10 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
         )
       }
       if (notes.length) {
+        // A relay note beside a removal that did go through must not swallow the Pro receipt below.
+        if (result.local && result.server === 'ok') {
+          notes.push('Its Pro ends when the pass it already holds expires — within 7 days.')
+        }
         setRevokeNote({ text: notes.join(' '), warn: true })
       } else if (result.server === 'ok') {
         // Not instant, and we say so. The phone holds a signed entitlement minted for up to seven
