@@ -34,8 +34,13 @@ object SshFallback {
     const val RELAY_ONLY_SETTING =
         "choose “Only through the relay” for this computer in Settings → How to reach each computer."
 
-    /** Re-pairing is one way out, not the only one: it resets the pin to the computer's current key. */
-    const val REPAIR_NOTE = "If the computer was reinstalled, pairing it again trusts its new key."
+    /**
+     * A reinstalled computer's new key is trusted again once the computer itself confirms it through the
+     * relay ([LanRefresh], audit A74-refresh: a current nodeterm does so on every relay connect), or by
+     * pairing it again. Neither is the only way out, and neither trusts whatever answered at the address.
+     */
+    const val REPAIR_NOTE = "If the computer was reinstalled, the phone trusts its new key once the computer confirms it " +
+        "through the relay (nodeterm on the computer must be up to date), or when you pair it again."
 
     /** The relay is not an option yet: say how to get one. */
     const val NO_RELAY_ADVICE =

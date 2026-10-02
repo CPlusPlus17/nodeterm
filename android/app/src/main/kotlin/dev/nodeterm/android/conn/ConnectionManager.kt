@@ -24,6 +24,7 @@ import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.RelayBlock
 import dev.nodeterm.protocol.relay.RelayApi
 import dev.nodeterm.protocol.ssh.HostKeyPin
+import dev.nodeterm.protocol.ssh.LanRefresh
 import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshFallback
 import dev.nodeterm.protocol.ssh.SshHostConnection
@@ -183,6 +184,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     graph.relayGate.onConnected(hostId)
                     _snapshot.value = connected.first
                     _sshWarning.value = sshWarning
+                    refreshLanLeg(connected.connection, connected.first)
                     adopt(connected.connection)
                     return connected.connection
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -391,6 +393,32 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         override fun anchors(): List<String> = graph.hosts.get(host.id)?.sshHostKeyAnchors.orEmpty()
     }
 
+    /**
+     * Update this computer's LAN leg from what it said beside a RELAY listing (audit A74-refresh,
+     * [LanRefresh]): its current address, and its SSH host keys, which replace a pin that is not among
+     * them. [LanRefresh.afterListing] refuses a listing that came over SSH, which is the leg these
+     * facts check. Recomputed inside the store's update so it applies to the record as it is then
+     * (a late adoption may be writing the relay block at the same moment). Takes effect at the next
+     * SSH dial: [connectLocked] and [pinFor] read the record fresh. When the relay is in use because
+     * the SSH leg failed, the warning that says so gains a sentence about what changed. Never throws:
+     * a record that could not be saved is not a failed listing.
+     *
+     * Only for the PRIMARY connection, never for the relay held next to a live SSH one ([viaRelay]):
+     * there the LAN leg as recorded has just authenticated, which says more than a report does (a
+     * computer with two adapters may report the other one, and one whose key list misses the key sshd
+     * serves would otherwise drop a pin that works).
+     */
+    private fun refreshLanLeg(c: HostConnection, listed: ProjectsSnapshot) {
+        runCatching {
+            val before = graph.hosts.get(hostId) ?: return
+            val result = LanRefresh.afterListing(before, c.kind, listed) ?: return
+            graph.hosts.update(hostId) { current -> LanRefresh.afterListing(current, c.kind, listed)?.host ?: current }
+            val warning = _sshWarning.value
+            val note = LanRefresh.note(result)
+            if (warning != null && note != null && !warning.contains(note)) _sshWarning.value = "$warning $note"
+        }
+    }
+
     /** One late adoption at a time: a connect and a listing may both ask for it. */
     private val adopting = AtomicBoolean(false)
 
@@ -464,6 +492,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 if (ssh != null && LegRouting.adoptAfterListing(relayLeg(), advertisedBefore, ssh.relayAdvertised, userAsked = trigger == Trigger.USER)) {
                     adoptInBackground(ssh)
                 }
+                // A listing over the relay says where the computer is on the LAN now (A74-refresh).
+                refreshLanLeg(c, it)
                 _snapshot.value = it
                 _lastError.value = null
             }

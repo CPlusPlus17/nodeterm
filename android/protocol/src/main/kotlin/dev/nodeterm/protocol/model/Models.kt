@@ -19,7 +19,15 @@ data class ProjectsSnapshot(
      * (audit A27), and a session is reached on the socket it was listed on. Empty for a relay
      * listing (the desktop attaches its own sessions itself).
      */
-    val sockets: Map<String, String> = emptyMap()
+    val sockets: Map<String, String> = emptyMap(),
+    /**
+     * What the computer said about its own LAN leg beside the listing (audit A74-refresh): its current
+     * address and SSH host keys. Only a relay listing carries it, read off the answer next to the blob
+     * ([dev.nodeterm.protocol.host.RelayHostConnection.listProjects]); a direct-SSH listing never does,
+     * and [dev.nodeterm.protocol.ssh.LanRefresh] refuses one anyway, so nothing taken over SSH moves
+     * the address or the keys that check SSH.
+     */
+    val lan: dev.nodeterm.protocol.ssh.LanReport? = null
 ) {
     fun isLive(nodeId: String): Boolean = liveSessions.contains(TmuxNames.sessionName(nodeId))
 

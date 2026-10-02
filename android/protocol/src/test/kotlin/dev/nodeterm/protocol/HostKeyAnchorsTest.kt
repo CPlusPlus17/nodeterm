@@ -100,7 +100,7 @@ class HostKeyAnchorsTest {
         assertEquals("SHA256:whoever-answered", e.actual)
         val fact = e.message!!
         assertTrue(fact.contains("SHA256:whoever-answered") && fact.contains("none of the 2 keys the computer reported"), fact)
-        assertTrue(fact.contains("reported when this phone was paired"), fact)
+        assertTrue(fact.contains("the computer reported to this phone (when it was paired, or since through the relay)"), fact)
         // The likely causes before the alarming one, as for a changed pin.
         assertTrue(fact.indexOf("network address") in 0 until fact.indexOf("intercepting"), fact)
         assertTrue(HostKeyNotPairedException(listOf(githubEd25519Fp), "x").message!!.contains("not the key the computer reported"))

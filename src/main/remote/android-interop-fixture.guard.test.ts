@@ -110,6 +110,24 @@ describe('the Android interop fixture is type-checked against the desktop interf
     expect(fixture).toMatch(/from '\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/src\/core\/git-service'/)
   })
 
+  it('serves the `lan` field from the desktop\'s own reporter, never a hand-written one (audit A74-refresh)', () => {
+    // The phone refreshes the LAN address it dials and the SSH keys it trusts from this field, so the
+    // Kotlin client must be checked against what the desktop's reporter really sends: the QR's address
+    // pick and the sealed answer's host-key reader, over the test's interfaces and host-key dir.
+    const code = (file: string): string =>
+      readFileSync(file, 'utf8')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .join('\n')
+    const fixture = code(join(INTEROP_DIR, 'host-fixture.ts'))
+    const index = code(join(REPO_ROOT, 'src', 'main', 'index.ts'))
+    expect(index).toMatch(/\blanReport: createHostLanReporter\(\)/)
+    expect(fixture).toMatch(/\blanReport: createHostLanReporter\(\{/)
+    expect(fixture).toMatch(/from '\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/src\/main\/remote\/host-lan-report'/)
+    expect(fixture, 'the fixture must not read this machine\'s /etc/ssh').toMatch(/\bsshHostKeyDirs: \[process\.env\.FIXTURE_SSH_HOST_KEY_DIR \|\|/)
+  })
+
   it('hands the desktop code nothing through a cast that would switch the type check off', () => {
     const CAST = /\bas\s+(?:unknown\s+as|never|any)\b/
     const offenders: string[] = []

@@ -9,7 +9,8 @@
 //                 `WorkspaceStore` and a mirror file the real agent-status mirror wrote, all under
 //                 FIXTURE_USERDATA (see seedDesktopState; audit A64). Neither is `git.*`: the real
 //                 `GitService` behind the real jail, over a repository in the project's folder (see
-//                 seedGitRepo; audit A29).
+//                 seedGitRepo; audit A29). Nor the `lan` field beside the blob: the desktop's own
+//                 `createHostLanReporter` over the test's interfaces and host-key dir (A74-refresh).
 //   mode "pair":  the desktop's real `createPairingService` (src/main/pairing-service.ts) with the
 //                 home dir pointed at a temp dir by the caller (HOME, and USERPROFILE for Windows, see
 //                 InteropHarness.scratchHomeEnv; refused unless `os.homedir()` is FIXTURE_HOME), and a
@@ -45,6 +46,7 @@ import {
   type HostSession
 } from '../../../../../src/main/remote/host-service'
 import { createHostNewSessions } from '../../../../../src/main/remote/host-new-sessions'
+import { createHostLanReporter } from '../../../../../src/main/remote/host-lan-report'
 import {
   flush as flushMirror,
   initAgentStatusMirror,
@@ -319,6 +321,25 @@ async function runRelay(): Promise<void> {
     // the store's read-only load, the mirror file, and the session names, between the markers.
     listProjects: () =>
       buildProjectsListBlob({ workspace: store, userDataDir: platform().userDataDir, listSessions: async () => ['nt-term-abc-1'] }),
+    // A74-refresh: the `lan` field beside the blob, from the desktop's own reporter (the QR's
+    // `pickLanIPv4` over the interfaces, and the sealed answer's host-key reader). The interfaces are
+    // the test's (FIXTURE_LAN_ADDRESS, as a Wi-Fi adapter beside loopback), never this machine's, and
+    // the host keys come from FIXTURE_SSH_HOST_KEY_DIR or a dir that does not exist, never /etc.
+    // `FIXTURE_NO_LAN=1` stands for a desktop that predates the field.
+    ...(process.env.FIXTURE_NO_LAN === '1'
+      ? {}
+      : {
+          lanReport: createHostLanReporter({
+            platform: 'linux',
+            interfaces: () => ({
+              lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+              ...(process.env.FIXTURE_LAN_ADDRESS
+                ? { wlan0: [{ address: process.env.FIXTURE_LAN_ADDRESS, family: 'IPv4', internal: false }] }
+                : {})
+            }),
+            sshHostKeyDirs: [process.env.FIXTURE_SSH_HOST_KEY_DIR || path.join(platform().userDataDir, 'no-ssh-host-keys')]
+          })
+        }),
     // A viewer on a node is an Eco shield and a size ceiling on the desktop (A18): the phone must
     // never leave one behind.
     remoteViewer: {

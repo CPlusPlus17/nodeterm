@@ -21,6 +21,19 @@ import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.NodeKind
 import dev.nodeterm.protocol.model.SessionBucket
+import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.host.TransportKind
+import dev.nodeterm.protocol.pairing.SshIdentity
+import dev.nodeterm.protocol.ssh.HostKeyChangedException
+import dev.nodeterm.protocol.ssh.HostKeyPin
+import dev.nodeterm.protocol.ssh.LanRefresh
+import dev.nodeterm.protocol.ssh.LanReport
+import dev.nodeterm.protocol.ssh.SshHostConnection
+import net.schmizz.sshj.common.Buffer
+import net.schmizz.sshj.common.KeyType
+import org.apache.sshd.server.SshServer
+import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
+import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -40,6 +53,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -55,10 +69,12 @@ import kotlin.test.assertTrue
 class RelayInteropTest {
     private val harnesses = ArrayList<InteropHarness>()
     private val userDataDirs = ArrayList<File>()
+    private val sshServers = ArrayList<SshServer>()
 
     @AfterTest
     fun tearDown() {
         harnesses.forEach { it.close() }
+        sshServers.forEach { it.stop(true) }
         userDataDirs.forEach { it.deleteRecursively() }
     }
 
@@ -616,4 +632,120 @@ class RelayInteropTest {
             assertEquals("git is not served on this host.", e.message)
         }
     }
+
+    // ---- A74-refresh: the computer's LAN leg, reported beside the listing -----------------------------
+
+    /** sshd's `ssh_host_<name>_key.pub` files for [keys], under a new dir (the layout of /etc/ssh). */
+    private fun hostKeyDir(vararg keys: Pair<String, java.security.PublicKey>): File {
+        val dir = Files.createTempDirectory("nt-relay-etc-ssh").toFile().also { userDataDirs += it }
+        for ((name, key) in keys) {
+            val blob = Buffer.PlainBuffer().putPublicKey(key).compactData
+            File(dir, "ssh_host_${name}_key.pub").writeText("${KeyType.fromKey(key)} ${java.util.Base64.getEncoder().encodeToString(blob)} root@box\n")
+        }
+        return dir
+    }
+
+    /** A real SSH server that lets [identity] in as `dev`, and its host key. */
+    private fun sshServer(identity: SshIdentity): Pair<SshServer, java.security.PublicKey> {
+        val root = Files.createTempDirectory("nt-relay-sshd").toFile().also { userDataDirs += it }
+        val server = SshServer.setUpDefaultServer()
+        server.host = "127.0.0.1"
+        server.port = 0
+        server.keyPairProvider = SimpleGeneratorHostKeyProvider(File(root, "hostkey.ser").toPath())
+        val accepted = identity.keyPair.public.encoded
+        server.publickeyAuthenticator = PublickeyAuthenticator { user, key, _ -> user == "dev" && key.encoded.contentEquals(accepted) }
+        server.start()
+        sshServers += server
+        return server to server.keyPairProvider.loadKeys(null).first().public
+    }
+
+    /** The pin as the app keeps it (ConnectionManager's `pinFor`): read from, and written to, the record. */
+    private class RecordPin(var record: PairedHost) : HostKeyPin {
+        override fun pinned() = record.sshHostKeyFingerprint
+        override fun pin(fingerprint: String) {
+            record = record.copy(sshHostKeyFingerprint = fingerprint)
+        }
+        override fun anchors() = record.sshHostKeyAnchors
+    }
+
+    @Test
+    fun `the relay listing names the computer's LAN address and SSH keys, and the phone trusts its new key from it (A74-refresh)`() = runBlocking<Unit> {
+        // The computer's sshd keys were regenerated (a reinstall) and its lease moved since the phone
+        // paired: the record still says the old address and pins a key the computer no longer has.
+        val identity = SshIdentity.generate()
+        val (sshd, serverKey) = sshServer(identity)
+        val old = java.security.KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair().public
+        val oldFp = SshHostConnection.fingerprint(old)
+        val serverFp = SshHostConnection.fingerprint(serverKey)
+        val h = start(extra = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to hostKeyDir("ecdsa" to serverKey).path, "FIXTURE_LAN_ADDRESS" to "192.168.77.20"))
+        val connected = connect(h)
+        connected.connection.use { conn ->
+            // The desktop's own reporter (the QR's address pick, the sealed answer's key reader), beside the blob.
+            assertEquals(LanReport("192.168.77.20", listOf(serverFp)), connected.first.lan)
+            // Every listing carries it, so a lease that moves while the phone is connected is picked up.
+            assertEquals(connected.first.lan, conn.listProjects().lan)
+            // The blob is what it was: the projects still parse.
+            assertEquals("Demo", connected.first.projects.single().name)
+        }
+
+        val record = PairedHost(
+            id = "dev-1", name = "Box", host = "192.168.1.5", port = 22, user = "dev", sshAvailable = true,
+            hostKeyB64 = h.str("hostPublicKeyB64"), relay = null, sshHostKeyFingerprint = oldFp, pairedAt = 1,
+            sshHostKeyAnchors = listOf(oldFp)
+        )
+        // Before the refresh the server's new key is a changed key: refused over SSH, pin untouched.
+        val before = RecordPin(record)
+        assertFailsWith<HostKeyChangedException> { SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, before).close() }
+        assertEquals(oldFp, before.record.sshHostKeyFingerprint)
+
+        // A listing over SSH carries no report, and one that did would still not count.
+        assertNull(LanRefresh.afterListing(record, TransportKind.SSH, connected.first))
+        val refreshed = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, connected.first))
+        assertTrue(refreshed.addressChanged && refreshed.keysReplaced)
+        assertEquals("192.168.77.20", refreshed.host.host)
+        assertNull(refreshed.host.sshHostKeyFingerprint)
+        assertEquals(listOf(serverFp), refreshed.host.sshHostKeyAnchors)
+
+        // After it, the next connect accepts the key the computer confirmed, and pins exactly that one.
+        val after = RecordPin(refreshed.host)
+        SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, after).close()
+        assertEquals(serverFp, after.record.sshHostKeyFingerprint)
+        // The record now says what the computer says: the next listing changes nothing.
+        assertNull(LanRefresh.afterListing(after.record, TransportKind.RELAY, connected.first), "nothing left to refresh")
+    }
+
+    @Test
+    fun `a computer whose keys did not change keeps its pin, and one that sends nothing changes nothing (A74-refresh)`() = runBlocking<Unit> {
+        val identity = SshIdentity.generate()
+        val (_, serverKey) = sshServer(identity)
+        val serverFp = SshHostConnection.fingerprint(serverKey)
+        val record = PairedHost(
+            id = "dev-1", name = "Box", host = "192.168.1.5", port = 22, user = "dev", sshAvailable = true,
+            hostKeyB64 = null, relay = null, sshHostKeyFingerprint = serverFp, pairedAt = 1
+        )
+
+        // Same keys, new lease: only the address moves.
+        val moved = connect(start(extra = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to hostKeyDir("ecdsa" to serverKey).path, "FIXTURE_LAN_ADDRESS" to "192.168.1.6")))
+        moved.connection.use {
+            val r = assertNotNull(LanRefresh.afterListing(record, TransportKind.RELAY, moved.first))
+            assertEquals(record.copy(host = "192.168.1.6", sshHostKeyAnchors = listOf(serverFp)), r.host)
+            assertFalse(r.keysReplaced)
+        }
+
+        // A desktop with no readable keys and no LAN address (offline Wi-Fi) reports nothing at all.
+        val silent = connect(start())
+        silent.connection.use {
+            assertNull(silent.first.lan)
+            assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, silent.first))
+        }
+
+        // A desktop that predates the field: the same, and the listing is what it always was.
+        val older = connect(start(extra = mapOf("FIXTURE_NO_LAN" to "1", "FIXTURE_LAN_ADDRESS" to "10.0.0.9")))
+        older.connection.use {
+            assertNull(older.first.lan)
+            assertNull(LanRefresh.afterListing(record, TransportKind.RELAY, older.first))
+            assertEquals("Demo", older.first.projects.single().name)
+        }
+    }
 }
+

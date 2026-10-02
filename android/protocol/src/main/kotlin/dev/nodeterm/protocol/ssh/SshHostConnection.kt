@@ -102,18 +102,20 @@ open class HostKeyChangedException protected constructor(
 
 /**
  * The first SSH connect to a paired computer met a host key that is none of the keys the computer
- * named in its sealed pairing answer (audit A49-anchor). Nothing was pinned, and this phone's key was
- * never offered. A [HostKeyChangedException], so [SshFallback] treats it as one: never used over SSH,
- * and in Auto the relay leg, which checks the computer on its own, is still tried.
+ * named in its sealed pairing answer (audit A49-anchor), or reported since through the relay (audit
+ * A74-refresh, [LanRefresh]). Nothing was pinned, and this phone's key was never offered. A
+ * [HostKeyChangedException], so [SshFallback] treats it as one: never used over SSH, and in Auto the
+ * relay leg, which checks the computer on its own, is still tried.
  */
 class HostKeyNotPairedException(val paired: List<String>, actual: String) : HostKeyChangedException(
     paired.joinToString(" or "),
     actual,
     "This computer's SSH server presented a host key ($actual) that is " +
         (if (paired.size == 1) "not the key" else "none of the ${paired.size} keys") +
-        " the computer reported when this phone was paired, so the phone did not connect to it over your network. " +
+        " the computer reported to this phone (when it was paired, or since through the relay), so the phone did " +
+        "not connect to it over your network. " +
         "Another machine may have its network address (a different Wi-Fi, or a reassigned address), or the " +
-        "computer's SSH server uses a key nodeterm could not read at pairing; if neither, someone may be " +
+        "computer's SSH server uses a key nodeterm on it could not read; if neither, someone may be " +
         "intercepting the connection."
 )
 

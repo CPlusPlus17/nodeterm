@@ -187,6 +187,7 @@ import {
   workingNodes
 } from '../core/agent-status-mirror'
 import { buildProjectsListBlob } from '../core/projects-list-blob'
+import { createHostLanReporter } from './remote/host-lan-report'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
 import { createGrantsAccessor, type PushGrant } from '../core/push-grants'
@@ -4060,7 +4061,11 @@ app.whenReady().then(async () => {
     // Jail roots beyond the active canvas: the phone browses EVERY project (projects.list), so
     // its fs/git access spans every local project root — not just the tab the desktop happens
     // to have focused (that gap read as "cwd is outside the shared project roots" on the phone).
-    workspaceRoots: () => workspaceStore.localProjectCwds()
+    workspaceRoots: () => workspaceStore.localProjectCwds(),
+    // This computer's current LAN address and SSH host keys, beside every projects.list answer, so
+    // a phone that reached it through the relay can update the LAN leg it dials (audit A74-refresh:
+    // the pairing QR's address is a DHCP lease, and a reinstall regenerates sshd's keys).
+    lanReport: createHostLanReporter()
   }
   // The renderer owns the Eco hibernation flag (persisted in ITS localStorage) and main only
   // mirrors it — same direction as `terminalFocused`. Feeds the agent-status mirror so the phone

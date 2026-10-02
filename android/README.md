@@ -213,6 +213,11 @@ iOS app does receive the detail, in the push the desktop sends.
   pinned on the first connect that authenticates (a server that refuses the phone's key is never
   pinned). A changed key is never used over SSH; in Auto the phone goes on to the relay, which
   verifies the computer separately, and shows a warning.
+- Over the relay (and only there) a current desktop also reports its LAN address and SSH host keys
+  as they are now, and the phone updates the computer from that: the address it dials on your
+  network, and a pin the computer's current keys no longer include (the next connect then has to
+  present one of them). So a moved address or a reinstalled computer's new key needs no new pairing.
+  Nothing learned over SSH ever changes them.
 - A computer added by its SSH address has no pairing behind its first connect, so compare the
   fingerprint the Add screen shows with the computer's own (the screen gives the `ssh-keygen`
   command). A changed key stops it; forget it and add it again only if you know why it changed. To

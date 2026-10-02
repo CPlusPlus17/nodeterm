@@ -386,6 +386,7 @@ export function initStandingHost(
         remoteNodes: bridge.remoteNodes,
         newSessions: bridge.newSessions,
         extraRoots: bridge.workspaceRoots,
+        lanReport: bridge.lanReport,
         // Typing attribution: this pooled session's input frames are ITS phone's keystrokes.
         getClientId: () => pooled.presence.id(),
         onPeerReady: () => void onPeerReady(pooled),

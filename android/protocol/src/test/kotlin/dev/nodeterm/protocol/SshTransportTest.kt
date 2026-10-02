@@ -1177,7 +1177,7 @@ class SshTransportTest {
         assertEquals(before, authAttempts.get(), "the phone's key must not be offered to a server the pairing did not name")
         assertEquals(serverFp, refused.actual)
         assertEquals(listOf(stranger), refused.paired)
-        assertTrue(refused.message!!.contains("reported when this phone was paired"), refused.message)
+        assertTrue(refused.message!!.contains("the computer reported to this phone (when it was paired, or since through the relay)"), refused.message)
         // A HostKeyChangedException, so SshFallback refuses SSH and in Auto still tries the relay.
         assertIs<HostKeyChangedException>(refused)
 

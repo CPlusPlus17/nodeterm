@@ -18,6 +18,7 @@ import dev.nodeterm.protocol.relay.RelaySocket
 import dev.nodeterm.protocol.relay.RelaySocketListener
 import dev.nodeterm.protocol.relay.RpcException
 import dev.nodeterm.protocol.relay.SnapshotReassembler
+import dev.nodeterm.protocol.ssh.LanReport
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
@@ -37,7 +38,7 @@ import kotlin.coroutines.resumeWithException
  * [HostConnection] over the standing phone host's relay dialect — `createHostHandlers` in
  * `src/main/remote/host-service.ts` is the other end, verb for verb:
  *
- *  `projects.list` → `{output}` · `pty.attach {nodeId, cols, rows}` → `{streamId, fresh}` then
+ *  `projects.list` → `{output, lan?}` · `pty.attach {nodeId, cols, rows}` → `{streamId, fresh}` then
  *  Snapshot Start, Chunk…, End and Output frames · `pty.kill|destroy|scroll {streamId…}` ·
  *  `node.wake|refresh|rename {nodeId, title?}` · `projects.ensureBoard|setCardColumn|
  *  editCardLabels|registerNode` · `git.*` · Input/Resize frames up, Output/Resized/Error down.
@@ -146,7 +147,9 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
 
     override suspend fun listProjects(): ProjectsSnapshot {
         val body = J.obj(call("projects.list")) ?: return ProjectsSnapshot.EMPTY
-        return ProjectsParser.parseBlob(body.s("output") ?: "")
+        // `lan` (A74-refresh) rides beside the blob, never inside it: the computer's current LAN
+        // address and SSH host keys, which only this authenticated channel may hand the phone.
+        return ProjectsParser.parseBlob(body.s("output") ?: "").copy(lan = LanReport.parse(body["lan"]))
     }
 
     override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream =

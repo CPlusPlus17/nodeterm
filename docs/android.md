@@ -47,12 +47,33 @@ authenticates the computer on its own (the relay host key from pairing, then the
 the host screen keeps a warning up while connected that way; the relay dial still goes through
 `RelayApprovalGate`, so a background check never makes a first relay handshake because of it. "Only
 on my network" stops with the warning. The usual cause is benign: the LAN leg dials the DHCP address
-the computer had at pairing, and another SSH-running machine now has it (or the phone is on another
-network using the same range). The message points at "Only through the relay"; pairing again is the
-way to trust a reinstalled computer's new key (for a computer added by its SSH address, forgetting
-it and adding it again). The iOS app can adopt the same field: it is additive in the sealed answer,
-and a phone that does not read it pairs exactly as before (a follow-up for @eneskirca in
-nodeterm-ios).
+the computer last reported (at pairing, or since through the relay, below), and another SSH-running
+machine now has it (or the phone is on another network using the same range). The message points at "Only through the relay". A reinstalled
+computer's new key is trusted again by the refresh below, or by pairing again (for a computer added
+by its SSH address, by forgetting it and adding it again). The iOS app can adopt the same field: it
+is additive in the sealed answer, and a phone that does not read it pairs exactly as before (a
+follow-up for @eneskirca in nodeterm-ios).
+
+**The LAN leg is refreshed over the relay** (audit `A74-refresh`). The address the LAN leg dials and
+the keys it checks were both facts about the moment of pairing: the QR's `host` is a DHCP lease, and
+a reinstall regenerates sshd's keys. So every relay `projects.list` answer carries, beside the blob,
+what the computer says about its own SSH leg now: `{ output, lan: { host?, sshHostKeyFingerprints? } }`
+(`src/main/remote/host-lan-report.ts`: the same `pickLanIPv4` the QR uses and the same host-key
+reader as the sealed `/pair` answer; the keys are re-read at most once a minute, the address on every
+answer; never on Windows, which has no SSH leg). The phone updates the paired computer from it
+(`LanRefresh`, applied by `HostSession` after the primary relay connection's listings): a different
+address replaces `PairedHost.host`, and the reported keys become the anchors, replacing a pin that is
+not among them, so the next SSH connect must present one of the computer's current keys and pins it
+once it has authenticated. A pin among them stays; no reported keys (an older desktop, keys it could
+not read) leave the pin and the anchors alone. This is safe because the relay authenticates the
+computer on its own (end-to-end encrypted to the box key pinned at pairing, served only once approved).
+Nothing that came over SSH ever refreshes these facts (`LanRefresh.afterListing` refuses an SSH
+listing, and an SSH listing never carries the field), and neither does the relay held next to a live
+SSH connection (`viaRelay`), where the LAN leg as recorded has just authenticated. While the host
+screen shows a changed-key warning, a refresh that moved the address or replaced the pin adds a
+sentence saying so. The field sits beside the blob, not inside it, so the blob stays the shape a phone
+on direct SSH reads off the host, and an iOS app that does not read `lan` sees the reply it always saw
+(a follow-up for @eneskirca in nodeterm-ios).
 
 **Relay approval.** The standing host raises its SAS dialog as soon as an unpinned phone completes
 the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the background worker
@@ -213,7 +234,7 @@ describes as the future. The Android client implements what the host actually se
 
 | Phone action | Relay (host-service.ts) | Direct SSH |
 |---|---|---|
-| List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob | same blob, from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
+| List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob, and beside it **`lan`** (new, `A74-refresh`): the computer's current LAN address and SSH host keys, which refresh the paired record | same blob (and never a `lan`), from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
 | Open a terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
@@ -261,7 +282,11 @@ unchanged.
   `projects.list` blob is the desktop's own: `buildProjectsListBlob`
   (`src/core/projects-list-blob.ts`, which the desktop's `listProjectsOutput` calls too) over a real
   `WorkspaceStore` (it writes the v3 index and the project file, then assembles them) and an
-  `agent-status.json` written by the real mirror from Claude hook payloads (audit `A64`).
+  `agent-status.json` written by the real mirror from Claude hook payloads (audit `A64`). The `lan`
+  field beside it is the desktop's own `createHostLanReporter` over the test's interfaces and
+  host-key dir (`A74-refresh`): the phone parses the address and keys, and a record that pins a key
+  the computer no longer has is refused by a real MINA server before the refresh and accepted (and
+  pinned) after it; a desktop that sends no field changes nothing.
 - **Relay security** — scripted-host tests for: no re-key after ready, reflected boxes (own role)
   dropped, replayed/reordered sequence numbers dropped, boxes under a foreign key dropped.
 - **Pairing** — against the desktop's real `createPairingService` with HOME in a temp dir: the
@@ -410,8 +435,12 @@ OpenSSH prints them (`src/main/ssh-host-keys.test.ts` checks the desktop's reade
 pair), the parsing and the record, and that a plaintext answer's keys are ignored.
 `SshFallbackTest` pins what follows a failed SSH leg (`A74`): a changed key goes on to the relay in
 Auto with a warning, stops on the SSH-only route, and its text names "Only through the relay" rather
-than only re-pairing. The app's use of it (the
-relay dial behind `RelayApprovalGate`, the warning on the host screen) is only type-checked.
+than only re-pairing. `LanRefreshTest` pins the refresh (`A74-refresh`): only a relay listing counts,
+only a dialable IPv4 is taken, reported keys replace a pin not among them and keep one that is, no
+keys leave the pin alone, and a computer added by its SSH address or paired relay-only is untouched.
+The app's use of them (the relay dial behind `RelayApprovalGate`, the warning on the host screen,
+the refresh after each primary relay listing, whose order in the source is pinned) is only
+type-checked.
 
 `TerminalHandoffTest` pins the terminal screen's attach hand-off (`A40`). A stream that arrives
 after the screen left (back, or the app going to the background), or from an attach a newer one
@@ -800,7 +829,11 @@ later fix left to a device.
     Automatic the phone refuses SSH, connects through the relay and keeps a warning on the host
     screen that names "Only through the relay"; on "Only on my network (SSH)" it stops with the
     warning. Do the same once between pairing and the first connect: the phone says the key is not
-    one the computer reported when it was paired, and pins nothing. *(A49, A74)*
+    one the computer reported, and pins nothing. With a current desktop, regenerate its host keys
+    (or move it to another address on the LAN) while the phone is away, connect through the relay,
+    then come back: the next connect on the network dials the new address and accepts the new key
+    without pairing again, and the host screen's warning (when one was up) says what changed.
+    *(A49, A74)*
 12. On cellular, off the LAN: connect through the relay. The desktop shows the SAS dialog and the phone
     shows the same code; approve. Reconnect later: no second prompt. On another pairing press Deny: the
     phone says it was not approved and does not dial again until Try again. *(A65, A30)*
@@ -1194,17 +1227,22 @@ later fix left to a device.
   resumes in its CLI's default, which can edit after asking, and a Codex node in `manual` on a
   codex before 0.149 loses `--ask-for-approval untrusted` and resumes in `on-request`, where the
   model decides when to ask.
-- **The SSH pin is anchored only by a current desktop, and the LAN address is frozen at pairing**
-  (audit `A49`/`A74`). A desktop with `A49-anchor` names its SSH host keys in the sealed `/pair`
+- **The SSH pin is anchored only by a current desktop, and the LAN address is refreshed only over the
+  relay** (audit `A49`/`A74`). A desktop with `A49-anchor` names its SSH host keys in the sealed `/pair`
   answer and the first connect must present one of them; an older desktop, one that could not read
   its keys, a computer paired before this build and one added by its SSH address still pin on first
   use (on the pairing LAN, right after the QR, so normally the real computer), where a server that
   accepts any key could become the pin. An sshd that serves a key from a place `ssh-host-keys.ts`
   does not read (a `HostKey` in a file `sshd_config` includes from elsewhere than `sshd_config.d/`,
   or a relative path) is refused over SSH, as a key the computer did not report at pairing, and the
-  phone then uses the relay in Auto. The iOS app does not read the field yet. Nothing refreshes
-  `PairedHost.host` either: the desktop could publish its current LAN address over the relay, letting
-  the phone update it after a relay connect.
+  phone then uses the relay in Auto. The iOS app does not read the field yet. The relay refresh
+  (`A74-refresh`) takes the same reader's answer as the truth: on a computer whose sshd serves a key
+  the reader misses, it drops a pin that works (one trusted on first use with an older desktop) and
+  the phone then uses the relay in Auto, as a fresh pairing there would. The refreshed address is the
+  QR's `pickLanIPv4`, the first non-internal IPv4 adapter: on a computer with several (Ethernet and
+  Wi-Fi, a VPN), it is whichever the OS lists first, which may not be the one the phone can reach;
+  the relay then still serves. The refresh needs a relay connection, so a phone that only ever uses
+  "Only on my network" keeps the pairing's address and keys, and the iOS app does not read `lan` yet.
 - **No signed release build** (audit `A50`). The only APK there is to install is the debug build,
   and AGP marks every debug build debuggable: anyone with adb access to the unlocked phone while USB
   debugging is on can read the app's files (`run-as`) and attach a debugger to the running app, whose

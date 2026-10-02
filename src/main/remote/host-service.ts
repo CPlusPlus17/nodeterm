@@ -44,6 +44,7 @@ import { sanitizeClientMutation } from './canvas-sync'
 import { connectRelay, type RelaySocket, type RpcRequest } from './relay-socket'
 import { initHostCanvasHub, currentCanvas, subscribeCanvas } from './host-canvas-hub'
 import { createPhonePresence, type PhonePresence } from './phone-presence'
+import type { HostLanReport } from './host-lan-report'
 
 // Default relay endpoint; `NODETERM_RELAY_URL` overrides it (mirrors license.ts's API_BASE /
 // CHECKOUT_URL env-override pattern — used both as the dev gate and for local testing).
@@ -358,7 +359,11 @@ export function createHostHandlers(
   // Absent ⇒ every node is attached locally, as before (the Server Edition has no SSH projects).
   remoteNodes?: HostRemoteNodes,
   // Where a phone-started session is created (see HostNewSessions). Absent ⇒ `{cols, rows}` only.
-  newSessions?: HostNewSessions
+  newSessions?: HostNewSessions,
+  // This computer's current LAN address and SSH host keys, sent as `lan` next to every `projects.list`
+  // answer (audit A74-refresh, host-lan-report.ts): the phone refreshes the LAN leg it dials from a
+  // relay-authenticated answer. Absent, or answering null ⇒ no `lan` field, the reply as before.
+  lanReport?: () => Promise<HostLanReport | null>
 ): HostHandlers {
   // streamId -> Stream. PTY callbacks close over their own `streamId` directly, so no
   // reverse (sessionId -> streamId) index is needed.
@@ -1093,9 +1098,15 @@ export function createHostHandlers(
           // Read-only enumeration of the host's projects/sessions/agent-status (no client params —
           // nothing to jail). Gated by the same pre-handler approval check in connectHostSession, so
           // an unapproved device never reaches here. Always respond ok; degrade to an empty blob.
-          void listProjects()
-            .then((output) => socket.respond(req.id, true, { output }))
-            .catch(() => socket.respond(req.id, true, { output: '' }))
+          // `lan` (additive, A74-refresh) rides beside the blob, never inside it: the blob is the
+          // shape a phone on direct SSH reads off the host itself, and the address and keys must
+          // reach the phone only over this authenticated channel. A failed read leaves it out.
+          void Promise.all([
+            listProjects().catch(() => ''),
+            Promise.resolve()
+              .then(() => lanReport?.() ?? null)
+              .catch(() => null)
+          ]).then(([output, lan]) => socket.respond(req.id, true, { output, ...(lan ? { lan } : {}) }))
           break
         default:
           socket.respond(req.id, false, { message: `Unknown method: ${req.method}` })
@@ -1342,6 +1353,9 @@ export interface HostSessionOptions {
   remoteNodes?: HostRemoteNodes
   /** Where a phone-started session is created (see HostNewSessions). Optional. */
   newSessions?: HostNewSessions
+  /** This computer's current LAN address and SSH host keys for the `projects.list` answer's `lan`
+   *  field (audit A74-refresh). Optional: absent ⇒ no `lan` field. */
+  lanReport?: () => Promise<HostLanReport | null>
   /** Extra fs/git jail roots beyond the shared canvas's node cwds — production passes the
    *  workspace's local project cwds: the phone browses EVERY project over `projects.list`, so a
    *  canvas-only jail denied whichever project the desktop didn't happen to have focused. */
@@ -1469,7 +1483,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     opts.kanban,
     opts.inbox,
     opts.remoteNodes,
-    opts.newSessions
+    opts.newSessions,
+    opts.lanReport
   )
   canvasSync = createHostCanvasSync(socket, opts.applyMutation)
   unsubCanvas = opts.subscribeCanvas(() => scheduleBroadcast())
@@ -1508,6 +1523,9 @@ export interface HostBridgeDeps {
   newSessions?: HostNewSessions
   /** Workspace-level jail roots (local project cwds) merged with the canvas node cwds. */
   workspaceRoots?: () => string[]
+  /** This computer's current LAN address and SSH host keys, beside every `projects.list` answer, so
+   *  a relay phone can refresh the LAN leg it dials (audit A74-refresh, host-lan-report.ts). */
+  lanReport?: () => Promise<HostLanReport | null>
 }
 
 export function initRemoteHost(
@@ -1584,6 +1602,7 @@ export function initRemoteHost(
       remoteNodes: bridge.remoteNodes,
       newSessions: bridge.newSessions,
       extraRoots: bridge.workspaceRoots,
+      lanReport: bridge.lanReport,
       // Typing attribution: this session's input frames are this phone's keystrokes.
       getClientId: () => phone.id(),
       // Interactive host: surface the SAS + a fresh pending id so the human can verify + approve.
