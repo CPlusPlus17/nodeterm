@@ -158,7 +158,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
     }
 
-    override suspend fun listProjects(): ProjectsSnapshot = withContext(Dispatchers.IO) {
+    override suspend fun listProjects(): ProjectsSnapshot = withContext(Dispatchers.IO) { browseNow() }
+
+    /** [listProjects], blocking: one browse, and what it says about the computer's nodes remembered. */
+    private fun browseNow(): ProjectsSnapshot {
+        val now = System.currentTimeMillis()
         val (_, raw) = run(SshScripts.browse())
         val out = HostBrowse.split(raw)
         val ud = out.userData
@@ -166,7 +170,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         // place (audit A02 shipped exactly that as an empty list), or at a nodeterm whose data dir we
         // cannot know (a Server Edition with another --data-dir). Say so instead.
         relayAdvertised = out.relayAdvertised
-        if (out.nothingFound) throw HostException(NO_USER_DATA)
+        if (out.nothingFound(now)) {
+            // Still an answer about the nodes: none here is anyone's (no index, nothing driven).
+            remember(ProjectsSnapshot.EMPTY)
+            throw HostException(NO_USER_DATA)
+        }
         userData = ud
         val base = ProjectsParser.parseBlob(out.blob)
         val wsText = out.blob.substringBefore(ProjectsParser.PROJECTS_MARK)
@@ -177,10 +185,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             base
         }
         // What a desktop that drives this computer over SSH left here, next to the host's own (A27).
-        val snapshot = HostBrowse.assemble(own, out, System.currentTimeMillis())
-        rememberRemoteNodes(snapshot)
-        rememberSessions(snapshot)
-        snapshot
+        val snapshot = HostBrowse.assemble(own, out, now)
+        remember(snapshot)
+        return snapshot
     }
 
     /**
@@ -241,6 +248,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         var opened: SshStream? = null
         try {
             return withContext(Dispatchers.IO) {
+                ensureListed()
                 refuseRemoteNode(nodeId)
                 // Where the session is NOW, on either socket (A27): one exec that is also the
                 // existence check, so a session listed on one socket is never attached on the other.
@@ -280,9 +288,47 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     /** Nodes of projects a desktop elsewhere drives over SSH ([ProjectInfo.drivenRemotely]). */
     @Volatile private var drivenNodes: Set<String> = emptySet()
 
-    private fun rememberSessions(snapshot: ProjectsSnapshot) {
+    /**
+     * Nodes of the computer's OWN index (its folder and data projects, closed ones included; not its
+     * SSH projects, whose nodes are [remoteNodes]): the only nodes the relay of this computer starts
+     * as the computer's own sessions ([notRunning]).
+     */
+    @Volatile private var ownNodes: Set<String> = emptySet()
+
+    /** Whether a browse has answered on THIS connection ([ensureListed]). */
+    @Volatile private var listed = false
+    private val listLock = Any()
+
+    private fun remember(snapshot: ProjectsSnapshot) {
+        rememberRemoteNodes(snapshot)
         sockets = snapshot.sockets
         drivenNodes = snapshot.projects.filter { it.drivenRemotely }.flatMapTo(HashSet()) { p -> p.nodes.map { it.id } }
+        ownNodes = snapshot.projects.filter { !it.drivenRemotely && it.sshTarget == null }
+            .flatMapTo(HashSet()) { p -> p.nodes.map { it.id } }
+        listed = true
+    }
+
+    /**
+     * Settle what this connection knows of the computer's nodes before a node-scoped decision (the
+     * review of A27a). Which nodes are the desktop's SSH projects' ([remoteNodes]), which a desktop
+     * elsewhere drives ([drivenNodes]) and which are the computer's own ([ownNodes]) comes from a
+     * listing, and a connection that has not listed yet knew none of them: a redial after a drop, or
+     * a terminal restored after the process died, attaches at once. A node's refusal then took the
+     * "nothing known" branch, which offered this computer's relay for a driven session that was not
+     * running, and let a node of an SSH project through to this computer's tmux. So the first
+     * node-scoped call on a connection lists, once; "nothing found" is an answer too. A failed
+     * transport is not, and fails the call.
+     */
+    private fun ensureListed() {
+        if (listed) return
+        synchronized(listLock) {
+            if (listed) return
+            try {
+                browseNow()
+            } catch (e: HostException) {
+                if (!listed) throw e
+            }
+        }
     }
 
     /**
@@ -312,20 +358,28 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         )
     }
 
-    private fun notRunning(nodeId: String): Exception =
-        if (nodeId in drivenNodes) {
-            // Its desktop is not the one behind this connection's relay: there is nothing to offer.
-            HostException(DRIVEN_NOT_RUNNING)
-        } else {
-            NeedsRelayException(
-                nodeId,
-                "This session isn't running on the computer right now. Starting it over your network would leave it " +
-                    "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer).",
-                withoutRelay = "This session isn't running on the computer right now, and the phone does not start it over " +
-                    "SSH: it would run without status reporting. Remote access isn't set up for this computer, so start it " +
-                    "in nodeterm on the computer."
-            )
-        }
+    /**
+     * Why [nodeId]'s session cannot be opened when it is not running. The relay is offered only for a
+     * node of the computer's OWN index ([ownNodes]): there the relay's `pty.attach` is nodeterm on
+     * this computer starting its own session (audit A08). For any other node it would make a bare
+     * `nt-<id>` on this computer's `node-terminal` socket, a session of no project with no hook
+     * environment, which later attaches then find first (host-service.ts `handleAttach` creates what
+     * it does not find). That covers a driven project's node, and a node no listing names at all: a
+     * driven project no longer listed (its desktop quit and its sessions ended), a deleted node.
+     */
+    private fun notRunning(nodeId: String): Exception = when (nodeId) {
+        // Its desktop is not the one behind this connection's relay: there is nothing to offer.
+        in drivenNodes -> HostException(DRIVEN_NOT_RUNNING)
+        in ownNodes -> NeedsRelayException(
+            nodeId,
+            "This session isn't running on the computer right now. Starting it over your network would leave it " +
+                "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer).",
+            withoutRelay = "This session isn't running on the computer right now, and the phone does not start it over " +
+                "SSH: it would run without status reporting. Remote access isn't set up for this computer, so start it " +
+                "in nodeterm on the computer."
+        )
+        else -> HostException(NOT_RUNNING_UNLISTED)
+    }
 
     /**
      * The terminal stream over one exec'd pty channel.
@@ -477,6 +531,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         throw HostException(LegRouting.sshRefusal(what))
 
     override suspend fun answerApproval(event: InboxEvent, allow: Boolean): ApprovalOutcome = withContext(Dispatchers.IO) {
+        ensureListed()
         refuseRemoteNode(event.nodeId)
         val pendingId = event.pendingId ?: return@withContext ApprovalOutcome.UNSUPPORTED
         if (!SshScripts.PENDING_ID.matches(pendingId)) return@withContext ApprovalOutcome.UNSUPPORTED
@@ -489,13 +544,18 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
 
     /** The phone→host read-ack (src/core/ack-sweep.ts): `~/.nodeterm/acks/<nodeId>.seen`. */
     override suspend fun ackRead(nodeId: String, eventId: String?) {
-        // A remote node's read-ack belongs on ITS host; writing it here would ack nothing.
-        if (remoteNodes.containsKey(nodeId)) return
-        withContext(Dispatchers.IO) { runCatching { run(SshScripts.ackRead(nodeId, eventId ?: "")) } }
+        withContext(Dispatchers.IO) {
+            runCatching {
+                ensureListed()
+                // A remote node's read-ack belongs on ITS host; writing it here would ack nothing.
+                if (!remoteNodes.containsKey(nodeId)) run(SshScripts.ackRead(nodeId, eventId ?: ""))
+            }
+        }
     }
 
     override suspend fun sendKeys(nodeId: String, keys: String) {
         withContext(Dispatchers.IO) {
+            ensureListed()
             refuseRemoteNode(nodeId)
             val (code, _) = run(SshScripts.sendKeys(nodeId, keys, socketFor(nodeId)))
             if (code != null && code != 0) throw HostException("Couldn't type into the session (tmux exited $code).")
@@ -503,9 +563,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     }
 
     override suspend fun paneCommand(nodeId: String): String? = withContext(Dispatchers.IO) {
-        // A remote node's pane is on ITS host; this computer's tmux has nothing to say about it.
-        if (remoteNodes.containsKey(nodeId)) return@withContext null
         try {
+            ensureListed()
+            // A remote node's pane is on ITS host; this computer's tmux has nothing to say about it.
+            if (remoteNodes.containsKey(nodeId)) return@withContext null
             val (code, out) = run(SshScripts.paneCommand(nodeId, socketFor(nodeId)))
             out.trim().takeIf { code == 0 && it.isNotEmpty() && '\n' !in it }
         } catch (e: HostException) {
@@ -517,6 +578,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
 
     /** Kill the node's tmux session (the node stays on the canvas; the desktop shows it as ended). */
     suspend fun killSession(nodeId: String) = withContext(Dispatchers.IO) {
+        ensureListed()
         refuseRemoteNode(nodeId)
         run(SshScripts.killSession(nodeId, socketFor(nodeId)))
     }
@@ -563,6 +625,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         /** A driven project's session that is not running (audit A27): only its own desktop starts it. */
         const val DRIVEN_NOT_RUNNING = "This session isn't running on this computer. It belongs to nodeterm on another " +
             "computer, which runs it here over SSH: open it there to start it again."
+
+        /** A session that is not running, of a node the computer's listing does not name (review of A27a). */
+        const val NOT_RUNNING_UNLISTED = "This session isn't running on this computer, and nodeterm on this computer " +
+            "doesn't list it, so the phone has nothing to start it from. If nodeterm on another computer runs it here " +
+            "over SSH, open it there."
 
         /** OpenSSH-style `SHA256:<unpadded base64>` of the host key blob. */
         fun fingerprint(key: PublicKey): String {

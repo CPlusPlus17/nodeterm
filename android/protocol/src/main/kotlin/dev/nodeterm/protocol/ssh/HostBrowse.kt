@@ -76,10 +76,17 @@ object HostBrowse {
         val relayAdvertised: Boolean? = null
     ) {
         /**
-         * Nothing of nodeterm's was found: no data dir, no session a desktop runs here, no slice.
-         * Not "no nodeterm here": a Server Edition started with another `--data-dir` looks like this.
+         * Nothing of nodeterm's was found as of [now]: no data dir, no session a desktop runs here, and
+         * no slice that is still data ([freshSlices]). Not "no nodeterm here": a Server Edition started
+         * with another `--data-dir` looks like this.
+         *
+         * Judged on what the listing can USE, not on what files exist: the desktop never deletes a
+         * slice (remote-status-push.ts only writes), so on a computer a desktop drove once the stale
+         * ones stay for good, and counting them made such a computer read as an empty one forever
+         * (the review of A27a).
          */
-        val nothingFound: Boolean get() = metaSeen && userData == null && rmtSessions.isEmpty() && slices.isEmpty()
+        fun nothingFound(now: Long): Boolean =
+            metaSeen && userData == null && rmtSessions.isEmpty() && freshSlices(this, now).isEmpty()
     }
 
     /** Split [SshScripts.browse]'s output into its sections. Every section is best-effort. */
@@ -135,12 +142,7 @@ object HostBrowse {
         for (s in out.rmtSessions) sockets.putIfAbsent(s, TmuxNames.REMOTE_SOCKET)
         val rmtOnly = out.rmtSessions.filter { sockets[it] == TmuxNames.REMOTE_SOCKET }.toSet()
 
-        val fresh = LinkedHashMap<String, AgentStatusFile>()
-        for ((id, text) in out.slices) {
-            if (!PROJECT_ID.matches(id)) continue
-            val slice = ProjectsParser.parseStatus(text) ?: continue
-            if (slice.updatedAt >= now - SLICE_STALE_MS) fresh[id] = slice
-        }
+        val fresh = freshSlices(out, now)
 
         val baseIds = base.projects.mapTo(HashSet()) { it.id }
         val usedIds = HashSet(baseIds)
@@ -211,6 +213,20 @@ object HostBrowse {
             status = mergeStatus(base.status, fresh.values.sortedByDescending { it.updatedAt }),
             sockets = sockets
         )
+    }
+
+    /**
+     * The slices in [out] that are data as of [now]: named by a valid project id, parseable, and no
+     * older than [SLICE_STALE_MS]. projectId → slice, in the order they were printed.
+     */
+    fun freshSlices(out: Output, now: Long): Map<String, AgentStatusFile> {
+        val fresh = LinkedHashMap<String, AgentStatusFile>()
+        for ((id, text) in out.slices) {
+            if (!PROJECT_ID.matches(id)) continue
+            val slice = ProjectsParser.parseStatus(text) ?: continue
+            if (slice.updatedAt >= now - SLICE_STALE_MS) fresh[id] = slice
+        }
+        return fresh
     }
 
     private fun bareNode(id: String, agentId: String?) = NodeInfo(

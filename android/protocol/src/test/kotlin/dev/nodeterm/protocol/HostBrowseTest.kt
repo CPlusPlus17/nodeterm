@@ -184,11 +184,31 @@ class HostBrowseTest {
         val o = HostBrowse.split(old)
         assertEquals("/ud", o.userData)
         assertTrue(o.blob.contains(ProjectsParser.STATUS_MARK) && o.rmtSessions.isEmpty() && o.slices.isEmpty())
-        assertFalse(o.nothingFound)
+        assertFalse(o.nothingFound(now))
         val none = HostBrowse.split("${SshScripts.META_START}\nud=\n${SshScripts.META_END}\n\n${SshScripts.RMT_MARK}\nnt-ok\nnt-x;y\nfoo\n${SshScripts.END_MARK}\n")
         assertEquals(listOf("nt-ok"), none.rmtSessions)
-        assertFalse(none.nothingFound, "a session a desktop runs here is something")
-        assertTrue(HostBrowse.split("${SshScripts.META_START}\nud=\n${SshScripts.META_END}\n${SshScripts.RMT_MARK}\n${SshScripts.END_MARK}\n").nothingFound)
+        assertFalse(none.nothingFound(now), "a session a desktop runs here is something")
+        assertTrue(HostBrowse.split("${SshScripts.META_START}\nud=\n${SshScripts.META_END}\n${SshScripts.RMT_MARK}\n${SshScripts.END_MARK}\n").nothingFound(now))
+    }
+
+    /**
+     * The review of A27a: the desktop never deletes a slice, so a computer a desktop drove once keeps
+     * its stale ones for good. Only a slice that is still data is "something found"; stale, broken or
+     * misnamed ones leave a computer with no data dir and no session reading as "not found".
+     */
+    @Test
+    fun `slices that are no data do not make a computer with nothing else an empty one`() {
+        val node = """"d-1":{"state":"blocked","agentId":"claude","updatedAt":1}"""
+        val junk = listOf(
+            "proj-old" to slice(now - HostBrowse.SLICE_STALE_MS - 1, node),
+            "proj-broken" to "{not json",
+            "bad id" to slice(now, node)
+        )
+        assertTrue(out(slices = junk, ud = null).nothingFound(now), "only slices the listing throws away")
+        assertTrue(HostBrowse.assemble(base(workspace = "", sessions = "", status = ""), out(slices = junk, ud = null), now).projects.isEmpty())
+        assertFalse(out(slices = junk + ("proj-live" to slice(now, node)), ud = null).nothingFound(now), "a fresh slice is data")
+        assertFalse(out(slices = junk, ud = "/ud").nothingFound(now), "a data dir is something, whatever the slices")
+        assertFalse(out(rmt = listOf("nt-x"), slices = junk, ud = null).nothingFound(now))
     }
 
     /** The review of A26: whether the computer advertises its relay right now, from the meta block. */

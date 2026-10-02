@@ -87,10 +87,12 @@ on the computer in this order: the desktop app's (`~/Library/Application Support
 (`$NODETERM_DATA_DIR` when the SSH session carries it, then `~/.nodeterm-server`, the default in
 `src/server/config.ts`; a fresh install that has written only `install-meta.json` counts). A server
 started with `--data-dir` elsewhere is not found, and a computer with nothing found reads as "not
-found, here is where the phone looked", never as an empty computer. It also lists the `nt-*`
-sessions on `nodeterm-rmt`, where a desktop ELSEWHERE runs the sessions of its SSH projects, and
-reads what that desktop leaves on this computer, since there is no `workspace.json` for those
-projects here:
+found, here is where the phone looked", never as an empty computer. "Nothing found" is judged on
+what the listing can use: the desktop never deletes a status slice, so on a computer a desktop drove
+once the old ones stay, and a slice that is no data (stale, unreadable, misnamed) counts as nothing.
+It also lists the `nt-*` sessions on `nodeterm-rmt`, where a desktop ELSEWHERE runs the sessions of
+its SSH projects, and reads what that desktop leaves on this computer, since there is no
+`workspace.json` for those projects here:
 
 - each project's canvas, `<remoteCwd>/.nodeterm/project.json`, found by walking up from each
   `nodeterm-rmt` session's start directory (`#{session_path}`, the node's cwd the desktop gave
@@ -108,12 +110,19 @@ own. The host's own index wins: a project id or node it already lists is never l
 node of the paired desktop's OWN SSH projects stays relay-routed (`A09`), even when that desktop
 drives this very computer. What the machine does works on a driven project's sessions over SSH, on
 their own socket: attach (attach-only: a session the driving desktop creates there gets its remote
-tmux.conf and hook env, which the phone cannot give it), keys, the wake line, held approvals and
-read-acks (both are files on this computer, where that desktop's SSH answer path and ack sweep look),
-and ending the tmux session. What needs nodeterm *the app* (a new session, board writes, node actions,
-git) belongs to the desktop elsewhere, which neither leg of this computer reaches, so
+tmux.conf and hook env, which the phone cannot give it), keys, the wake line, held approvals (a file
+on this computer, where that desktop's SSH answer path looks), read-acks (written where that
+desktop's ack sweep looks; on a computer that also runs its own nodeterm, see Known gaps), and ending
+the tmux session. What needs nodeterm *the app* (a new session, board writes, node actions, git)
+belongs to the desktop elsewhere, which neither leg of this computer reaches, so
 `LegRouting.forProject` makes it unavailable with that reason, and a driven session that is not
-running says it starts from that desktop instead of offering this computer's relay. The status block
+running says it starts from that desktop instead of offering this computer's relay. The relay is
+offered for a session that is not running only when it is a node of the computer's OWN index: the
+relay's `pty.attach` creates what it does not find, so for any other node (a driven one, or one no
+listing names, such as a driven project no longer listed or a deleted node) it would make a bare
+`nt-<id>` of no project on `node-terminal`, which later attaches would then find first. Which nodes
+are whose comes from a listing, so the first node-scoped call on a connection that has not listed
+yet (a redial, or a terminal restored after the process died) lists first. The status block
 merges the host's own mirror with the fresh slices (the host's entries, settings, usage and `server`
 block win). The Server Edition's `server` block (version, commit, install date) is shown on the
 host screen, above its tabs. A computer that has no pairing code to scan reaches this browse
@@ -165,7 +174,7 @@ describes as the future. The Android client implements what the host actually se
 | Phone action | Relay (host-service.ts) | Direct SSH |
 |---|---|---|
 | List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob | same blob, from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
-| Open a terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop) |
+| Open a terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
@@ -228,10 +237,13 @@ unchanged.
   detection, literal `send-keys` (a leading `-` is text), answer files, read-acks, host-key pinning.
   Both sockets (`A27`): a computer with no nodeterm of its own that another desktop drives (its
   `nodeterm-rmt` sessions, project file and slices, a stale slice dropped, attach / keys / pane read /
-  kill landing on `nodeterm-rmt`, nothing created for a session that is not running), one with both
-  sockets in use (a name on both is the host's own; the paired desktop's own SSH project stays
-  relay-routed), a Server Edition data dir, and a computer where nothing is found. A computer added
-  by its SSH address (`A27`, `ManualHostTest`, its own MINA server whose authenticator reads
+  kill landing on `nodeterm-rmt`, nothing created for a session that is not running, also on a
+  connection that has not listed yet), one with both sockets in use (a name on both is the host's
+  own; the paired desktop's own SSH project stays relay-routed), a Server Edition data dir, and a
+  computer where nothing is found, also when only stale slices remain. A node no listing names is
+  not offered the relay, and the first node-scoped call on a fresh connection settles which nodes are
+  whose. The SSH server's commands get none of the developer's `NODETERM_*` variables. A computer
+  added by its SSH address (`A27`, `ManualHostTest`, its own MINA server whose authenticator reads
   `~/.ssh/authorized_keys`): refused before the key line is installed (no pin, no record), the
   install command run under `/bin/sh`, then accepted and pinned to exactly the server's host key; a
   later connect verifies that pin and another server at the address is refused; the form's checks,
@@ -1000,10 +1012,12 @@ later fix left to a device.
     to reach each computer offers no choice for it. *(A27)*
 64. Add a Linux dev host that another computer's nodeterm drives over SSH (no nodeterm of its own) by
     its address: its projects and sessions are listed as in item 62, and approvals are answered from
-    the Inbox. Then reinstall its SSH host keys (or point the address at another machine): the phone
-    refuses it, saying to forget it and add it again. Forget it: the dialog names the
-    `nodeterm-android` line to remove on the computer, and the computer leaves the list. Adding an
-    address that is already in the list (paired or added) is refused with its name. *(A27, A49)*
+    the Inbox. Open one of its finished sessions on the phone: within about 15 s the other computer's
+    nodeterm clears that session's unread dot. Then reinstall its SSH host keys (or point the address
+    at another machine): the phone refuses it, saying to forget it and add it again. Forget it: the
+    dialog names the `nodeterm-android` line to remove on the computer, and the computer leaves the
+    list. Adding an address that is already in the list (paired or added) is refused with its name.
+    *(A27, A49)*
 
 ## Known gaps
 
@@ -1034,7 +1048,20 @@ later fix left to a device.
   computer that runs its own nodeterm AND is driven, launch settings come from its own mirror (a
   driven session's wake line uses its permission mode); a project whose sessions all start outside
   its folder (a worktree beside it) has no file found, so it is named by its id from its slice, and
-  its plain terminals are listed under "Other sessions on this computer".
+  its plain terminals are listed under "Other sessions on this computer". When no data dir is found
+  but another desktop's sessions are, the listing shows that desktop's projects and nothing of the
+  `node-terminal` sessions of a nodeterm whose data dir the phone could not find (a Server Edition
+  with `--data-dir` elsewhere), and nothing says they are missing.
+- **Read-acks of a driven session can miss the desktop that drives it.** The phone writes
+  `~/.nodeterm/acks/<nodeId>.seen` on the computer, and two sweepers read that directory when the
+  computer also runs its own nodeterm under the same user: the computer's own (`src/core/ack-sweep.ts`) and the driving
+  desktop's over SSH (`sweepRemoteAcks`, `src/main/remote-ssh/ssh-project.ts`). Both consume every
+  `.seen` they find, whichever node it names, so when the computer's own sweep runs first, the
+  driving desktop's unread dot and Done card for that session do not clear (and the other way round
+  for the computer's own sessions). iOS writes the same file and has the same race. The fix is on the
+  desktop: each sweeper consuming only the acks of nodes it owns. On a computer with no nodeterm of
+  its own (the driven dev host) there is one sweeper and no race. Held approvals are not affected:
+  each hook waits for its own `.answer` file.
 - **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and new sessions
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over

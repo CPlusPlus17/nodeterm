@@ -76,8 +76,11 @@ class SshTransportTest {
 
     // No locale at all, like an sshd exec channel on a stock macOS host (audit A03): passing the JVM's
     // own LANG through is what hid that bug.
+    // Nor any NODETERM_* of the developer's (the review of A27a): the browse reads NODETERM_DATA_DIR,
+    // so an exported one pointed these tests at a real Server Edition's data dir.
     private fun childEnv(): Map<String, String> = System.getenv().filterKeys {
-        it != "TMUX" && it != "TMUX_PANE" && it != "LANG" && it != "LANGUAGE" && !it.startsWith("LC_")
+        it != "TMUX" && it != "TMUX_PANE" && it != "LANG" && it != "LANGUAGE" && !it.startsWith("LC_") &&
+            !it.startsWith("NODETERM_")
     } +
         mapOf("HOME" to home.path, "TMUX_TMPDIR" to tmuxDir.path, "XDG_CONFIG_HOME" to File(home, ".config").path)
 
@@ -466,16 +469,57 @@ class SshTransportTest {
     @Test
     fun `a session that is not running is never created over SSH`() = runBlocking<Unit> {
         // A08: `new-session -A` over SSH created the desktop's session with no hook env. Now the
-        // phone is told to use the relay, and nothing appears on the computer's tmux.
+        // phone is told to use the relay, and nothing appears on the computer's tmux. term-c-3 is a
+        // node of the computer's own index (the Scratch project) whose session is not running.
         connect().use { conn ->
             conn.listProjects()
-            val e = assertFailsWith<NeedsRelayException> { conn.attach("term-z-9", 80, 24, Sink()) }
-            assertEquals("term-z-9", e.nodeId)
+            val e = assertFailsWith<NeedsRelayException> { conn.attach("term-c-3", 80, 24, Sink()) }
+            assertEquals("term-c-3", e.nodeId)
             // With no relay leg to offer (remote access off, or a computer added by its SSH address,
             // A27), the refusal promises no relay and says remote access isn't set up.
             assertNoRelayPromised(e)
             Thread.sleep(300)
+            assertEquals(1, tmux("has-session", "-t", "=nt-term-c-3").first, "no session was created")
+        }
+    }
+
+    @Test
+    fun `a node no listing names is not offered this computer's relay when its session is not running`() = runBlocking<Unit> {
+        // The review of A27a: the relay's pty.attach creates what it does not find, so for a node the
+        // computer's own index does not have (a deleted node, a driven project no longer listed) it
+        // would make a bare nt-<id> of no project on node-terminal. Only the computer's own nodes get
+        // the relay; this one is told why it cannot be started from here.
+        connect().use { conn ->
+            val e = assertFailsWith<HostException> { conn.attach("term-z-9", 80, 24, Sink()) }
+            assertFalse(e is NeedsRelayException, "no relay offered for a node nobody lists")
+            assertEquals(SshHostConnection.NOT_RUNNING_UNLISTED, e.message)
+            Thread.sleep(300)
             assertEquals(1, tmux("has-session", "-t", "=nt-term-z-9").first, "no session was created")
+        }
+    }
+
+    @Test
+    fun `a fresh connection settles which nodes are whose before it refuses, with no listing first`() = runBlocking<Unit> {
+        // The review of A27a: what a node is (the desktop's SSH project's, a driven one, the computer's
+        // own) came only from a listing on the SAME connection, and a redial or a terminal restored
+        // after the process died attaches at once. Each call below is the first on its connection.
+        connect().use { conn ->
+            // A09 with no listing: still the desktop's SSH project's node, not this computer's tmux.
+            val e = assertFailsWith<NeedsRelayException> { conn.attach("term-b-2", 80, 24, Sink()) }
+            assertTrue(e.message!!.contains("me@box"), e.message)
+            assertEquals(1, tmux("has-session", "-t", "=nt-term-b-2").first, "no phantom session")
+        }
+        connect().use { conn ->
+            val ev = InboxEvent("e2", 1, "term-b-2", "claude", null, InboxKind.APPROVAL, "Approve", null, false, false, emptyList(), false, "term-b-2-1-1")
+            assertFailsWith<NeedsRelayException> { conn.answerApproval(ev, allow = true) }
+        }
+        connect().use { conn ->
+            conn.ackRead("term-b-2", "e2")
+            assertFalse(File(home, ".nodeterm/acks/term-b-2.seen").exists(), "no ack written on the wrong machine")
+        }
+        connect().use { conn ->
+            // The computer's own node that is not running: the relay, as with a listing.
+            assertFailsWith<NeedsRelayException> { conn.attach("term-c-3", 80, 24, Sink()) }
         }
     }
 
@@ -913,6 +957,13 @@ class SshTransportTest {
                         val e = assertFailsWith<HostException> { conn.attach("term-r-3", 80, 24, Sink()) }
                         assertFalse(e is NeedsRelayException)
                         assertEquals(SshHostConnection.DRIVEN_NOT_RUNNING, e.message)
+                        // The same on a connection that has not listed yet (a redial, a terminal restored
+                        // after the process died): the review of A27a.
+                        connect().use { fresh ->
+                            val e2 = assertFailsWith<HostException> { fresh.attach("term-r-3", 80, 24, Sink()) }
+                            assertFalse(e2 is NeedsRelayException, "no relay offered on a connection that never listed")
+                            assertEquals(SshHostConnection.DRIVEN_NOT_RUNNING, e2.message)
+                        }
                         Thread.sleep(300)
                         assertEquals(1, tmuxOn("nodeterm-rmt", "has-session", "-t", "=nt-term-r-3").first)
                         assertEquals(1, tmux("has-session", "-t", "=nt-term-r-3").first)
@@ -1025,6 +1076,30 @@ class SshTransportTest {
                     assertTrue(e.message!!.contains("~/.nodeterm-server") && e.message!!.contains("--data-dir"), e.message)
                 }
             }
+        }
+    }
+
+    @Test
+    fun `a computer a desktop drove once, where only its stale slices remain, is still nothing found`() = runBlocking<Unit> {
+        // The review of A27a: the desktop never deletes ~/.nodeterm/agent-status-<projectId>.json, so
+        // once a desktop has driven a computer its slices stay. Old ones are no data, and must not
+        // turn "not found, here is where the phone looked" into an empty computer.
+        val old = System.currentTimeMillis() - 10 * 60_000
+        dotNodeterm.mkdirs()
+        File(dotNodeterm, "agent-status-project-gone.json").writeText(
+            """{"v":1,"updatedAt":$old,"nodes":{"term-g-1":{"state":"blocked","agentId":"claude","updatedAt":$old}}}"""
+        )
+        try {
+            withoutOwnData {
+                runBlocking {
+                    connect().use { conn ->
+                        val e = assertFailsWith<HostException> { conn.listProjects() }
+                        assertEquals(SshHostConnection.NO_USER_DATA, e.message)
+                    }
+                }
+            }
+        } finally {
+            clearDrivenHost()
         }
     }
 
