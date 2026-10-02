@@ -200,16 +200,18 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Build and install the private beta, then device pass:** use the latest successful branch
+1. **Finish continuation verification and obtain CI inputs.** Fetch the latest branch before
+   reconciling these local commits, run the required full checks, then push and confirm Android CI.
+   Download the unsigned release APK, R8 outputs and provenance from that same successful run.
+2. **Package and install the private beta, then device pass:** use the latest successful branch
    workflow's unsigned release/R8 inputs and local private signing procedure. Run all 64 items in
    `android.md`. Before leaving the computer, also run the README's mobile-data preflight. Record
    results and turn every failure into a finding. No device result has been recorded yet.
-2. **Finish continuation verification and pick a known gap.** Fetch the latest branch before
-   reconciling these local commits, run the required full checks, then push and confirm Android CI.
-   Batch D and E are done; do not repeat their completed work. Remaining examples: the live backend
-   join contract, offscreen Sleeping nodes and non-Claude permission flags. Read-ack ownership is
-   locally fixed in `A82`; finish its full interop and device verification.
-3. **`A68` last.** `push: branches: [main]` + `pull_request`, no `merge_group` (see the verifier).
+3. **Pick a remaining known gap.** Batch D and E are done; do not repeat their completed work.
+   Remaining examples: the live backend join contract, offscreen Sleeping nodes and non-Claude
+   permission flags. Read-ack ownership is locally fixed in `A82`; finish its full interop and device
+   verification.
+4. **`A68` last.** `push: branches: [main]` + `pull_request`, no `merge_group` (see the verifier).
    After it, pushes to this branch no longer run the Android workflow until a PR exists, which is why
    it waits until everything else is verified.
 
