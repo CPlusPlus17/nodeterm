@@ -296,8 +296,8 @@ unchanged.
 
 ## What is verified, and how
 
-**Latest real Pixel checklist follow-up (2026-10-02/03):** six complete items pass: **19, 21, 22,
-24, 38 and 39**. Twenty-one items have partial evidence and 37 remain pending; conditional SKIP variants
+**Latest real Pixel checklist follow-up, requirement-audited 2026-10-03:** seven complete items pass:
+**18, 19, 21, 22, 24, 38 and 39**. Twenty items have partial evidence and 37 remain pending; conditional SKIP variants
 below do not pass or close their parent item. This uses the unchanged installed minified
 `0.1.0-beta.6` / code `7`, source `c4b1f6cf1009f293a658b6331d2ed1ab80aa36c6`. The intended
 Pixel 10 Pro runs Android 17 / API 37 and Vanadium WebView `154.0.8037.92.0`. The real Linux
@@ -318,10 +318,12 @@ refused with the app's size message, with clipboard unchanged and no crash (PNG 
 visually checked). This phone result establishes visible refusal; the 450000 pre-bridge cap
 remains distinct bounded JVM/JS evidence. Invalid base64, missing separator, read query,
 overlong selection and invalid UTF8 were silent and preserved the known synthetic clipboard.
-The Copy sheet copied three exact Unicode lines (lower box border plus fixture lines A/B);
+The Copy sheet's taps and long-press range copied three exact Unicode lines (lower box border plus fixture lines A/B);
 the system Share chooser preserved selection, and modal interactions emitted zero mouse events.
-Sheet link/Open variants remain open. Wrapped HTTPS/HTTP links offered the complete 324/323-character
-URL from first/middle/last rows, including `/end`; link Copy worked. OSC8 HTTPS was offered while
+Sheet links/Open, initial top line, each inert target and non-tmux scrollback variants remain open.
+Wrapped HTTPS/HTTP links offered the complete 324/323-character URL from first/middle/last rows,
+including `/end`; link Copy and All expansion worked, with Less visible. Its collapse tap was not
+separately logged. OSC8 HTTPS was offered while
 file/JavaScript links were ignored. Browser Open and URL-offer interaction/scroll variants remain
 open, so items 54–56 are partial.
 
@@ -390,17 +392,26 @@ QR/cellular-relay/worker, outage and other 64-item variants remain open. No runt
 command accompanied this check. The latest required protocol task passes in 50 seconds and
 offline app `compileKotlin` in 1 second; the preceding 54/5-second QA results remain historical.
 
+**Requirement audit and after-hike handover:** item 18 is Pass on existing evidence: all 17
+sending chips, four application-cursor arrows, software input, font changes and rotation preserve
+the SSH connection (`physical-chips-interior.json`, `keyboard-results.json`, `recovery-results.json`).
+The extra route/viewport/Fit matrix previously attached to that row belongs to other items;
+item 23 stays Partial. Item 1 needs a desktop-issued pairing and relay credentials to survive a
+higher-code update; JSON or QR pairing is acceptable. The user defers remaining Pixel release
+checks until after the hike. No new phone work, runtime change or finding produced this tally
+correction; full release readiness, hosted cellular relay and live-Claude checks remain unverified.
+
 Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`, including
 `physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
 `link-checks.json`, `recovery-results.json` and `activity-results.json`. The 64 rows below reconcile
 that physical evidence with the earlier draft ledger. Recorded CI baseline
-`58a202be84a6e07e0684584f978bb6346b3c3b52` has all five jobs green in
-[run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975); this does
+`92ab112df0e2b2bad1b77a1adf6b55dfa7c552a8` has all five jobs green in
+[run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440); this does
 not change the APK source or imply full device validation.
 
 | Item | Result | Evidence or remaining scope |
 |---|---|---|
-| 1 | Partial | Same-signer updates retain manual SSH identity; QR pairing persistence pending. Debug migration variant SKIP*. |
+| 1 | Partial | Same-signer updates retain manual SSH identity; desktop-issued pairing/relay credentials across a higher-code update pending. Debug migration variant SKIP*. |
 | 2 | Partial | Force-stop retains manual SSH registration/authentication; phone reboot, paired SSH/relay pending. |
 | 3 | Pending | Uninstall/Clear storage variants SKIP* on working installation; disposable setup required. |
 | 4 | Pending | Second-phone transfer/revoke and cloud restore SKIP*; no authorized setup. |
@@ -417,7 +428,7 @@ not change the APK source or imply full device validation.
 | 15 | Pending | Repeated Back-before-connect cancellation pending. |
 | 16 | Partial | Relay-only route takes effect and disposable fixture host is forgotten; other routes and two-paired-host matrix pending. |
 | 17 | Pending | Late relay adoption and background authorization pending. |
-| 18 | Partial | SSH 17 chips + 4 app-mode arrows, soft input/font/rotation and real relay echo input work; full route/geometry matrix pending. |
+| 18 | Pass | All 17 sending chips + 4 app-mode arrows, software input, A−/A+ and rotation preserve the real SSH connection; existing physical proof audited. |
 | 19 | Pass | Rounded borders, accents, CJK and emoji rendered on real SSH. |
 | 20 | Partial | Drag/coast/Esc/new-touch stop and small OSC52 work; user confirms smooth beta-6 cellular-WireGuard SSH scrolling, full matrix pending. |
 | 21 | Pass | 90000 chars copied exactly; 150000/450000 refused with size toast, no crash. Bridge boundary is JVM evidence. |
@@ -453,9 +464,9 @@ not change the APK source or imply full device validation.
 | 51 | Pending | Phone theme matrix pending; tablet/foldable variant SKIP*. |
 | 52 | Pending | Relay-assisted actions and remote-access toggles pending. |
 | 53 | Pending | Source-control branch/status/diff/stage/commit/push/pull/conflict/hook matrix pending. |
-| 54 | Partial | Wrapped HTTP/HTTPS full URL and Copy verified; Open/browser/offer interaction variants pending. |
+| 54 | Partial | Wrapped full URL/Copy/All expansion verified; Less collapse, browser Open and remaining bar/isolation/link variants pending. |
 | 55 | Partial | HTTP(S) OSC8 offered, file/JavaScript ignored; Open pending. Windows/external-mouse variant SKIP*. |
-| 56 | Partial | Three exact Unicode lines copied; Share/selection and modal mouse isolation verified; sheet links/Open pending. |
+| 56 | Partial | Taps/long-press range copy three exact Unicode lines; Share/modal isolation verified; links/top line/inert targets/non-tmux scrollback pending. |
 | 57 | Pending | Notification approval actions pending; Android 8–11 variant SKIP*. |
 | 58 | Pending | Notification question actions pending. |
 | 59 | Pending | Already-handled/expired/unreachable notification answers and repeated-tap behavior pending. |
@@ -689,10 +700,10 @@ and the fixed test source was restored before that rerun. The user authorized th
 instead of requiring CI for the first beta; each newly requested push still requires green Android
 workflow verification.
 
-Device results remain partial overall, with complete passes for items 19, 21, 22, 24, 38 and 39 in
+Device results remain partial overall, with complete passes for items 18, 19, 21, 22, 24, 38 and 39 in
 the latest record above. Items 1/5/10/63 retain install/minified/manual-SSH evidence, and current
-key/font/rotation, copy/link, mounted-relay question/copy-mode answers and SSH lifecycle results
-cover additional partial items. The private
+key/input/font/rotation survival completes item 18; viewport/Fit, copy/link, mounted-relay
+question/copy-mode answers and SSH lifecycle results cover partial items. The private
 update preserved manual SSH registration and its identities; pre-attach tmux history is visible.
 Paste pairing, live hosted relay browsing/terminal input and the item-39 held-hook lifecycle are verified.
 QR pairing, cellular relay,
@@ -1321,12 +1332,12 @@ still loses continued swipe/release events (`A89`). Code 7 received a same-signe
 app data and notification permission; SSH reopened with the retained key/pin at 56×48. Controlled
 continuous drag, coast and Esc stopping pass; a held touch stops coast at a stable 56×25 viewport.
 Earlier IME-resizing touch checks were inconclusive; the user confirms normal drag/coast both
-work now. The latest signed-beta follow-up completes items 19, 21, 22, 24, 38 and 39; all other items
+work now. The requirement-audited signed-beta follow-up completes items 18, 19, 21, 22, 24, 38 and 39; all other items
 are Partial or Pending as recorded in the 64-row table above, with named conditional SKIP variants.
 Real SSH background/detach recovery, encrypted paste pairing, relay-only hosted browse/input and
 the synthetic shipped-hook lifecycle are verified;
 outage/cellular-relay and remaining lifecycle
-checks stay open. Run these
+checks stay open. The user defers the remaining Pixel release checks until after the hike. Run these
 on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
 the route (network or relay). Write the results into "What is verified, and how" above, and turn each
@@ -1871,8 +1882,8 @@ the wider relay action matrix remain device checks.
   658 protocol tests pass. Code 7 reopens SSH with its retained key/pin and verifies controlled
   continuous drag/coast/Esc. A held touch stops coast at a stable 56×25 viewport; earlier
   IME-resizing touch checks were inconclusive. The user confirms normal drag/coast both work.
-  The latest real Pixel QA passes six complete items (19/21/22/24/38/39), plus partial key/font,
-  copy/link and SSH recovery checks. Encrypted paste pairing, live relay browse/terminal input and
+  The requirement-audited real Pixel QA passes seven complete items (18/19/21/22/24/38/39), plus
+  partial copy/link and SSH recovery checks. Encrypted paste pairing, live relay browse/terminal input and
   shipped-hook Approve/Deny/expiry and mounted relay question/copy-mode answers work; the hook
   producer/application are synthetic, with no live Claude execution. Offscreen/released/direct-SSH/
   target-guard device variants remain open.

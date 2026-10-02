@@ -21,17 +21,21 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   coasting both work now. The final beta-6 cellular WireGuard SSH check with Wi-Fi off confirms
   connection and smooth scrolling.
   Remaining lifecycle checks, FPS and custom bindings remain open.
-- **Latest real Pixel checklist QA:** complete passes are **19/21/22/24/38/39**. Unicode renders;
+- **Requirement-audited real Pixel checklist QA:** complete passes are **18/19/21/22/24/38/39**.
+  All sending chips, software input, font changes and rotation preserve SSH. Unicode renders;
   90000 clipboard characters match exactly, 150000/450000 are refused, and invalid OSC52 is silent
   with clipboard preserved. All three keyboard-focus states send real software input to the pane.
   Background process kill restores Inbox/tab/back stack; the shipped managed hook passes
   Approve/Deny/expiry with a synthetic producer (no live Claude CLI/account or requested Bash execution).
-  Seventeen sending chips plus four app-mode
-  arrows, font/rotation, links/Copy sheet and SSH detach/recovery add partial evidence. Landscape
+  Seventeen sending chips plus four app-mode arrows and font/rotation complete item 18;
+  links/Copy sheet and SSH detach/recovery add partial evidence. Landscape
   with the IME open is 129×1, not a verified usable-height case. The [64-row table](android.md#what-is-verified-and-how)
-  records six Pass, twenty-one Partial and 37 Pending items with conditional SKIP variants. The APK
-  source remains `c4b1f6cf`; no new product failure was found. Recorded CI baseline `58a202be` has all five
-  CI jobs green in [run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975).
+  records seven Pass, twenty Partial and 37 Pending items with conditional SKIP variants. The APK
+  source remains `c4b1f6cf`; no new product failure was found. Recorded CI baseline `92ab112d` has all five
+  CI jobs green in [run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440).
+- The user defers remaining Pixel release checks until after the hike. Item 18's Pass comes from
+  reviewing existing proof against its written requirement, with no new phone work. Item 1 needs
+  desktop-issued pairing/relay credentials through a higher-code update; JSON or QR is acceptable.
 - **Live encrypted paste pairing and relay-only browsing work.** The actual Pixel pairs from
   PairingService JSON with remote access enabled, then opens the empty isolated production
   desktop through the hosted relay. The current `/v1/relay/join` request/response is verified
@@ -91,12 +95,31 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### Requirement audit corrects item 18; remaining device work deferred (2026-10-03)
+
+A read-only review of all 64 requirements promotes item 18 to Pass on existing
+`physical-chips-interior.json`, `keyboard-results.json` and `recovery-results.json`: all 17 sending
+chips, four application-cursor arrows, real software input, A−/A+ and rotation preserve the SSH
+connection. Its former extra route/geometry requirement belongs to other items; viewport/Fit
+remains Partial under item 23. Item 1 stays Partial and requires a desktop-issued pairing and
+relay credentials to survive a higher-code update; actual JSON or QR pairing is acceptable.
+The current tally is seven Pass / 20 Partial / 37 Pending, with no other promoted row.
+
+The user defers remaining Pixel release checks until after the hike. No new phone/service work,
+runtime fix, test change or product finding accompanied this audit. Afterwards, finish the
+remaining 64-item QR/cellular-relay/SAS/worker/outage and paired-update gates, then the remaining
+scroll/viewport matrix. Full release readiness, hosted cellular relay and live-Claude verification
+remain open. Existing APK/source/hash and user-confirmed cellular WireGuard SSH connection/smooth
+scrolling are unchanged. Recorded historical CI baseline `92ab112df0e2b2bad1b77a1adf6b55dfa7c552a8`
+has all five jobs green in [run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440);
+the next documentation push needs its own required checks and green workflow.
+
 ### Final cellular WireGuard check confirmed by the user (2026-10-03)
 
 With WireGuard enabled and Wi-Fi off, the user confirms beta 6 / code 7 "Connects and scrolls
 smoothly" in their usual manual-SSH terminal, confirming connection and smooth scrolling. This verifies the
 regular cellular VPN route; hosted cellular relay remains untested. Item 20 stays Partial and
-the table stays six Pass / 21 Partial / 37 Pending. QR/scanner, cellular relay/SAS, worker/
+as of this checkpoint the table stood at six Pass / 21 Partial / 37 Pending. QR/scanner, cellular relay/SAS, worker/
 notifications, actual outage and the rest of the 64-item matrix remain the next gates. No runtime
 fix or phone command accompanied this check. Latest required protocol/offline app tasks pass in
 50/1 seconds; the preceding 54/5-second QA checks are historical. Recorded green CI baseline stays `58a202be`;
@@ -115,7 +138,7 @@ and the actual mounted transport path, with a synthetic application and no live 
 Item 41 remains Partial: offscreen/released/direct-SSH and missing/prefix-collision target device
 variants are not verified; regression tests cover transport/target guards. Private desktop
 `hook-qa-*.jsonl` and phone `relay-single-before/after`, `relay-multi-refreshed/multi-terminal/multi-input`,
-`relay-copy-question-before/after` proof record the outcomes. The 64-row table now has six Pass,
+`relay-copy-question-before/after` proof record the outcomes. At this checkpoint the 64-row table had six Pass,
 twenty-one Partial and 37 Pending, with conditional SKIP variants.
 
 Cleanup forgot only the disposable fixture host, returned the phone to its regular Sessions,
@@ -144,7 +167,7 @@ routes/target variants and notification actions remain unverified.
 Private proof is in `hook-qa-*.jsonl` under the isolated desktop fixture's proof directory.
 
 The latest required checks pass 658 protocol tests in 63 suites with zero failures/errors/skips
-(54 seconds), plus offline app `compileKotlin` (5 seconds). The 64-row table now has six Pass,
+(54 seconds), plus offline app `compileKotlin` (5 seconds). At the question checkpoint, the 64-row table had six Pass,
 twenty-one Partial and 37 Pending after the question follow-up above; original APK/hash/source
 and the recorded green CI baseline are unchanged.
 No production or interop contract changed and no new audit finding is added.
@@ -166,7 +189,7 @@ the newer entry above adds relay terminal/input and held-hook proof. Private pho
 `checklist-20261002/relay-first-connect.json`.
 
 Checklist 7/8/12/16 gain partial evidence; this pairing step did not add a complete pass. The current
-64-row record has six Pass, twenty-one Partial and 37 Pending after the question follow-up above, with
+64-row record had six Pass, twenty-one Partial and 37 Pending at the question follow-up checkpoint, with
 named conditional SKIP variants.
 The APK source/hash, code 7 and recorded green CI baseline `58a202be` are unchanged. No production
 or interop contract changed and no new audit finding is added.
@@ -179,8 +202,8 @@ and Vanadium `154.0.8037.92.0`; its real SSH-driven Linux host is Fedora 44/kern
 `7.2.7-200.fc44` x86_64, OpenSSH `10.2p1-14`, tmux `3.7c`. The running desktop nodeterm version
 is not recorded. All content is synthetic and scoped to owned test panes. Private proof is in
 `.nodeterm/android-beta-build-6/checklist-20261002/`; [android.md](android.md#what-is-verified-and-how)
-has the detailed evidence and the 64-row result table (six Pass, twenty-one Partial, 37 Pending after
-the live relay/hook/question follow-ups above).
+has the detailed evidence and the 64-row result table. After the live relay/hook/question follow-ups,
+that checkpoint had six Pass, twenty-one Partial and 37 Pending, before the requirement audit above.
 
 Rounded borders/accents/CJK/emoji render. Exactly 90000 clipboard characters copy; 150000 and
 450000 show the app's size refusal, preserve the clipboard and do not crash. Invalid
@@ -190,7 +213,7 @@ bounded JVM/JS evidence. The keyboard chip passes all three focus states: real s
 and Enter reach the pane, not the native draft. Background `am kill` restores Inbox tab and
 host back stack; force-stop/reopen retains manual SSH authentication without a key prompt.
 
-Partial checks include all 17 sending chips and four app-mode arrows, A+ 56×48→52×45 and A−
+At that checkpoint, partial checks included all 17 sending chips and four app-mode arrows, A+ 56×48→52×45 and A−
 restoration, rotation/draft survival, wrapped HTTP/HTTPS links from first/middle/last rows,
 accepted HTTP(S) OSC8 and rejected file/JavaScript. Copy sheet copies three exact Unicode lines
 (lower box border plus synthetic A/B); Share preserves selection and overlay mouse events remain
@@ -660,7 +683,10 @@ are listed with it.
 
 ### What is still open
 
-**Next work, in order** (item lists were written for this session's workflows; re-read each audit
+The user defers remaining Pixel release checks until after the hike; no further phone work or
+readiness requests now. Resume these device steps afterwards.
+
+**Next work after the hike, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
 1. **Finish the remaining 64-item checks: QR, cellular relay/SAS, worker/notifications and actual outage/answers.** Code-7 beta is installed on the
@@ -668,8 +694,8 @@ section before starting, since the verifier corrections take precedence):
    font/keyboard resizing and pre-attach tmux history. Code 7 now reopens SSH with the retained
    key/pin and verifies continuous drag/coast/Esc. The user confirms final beta-6/code-7 cellular
    WireGuard connection and smooth scrolling with Wi-Fi off on regular manual SSH.
-   Before leaving the computer, check needed answers, actual airplane/outage recovery and relay/
-   notification behavior. Six complete items now pass (19/21/22/24/38/39); the 64-row table records
+   After the hike, check needed answers, actual airplane/outage recovery and relay/
+   notification behavior. Seven complete items now pass (18/19/21/22/24/38/39); the 64-row table records
    remaining Partial/Pending items and conditional SKIP variants. Turn every actual failure into a
    finding. Paste pairing/hosted relay browse/input and synthetic shipped-hook approval lifecycle
    now work; mounted relay questions add partial proof. QR/cellular-relay/SAS/remaining question
@@ -852,12 +878,13 @@ Verified:
   at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
   observed workflow repair. The user confirms normal continuous dragging and coast both work.
 
-- Latest real Pixel QA completes checklist 19/21/22/24/38/39 (Unicode, large/invalid OSC52,
+- Requirement-audited real Pixel QA completes checklist 18/19/21/22/24/38/39 (SSH key/input/font/
+  rotation survival, Unicode, large/invalid OSC52,
   keyboard-focus states, process-kill tab/back-stack restoration and synthetic shipped-hook
-  Approve/Deny/expiry). Key/font/rotation, Copy sheet,
+  Approve/Deny/expiry). Copy sheet,
   links and SSH background/detach recovery have additional partial evidence; the 64-row table
-  records exact scope. The unchanged code-7 APK remains installed, and recorded CI baseline `58a202be`
-  passed all five CI jobs in run `37062631975`.
+  records exact scope. The unchanged code-7 APK remains installed, and recorded CI baseline `92ab112d`
+  passed all five CI jobs in run `37071299440`. Remaining device checks are deferred until after the hike.
 - Encrypted paste pairing and forced relay-only browse on the real Pixel succeed against the
   actual hosted backend and production desktop source `58a202be` in an isolated private home.
   The current `{deviceToken, hostId}` join request and accepted reply are verified beyond interop.
@@ -1070,7 +1097,7 @@ were removed. The user confirms terminal access over mobile-data WireGuard with 
 Encrypted paste pairing and hosted relay browse now work. QR pairing, cellular relay/SAS variants,
 actual outage/notification/answer behavior and the full device checklist remain open.
 
-1. Finish remaining QR/cellular-relay/worker, outage/answer and all 64 device items, then A86
+1. After the hike, finish remaining QR/cellular-relay/worker, outage/answer and all 64 device items, then A86
    reversal/remaining lifecycle/FPS/custom-binding checks on the intended Pixel in
    docs/android.md (#device-checklist). Record results in "What is verified" and turn every failure
    into a finding. Code-3 build/sign/update, identity persistence, SSH browse/input, font/keyboard
@@ -1078,9 +1105,9 @@ actual outage/notification/answer behavior and the full device checklist remain 
    type-check pass. Mobile-data WireGuard terminal access is user-confirmed with Wi-Fi off;
    encrypted paste pairing and forced hosted relay browse work. QR/cellular-relay/SAS,
    actual outage/notification/answer behavior and the full checklist remain open.
-   Latest real Pixel QA completes items 19/21/22/24/38/39 and adds partial key/font/rotation/copy/link/
+   Requirement-audited real Pixel QA completes items 18/19/21/22/24/38/39 and adds partial copy/link/
    SSH recovery proof; see the 64-row table. Background am kill restores Inbox tab and host back stack.
-   The same source c4b1f6cf APK is installed; recorded CI baseline 58a202be passed all five jobs in CI 37062631975.
+   The same source c4b1f6cf APK is installed; recorded CI baseline 92ab112d passed all five jobs in CI 37071299440.
    Live /v1/relay/join accepts the current client shape against production desktop source 58a202be
    in an isolated home; actual relay terminal input and shipped-hook Approve/Deny/expiry now pass.
    The hook producer is synthetic, not a live Claude CLI/account or requested Bash execution;

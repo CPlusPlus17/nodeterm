@@ -24,14 +24,15 @@ release/R8/signing checks. A held touch stops coast at a stable 56×25 keyboard-
 earlier resizing tap checks were inconclusive. The user confirms normal dragging and coasting
 both work now. Remaining lifecycle checks, FPS and custom bindings remain open.
 
-**New real Pixel QA:** complete checklist passes are **19, 21, 22, 24, 38 and 39**: Unicode rendering,
+**Requirement-audited real Pixel QA:** complete checklist passes are **18, 19, 21, 22, 24, 38 and 39**:
+SSH software input/key chips/font/rotation survival, Unicode rendering,
 large/invalid OSC52 handling, all three keyboard-focus states, and background-process tab/back-stack
 restoration and the shipped managed-hook Approve/Deny/expiry lifecycle. The hook producer is
 synthetic; no live Claude CLI/account or requested Bash execution was involved. Seventeen sending
-chips plus four app-mode arrows, font/rotation, wrapped/OSC8 links,
-Copy-sheet Unicode/Share and real SSH recovery have partial evidence. Landscape with IME open
+chips plus four app-mode arrows and font/rotation complete item 18 on the existing proof;
+wrapped/OSC8 links, Copy-sheet Unicode/Share and real SSH recovery have partial evidence. Landscape with IME open
 was 129×1; usable-height and larger-client Fit checks remain open. The [64-row result table](../docs/android.md#what-is-verified-and-how)
-records six Pass, twenty-one Partial and 37 Pending items with conditional SKIP variants. This is the
+records seven Pass, twenty Partial and 37 Pending items with conditional SKIP variants. This is the
 unchanged beta-6/code-7 APK. Encrypted PairingService JSON paste and **Only through the relay**
 browse succeed against production desktop source `58a202be`, with the actual hosted API/relay;
 the current `/v1/relay/join` shape is verified beyond interop tests. Remote access was already
@@ -46,7 +47,7 @@ application, leaves copy mode and resolves the question. Item 41 stays Partial: 
 direct-SSH and target-guard variants lack device proof. No live Claude CLI/account was used.
 QR/scanner, cellular relay, SAS denial/revoke, remaining node actions, remaining question routes,
 notifications
-remain open. Recorded CI baseline `58a202be` has all five jobs green in [run `37062631975`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37062631975).
+remain open. Recorded CI baseline `92ab112d` has all five jobs green in [run `37071299440`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37071299440).
 Only disposable fixture resources were removed and the phone returned to regular Sessions;
 cleanup does not establish the full revoke matrix. **Final beta-6/code-7 cellular check:** with
 WireGuard enabled and Wi-Fi off, the user confirms "Connects and scrolls smoothly" in their usual
@@ -54,6 +55,11 @@ manual-SSH terminal, confirming connection and smooth scrolling. Cellular hosted
 item 20 stays Partial and the full 64-item pass remains open. No runtime change or phone command
 was needed. Latest required protocol/offline app tasks pass in 50/1 seconds; the next documentation
 push still requires green CI.
+
+The user defers remaining Pixel release checks until after the hike. The requirement review adds
+item 18's Pass without new phone work; viewport/Fit remains item 23's open scope. Item 1 requires
+desktop-issued pairing/relay credentials through a higher-code update, using JSON or QR. Full
+release readiness, hosted cellular relay and live-Claude checks remain unverified.
 
 ## What it does
 
@@ -500,7 +506,7 @@ iOS app does receive the detail, in the push the desktop sends.
   accept, the relay box secret and the relay device token. A signed, non-debuggable release build
   has been built and privately signed through the [private-beta path](#private-beta). Its wrong-test-device
   installation was removed; the intended Pixel now has the same private beta, with `run-as` denied.
-  Real Pixel SSH/input/font/history, clipboard and keyboard checks work; six complete checklist
+  Real Pixel SSH/input/font/history, clipboard and keyboard checks work; seven complete checklist
   items pass, and encrypted paste pairing/live relay browse/input plus synthetic shipped-hook
   Approve/Deny/expiry and mounted relay question/copy-mode answers also work. QR/cellular-relay/SAS/worker
   and remaining device variants remain unverified. Keep USB and wireless debugging off when not using them.
