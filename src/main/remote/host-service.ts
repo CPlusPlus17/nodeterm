@@ -79,6 +79,13 @@ export interface HostPtyManager {
    *  Optional: absent ⇒ remote nodes are refused rather than attached locally. */
   sessionExistsOver?(persistKey: string, sshRemote: NonNullable<PtyCreateOptions['sshRemote']>): Promise<boolean>
   captureSnapshotOver?(persistKey: string, sshRemote: NonNullable<PtyCreateOptions['sshRemote']>): Promise<string>
+  /** `node.sendKeys` for a node on an SSH project's host: type the keys into its REMOTE pane over
+   *  the master. Optional: absent ⇒ such a node answers `sent:false`, never a local write. */
+  backgroundWriteOver?(
+    persistKey: string,
+    data: string,
+    sshRemote: NonNullable<PtyCreateOptions['sshRemote']>
+  ): Promise<boolean>
   /** `clientId` identifies WHO typed (the bridged phone's presence peer), so the keystroke can be
    *  attributed to it — null when this session has no peer, which just means it is not badged. */
   write(clientId: number | null, sessionId: string, data: string): void
@@ -154,7 +161,8 @@ export interface HostNodeActions {
   /**
    * Type a short quick answer (`node.sendKeys`) into the node's session without attaching a new
    * client. Resolves whether it was delivered. Optional: absent ⇒ "not served", and the phone falls
-   * back to its old attach-and-write.
+   * back to its old attach-and-write. LOCAL nodes only: a node `HostRemoteNodes` places on an SSH
+   * host is typed over its master (`HostPtyManager.backgroundWriteOver`) and never reaches this.
    */
   sendKeys?(nodeId: string, keys: string): Promise<boolean>
 }
@@ -926,6 +934,12 @@ export function createHostHandlers(
    * (no session yet), and one that did not could die with the client before tmux read it — a lone
    * ESC (Deny) nearly always, inside tmux's escape-time (audit A12). This types through the node's
    * existing session instead. `sent:false` is an ANSWER (not delivered: open the session).
+   *
+   * A node of one of the desktop's SSH projects is typed into on ITS host, over the project's
+   * ControlMaster (`pty.backgroundWriteOver`); it used to answer `sent:false` outright, which sent
+   * the phone to open the session for what is meant to be a one-tap answer. The master being down
+   * (or still running its connect setup) is still `sent:false`, and so is a node the host does not
+   * have — the remote target is exact, so a miss never lands in another node's session.
    */
   function handleSendKeys(req: RpcRequest): void {
     if (!nodeActions?.sendKeys) {
@@ -944,10 +958,37 @@ export function createHostHandlers(
       socket.respond(req.id, false, { message: 'node.sendKeys takes a short answer: up to 16 printable characters, Esc or Enter.' })
       return
     }
-    void nodeActions
-      .sendKeys(nodeId, keys)
-      .then((sent) => socket.respond(req.id, true, { sent }))
-      .catch(() => socket.respond(req.id, true, { sent: false }))
+    // A writer that throws (synchronously or not) delivered nothing: `sent:false`, never a dropped reply.
+    const answer = (deliver: () => Promise<boolean>): void => {
+      void Promise.resolve()
+        .then(deliver)
+        .then((sent) => socket.respond(req.id, true, { sent: sent === true }))
+        .catch(() => socket.respond(req.id, true, { sent: false }))
+    }
+    // A node of an SSH project: its tmux is on THAT host. Type over the project's ControlMaster —
+    // the same resolver `pty.attach` uses for such a node (audit A09) — or answer `sent:false`,
+    // which the phone reads as "open the session". Never the local socket: an `nt-<id>` there is at
+    // best nothing and at worst a phantom left by an old attach. A resolver that throws has not
+    // said the node is local, so that is `sent:false` too, not a guess.
+    let owner: ReturnType<HostRemoteNodes['resolve']>
+    try {
+      owner = remoteNodes?.resolve(nodeId) ?? null
+    } catch {
+      socket.respond(req.id, true, { sent: false })
+      return
+    }
+    if (owner) {
+      if (!owner.sshRemote || !pty.backgroundWriteOver) {
+        socket.respond(req.id, true, { sent: false })
+        return
+      }
+      const { sshRemote } = owner
+      const over = pty.backgroundWriteOver.bind(pty)
+      answer(() => over(nodeId, keys, sshRemote))
+      return
+    }
+    const local = nodeActions.sendKeys.bind(nodeActions)
+    answer(() => local(nodeId, keys))
   }
 
   function handleNodeAction(req: RpcRequest): void {

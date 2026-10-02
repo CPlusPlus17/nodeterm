@@ -33,6 +33,7 @@ import {
   remotePasteDelivery,
   remoteCapturePaneArgs,
   remoteCaptureScreenArgs,
+  remoteTmuxSendKeysArgs,
   remotePaneCommandArgs,
   remoteSessionAgeArgs,
   parseSessionAge,
@@ -2536,6 +2537,44 @@ export class PtyManager {
       return stdout
     } catch {
       return ''
+    }
+  }
+
+  /**
+   * `backgroundWrite` for a node on an SSH project's host: type a few keys into its REMOTE tmux
+   * pane over the project's ControlMaster, without attaching anything (`remoteTmuxSendKeysArgs`).
+   * The relay host's `node.sendKeys` asks it with the `sshRemote` its `HostRemoteNodes` resolver
+   * produced — the same one `pty.attach` uses for such a node (audit A09) — so a quick answer from
+   * the phone reaches a node of an SSH project in one tap instead of answering `sent:false`.
+   *
+   * Never the local socket, by construction: there is no branch here that names one. A
+   * `backgroundWrite` of the same node is refused for the same reason (its tmux is on the far host).
+   *
+   * `true` only when the remote `send-keys` exited 0, i.e. the session existed (the target is exact)
+   * and the keys were handed to its pane. Every failure is `false` and is never retried — a timed-out
+   * ssh may well have run the command, and typing an answer twice is worse than not typing it — the
+   * same rule `backgroundWrite` keeps. No ssh binary, an unsafe name, a master that is gone, a host
+   * tmux too old for `send-keys -H`, a session that does not exist: all `false`.
+   */
+  async backgroundWriteOver(
+    persistKey: string,
+    data: string,
+    sshRemote: NonNullable<PtyCreateOptions['sshRemote']>
+  ): Promise<boolean> {
+    if (!data) return false
+    const ssh = findSsh()
+    if (!ssh) return false
+    let args: string[]
+    try {
+      args = remoteTmuxSendKeysArgs(sshRemote.conn, sshRemote.controlPath, sessionName(persistKey), data)
+    } catch {
+      return false
+    }
+    try {
+      await runAsync(ssh, args, { timeout: PROBE_TIMEOUT_MS })
+      return true
+    } catch {
+      return false
     }
   }
 

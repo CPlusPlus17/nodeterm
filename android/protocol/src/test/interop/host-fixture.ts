@@ -278,6 +278,13 @@ async function runRelay(): Promise<void> {
     setFlow() {},
     kill(clientId, sessionId) {
       emit({ event: 'kill', sessionId })
+    },
+    // A12 for nodes of the desktop's SSH projects (`remoteNodes` below): the keys typed on THAT host
+    // over its master (PtyManager.backgroundWriteOver). A node id containing `gone` stands for a
+    // session the host does not have.
+    async backgroundWriteOver(persistKey, data, sshRemote) {
+      emit({ event: 'sendKeysOver', nodeId: persistKey, keys: data, controlPath: sshRemote.controlPath })
+      return !persistKey.includes('gone')
     }
   }
 
@@ -350,6 +357,16 @@ async function runRelay(): Promise<void> {
         emit({ event: 'answer', nodeId, pendingId, decision }), pendingId.endsWith('-expired') ? 'gone' : 'sent'
       ),
       ackRead: (nodeId) => emit({ event: 'ack', nodeId })
+    },
+    // A09/A12: which nodes belong to one of the desktop's SSH projects. `ssh-*` ids do, reached over
+    // a connected master; `ssh-offline-*` ones belong to a project whose master is down. Every other
+    // id is local, as before.
+    remoteNodes: {
+      resolve: (nodeId) => {
+        if (!nodeId.startsWith('ssh-')) return null
+        if (nodeId.startsWith('ssh-offline-')) return { where: 'me@box' }
+        return { where: 'me@box', sshRemote: { controlPath: '/cm/box.sock', conn: { host: 'box', user: 'me' }, remoteCwd: '~/repo' } }
+      }
     },
     // A33/A72: the desktop's REAL resolver decides what a phone-started session is created with —
     // folder, account, agent and pane owner — over a fake index (local folder project p1) and one

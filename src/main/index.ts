@@ -4015,9 +4015,11 @@ app.whenReady().then(async () => {
         refresh: (nodeId: string) => deliver(IPC.agentRefreshNode, nodeId),
         rename: (nodeId: string, title: string) => deliver(IPC.agentRenameNode, { nodeId, title }),
         // A quick answer typed WITHOUT a throwaway tmux client (audit A12): the painter pty or a
-        // control client, via the existing background write. A node of an SSH project is refused
-        // (its tmux is on the host; background writes do not reach it yet) — the phone then opens
-        // the session instead of guessing.
+        // control client, via the existing background write. LOCAL nodes only: host-service sends
+        // a node of an SSH project over its master instead (`remoteNodes` below →
+        // `ptyManager.backgroundWriteOver`), so it never gets here. The refusal stays as the
+        // backstop — a local write for such a node would type into this machine's socket, where
+        // its `nt-<id>` is at best nothing — and `false` opens the session on the phone.
         sendKeys: async (nodeId: string, keys: string) =>
           workspaceStore.sshProjectIdForNode(nodeId) ? false : ptyManager.backgroundWrite(nodeId, keys)
       }

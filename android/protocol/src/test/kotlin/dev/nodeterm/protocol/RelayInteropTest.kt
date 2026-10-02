@@ -382,6 +382,27 @@ class RelayInteropTest {
     }
 
     @Test
+    fun `a quick answer for a node of the desktop's SSH project is typed on that host`() = runBlocking<Unit> {
+        // Follow-up to A12, through the desktop's real verb handler and its A09 resolver: the keys
+        // go over the project's master instead of answering sent:false (which opened the session).
+        val h = start()
+        connect(h).connection.use { conn ->
+            conn.sendKeys("ssh-abc-1", "1")
+            val ev = h.awaitEvent("sendKeysOver")
+            assertEquals("ssh-abc-1", ev.str("nodeId"))
+            assertEquals("1", ev.str("keys"))
+            assertEquals("/cm/box.sock", ev.str("controlPath"))
+            // Never the local writer: the first local `sendKeys` the desktop sees is this later one.
+            conn.sendKeys("term-abc-1", "2")
+            assertEquals("term-abc-1", h.awaitEvent("sendKeys").str("nodeId"))
+            // A session the host does not have, and a project whose master is down, are not "sent":
+            // the caller opens the session instead.
+            assertFailsWith<HostException> { conn.sendKeys("ssh-gone-1", "1") }
+            assertFailsWith<HostException> { conn.sendKeys("ssh-offline-1", "1") }
+        }
+    }
+
+    @Test
     fun `an older desktop without the verb still gets the keys, after the pane painted`() = runBlocking<Unit> {
         val h = start(extra = mapOf("FIXTURE_NO_SENDKEYS" to "1"))
         connect(h).connection.use { conn ->

@@ -200,7 +200,7 @@ describes as the future. The Android client implements what the host actually se
 | Source control (`A29`) | `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd, …}`, `cwd` = the project's folder from `projects.list`; the desktop jails it to its project folders and hands each verb to its `GitService` | through the relay leg opened next to SSH (`A26`); the screen says why when the phone has none. There is no SSH git of its own (see Known gaps) |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
-| Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`, typed through the node's existing session; an older desktop gets attach → wait for paint → write → linger | `tmux send-keys -l` |
+| Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`, typed through the node's existing session; a node of an SSH project is typed on its host over that project's ControlMaster (exact pane target, copy mode cancelled first), and answers `sent:false` (the phone opens the session) while that master is down or the host has no such session; an older desktop gets attach → wait for paint → write → linger | `tmux send-keys -l`; a node of an SSH project goes through the relay leg (`A09`) |
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
 the shared pty. An `OP.Resized` still shows a "sized to another screen · fit this screen" hint.
