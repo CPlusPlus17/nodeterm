@@ -80,5 +80,21 @@ class TerminalJsXtermInteractionTest {
         assertEquals(1, kineticEvents.count { "stop" in it }, "focus/query replies preserve the real coast")
         assertTrue(kineticEvents.any { it["report"]?.jsonPrimitive?.content == "\u001b[O" })
         assertTrue(kineticEvents.any { it["report"]?.jsonPrimitive?.content == "\u001b[1;1R" })
+        val repaint = reply["repaint"]!!.jsonObject
+        assertEquals("none", repaint["touchAction"]!!.jsonPrimitive.content,
+            "the computed stable-screen CSS reserves the gesture for the terminal")
+        val removed = repaint["removedSpan"]!!.jsonObject
+        assertTrue(removed["originalSpanRemoved"]!!.jsonPrimitive.boolean, "xterm's real redraw removes the touched text span")
+        assertFalse(removed["targetStillConnected"]!!.jsonPrimitive.boolean)
+        assertEquals(listOf("touchstart", "touchmove"), removed["hostEvents"]!!.jsonArray.map { it.jsonPrimitive.content },
+            "later events on the old detached span no longer reach the page swipe handlers")
+        assertEquals(1, removed["notches"]!!.jsonPrimitive.int)
+        val stable = repaint["pageHitTarget"]!!.jsonObject
+        assertTrue(stable["originalSpanRemoved"]!!.jsonPrimitive.boolean)
+        assertTrue(stable["targetWasScreen"]!!.jsonPrimitive.boolean, "real page CSS targets the stable screen behind painted text")
+        assertTrue(stable["targetStillConnected"]!!.jsonPrimitive.boolean)
+        assertEquals(listOf("touchstart", "touchmove", "touchmove", "touchend"),
+            stable["hostEvents"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertTrue(stable["notches"]!!.jsonPrimitive.int > 5, "the rest of the drag and release coast survive a real repaint")
     }
 }

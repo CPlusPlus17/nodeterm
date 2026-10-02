@@ -7,7 +7,11 @@ const { JSDOM } = require('jsdom')
 const fs = require('node:fs')
 const path = require('node:path')
 const scriptPath = process.argv[2]
-const dom = new JSDOM('<!doctype html><style>* { padding: 0; }</style><div id="term"></div>', {
+const assets = process.argv[3] || path.dirname(scriptPath)
+const indexPath = process.argv[4] || path.join(assets, 'index.html')
+const pageStyles = fs.readFileSync(indexPath, 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1]
+const xtermStyles = fs.readFileSync(path.join(assets, 'xterm.css'), 'utf8')
+const dom = new JSDOM('<!doctype html><style>' + xtermStyles + pageStyles + '* { padding: 0; }</style><div id="term"></div>', {
   url: 'https://terminal.test/', runScripts: 'outside-only', pretendToBeVisual: true
 })
 const win = dom.window
@@ -39,7 +43,6 @@ win.NodetermBridge = {
   onScrollStop: () => events.push({ stop: true }),
   onCopy() {}, onCopyTooLarge() {}, onCopySheet() {}, openUrl() {}, onReady() { ready = true }
 }
-const assets = process.argv[3] || path.dirname(scriptPath)
 win.eval(fs.readFileSync(path.join(assets, 'xterm.js'), 'utf8'))
 const Original = win.Terminal
 win.Terminal = class extends Original {
@@ -67,13 +70,13 @@ async function main() {
     await write('\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h')
     terminal._core.coreService.onUserInput(() => events.push({ userOrigin: true }))
     const target = terminal.element.querySelector('.xterm-screen')
-    function touch(type, y, timestamp = 0) {
-      const t = { identifier: 1, target, clientX: 30, clientY: y, pageX: 30, pageY: y }
+    function touch(type, y, timestamp = 0, touchTarget = target) {
+      const t = { identifier: 1, target: touchTarget, clientX: 30, clientY: y, pageX: 30, pageY: y }
       const event = new win.TouchEvent(type, { bubbles: true, cancelable: true,
         touches: type === 'touchend' ? [] : [t], changedTouches: [t] })
       Object.defineProperty(event, 'timeStamp', { value: timestamp })
       now = Math.max(now, timestamp)
-      target.dispatchEvent(event)
+      touchTarget.dispatchEvent(event)
     }
     const actions = {
       'touch-only': async () => {},
@@ -113,7 +116,7 @@ async function main() {
       touch('touchmove', 100)
       touch('touchend', 100)
       drainFrames()
-      results.push({ name, events, notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0) })
+      results.push({ name, events: events.slice(), notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0) })
     }
     win.nt.cancelScroll()
     events = []
@@ -124,9 +127,44 @@ async function main() {
     terminal.blur()
     await write('\x1b[6n')
     drainFrames()
-    const kinetic = { events, notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0), duration: now - start - 55 }
+    const kinetic = { events: events.slice(), notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0), duration: now - start - 55 }
+    async function repaintGesture(usePageHitRules) {
+      win.nt.cancelScroll()
+      await write('\x1b[H' + Array.from({ length: 45 }, (_, row) => 'initial row ' + row + '\x1b[K').join('\r\n'))
+      drainFrames()
+      const span = target.querySelector('.xterm-rows > div:nth-child(25) span')
+      if (!span) throw new Error('actual DOM renderer did not paint the touch target')
+      let touchTarget = span
+      // jsdom has no geometric hit testing. Walk the real computed pointer-events styles to
+      // select the eligible ancestor, then retain that same target for the entire touch stream.
+      // The comparison deliberately bypasses these rules to reproduce the old removed-span bug.
+      if (usePageHitRules) {
+        while (touchTarget && win.getComputedStyle(touchTarget).pointerEvents === 'none') touchTarget = touchTarget.parentElement
+      }
+      if (!touchTarget) throw new Error('page CSS removed every possible touch target')
+      const host = win.document.getElementById('term')
+      const seen = []
+      const listener = event => seen.push(event.type)
+      for (const type of ['touchstart', 'touchmove', 'touchend']) host.addEventListener(type, listener)
+      events = []
+      const began = now + 10
+      touch('touchstart', 500, began, touchTarget)
+      touch('touchmove', 480, began + 20, touchTarget)
+      drainFrames()
+      await write('\x1b[25;1Hreplacement after remote redraw\x1b[K')
+      drainFrames()
+      const originalSpanRemoved = !span.isConnected
+      touch('touchmove', 400, began + 60, touchTarget)
+      touch('touchend', 400, began + 65, touchTarget)
+      drainFrames()
+      for (const type of ['touchstart', 'touchmove', 'touchend']) host.removeEventListener(type, listener)
+      return { originalSpanRemoved, targetWasScreen: touchTarget === target, targetStillConnected: touchTarget.isConnected,
+        hostEvents: seen, notches: events.reduce((sum, event) => sum + (event.scroll?.notches || 0), 0) }
+    }
+    const repaint = { removedSpan: await repaintGesture(false), pageHitTarget: await repaintGesture(true),
+      touchAction: win.getComputedStyle(target).getPropertyValue('touch-action') }
     process.stdout.write(JSON.stringify({ rows: terminal.rows, cols: terminal.cols,
-      mouseMode: terminal.modes.mouseTrackingMode, results, kinetic }) + '\n')
+      mouseMode: terminal.modes.mouseTrackingMode, results, kinetic, repaint }) + '\n')
   } finally {
     terminal.dispose()
     dom.window.close()
