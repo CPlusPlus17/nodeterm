@@ -48,10 +48,42 @@
     return new TextDecoder('utf-8').decode(b64ToBytes(b64))
   }
 
-  // Keystrokes typed INTO the terminal (a hardware keyboard, or the soft keyboard when the user
-  // taps the terminal itself) go straight to the pane.
-  term.onData(function (d) { cancelScroll(); bridge.onInput(d) })
-  term.onBinary(function (d) { cancelScroll(); bridge.onInput(d) })
+  // onData also carries terminal replies and focus/mouse reports. Those must not cancel a swipe
+  // or discard native queued scrolls. In the pinned xterm 5.5 bundle CoreService fires onUserInput
+  // immediately BEFORE onData for keys, paste and IME input, but also for SGR mouse reports.
+  // Consume the flag once and exclude that complete mouse-report shape. Never cancel in the flag
+  // listener: a mouse report sets it too. Keep a guarded fallback if xterm's internal API changes.
+  var userInput = false
+  var hasInputOrigin = false
+  function mouseReport(data) { return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data) }
+  function generatedReport(data) {
+    return mouseReport(data) || /^\x1b\[[IO]$/.test(data) ||
+      /^\x1b\[(?:[?>][\d;]*c|\??\d+;\d+R|0n|\??\d+;\d+\$y|[468];\d+;\d+t)$/.test(data) ||
+      /^\x1b(?:\][\d;]+;[^\x1b]*|P[01]\$r[^\x1b]*)\x1b\\$/.test(data)
+  }
+  try {
+    var service = term._core && term._core.coreService
+    if (service && typeof service.onUserInput === 'function') {
+      service.onUserInput(function () { userInput = true })
+      hasInputOrigin = true
+    }
+  } catch (e) { /* a future bundle can still use the public key/DOM fallback below */ }
+  if (!hasInputOrigin) {
+    if (typeof term.onKey === 'function') term.onKey(function () { userInput = true })
+    if (term.textarea && typeof term.textarea.addEventListener === 'function') {
+      ;['input', 'paste', 'compositionend'].forEach(function (type) {
+        term.textarea.addEventListener(type, function () { userInput = true }, true)
+      })
+    }
+  }
+  term.onData(function (d) {
+    var fromUser = userInput
+    userInput = false
+    if (mouseReport(d) || (!fromUser && (hasInputOrigin || generatedReport(d)))) bridge.onReport(d)
+    else { cancelScroll(); bridge.onInput(d) }
+  })
+  // In this xterm bundle onBinary is used only by the legacy mouse encoding.
+  term.onBinary(function (d) { userInput = false; bridge.onReport(d) })
 
   // Copy: tmux's copy-mode emits OSC 52 (set-clipboard on). The whole sequence goes to Kotlin's
   // Osc52.parse, which mirrors the desktop's parseOsc52: the ';' is required, a read query ('?') is
@@ -314,11 +346,10 @@
   var acc = 0
   var tapX = null
   var tapY = null
-  // Stock tmux advances five history rows per wheel notch (measured with the beta's real SSH
-  // client). Match the finger's distance to those rows instead of moving five rows for one row
-  // of touch movement. A host with custom wheel bindings can have a different scroll distance.
-  var WHEEL_ROWS = 5
-  var scrollStep = fontSize * 1.4 * WHEEL_ROWS
+  // One rendered text-row of finger movement requests one wheel notch. Stock tmux advances five
+  // history rows per notch: this responsive gain lets a short phone swipe reach useful history.
+  // A host with custom wheel bindings can have a different history distance.
+  var scrollStep = fontSize * 1.4
   var pendingScroll = []
   var scrollFrame = null
   var scrollRequestedAt = 0
@@ -359,7 +390,7 @@
   function measuredScrollStep() {
     var screen = term.element && term.element.querySelector('.xterm-screen')
     var rowHeight = screen && term.rows > 0 ? screen.getBoundingClientRect().height / term.rows : 0
-    return (rowHeight > 0 && isFinite(rowHeight) ? rowHeight : fontSize * 1.4) * WHEEL_ROWS
+    return rowHeight > 0 && isFinite(rowHeight) ? rowHeight : fontSize * 1.4
   }
   window.addEventListener('pagehide', cancelScroll)
   window.addEventListener('blur', cancelScroll)

@@ -19,7 +19,8 @@ class TerminalActionsTest {
         override val fresh = false
         val log = mutableListOf<String>()
         var onScroll: suspend (Boolean, Int) -> Unit = { _, _ -> }
-        override fun write(text: String) { log += "input:$text" }
+        var onWrite: (String) -> Unit = {}
+        override fun write(text: String) { log += "input:$text"; onWrite(text) }
         override fun resize(cols: Int, rows: Int) {}
         override suspend fun scroll(up: Boolean, lines: Int) {
             log += "scroll:$up:$lines"
@@ -102,6 +103,88 @@ class TerminalActionsTest {
     }
 
     @Test
+    fun `automatic replies arriving during a scroll retain every chunk and direction in FIFO order`() = runBlocking {
+        val stream = Stream()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        stream.onScroll = { _, _ -> if (!started.isCompleted) { started.complete(Unit); release.await() } }
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            assertTrue(actions.scroll(true, 45))
+            withTimeout(2_000) { started.await() }
+            assertTrue(actions.report("\u001b[1;1R"))
+            assertTrue(actions.scroll(false, 7))
+            assertTrue(actions.report("\u001b[?1;2c"))
+            assertTrue(actions.scroll(true, 3))
+            yield()
+            assertEquals(listOf("scroll:true:20"), stream.log)
+            release.complete(Unit)
+            yield()
+            assertEquals(listOf("scroll:true:20", "scroll:true:20", "scroll:true:5", "input:\u001b[1;1R",
+                "scroll:false:7", "input:\u001b[?1;2c", "scroll:true:3"), stream.log)
+        } finally { actions.close() }
+    }
+
+    @Test
+    fun `Esc still cancels pending gesture distance while preserving automatic replies`() = runBlocking {
+        val stream = Stream()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        stream.onScroll = { _, _ -> if (!started.isCompleted) { started.complete(Unit); release.await() } }
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            assertTrue(actions.scroll(true, 80))
+            withTimeout(2_000) { started.await() }
+            assertTrue(actions.report("reply-before"))
+            assertTrue(actions.scroll(false, 10))
+            assertTrue(actions.write("\u001b"))
+            assertTrue(actions.report("reply-after"))
+            release.complete(Unit)
+            yield()
+            assertEquals(listOf("scroll:true:20", "input:reply-before", "input:\u001b", "input:reply-after"), stream.log)
+        } finally { actions.close() }
+    }
+
+    @Test
+    fun `automatic replies share pending run and character bounds without cancelling accepted movement`() = runBlocking {
+        val stream = Stream()
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            repeat(64) { assertTrue(actions.scroll(it % 2 == 0, 1)) }
+            assertFalse(actions.report("reply"), "Reports count queued scroll runs against capacity")
+            yield()
+            assertEquals(64, stream.log.size)
+            stream.log.clear()
+            assertTrue(actions.report("a".repeat(1024 * 1024)))
+            assertTrue(actions.scroll(true, 13))
+            assertFalse(actions.report("overflow"))
+            assertFalse(actions.write("overflow"), "User input shares the report's character budget")
+            yield()
+            assertEquals(2, stream.log.size)
+            assertEquals("scroll:true:13", stream.log.last())
+            repeat(64) { assertTrue(actions.report("$it")) }
+            assertFalse(actions.report("65th"))
+        } finally { actions.close() }
+    }
+
+    @Test
+    fun `a failed automatic reply is not retried and does not cancel following movement`() = runBlocking {
+        val stream = Stream()
+        stream.onWrite = { if (it == "reply") throw IllegalStateException("reply refused") }
+        val actions = TerminalActions(this, stream) { true }
+        try {
+            assertTrue(actions.scroll(true, 9))
+            assertTrue(actions.report("reply"))
+            assertTrue(actions.scroll(false, 6))
+            yield()
+            assertEquals(listOf("scroll:true:9", "input:reply", "scroll:false:6"), stream.log)
+            assertTrue(actions.report("next"))
+            yield()
+            assertEquals("input:next", stream.log.last())
+        } finally { actions.close() }
+    }
+
+    @Test
     fun `close cancels suspended RPC and clears pending input and scroll permanently`() = runBlocking {
         val stream = Stream()
         val started = CompletableDeferred<Unit>()
@@ -120,6 +203,7 @@ class TerminalActionsTest {
         withTimeout(2_000) { cancelled.await() }
         assertFalse(actions.scroll(false, 1))
         assertFalse(actions.write("late"))
+        assertFalse(actions.report("late reply"))
         assertEquals(listOf("scroll:true:20"), stream.log)
     }
 
@@ -134,6 +218,7 @@ class TerminalActionsTest {
             assertTrue(oldActions.scroll(true, 40))
             current = false
             assertFalse(oldActions.write("obsolete"))
+            assertFalse(oldActions.report("obsolete reply"))
             assertTrue(newActions.write("new"))
             yield()
             assertEquals(emptyList(), old.log)
@@ -198,6 +283,7 @@ class TerminalActionsTest {
         yield()
         assertEquals(listOf("scroll:true:20"), stream.log)
         assertFalse(actions.write("late"))
+        assertFalse(actions.report("late reply"))
         assertFalse(actions.scroll(false, 1))
         actions.close()
     }

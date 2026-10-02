@@ -64,7 +64,7 @@ class TerminalActions(
                     } catch (_: Exception) {
                         // A timed-out/refused relay RPC need not disconnect the transport. Do
                         // not retry uncertain movement, but keep explicit input usable (Esc).
-                        synchronized(lock) { if (!closed) discardScrollLocked() }
+                        synchronized(lock) { if (!closed && action is Action.Scroll) discardScrollLocked() }
                     }
                     synchronized(lock) {
                         if (!closed) when (action) {
@@ -102,12 +102,17 @@ class TerminalActions(
      * the single in-flight RPC. Esc is then the next operation after that RPC, with no late scroll
      * from this gesture left to put tmux back into copy mode.
      */
-    fun write(data: String): Boolean = synchronized(lock) {
+    fun write(data: String): Boolean = addInput(data, cancelScroll = true)
+
+    /** Automatic emulator replies (DSR/DA etc.) are ordered writes, never gesture barriers. */
+    fun report(data: String): Boolean = addInput(data, cancelScroll = false)
+
+    private fun addInput(data: String, cancelScroll: Boolean): Boolean = synchronized(lock) {
         if (closed || !drain.isActive || !isCurrent()) return false
         if (data.isEmpty()) return true
-        val inputRuns = pending.count { it is Action.Input }
-        if (inputRuns >= MAX_PENDING_RUNS || data.length > MAX_INPUT_CHARS - inputChars) return false
-        discardScrollLocked()
+        val retainedRuns = if (cancelScroll) pending.count { it is Action.Input } else pending.size
+        if (retainedRuns >= MAX_PENDING_RUNS || data.length > MAX_INPUT_CHARS - inputChars) return false
+        if (cancelScroll) discardScrollLocked()
         pending.addLast(Action.Input(data))
         inputChars += data.length
         wake.trySend(Unit)

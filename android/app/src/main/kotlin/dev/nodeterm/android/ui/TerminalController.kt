@@ -304,6 +304,14 @@ class TerminalController(
             if (!input.scroll(up, notches)) inputBusy()
         }
 
+        /** xterm mouse/focus/protocol reports preserve a pending gesture and an armed Ctrl. */
+        @JavascriptInterface
+        fun onReport(data: String) {
+            val s = stream ?: return
+            if (!page.isCurrent(gen)) return
+            writeReport(data, s)
+        }
+
         /** The OSC 52 base64 cap terminal.js applies before a copy crosses this bridge (A53). */
         @JavascriptInterface
         fun copyLimit(): Int = Osc52.MAX_BASE64
@@ -512,6 +520,12 @@ class TerminalController(
         val input = actions ?: return
         if (expected == null || stream !== expected) return
         if (!input.write(data)) inputBusy()
+    }
+
+    private fun writeReport(data: String, expected: TerminalStream) {
+        val input = actions ?: return
+        if (stream !== expected) return
+        if (!input.report(data)) inputBusy()
     }
 
     /** A native resume must wait for JS to discard its unsent swipe, then check the viewer again. */

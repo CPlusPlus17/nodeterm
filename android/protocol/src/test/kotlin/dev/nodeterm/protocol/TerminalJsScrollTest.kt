@@ -27,10 +27,11 @@ class TerminalJsScrollTest {
         configure()
     }
 
-    private fun run(vararg gestures: JsonObject, cellHeight: Int = 20, fontSize: Int = 13): List<JsonObject> =
+    private fun run(vararg gestures: JsonObject, cellHeight: Int = 20, fontSize: Int = 13, originUnavailable: Boolean = false): List<JsonObject> =
         TerminalJsDriver.run(buildJsonObject {
             put("copyLimit", 8)
             put("fontSize", fontSize)
+            put("originUnavailable", originUnavailable)
             put("screen", buildJsonObject {
                 put("cols", 52)
                 put("rows", 45)
@@ -49,11 +50,11 @@ class TerminalJsScrollTest {
     }
 
     @Test
-    fun `finger distance matches history rows instead of multiplying it by the wheel gain`() {
+    fun `a short swipe requests one wheel notch per rendered row of finger movement`() {
         val gestures = run(gesture(0 to 200), gesture(0 to -200), gesture(200 to 0),
-            gesture(0 to 99), gesture(0 to 200) { put("fingers", 2) })
-        assertEquals(listOf(true to 2), scrolls(gestures[0]), "downward drag reveals earlier output")
-        assertEquals(listOf(false to 2), scrolls(gestures[1]), "upward drag moves toward live output")
+            gesture(0 to 19), gesture(0 to 200) { put("fingers", 2) })
+        assertEquals(listOf(true to 10), scrolls(gestures[0]), "downward drag reveals earlier output")
+        assertEquals(listOf(false to 10), scrolls(gestures[1]), "upward drag moves toward live output")
         assertTrue(gestures.take(2).all { it["movePrevented"]!!.jsonPrimitive.boolean },
             "the gesture belongs to tmux rather than the browser viewport")
         for (gesture in gestures.drop(2)) assertTrue(scrolls(gesture).isEmpty(),
@@ -62,14 +63,48 @@ class TerminalJsScrollTest {
 
     @Test
     fun `swipe gain uses the rendered row height with a font fallback before layout`() {
-        assertEquals(listOf(true to 1), scrolls(run(gesture(0 to 200), cellHeight = 40).single()))
-        assertEquals(listOf(true to 2), scrolls(run(gesture(0 to 280), cellHeight = 0, fontSize = 20).single()))
+        assertEquals(listOf(true to 5), scrolls(run(gesture(0 to 200), cellHeight = 40).single()))
+        assertEquals(listOf(true to 10), scrolls(run(gesture(0 to 280), cellHeight = 0, fontSize = 20).single()))
+    }
+
+    @Test
+    fun `terminal replies focus and both mouse encodings preserve queued history`() {
+        val reports = listOf("\u001b[I", "\u001b[O", "\u001b[12;3R", "\u001b[?1;2c")
+        val mouse = "\u001b[<35;4;12M"
+        val legacy = "\u001b[M !!"
+        val result = run(gesture(0 to 900) {
+            putJsonArray("after") {
+                add(buildJsonObject { put("mouse", mouse) }) // xterm marks SGR mouse as user input
+                reports.forEach { add(buildJsonObject { put("report", it) }) }
+                add(buildJsonObject { put("binary", legacy) })
+            }
+        }).single()
+        assertEquals(listOf(true to 20, true to 20, true to 5), scrolls(result))
+        assertTrue(result["inputs"]!!.jsonArray.isEmpty(), "reports must not enter the native input barrier")
+        assertEquals(listOf(mouse) + reports + legacy,
+            result["reports"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun `missing internal input origin has a guarded public fallback`() {
+        val reports = listOf("\u001b[I", "\u001b[O", "\u001b[12;3R", "\u001b[?1;2c")
+        val result = run(gesture(0 to 200) {
+            putJsonArray("after") { reports.forEach { add(buildJsonObject { put("report", it) }) } }
+        }, originUnavailable = true).single()
+        assertEquals(listOf(true to 10), scrolls(result))
+        assertEquals(reports, result["reports"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertTrue(result["inputs"]!!.jsonArray.isEmpty())
+        val typed = run(gesture(0 to 200) {
+            putJsonArray("after") { add(buildJsonObject { put("data", "x") }) }
+        }, originUnavailable = true).single()
+        assertTrue(scrolls(typed).isEmpty())
+        assertEquals(listOf("x"), typed["inputs"]!!.jsonArray.map { it.jsonPrimitive.content })
     }
 
     @Test
     fun `touch moves in one frame merge into one ordered request`() {
         val result = run(gesture(0 to 10, 0 to 50, 0 to 100, 0 to 200, 0 to 400)).single()
-        assertEquals(listOf(true to 4), scrolls(result))
+        assertEquals(listOf(true to 20), scrolls(result))
         assertTrue(result["scrollsBeforeFrame"]!!.jsonArray.isEmpty(), "touchmove sends nothing immediately")
         assertEquals(listOf(1), result["scrollFrames"]!!.jsonArray.map { it.jsonObject["frame"]!!.jsonPrimitive.int })
     }
@@ -77,13 +112,13 @@ class TerminalJsScrollTest {
     @Test
     fun `direction reversals during a gesture keep their order across frames`() {
         val result = run(gesture(0 to 200, 0 to -100)).single()
-        assertEquals(listOf(true to 2, false to 3), scrolls(result))
+        assertEquals(listOf(true to 10, false to 15), scrolls(result))
         assertEquals(listOf(1, 2), result["scrollFrames"]!!.jsonArray.map { it.jsonObject["frame"]!!.jsonPrimitive.int })
     }
 
     @Test
     fun `a fast swipe retains its distance past the transport cap and drains after touchend`() {
-        val result = run(gesture(0 to 4500)).single()
+        val result = run(gesture(0 to 900)).single()
         assertEquals(listOf(true to 20, true to 20, true to 5), scrolls(result))
         assertTrue(result["scrollsBeforeFrame"]!!.jsonArray.isEmpty())
         assertEquals(listOf(1, 2, 3), result["scrollFrames"]!!.jsonArray.map { it.jsonObject["frame"]!!.jsonPrimitive.int })
@@ -93,11 +128,11 @@ class TerminalJsScrollTest {
     fun `reset new input and a hidden page discard an outstanding swipe`() {
         val actions = listOf(ntAction("reset"), ntAction("paint", "eA=="), ntAction("cancelScroll"),
             ntAction("key", "esc"), ntAction("raw", "Aw=="), ntAction("submit", "eA=="),
-            buildJsonObject { put("data", "x") }, buildJsonObject { put("binary", "x") }) +
+            buildJsonObject { put("data", "x") }) +
             listOf("blur", "pagehide", "hidden", "touchcancel", "multitouch")
                 .map { buildJsonObject { put("event", it) } }
         for (action in actions) {
-            val result = run(gesture(0 to 4500) { putJsonArray("after") { add(action) } }).single()
+            val result = run(gesture(0 to 900) { putJsonArray("after") { add(action) } }).single()
             assertTrue(scrolls(result).isEmpty(), "no stale scroll after $action")
             if (action == ntAction("raw", "Aw==")) {
                 assertEquals(listOf("\u0003"), result["inputs"]!!.jsonArray.map { it.jsonPrimitive.content },
@@ -111,7 +146,7 @@ class TerminalJsScrollTest {
         val cancels = listOf(ntAction("raw", "Gw=="),
             buildJsonObject { put("event", "touchcancel") }, buildJsonObject { put("event", "multitouch") })
         for (cancel in cancels) {
-            val result = run(gesture(0 to 4500) {
+            val result = run(gesture(0 to 900) {
                 putJsonArray("after") {
                     add(buildJsonObject { put("frame", true) })
                     add(cancel)
@@ -126,7 +161,7 @@ class TerminalJsScrollTest {
 
     @Test
     fun `the delayed submit Enter cancels a swipe begun after the paste`() {
-        val result = run(gesture(0 to 4500) {
+        val result = run(gesture(0 to 900) {
             putJsonArray("before") {
                 add(buildJsonObject {
                     put("nt", "submit")
@@ -142,19 +177,19 @@ class TerminalJsScrollTest {
     @Test
     fun `suspending scroll cancels pending work and rejects gestures until attach resumes it`() {
         val results = run(
-            gesture(0 to 4500) { putJsonArray("after") { add(ntAction("suspendScroll")) } },
+            gesture(0 to 900) { putJsonArray("after") { add(ntAction("suspendScroll")) } },
             gesture(0 to 200),
             gesture(0 to 200) { putJsonArray("before") { add(ntAction("resumeScroll")) } },
         )
         assertTrue(scrolls(results[0]).isEmpty())
         assertTrue(scrolls(results[1]).isEmpty())
-        assertEquals(listOf(true to 2), scrolls(results[2]))
+        assertEquals(listOf(true to 10), scrolls(results[2]))
     }
 
     @Test
     fun `a frame delayed by a page suspension drops stale input and the next gesture works`() {
         val results = run(gesture(0 to 200) { put("frameDelay", 251) }, gesture(0 to 200))
         assertTrue(scrolls(results[0]).isEmpty())
-        assertEquals(listOf(true to 2), scrolls(results[1]))
+        assertEquals(listOf(true to 10), scrolls(results[1]))
     }
 }

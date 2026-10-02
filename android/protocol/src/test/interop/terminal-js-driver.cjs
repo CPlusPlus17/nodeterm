@@ -10,7 +10,7 @@
 //                     "lines": [{"text": "...", "wrapped": <bool>, "links": [{"from": col, "to": col, "uri": "..."}]}]},
 //          "provideLinks": [<1-based buffer line>, ...],
 //          "linkHandler": ["<OSC 8 URI>", ...],
-//          "fontSize": px,
+//          "fontSize": px, "originUnavailable": <bool, omit xterm's internal input-origin event>,
 //          "taps": [{"col": c, "row": <viewport row>, "move": [dx, dy], "moves": [[dx,dy], ...], "fingers": n,
 //                    "before": [action, ...], "after": [action, ...], "frameDelay": ms}],
 //          "copySheet": <bool>}
@@ -21,7 +21,8 @@
 //    "provideLinks": [{"links": null | [{"text", "range", "opened": [url, ...]}]}],
 //    "linkHandler": [{"opened": [url, ...]}],
 //    "taps": [{"prevented": bool, "movePrevented": bool, "opened": [url, ...], "scrolls": [[up, notches], ...],
-//              "scrollsBeforeFrame": [...], "scrollFrames": [{"frame": n, "up": bool, "notches": n}], "inputs": [text, ...]}],
+//              "scrollsBeforeFrame": [...], "scrollFrames": [{"frame": n, "up": bool, "notches": n}],
+//              "inputs": [text, ...], "reports": [text, ...]}],
 //    "copySheet": {"raw": "<the JSON string the page handed onCopySheet>", "calls": n},
 //    "confirmCalls": n}
 // where an onCopy call's argument is reported as {"length": n, "sameAsInput": bool}, so a payload of
@@ -35,10 +36,13 @@
 // The screen element sits at (4, 2) with 10×20 px cells; a tap is a touchstart at the cell's centre,
 // touchmoves at offsets in `moves` (or one `move`), and a touchend at the end point. `fingers` > 1
 // starts with that many touches. Actions are {"nt": fn, "args": [...]}, {"event": "blur"|"pagehide"|"hidden"|
-// "touchcancel"|"multitouch"}, {"frame": true}, {"timers": true}, {"data": text} or {"binary": text}.
+// "touchcancel"|"multitouch"}, {"frame": true}, {"timers": true}, {"data": text}, {"report": text},
+// {"mouse": text} or {"binary": text}. Data/paste fire xterm's user-origin event; SGR mouse fires
+// it too, while generated reports and legacy mouse do not.
 // They run before touchstart or after touchend, before the queued
 // animation frames drain deterministically (16ms per frame, or `frameDelay` for the first frame).
-// "scrollsBeforeFrame" catches unbatched calls; "inputs" records bridge.onInput. "opened" lists URLs.
+// "scrollsBeforeFrame" catches unbatched calls; "inputs"/"reports" record their separate bridge
+// paths. "opened" lists URLs.
 'use strict'
 const fs = require('fs')
 const vm = require('vm')
@@ -52,6 +56,7 @@ let opened = []
 let scrolls = []
 let scrollFrames = []
 let inputs = []
+let reports = []
 let frameNumber = 0
 let frameTime = 0
 let nextFrameId = 1
@@ -89,6 +94,7 @@ const bridge = {
   onResize() {},
   onReady() {},
   onInput(data) { inputs.push(data) },
+  onReport(data) { reports.push(data) },
   onScroll(up, notches) {
     scrolls.push([up, notches])
     scrollFrames.push({ frame: frameNumber, up, notches })
@@ -144,6 +150,8 @@ const screenElement = {
   }
 }
 let createdTerm = null
+const userInputListeners = []
+const textareaListeners = {}
 class Terminal {
   constructor() {
     createdTerm = this
@@ -156,11 +164,17 @@ class Terminal {
       active: { length: rowsData.length, viewportY, baseY: viewportY, getLine: bufferLine }
     }
     this._core = {
+      coreService: input.originUnavailable ? undefined : {
+        onUserInput(fn) { userInputListeners.push(fn) }
+      },
       _oscLinkService: {
         getLinkData(id) {
           return id > 0 && id <= linkUris.length ? { id: String(id), uri: linkUris[id - 1] } : undefined
         }
       }
+    }
+    this.textarea = {
+      addEventListener(type, fn) { listen(textareaListeners, type, fn) }
     }
     this.parser = {
       registerOscHandler(ident, fn) {
@@ -182,6 +196,7 @@ class Terminal {
   }
   onData(fn) { this.dataCallback = fn }
   onBinary(fn) { this.binaryCallback = fn }
+  onKey(fn) { this.keyCallback = fn }
   write() {}
   reset() {}
   focus() {
@@ -194,7 +209,14 @@ class Terminal {
     textareaFocused = false
     if (focusChanges) focusChanges.push('blur')
   }
-  paste(text) { if (this.dataCallback) this.dataCallback(text) }
+  paste(text) { emitData(text, true) }
+}
+function emitData(data, fromUser) {
+  if (fromUser) {
+    for (const fn of userInputListeners) fn()
+    if (createdTerm.keyCallback) createdTerm.keyCallback({ key: data })
+  }
+  createdTerm.dataCallback(data)
 }
 class FitAddonStub {
   fit() {}
@@ -312,7 +334,9 @@ function actions(items) {
       const callbacks = timers.splice(0)
       for (const callback of callbacks) callback()
     }
-    else if (action.data !== undefined) createdTerm.dataCallback(action.data)
+    else if (action.data !== undefined) emitData(action.data, true)
+    else if (action.report !== undefined) emitData(action.report, false)
+    else if (action.mouse !== undefined) emitData(action.mouse, true)
     else if (action.binary !== undefined) createdTerm.binaryCallback(action.binary)
   }
 }
@@ -337,6 +361,7 @@ for (const tap of input.taps || []) {
   scrolls = []
   scrollFrames = []
   inputs = []
+  reports = []
   frameNumber = 0
   let prevented = false
   let movePrevented = false
@@ -366,7 +391,7 @@ for (const tap of input.taps || []) {
   actions(tap.after)
   const scrollsBeforeFrame = scrolls.slice()
   drainFrames(tap.frameDelay)
-  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs })
+  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs, reports })
 }
 
 let copySheet = null

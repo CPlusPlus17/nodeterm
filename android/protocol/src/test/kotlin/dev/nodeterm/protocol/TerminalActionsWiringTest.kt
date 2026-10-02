@@ -52,6 +52,22 @@ class TerminalActionsWiringTest {
     }
 
     @Test
+    fun `automatic reports keep their stream and queue while preserving Ctrl and pending scrolling`() {
+        val source = controller()
+        assertTrue(Regex("""@JavascriptInterface\s+fun onReport\(""").containsMatchIn(source),
+            "The release WebView must expose its automatic-report callback")
+        val report = AppSourcePins.blockAfter(source, "fun onReport(data:")
+        AppSourcePins.assertInOrder(report, "val s = stream ?: return", "if (!page.isCurrent(gen)) return", "writeReport(data, s)")
+        assertFalse(report.contains("ctrlArmed"), "Automatic replies must not consume an armed Ctrl chip")
+        assertFalse(report.contains("Keys.ctrl("))
+        assertFalse(report.contains("cancelScroll"))
+        val write = AppSourcePins.blockAfter(source, "private fun writeReport(")
+        AppSourcePins.assertInOrder(write, "val input = actions ?: return", "stream !== expected",
+            "if (!input.report(data)) inputBusy()")
+        assertFalse(write.contains(".write("), "A report must not use the user-input scroll barrier")
+    }
+
+    @Test
     fun `native input cancels page momentum before the queue write and rechecks its stream`() {
         val source = controller()
         val raw = AppSourcePins.blockAfter(source, "fun raw(data:")
