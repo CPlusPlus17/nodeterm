@@ -5,6 +5,7 @@ import type {
   CanvasMutation,
   CanvasNodeState,
   ClosedSessionEntry,
+  HandedOffTo,
   NavStop,
   Project,
   ProjectKanban,
@@ -23,8 +24,10 @@ import {
   pruneLayoutViewports,
   type CanvasLayout
 } from '@shared/canvas-layout'
+import { clampProjectName } from '@shared/project-name'
 import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
 import { diffToMutations, type CanvasScene } from '@shared/canvas-mutations'
+import { groupsFirst } from '@shared/node-order'
 import { applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
 import { registerCodexRelayProjectCheck } from './codexCli'
 import { markWorkspaceDirty } from './workspaceDirty'
@@ -101,6 +104,10 @@ interface ProjectsState {
   /** Sets (or clears, with undefined = fall back to the global setting) the project's default
    *  permission mode for new Claude terminal (CLI) sessions. Chat nodes are not covered. */
   setProjectDefaultPermissionMode(id: string, mode: AgentPermissionMode | undefined): void
+  /** Sets (or clears, with undefined) the machine-local mark that this SSH project was handed to a
+   *  hosted team (see `HandedOffTo`). Cleared means the field is gone, so the next save drops it
+   *  from the index entry. The caller saves. No-op for an unknown id. */
+  setHandedOffTo(id: string, value: HandedOffTo | undefined): void
   /**
    * THE strict per-project capability setter (@shared/project-capabilities). `on` writes the
    * literal `true` the validators accept AND records this machine's 'kept' answer — setting a
@@ -191,6 +198,9 @@ interface ProjectsState {
    * Never route a peer's mutation through this.
    */
   applyOwnNodeMutation(projectId: string, mutation: CanvasMutation): boolean
+  /** Several of our own node writes as ONE store write, re-sorted parents-first (`groupsFirst`) —
+   *  a structural control verb run off screen adds a frame after the children it now holds. */
+  applyOwnNodeMutations(projectId: string, mutations: readonly CanvasMutation[]): boolean
   /** Renames a node within a project (source of truth for inactive projects). */
   renameNode(projectId: string, nodeId: string, title: string): void
   /** Recolors a node within a project. */
@@ -466,6 +476,19 @@ function ownWrite(get: () => ProjectsState, projectId: string, write: () => void
   hook(projectId, () => diffToMutations(sceneOf(before), sceneOf(after)))
 }
 
+/** One server folder is one project: the same endpoint (host, user, and port — 22 when unset) and
+ *  the same remoteCwd. The server entry's own id and label do not count, so a re-added server entry
+ *  still finds its folder's project. `openSshProject` dedupes by this, and so does anything that
+ *  must know in advance which project that call will reopen. */
+export function sameSshEndpoint(a: NonNullable<Project['ssh']>, b: NonNullable<Project['ssh']>): boolean {
+  return (
+    a.remoteCwd === b.remoteCwd &&
+    a.server.host === b.server.host &&
+    a.server.user === b.server.user &&
+    (a.server.port ?? 22) === (b.server.port ?? 22)
+  )
+}
+
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeProjectId: '',
@@ -488,7 +511,10 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   addProject(name, cwd, ssh) {
-    const project = createProject(get().projects.length, name, cwd, ssh)
+    // Every new project's name — a folder's own name, an SSH label, a relay host's project
+    // name — gets the same cap as a rename (issue #940). A blank one keeps createProject's default.
+    const clean = name === undefined ? undefined : clampProjectName(name) || undefined
+    const project = createProject(get().projects.length, clean, cwd, ssh)
     set((s) => ({ projects: [...s.projects, project] }))
     return project
   },
@@ -509,14 +535,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   openSshProject(label, ssh) {
-    const existing = get().projects.find(
-      (p) =>
-        p.ssh &&
-        p.ssh.remoteCwd === ssh.remoteCwd &&
-        p.ssh.server.host === ssh.server.host &&
-        p.ssh.server.user === ssh.server.user &&
-        (p.ssh.server.port ?? 22) === (ssh.server.port ?? 22)
-    )
+    const existing = get().projects.find((p) => !!p.ssh && sameSshEndpoint(p.ssh, ssh))
     if (existing) {
       get().reopenProject(existing.id)
       return existing
@@ -551,8 +570,12 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   renameProject(id, name) {
+    // Every rename surface funnels through here, so the cap holds even for input that bypassed a
+    // field's maxLength (issue #940). A blank name is not a rename.
+    const clean = clampProjectName(name)
+    if (!clean) return
     set((s) => ({
-      projects: s.projects.map((p) => (p.id === id ? { ...p, name } : p))
+      projects: s.projects.map((p) => (p.id === id ? { ...p, name: clean } : p))
     }))
   },
 
@@ -589,6 +612,17 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   setProjectDefaultPermissionMode(id, mode) {
     set((s) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, defaultPermissionMode: mode } : p))
+    }))
+  },
+
+  setHandedOffTo(id, value) {
+    set((s) => ({
+      projects: s.projects.map((p) => {
+        if (p.id !== id) return p
+        if (value) return { ...p, handedOffTo: value }
+        const { handedOffTo: _drop, ...rest } = p
+        return rest
+      })
     }))
   },
 
@@ -734,6 +768,19 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       set((s) => ({
         projects: mapProjectNodes(s.projects, projectId, (nodes) =>
           applyOwnCanvasMutation(nodes, mutation)
+        )
+      }))
+    )
+    return true
+  },
+
+  applyOwnNodeMutations(projectId, mutations) {
+    if (!get().projects.some((p) => p.id === projectId)) return false
+    if (mutations.length === 0) return true
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          groupsFirst(mutations.reduce(applyOwnCanvasMutation, nodes))
         )
       }))
     )
@@ -1076,9 +1123,10 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       set((s) => ({ projects: [...s.projects, adopted] }))
       return { project: adopted, created: false, adopted: true }
     }
-    const fallbackName = folderName(cwd) || 'Project'
+    const fallbackName = clampProjectName(folderName(cwd)) || 'Project'
+    // `name` is the agent's `--name`, free text like a rename: same cap (issue #940).
     const project = {
-      ...createProject(get().projects.length, name ?? fallbackName, cwd),
+      ...createProject(get().projects.length, clampProjectName(name ?? '') || fallbackName, cwd),
       ...(color ? { color } : {})
     }
     set((s) => ({ projects: [...s.projects, project] }))

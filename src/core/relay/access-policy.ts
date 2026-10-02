@@ -292,6 +292,7 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.ptyRecycle,
   IPC.ptySessionAge,
   IPC.ptySendText,
+  IPC.ptySendChatPrompt,
   IPC.ptyPaneOwner,
   // A host filesystem path, not a view of the terminal — a viewer's file links keep the node cwd.
   IPC.ptyPaneCwd,
@@ -328,6 +329,10 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.filesDownloadTicket,
   IPC.filesSaveUpload,
   IPC.filesSaveCanvasImage,
+  // Custom alert sounds live in the HOST's data dir and replace the host user's own chime.
+  IPC.filesSaveAlertSound,
+  IPC.filesReadAlertSound,
+  IPC.filesClearAlertSound,
   // Git: every mutation, plus network, worktree and commit-message (runs an agent CLI) operations.
   IPC.gitInit,
   IPC.gitClone,
@@ -403,7 +408,9 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   // The hosted team verbs (renderer `buildHostedApi`). INTERCEPTED by hosted-service.ts before this
   // table is ever consulted, which judges each caller itself (`self`: any member; the rest: owners
   // only) — so this table never decides them. Listed so the guard sees a decision, not a gap. Their
-  // events reach owners only (hosted-service `tellOwners`), never through VIEW_EVENTS.
+  // events reach owners only (hosted-service `tellOwners`), never through VIEW_EVENTS — except
+  // `relayHostedSharedChanged`, an event every MEMBER receives (`tellMembers`), so it also has a
+  // VIEW_EVENTS entry.
   IPC.relayHostedSelf,
   IPC.relayHostedPending,
   IPC.relayHostedInviteCode,
@@ -411,6 +418,7 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.relayHostedDeny,
   IPC.relayHostedPeerPending,
   IPC.relayHostedPendingClosed,
+  IPC.relayHostedSharedChanged,
   // Server→client events (see the doc comment): what a non-editor receives is VIEW_EVENTS.
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,
@@ -490,7 +498,9 @@ export const VIEW_EVENTS: Readonly<Record<string, EventCheck>> = Object.freeze({
   // Token counts + model for an opaque agent session id: no project, node, path or text.
   [IPC.contextUpdate]: always,
   [IPC.presenceSync]: always,
-  [IPC.presencePeer]: always
+  [IPC.presencePeer]: always,
+  // The shared set itself — exactly what a viewer's narrowed workspace already reveals.
+  [IPC.relayHostedSharedChanged]: always
 })
 
 /**

@@ -87,6 +87,7 @@ the production paging, not a second implementation of it.
 | `meta-turns` | `isMeta` rule 1: a peer hand-back (`promptSource` + `origin.kind:"peer"` + `turnOrigin`), a scheduled wakeup (`turnOrigin:"scheduled"` + `scheduledTaskId`), an auto-continuation (`origin.kind:"auto-continuation"`), a `promptSource`-only, an `origin`-only and a `turnOrigin`-only record (the last two with no `promptSource`, so each field is pinned on its own) are all KEPT; the caveat and a skill body (none of the three fields) are skipped. Three of the kept records then render as system chips (see **System-injected records**): BOTH `origin.kind:"peer"` records — the hand-back and the `origin`-only one — as `Agent message`, and the auto-continuation as `System`; the others stay user messages. |
 | `system-records` | Every rule of **System-injected records**: a full agent completion (nested `<usage>`, a result over three lines), a status + summary completion, a monitor `<event>`, a summary alone (the `notified` result), a repeated `<task-id>` with a summary over the 200-unit cap, a whole element with no `origin`, the same whole element sent by a human (`origin.kind:"human"`, and `promptSource:"typed"` with no `origin`; both stay user messages), two malformed notifications (unknown tags only; plain prose), a message that only MENTIONS the element (stays a user message), a subagent `<agent-message>` hand-back with its frame lines, a `<cross-session-message>` (its `from-name` is the arg), a report over the 16384-unit cap, a peer record with no element, an auto-continuation and a multi-line coordinator prompt. |
 | `pasted-content` | **Pasted content**: a span between typed lines, backtick runs inside (a five-backtick fence) and the same id twice, an array text part beside an image, a pasted `<task-notification>` (stays the user's paste), a close tag with a different id inside a span (content), an empty paste, a same-id open nested inside a span (the span ends at the FIRST close), text that is not the CLI's grammar (no id, an upper-case or three- or five-digit id, a missing newline after the open or before the close: all left as typed) and an unclosed span (left as typed). |
+| `queued-prompts` | **Queued prompts**: a typed prompt queued mid-turn (between a tool result and the reply), one with no `origin`, an array prompt with an image (its text block only), a paste inside one (fenced, as in a typed prompt), and six attachments that stay hidden: a task notification, a peer message (`isMeta`), a coordinator message, a non-human `origin`, a blank prompt and a non-`queued_command` attachment. |
 
 Decision cases: plan `restore` / `acceptEdits` / `manual` / `revise` (the revise text is trimmed),
 question single / multi (labels joined with `, `) / free text (trimmed), and three refusals: a
@@ -248,6 +249,25 @@ content that is not a system record or a local command, and each `text` part of 
 The find-bar index applies the same transform to the user lines it emits. Titles do NOT: the
 recent-conversations list and the transcript index read with `expandPastes:false`, so a prompt that
 starts with a paste still starts with `<` (and is skipped as a title), and no title carries a fence.
+
+## Queued prompts (the Swift port must replicate this exactly)
+
+A prompt the user submits while a turn is running is never a `user` record. Claude Code hands it to
+the model at the next tool boundary of the SAME turn as an `attachment` record whose
+`attachment.type` is `queued_command` (measured on 2.1.281–2.1.285). Most queued attachments are not
+the user typing: task notifications and peer or coordinator messages queue the same way. An
+attachment record becomes ONE user message, at its own line (`key` = its offset, `at` = its
+`timestamp`), only when all of these hold (`queuedHumanPrompt`, `src/core/transcript-reader.ts`):
+
+1. `attachment.type` is `queued_command` and `attachment.commandMode` is `"prompt"`;
+2. `attachment.isMeta` is not `true`;
+3. `attachment.origin` is absent/`null`, or an object whose `kind` is `"human"`;
+4. its text is not empty after trimming. The text is `attachment.prompt` when it is a string; when
+   it is an array, the `text` of each element whose `type` is `text` and whose `text` is a string,
+   non-empty ones joined by `\n`; otherwise empty.
+
+The text then goes through `expandPastedContent` like any other user text (see **Pasted content**),
+and the find-bar index emits the same user line. Every other attachment yields nothing.
 
 ## Renderer rules that follow from these records (desktop; iOS notes)
 

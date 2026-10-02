@@ -29,6 +29,7 @@ import {
   CHAT_CAPABLE,
   TYPED_INPUT_CAPABLE,
   typesChatInput,
+  readsScreenDialogs,
   LOCAL_ONLY_HOOK_AGENTS,
   reportsSessionEnd
 } from './config'
@@ -467,5 +468,12 @@ describe('typed chat input (TYPED_INPUT_CAPABLE)', () => {
 
   it('is a subset of CHAT_CAPABLE: only the chat view types', () => {
     for (const id of TYPED_INPUT_CAPABLE) expect((CHAT_CAPABLE as readonly string[]).includes(id)).toBe(true)
+  })
+})
+
+describe('readsScreenDialogs — whose own dialogs the chat view can see on screen', () => {
+  it('is claude only: its reader would read every other CLI\'s screen as a permanent dialog', () => {
+    expect(readsScreenDialogs('claude')).toBe(true)
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'claude')) expect(readsScreenDialogs(id)).toBe(false)
   })
 })

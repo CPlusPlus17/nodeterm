@@ -520,6 +520,35 @@ function pastedContent(): string {
   ])
 }
 
+// ── Prompts queued while a turn was running ──────────────────────────────────────────────────────
+// Shapes measured on claude 2.1.281–2.1.285: a prompt typed mid-turn is never a `user` record; it
+// reaches the model at the next tool boundary as a `queued_command` attachment. Only a typed prompt
+// is shown; task notifications and peer / coordinator messages queue the same way and stay hidden.
+const queued = (attachment: Rec): Rec => ({ type: 'attachment', attachment: { type: 'queued_command', ...attachment } })
+function queuedPrompts(): string {
+  return jsonl([
+    { ...user('Run the tests, then summarise.'), ...HUMAN },
+    { type: 'queue-operation', operation: 'enqueue', content: 'Also check the lint.' },
+    assistant([toolUse('toolu_q1', 'Bash', { command: 'npm test' })]),
+    { type: 'queue-operation', operation: 'remove', content: 'Also check the lint.' },
+    toolResult('toolu_q1', 'all passed'),
+    queued({ prompt: 'Also check the lint.', commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true }),
+    // No origin (a typed prompt from a build that did not record one), and an array prompt.
+    queued({ prompt: 'and the types', commandMode: 'prompt' }),
+    queued({ prompt: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }, text('this one')], commandMode: 'prompt', origin: { kind: 'human' } }),
+    // A paste inside a queued prompt renders as it does in a typed one.
+    queued({ prompt: 'log:\n<pasted_content id="0b1e">\nE1\nE2\n</pasted_content id="0b1e">', commandMode: 'prompt', origin: { kind: 'human' } }),
+    // Not the user typing: all hidden.
+    queued({ prompt: '<task-notification>\n<summary>Build finished</summary>\n</task-notification>', commandMode: 'task-notification' }),
+    queued({ prompt: '<agent-message from="a1">done</agent-message>', commandMode: 'prompt', isMeta: true, origin: { kind: 'peer' } }),
+    queued({ prompt: 'continue', isMeta: true, origin: { kind: 'coordinator' } }),
+    queued({ prompt: 'x', commandMode: 'prompt', origin: { kind: 'task-notification' } }),
+    queued({ prompt: '   ', commandMode: 'prompt', origin: { kind: 'human' } }),
+    { type: 'attachment', attachment: { type: 'hook_success', prompt: 'not queued', commandMode: 'prompt' } },
+    assistant([text('Tests pass, lint is clean, types check.')])
+  ])
+}
+
 // ── Held permission requests + the answers tried against them ────────────────────────────────────
 const pendingPayload = (tool_name: string, tool_input: unknown, permission_mode = 'default'): string =>
   JSON.stringify(
@@ -632,7 +661,8 @@ const INPUTS: Record<string, string> = {
   'bash-mode.jsonl': bashMode(),
   'meta-turns.jsonl': metaTurns(),
   'system-records.jsonl': systemRecords(),
-  'pasted-content.jsonl': pastedContent()
+  'pasted-content.jsonl': pastedContent(),
+  'queued-prompts.jsonl': queuedPrompts()
 }
 
 // ── Plumbing ─────────────────────────────────────────────────────────────────────────────────────

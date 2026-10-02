@@ -102,6 +102,12 @@ export interface TypedSurface {
   type(stdin: string): Promise<boolean>
   /** Submit, in its own write. False: the Enter could not be sent. */
   submit(): Promise<boolean>
+  /**
+   * Asked right before the Enter. Typing takes seconds, so a check made before the first keystroke
+   * can be stale: false means something now owns the keyboard (an agent dialog that opened
+   * meanwhile), and the Enter — which would ANSWER it — is not sent. Absent = always submit.
+   */
+  canSubmit?(): Promise<boolean>
 }
 
 // eslint-disable-next-line no-control-regex
@@ -150,7 +156,10 @@ export async function typeThenSubmitWhenSettled(
     await wait(ENVELOPE_SETTLE_POLL_MS)
     const now = await surface.capture()
     const shown = now !== null && occurrences(visible(now), needle) > baseline
-    if (shown && seenOnce) return (await surface.submit()) ? true : 'pasted-not-submitted'
+    if (shown && seenOnce) {
+      if (surface.canSubmit && !(await surface.canSubmit())) return 'pasted-not-submitted'
+      return (await surface.submit()) ? true : 'pasted-not-submitted'
+    }
     seenOnce = shown
   }
   return 'pasted-not-submitted'

@@ -31,6 +31,9 @@ import { IPC } from './ipc'
  *    about the host's panes it never measured.
  *  - `station-notice:list` — every project's failed-station ids and titles, unscoped. A relay tab
  *    never asks (it takes the inert stub), and a guest bound to ONE project must not read the rest.
+ *  - `watchLink:*` — live links (src/core/watch-link/service.ts): a link publishes one of the host's
+ *    terminals to anyone holding its URL and is paid for with the host's Pro. An editor passes every
+ *    access check, so only this list keeps a teammate from minting one.
  *
  * DELIBERATELY NOT LISTED: `project-setup:subscribe`/`unsubscribe` and the `project-setup:event:*`
  * push. They neither start nor authorize anything, and a peer that can see the canvas can already
@@ -58,7 +61,11 @@ export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
   'pairing:',
   'remote:',
   'relay:host:',
-  'relay:client:'
+  'relay:client:',
+  // Live links: publishing a host terminal to anyone with a URL, with the host's Pro. No relay peer
+  // may create, list (every link's URL carries its secret), stop, kick or chat as the owner. The
+  // viewer's own protocol is `watch:*`, which this prefix deliberately does not match.
+  'watchLink:'
 ]
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
@@ -67,6 +74,12 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.projectSetupConsentSubmit,
   IPC.projectSetupRequestTrust,
   IPC.ptyLaunchHeadless,
+  // Prepare-for-update ends EVERY session on this machine's session host and quits the app. Only
+  // the host's own user may do that. Raw ipcMain handlers (no peer reaches them); listed here too
+  // so moving them onto the platform table later cannot quietly open them.
+  IPC.appUpdatePrepInspect,
+  IPC.appUpdatePrepShutdown,
+  IPC.appUpdatePrepQuit,
   // A board comment that @mentions a session types into that session's pane. Only the host's own
   // user may do that: a relay peer's comment is display-only. Registered with a raw ipcMain handler
   // (so no peer can reach it at all); listed here too, so moving it onto the platform table later

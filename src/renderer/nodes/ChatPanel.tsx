@@ -1,10 +1,11 @@
-import { TEXT_NOT_SUBMITTED } from '@shared/text-delivery'
+import { TEXT_NOT_SUBMITTED, isChatPromptBlocked } from '@shared/text-delivery'
+import { claudeScreenBlocksInput, readClaudeScreen } from '@shared/agents/claude-screen'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { renderMarkdown } from '../lib/markdown'
 import { useAgentStatus } from '../state/agentStatus'
 import { useSession } from '../session/session'
 import { chipFor } from '../lib/keybindingOverrides'
-import { chatComposerPlaceholder, chatSendRefusal } from '../lib/chatSendGate'
+import { chatComposerPlaceholder, chatSendRefusal, screenBlockedSentence, type ScreenBlock } from '../lib/chatSendGate'
 import { chatPaneRefusal, chatPaneRefusalToast } from '../lib/chatPaneGate'
 import { chatAgentLabel, isNearBottom, shouldFollowOnLoad, toolCardTitle } from '../lib/chatPanel'
 import { useSettings } from '../state/settings'
@@ -22,10 +23,19 @@ import {
 import { E_UNSUPPORTED } from '@shared/rpc'
 import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@shared/chat-page'
 import { Spinner } from '../components/Spinner'
-import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
+import {
+  CHAT_LIVE_RELOAD_MIN_MS,
+  CHAT_OPTIMISTIC_WORKING_MS,
+  CHAT_SCREEN_POLL_MS,
+  TURN_END_RELOAD_DELAYS_MS,
+  chatActivity,
+  planLiveReload,
+  shouldPollScreen,
+  turnEndReloadCarries
+} from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
 import { isInteractiveBuiltin } from '@shared/chat-catalog'
-import { capabilityAgentId, chatReadsLocalOnly, typesChatInput } from '@shared/agents/config'
+import { capabilityAgentId, chatReadsLocalOnly, readsScreenDialogs } from '@shared/agents/config'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
@@ -36,8 +46,10 @@ import { assistantTurnEnds } from '../lib/chatThread'
 
 // Memoized bubble: marked+DOMPurify re-ran for EVERY message on each ChatPanel render (each
 // turn-finish reload, each keystroke re-render). Text is stable per message, so cache per text.
+// `breaks`: a single newline is a line break, as Claude Code's own TUI renders it — without it a
+// multi-line prompt, or a reply quoting one line by line (`> a` / `> b`), collapsed onto one line.
 export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text])
+  const html = useMemo(() => renderMarkdown(text, { breaks: true }), [text])
   return <div className="term-chat__text" dangerouslySetInnerHTML={{ __html: html }} />
 })
 
@@ -178,7 +190,7 @@ export function ChatPanel({
 }: ChatPanelProps) {
   // This node's core api (stable for the session — the chat transcript and the tmux session
   // both live on the core this panel's project belongs to).
-  const { api } = useSession()
+  const { api, source } = useSession()
   // Which transcript this panel reads. Keys are byte offsets into ONE file, so a thread is only
   // ever merged with a read of the same identity (see lib/chatPaging.ts).
   const identity = JSON.stringify([nodeId, sessionId ?? null, cwd ?? null, accountId ?? null, agentId])
@@ -219,6 +231,21 @@ export function ChatPanel({
   // Not just `working`: a TUI dialog (`waiting`/`blocked`) would be ANSWERED by sendText's Enter,
   // and a pane whose CLI is gone (hibernated/paused/dropped/exited) is a SHELL that would execute it.
   const refusal = chatSendRefusal(agentId, { state, hibernated, paused, dropped, sessionEnded })
+  // The agent's OWN dialog on the pane's screen (folder trust, /model, setup questions): no hook
+  // reports those, so the state gate above cannot see them. Found by the poll (local panes, `live`
+  // — the poll also clears it) or by a send core refused before writing (`live: false` — it then
+  // stays until a send gets through or the view closes). `text`: the dialog's own lines.
+  const [screenBlock, setScreenBlock] = useState<{ kind: ScreenBlock; text: string | null; live: boolean } | null>(
+    null
+  )
+  const pollScreen = shouldPollScreen({
+    readable: readsScreenDialogs(agentId),
+    readOnly: readOnly === true,
+    // An SSH node's tmux is on its host (`sshProjectId` is set exactly for those); a relay tab's
+    // is on the peer. Either way each read is a network round trip.
+    remote: sshProjectId !== undefined || source !== 'local',
+    refusal
+  })
   const agentLabel = chatAgentLabel(agentId, customAgents)
   // What the row closing the thread says (lib/chatLive.ts). `optimistic` covers the gap between a
   // send and the first hook event: set by `send`, retired by the next state change (the real state
@@ -307,7 +334,9 @@ export function ChatPanel({
   // The ONE tail read a sent local command schedules (see `send`): `/model` or `!ls` fires no hook,
   // so neither a state change nor a live read would ever confirm it.
   const commandReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const loadRef = useRef<(live?: boolean, rebind?: boolean) => void>(() => {})
+  const loadRef = useRef<(live?: boolean, rebind?: boolean, carry?: boolean) => void>(() => {})
+  // The turn-end settle reloads (TURN_END_RELOAD_DELAYS_MS) still to fire; cleared on unmount.
+  const settleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const requestHeldReloadRef = useRef<() => void>(() => {})
 
   // `live` = a read driven by a hook event while the agent works (see `attemptLive`), as opposed to
@@ -319,7 +348,10 @@ export function ChatPanel({
   // `rebind` = the held-request reload (see `requestHeldReload`): QUIET like a live read (no
   // "Loading…", the older-page row left alone, unconfirmed sends kept), and it never cancels an
   // older-page fetch — it is only ever started with none in flight.
-  const load = useCallback((live = false, rebind = false) => {
+  //
+  // `carry` = keep unconfirmed sends (`carryUnconfirmed`). Every live and rebind read does; so do the
+  // turn-end settle reloads but the last (`turnEndReloadCarries`).
+  const load = useCallback((live = false, rebind = false, carry = live || rebind) => {
     const token = ++reqRef.current
     if (!rebind) olderReqRef.current++
     // The held request this read starts under: once it is applied, the thread is known to show the
@@ -393,7 +425,7 @@ export function ChatPanel({
         // command it is the ONLY signal (no hook fires). A command that starts a real turn is
         // still covered — its `working` state keeps the row (and the send refusal) on its own.
         if (tailConfirmsSends(threadRef.current, identity, res)) setOptimistic(false)
-        setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live || rebind }))
+        setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: carry }))
         setLoadState('ok')
         setHeldRead({ identity, pendingId: heldAtStart })
         settleHeldReload(heldAtStart)
@@ -516,6 +548,8 @@ export function ChatPanel({
       attemptLiveRef.current = () => {}
       if (liveTimerRef.current !== null) clearTimeout(liveTimerRef.current)
       liveTimerRef.current = null
+      for (const t of settleTimersRef.current) clearTimeout(t)
+      settleTimersRef.current = []
     },
     []
   )
@@ -580,12 +614,26 @@ export function ChatPanel({
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [])
 
-  // Reload when a turn completes (working -> not working). Sessions whose hooks never report
-  // `working` never take this path — the bar's ↻ is their reload.
+  // Reload when a turn completes (working -> not working), then again on the settle schedule
+  // (TURN_END_RELOAD_DELAYS_MS): the Stop hook lands before the final reply is written, so the read
+  // at the edge usually misses it. A new turn does NOT cancel the schedule: a prompt sent the moment
+  // the turn ended starts one at once, and cancelling there would hide the finished turn's reply
+  // until the next one ended. Sessions whose hooks never report `working` never take this path —
+  // the bar's ↻ is their reload.
   useEffect(() => {
-    if (prevState.current === 'working' && state !== 'working') load()
+    if (prevState.current === 'working' && state !== 'working') {
+      load(false, false, true)
+      for (const t of settleTimersRef.current) clearTimeout(t)
+      const last = TURN_END_RELOAD_DELAYS_MS.length - 1
+      settleTimersRef.current = TURN_END_RELOAD_DELAYS_MS.map((ms, i) =>
+        setTimeout(() => {
+          const working = useAgentStatus.getState().byId[nodeId]?.state === 'working'
+          loadRef.current(false, false, turnEndReloadCarries({ final: i === last, working }))
+        }, ms)
+      )
+    }
     prevState.current = state
-  }, [state, load])
+  }, [state, load, nodeId])
 
   // Any state change retires the optimistic working row: from here the real state speaks.
   useEffect(() => {
@@ -596,6 +644,38 @@ export function ChatPanel({
     const t = setTimeout(() => setOptimistic(false), CHAT_OPTIMISTIC_WORKING_MS)
     return () => clearTimeout(t)
   }, [optimistic])
+
+  // Re-read the pane's screen while the view is visible (see `screenBlock`). A read that fails or
+  // finds a blank screen changes nothing: unknown is not evidence either way.
+  useEffect(() => {
+    if (!pollScreen) {
+      setScreenBlock((b) => (b?.live === true ? null : b))
+      return
+    }
+    let cancelled = false
+    const tick = async (): Promise<void> => {
+      const el = msgsRef.current
+      if (el === null || el.clientHeight === 0 || document.hidden) return
+      let screen: string
+      try {
+        screen = await api.pty.capture(nodeId)
+      } catch {
+        return
+      }
+      if (cancelled) return
+      const read = readClaudeScreen(screen)
+      if (read.kind === 'unknown') return
+      if (!claudeScreenBlocksInput(read)) setScreenBlock(null)
+      else if (read.kind === 'dialog') setScreenBlock({ kind: 'dialog', text: read.text, live: true })
+      else setScreenBlock({ kind: 'no-prompt', text: null, live: true })
+    }
+    void tick()
+    const t = setInterval(() => void tick(), CHAT_SCREEN_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [pollScreen, api, nodeId])
 
   // Follow the newest message only when the user was already at the bottom or just sent; a user
   // scrolled up reading an earlier answer keeps their place. Layout effect: the jump lands before
@@ -618,8 +698,8 @@ export function ChatPanel({
       nearBottomRef.current = true
     }
     justSentRef.current = false
-    // `activity`: the status row appearing at the end grows the thread like a message does.
-  }, [messages, olderState, activity])
+    // `activity` / `screenBlock`: a row appearing at the end grows the thread like a message does.
+  }, [messages, olderState, activity, screenBlock])
 
   const maybeLoadOlder = useCallback(() => {
     const el = msgsRef.current
@@ -673,78 +753,83 @@ export function ChatPanel({
     maybeLoadOlder()
   }
 
-  // A typed send takes a moment (core waits for the pane to show the text before pressing Enter),
-  // and core refuses a second one into the same pane meanwhile — which this panel would misread as
-  // "can't write to this session". An Enter during a send is simply ignored.
-  const sendingRef = useRef(false)
-
-  const send = useCallback(async () => {
+  const sendOnce = useCallback(async () => {
     const text = input.trim()
-    if (!text || sendingRef.current) return
     // Read the store at SEND time, not the render-time values: a PermissionRequest (or an Eco
     // hibernation) that landed between the last render and this keypress must still block.
-    if (chatSendRefusal(agentId, useAgentStatus.getState().byId[nodeId] ?? {}) !== null) return
+    if (!text || chatSendRefusal(agentId, useAgentStatus.getState().byId[nodeId] ?? {}) !== null) return
+    // The kernel's say (chatPaneGate.ts): an agent that announces no quit (codex) may have left a
+    // SHELL in the pane while the store still reads `done` — typed there, the message would run.
+    const pane = await chatPaneRefusal(agentId, nodeId, {
+      paneOwner: (n) => api.pty.paneOwner(n),
+      customAgents: useSettings.getState().settings.customAgents
+    })
+    if (pane) {
+      const message = chatPaneRefusalToast(pane, chatAgentLabel(agentId, useSettings.getState().settings.customAgents))
+      window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
+      return
+    }
+    // Through core's chat-prompt path: where it can read the agent's screen, it refuses before
+    // writing anything when the agent's own dialog owns the keyboard (such dialogs fire no hook).
+    const ok = await api.pty.sendChatPrompt(nodeId, text, agentId)
+    if (isChatPromptBlocked(ok)) {
+      // Nothing reached the pane: the draft stays for a resend once the dialog is answered.
+      setScreenBlock({ kind: ok.dialog === null ? 'no-prompt' : 'dialog', text: ok.dialog, live: pollScreen })
+      return
+    }
+    if (ok === 'pasted-not-submitted') {
+      window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: TEXT_NOT_SUBMITTED } }))
+      setInput('')
+      return
+    }
+    if (!ok) {
+      setReadonly(true)
+      return
+    }
+    // Optimistic: show the prompt immediately. A live read keeps it until the transcript carries it
+    // (`carryUnconfirmed`); the turn-end reload / ↻ reconcile from the transcript outright.
+    setScreenBlock(null)
+    justSentRef.current = true
+    setThread((t) => ({ ...t, messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text }] }] }))
+    setOptimistic(true)
+    setInput('')
+    // A built-in that opens a dialog in the TUI (`/rewind`, `/resume`, `/model`, …) is now on screen
+    // THERE, invisible from here, and the state still reads `done`: the next message's Enter would
+    // answer it. Go to the terminal — the same hand-off the toolbar's model/effort labels make.
+    // Only after the send was confirmed (`ok === true` above): nothing opened otherwise.
+    if (onShowTerminal && isInteractiveBuiltin(agentId, text)) {
+      onShowTerminal()
+      return
+    }
+    // A local command (`/model`, `!ls`) fires no hook: schedule ONE live tail read, one throttle
+    // interval out (claude writes the command record once the command ran), so its confirmation
+    // retires the working row instead of the 15 s timeout. A read already in flight defers it.
+    if (sentCommand(text)) {
+      if (commandReadTimerRef.current !== null) clearTimeout(commandReadTimerRef.current)
+      const fire = () => {
+        if (tailInFlightRef.current || olderInFlightRef.current) {
+          commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
+          return
+        }
+        commandReadTimerRef.current = null
+        loadRef.current(true)
+      }
+      commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
+    }
+  }, [api, input, nodeId, agentId, onShowTerminal, pollScreen])
+  // A send in flight. A typed send (core/typed-input.ts, claude) takes a moment — core waits for the
+  // pane to show the text before it presses Enter — and the draft is only cleared once it lands, so
+  // a second Enter in that window would send the same prompt twice. Ignore it instead.
+  const sendingRef = useRef(false)
+  const send = useCallback(async () => {
+    if (sendingRef.current) return
     sendingRef.current = true
     try {
-      // The kernel's say (chatPaneGate.ts): an agent that announces no quit (codex) may have left a
-      // SHELL in the pane while the store still reads `done` — typed there, the message would run.
-      const pane = await chatPaneRefusal(agentId, nodeId, {
-        paneOwner: (n) => api.pty.paneOwner(n),
-        customAgents: useSettings.getState().settings.customAgents
-      })
-      if (pane) {
-        const message = chatPaneRefusalToast(pane, chatAgentLabel(agentId, useSettings.getState().settings.customAgents))
-        window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
-        return
-      }
-      // Typed, not pasted, for an agent whose composer was measured (`typesChatInput`): Claude Code
-      // wraps a multi-line PASTE as <pasted_content>, content its model is told may not be the user's
-      // own words (core/typed-input.ts). Ignored off tmux. Every other agent keeps the paste.
-      const ok = typesChatInput(agentId)
-        ? await api.pty.sendText(nodeId, text, { typed: true })
-        : await api.pty.sendText(nodeId, text)
-      if (ok === 'pasted-not-submitted') {
-        window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: TEXT_NOT_SUBMITTED } }))
-        setInput('')
-        return
-      }
-      if (!ok) {
-        setReadonly(true)
-        return
-      }
-      // Optimistic: show the prompt immediately. A live read keeps it until the transcript carries it
-      // (`carryUnconfirmed`); the turn-end reload / ↻ reconcile from the transcript outright.
-      justSentRef.current = true
-      setThread((t) => ({ ...t, messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text }] }] }))
-      setOptimistic(true)
-      setInput('')
-      // A built-in that opens a dialog in the TUI (`/rewind`, `/resume`, `/model`, …) is now on screen
-      // THERE, invisible from here, and the state still reads `done`: the next message's Enter would
-      // answer it. Go to the terminal — the same hand-off the toolbar's model/effort labels make.
-      // Only after the send was confirmed (`ok === true` above): nothing opened otherwise.
-      if (onShowTerminal && isInteractiveBuiltin(agentId, text)) {
-        onShowTerminal()
-        return
-      }
-      // A local command (`/model`, `!ls`) fires no hook: schedule ONE live tail read, one throttle
-      // interval out (claude writes the command record once the command ran), so its confirmation
-      // retires the working row instead of the 15 s timeout. A read already in flight defers it.
-      if (sentCommand(text)) {
-        if (commandReadTimerRef.current !== null) clearTimeout(commandReadTimerRef.current)
-        const fire = () => {
-          if (tailInFlightRef.current || olderInFlightRef.current) {
-            commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
-            return
-          }
-          commandReadTimerRef.current = null
-          loadRef.current(true)
-        }
-        commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
-      }
+      await sendOnce()
     } finally {
       sendingRef.current = false
     }
-  }, [api, input, nodeId, agentId, onShowTerminal])
+  }, [sendOnce])
 
   // The scheduled command read belongs to THIS transcript and this mount.
   useEffect(
@@ -924,6 +1009,14 @@ export function ChatPanel({
             )}
           </div>
         ))}
+        {screenBlock && (
+          <div className="term-chat__screen-block" role="status" aria-live="polite">
+            <div className="term-chat__screen-block-title">
+              {screenBlockedSentence(screenBlock.kind, agentLabel, mdChip)}
+            </div>
+            {screenBlock.text !== null && <pre className="term-chat__screen-block-text">{screenBlock.text}</pre>}
+          </div>
+        )}
         {activity && (
           // One live region for both sentences, so working → waiting changes its text instead of
           // remounting it (a remounted role=status is announced again). The words are the
@@ -954,9 +1047,12 @@ export function ChatPanel({
             refusal,
             agentLabel,
             chip: mdChip,
-            answerOnCard: answerCard !== null
+            answerOnCard: answerCard !== null,
+            screen: screenBlock?.live === true ? screenBlock.kind : null
           })}
-          disabled={readonly || refusal !== null}
+          // A dialog the POLL found is also cleared by it; one a refused send found is not (a remote
+          // pane is never polled), so that one leaves the draft editable for the resend.
+          disabled={readonly || refusal !== null || screenBlock?.live === true}
           onWriteRefused={onWriteRefused}
           sendUnconfirmed={optimistic}
           pathsForFiles={pathsForFiles}

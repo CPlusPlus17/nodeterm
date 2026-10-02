@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentProcessInPane } from '../terminal/live-work'
-import { canSendFromChat, chatComposerPlaceholder, chatSendRefusal } from './chatSendGate'
+import { canSendFromChat, chatComposerPlaceholder, chatSendRefusal, screenBlockedSentence } from './chatSendGate'
 
 describe('chatSendRefusal / canSendFromChat', () => {
   it('allows a finished turn and an unknown state (no hook knowledge keeps the historical behavior)', () => {
@@ -113,5 +113,26 @@ describe('chatComposerPlaceholder', () => {
     expect(chatComposerPlaceholder({ ...base, readonly: true, refusal: 'dialog' })).toBe(
       "Can't write to this session"
     )
+  })
+})
+
+describe('screenBlockedSentence — the agent\'s own dialog is on screen', () => {
+  it('points at the terminal through the bound chord, or names the action when unbound', () => {
+    expect(screenBlockedSentence('dialog', 'Claude Code', '⌘M')).toBe(
+      'Claude Code is showing a dialog — press ⌘M to answer it in the terminal'
+    )
+    expect(screenBlockedSentence('dialog', 'Claude Code', '')).toBe(
+      'Claude Code is showing a dialog — switch back to the terminal to answer it'
+    )
+    expect(screenBlockedSentence('no-prompt', 'Claude Code', '⌘M')).toBe(
+      "Claude Code's input box isn't on screen — press ⌘M to check the terminal"
+    )
+  })
+
+  it('is what the composer placeholder says, over every state sentence but read-only', () => {
+    const base = { readonly: false, agentLabel: 'Claude Code', chip: '⌘M', refusal: null, screen: 'dialog' as const }
+
+    expect(chatComposerPlaceholder(base)).toBe(screenBlockedSentence('dialog', 'Claude Code', '⌘M'))
+    expect(chatComposerPlaceholder({ ...base, readonly: true })).toBe("Can't write to this session")
   })
 })

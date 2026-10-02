@@ -45,14 +45,18 @@ export interface HostedAttemptRequest {
   afterDrop?: boolean
   /** A bookmarked reconnect: this side confirms on its own (no SAS prompt is expected). */
   autoConfirm?: boolean
+  /** Activate this tab when the mount places it (the project the user just shared). */
+  focusProjectId?: string
 }
 
 export type HostedAttemptPhase = 'connecting' | 'waiting' | 'mounting' | 'live'
 
 /** How a mount ended: a live tab, or not — and then whether trying again could help. `retry` is for
  *  a connection that dropped before the host answered (a host restarting, a relay blip): the relay
- *  client exists before the host is reached, so that failure arrives here rather than as a code. */
-export type HostedMountResult = { projectId: string } | { retry: boolean }
+ *  client exists before the host is reached, so that failure arrives here rather than as a code.
+ *  `projectIds` = every tab the one connection serves (a hosted team shares several projects);
+ *  `projectId` is the one the attempt follows. */
+export type HostedMountResult = { projectId: string; projectIds?: string[] } | { retry: boolean }
 
 export interface HostedAttemptDeps {
   /** `relayClient.connect(code)` → a connection id; rejects with main's `[E_JOIN_…]` message. */
@@ -93,6 +97,9 @@ export interface HostedAttempts {
    *  in, and its team's slot is free at once. A connection waiting for approval is closed; a live
    *  one is the tab's own to close (its session teardown does), and is not reported as a drop. */
   cancelProject(projectId: string): void
+  /** One of a live team's tabs went away while others remain: its attempt now belongs to `to`, so a
+   *  later drop reconnects into a tab that is still open, and closing the old one stops nothing. */
+  retarget(fromProjectId: string, toProjectId: string): void
   /** Stop everything (the canvas is going away). */
   dispose(): void
 }
@@ -298,6 +305,12 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
         // Waiting for approval: nobody will ever look at that tab, so the connection goes too.
         if (e.phase === 'mounting' && e.connectionId) deps.disconnect(e.connectionId)
         release(e)
+      }
+    },
+    retarget(from, to) {
+      for (const e of entries.values()) {
+        if (e.projectId === from) e.projectId = to
+        if (e.req.reconnectProjectId === from) e.req = { ...e.req, reconnectProjectId: to }
       }
     },
     dispose() {

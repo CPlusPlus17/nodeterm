@@ -36,7 +36,7 @@ export function RecentConversations({ items, actionFor, onResume, now }: RecentC
         {groups.map((g) => (
           <div key={g.cwd ?? '\0'} className="welcome__convs-group">
             <div className="welcome__convs-folder" title={g.cwd ?? 'The history does not name a folder'}>
-              {folderLabel(g.cwd)}
+              <span className="welcome__convs-folder-name">{folderLabel(g.cwd)}</span>
               {g.cwd && <span className="welcome__recent-path">{g.cwd}</span>}
             </div>
             {g.items.map((conv) => {

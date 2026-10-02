@@ -16,15 +16,15 @@ import { useAgentStatus } from '../state/agentStatus'
 
 // ONE stable api object: `load` depends on `api`, so a fresh object per `useSession()` call would
 // re-run the load effect on every render and never settle.
-const { sendText, session } = vi.hoisted(() => {
-  const sendText = vi.fn(async (_id: string, _text: string) => true as const)
+const { sendChatPrompt, session } = vi.hoisted(() => {
+  const sendChatPrompt = vi.fn(async (_id: string, _text: string, _agent: string) => true as const)
   const session = {
     api: {
       chat: { readTranscript: async () => ({ messages: [], found: true }) },
-      pty: { sendText }
+      pty: { sendChatPrompt }
     }
   }
-  return { sendText, session }
+  return { sendChatPrompt, session }
 })
 vi.mock('../session/session', () => ({ useSession: () => session }))
 
@@ -61,7 +61,7 @@ const enter = (ta: HTMLTextAreaElement): void => {
 }
 
 beforeEach(() => {
-  sendText.mockClear()
+  sendChatPrompt.mockClear()
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -84,7 +84,7 @@ describe('ChatPanel send gate', () => {
     expect(ta.disabled).toBe(false)
     await act(async () => type(ta, 'hello'))
     await act(async () => enter(ta))
-    expect(sendText).toHaveBeenCalledWith(NODE, 'hello', { typed: true })
+    expect(sendChatPrompt).toHaveBeenCalledWith(NODE, 'hello', 'claude')
   })
 
   it.each(['waiting', 'blocked'] as const)('disables the composer and explains while %s', async (state) => {
@@ -104,7 +104,7 @@ describe('ChatPanel send gate', () => {
       setAgentState('waiting')
       enter(ta)
     })
-    expect(sendText).not.toHaveBeenCalled()
+    expect(sendChatPrompt).not.toHaveBeenCalled()
   })
 
   it('disables the composer on a hibernated node: its state still reads done, but a SHELL owns the pane', async () => {
@@ -122,7 +122,7 @@ describe('ChatPanel send gate', () => {
       setAgentState('done', { hibernated: true })
       enter(ta)
     })
-    expect(sendText).not.toHaveBeenCalled()
+    expect(sendChatPrompt).not.toHaveBeenCalled()
   })
 
   it('disables the composer after the CLI exited (/exit, Ctrl+D): state undefined, a SHELL owns the pane', async () => {
@@ -140,6 +140,6 @@ describe('ChatPanel send gate', () => {
       setAgentState(undefined, { sessionEnded: true })
       enter(ta)
     })
-    expect(sendText).not.toHaveBeenCalled()
+    expect(sendChatPrompt).not.toHaveBeenCalled()
   })
 })

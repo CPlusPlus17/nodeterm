@@ -28,7 +28,8 @@ function fakeHosted(pulled: HostedPending[] | Error = []) {
       calls.push('sub:closed')
       onClosed = l
       return unClosed
-    })
+    }),
+    onSharedChanged: () => () => {}
   } as unknown as HostedSessionApi
   return { hosted, calls, unPending, unClosed, push: (p: HostedPending) => onPending?.(p), close: (id: string, reason: HostedPendingClosedReason) => onClosed?.({ pendingId: id, reason }) }
 }

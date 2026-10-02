@@ -6,14 +6,15 @@ import { IPC } from '../shared/ipc'
 import { platform } from './platform'
 import {
   DEFAULT_PROJECT_ID, EMPTY_WORKSPACE,
-  type BridgeLink, type CanvasNodeState, type KanbanColumn, type KanbanLabel, type Project, type ProjectKanban,
-  type Workspace, type WorkspaceSaveOptions, type WorkspaceV1
+  type BridgeLink, type CanvasNodeState, type HandedOffTo, type KanbanColumn, type KanbanLabel, type Project,
+  type ProjectKanban, type Workspace, type WorkspaceSaveOptions, type WorkspaceV1
 } from '../shared/types'
 import { contentOf, type CanvasContent } from '../shared/canvas-content'
 import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
   projectToFile, resolveNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
+  sanitizeHandedOffTo,
   sanitizeKanban,
   sanitizeLinks,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
@@ -37,6 +38,18 @@ import {
 import { appendProjectNode, removeProjectNode, type RemoteNodeInput } from './project-node-append'
 import { editProjectCardLabels, ensureProjectBoard, setProjectCardColumn, type CardLabelEdit } from './project-kanban-write'
 import { boardLabels, cardMeta } from '../shared/kanban-labels'
+import { localizeAdoptedNode } from '../shared/adopt-cwd'
+import { clampProjectName, folderName } from '../shared/project-name'
+import { SYSTEM_NODE_COLORS } from '../shared/node-colors'
+import { codedError } from './relay/admin-error'
+
+/** What `WorkspaceStore.adoptFolder` did: the project now holding the folder, and whether this call
+ *  added it (`created: false` = an existing project already held the same real directory). */
+export interface AdoptFolderResult {
+  projectId: string
+  projectName: string
+  created: boolean
+}
 
 /**
  * The seam a content authority (the Server Edition's canvas authority, `core/canvas-authority.ts`)
@@ -234,6 +247,20 @@ async function sweepStaleTmp(target: string): Promise<void> {
 }
 
 /**
+ * Whether `real` (already a real path) is the filesystem root, the real home directory, or a folder
+ * that contains it. A shared folder is readable by every teammate, Viewers included, and a home
+ * holds the ssh keys, the agents' credentials and nodeterm's own hook tokens. An unreadable home is
+ * judged by the path as given; an empty one only refuses the root.
+ */
+async function containsHome(real: string, home: string): Promise<boolean> {
+  if (path.parse(real).root === real) return true
+  if (!home) return false
+  const homeReal = await fs.realpath(home).catch(() => home)
+  const rel = path.relative(real, homeReal)
+  return rel === '' || (!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..')
+}
+
+/**
  * v3 persistence: workspace.json is an index (refs + inline canvases); each local
  * project's data lives in <cwd>/.nodeterm/project.json (source of truth). The
  * renderer contract is unchanged: load() returns / save() takes an assembled
@@ -325,6 +352,42 @@ export class WorkspaceStore {
   private index: WorkspaceIndexV3 | null = null
   /** Optional hook fired after every load()/save() — the watcher re-syncs its watch set (Task 5). */
   onPersist?: () => void
+  /**
+   * Some load in THIS run found no readable workspace.json — missing (deleted, a first run, a crash
+   * between the corrupt-file set-aside and the next write), unreadable, unparsable, or parsable but no
+   * index this build recognises (`{}`, a v3 without entries, a newer build's version) — so whatever
+   * index this run holds afterwards may have been rebuilt from NOTHING: the renderer's unconditional
+   * boot save writes an EMPTY index over the set-aside file while every project's own
+   * `.nodeterm/project.json` still holds its nodes. `knownNodeIdsStrict` then answers undefined for
+   * the rest of the run (controller ruling R44): a live link would otherwise read every node as gone
+   * and be revoked server-side a second after launch — irreversibly. The cost: a live link's node-gone
+   * waits for the next launch with a readable index (links still end at their expiry).
+   *
+   * Live links ONLY (R64/M2): `knownNodeIds`, which the agent-status mirror prunes identities with,
+   * does not read this flag. A mirror entry pruned against an index rebuilt from nothing costs one
+   * hook event to restore; the flag lasts for the whole PROCESS, and a Server Edition started on a
+   * fresh data dir runs for weeks — R54's first version switched the mirror's pruning off for all of
+   * them, so the phone kept listing deleted sessions for up to the 30-day identity TTL.
+   */
+  private indexRebuiltThisRun = false
+  /**
+   * What the most recent `loadInner` found at the index path: `read` (a shape this build builds a
+   * workspace from, empty or not), `absent` (no file — a first run), or `unreadable` (the file is
+   * there but could not be read, did not parse, or is a shape this build does not recognise, such
+   * as a newer build's). Unlike `indexRebuiltThisRun` it describes the LAST load, not the run, so a
+   * caller about to write a fresh index can ask whether doing so would replace one it never read
+   * (`adoptFolder`, which loads without sidelining and so leaves no backup behind).
+   */
+  private indexReadState: 'read' | 'absent' | 'unreadable' = 'absent'
+  /**
+   * Projects `adoptFolder` added that no renderer has loaded yet. A renderer's save is its whole
+   * workspace and `saveNow` rebuilds the index from it, so a browser tab opened before a headless
+   * adoption would otherwise delete the adopted entry on its next autosave. A renderer can only
+   * delete a project it has loaded, so an entry no renderer has seen is never treated as deleted:
+   * the renderer save path re-appends it (`withPendingAdoptions`) until an OWNER client's load
+   * hands it out (a client that cannot save cannot be the one whose save would drop it).
+   */
+  private pendingAdoptions = new Set<string>()
   /** The content authority, when this process runs one (Server Edition hosting a team). */
   private contentAuthority: ContentAuthorityHooks | null = null
 
@@ -342,9 +405,21 @@ export class WorkspaceStore {
   }
 
   registerIpc(): void {
-    platform().handle(IPC.workspaceLoad, () => this.load())
+    platform().handleWithSender(IPC.workspaceLoad, async (senderId: number) => {
+      const workspace = await this.load()
+      // The renderer now holds these, so from here on its saves speak for them. Only the ids this
+      // load actually returned: an adoption that landed while the load was in flight stays pending.
+      // And only for a client that CAN save: a relay peer or a hosted-team guest reaches this same
+      // handler but is refused `workspace:save`, so its load proves nothing about the owner's tabs,
+      // and clearing on it let the first teammate to join hand a stale owner tab the right to drop
+      // the shared project. A platform that cannot tell (a test double) counts every caller.
+      if (platform().isOwnerClient?.(senderId) !== false) {
+        for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
+      }
+      return workspace
+    })
     platform().handle(IPC.workspaceSave, (workspace: Workspace, opts?: WorkspaceSaveOptions) =>
-      this.save(workspace, { localOnly: opts?.localOnly === true }))
+      this.saveFromRenderer(workspace, opts?.localOnly === true))
     platform().handle(IPC.workspaceProbeFolder, (folder: string) => this.probeFolder(folder))
     platform().handle(IPC.workspaceProjectFileState, (cwd: unknown) =>
       typeof cwd === 'string' && cwd ? this.projectFileState(cwd) : 'unreadable')
@@ -389,7 +464,9 @@ export class WorkspaceStore {
     let raw: string
     try {
       raw = await fs.readFile(this.indexPath, 'utf-8')
-    } catch {
+    } catch (err) {
+      this.indexReadState = (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'absent' : 'unreadable'
+      this.indexRebuiltThisRun = true // R44: see the field
       // No index. Usually a first run — but it is also what a crash BETWEEN the sideline rename
       // below and the next index write leaves behind, and that case owes the user the note. Only
       // this branch pays for the readdir, and only for a load that may touch disk anyway.
@@ -400,6 +477,8 @@ export class WorkspaceStore {
     try {
       parsed = JSON.parse(raw)
     } catch {
+      this.indexReadState = 'unreadable'
+      this.indexRebuiltThisRun = true // R44: see the field
       // Same rule as a corrupt project.json: sideline the only copy so the boot flow's
       // unconditional save cannot replace it with an empty index. Read-only callers must not
       // mutate the disk (sideline: false).
@@ -413,10 +492,27 @@ export class WorkspaceStore {
       }
       return EMPTY_WORKSPACE
     }
-    const anyParsed = parsed as { version?: number }
-    if (anyParsed?.version === 3) return this.loadV3(parsed as WorkspaceIndexV3, sideline)
+    const anyParsed = parsed as { version?: number; entries?: unknown }
+    // Only a v3 index with an entry list of objects is one: `{"version":3}` alone used to reach loadV3
+    // and throw (`index.entries is not iterable`); now it falls through, like any unrecognised shape.
+    if (anyParsed?.version === 3 && Array.isArray(anyParsed.entries) && anyParsed.entries.every(isObjectEntry)) {
+      try {
+        const built = await this.loadV3(parsed as WorkspaceIndexV3, sideline)
+        this.indexReadState = 'read'
+        return built
+      } catch (e) {
+        this.indexReadState = 'unreadable'
+        this.indexRebuiltThisRun = true // R44: an index we could not build is not a read of it
+        throw e
+      }
+    }
     // v1/v2: assemble in memory now; the first save() performs the actual migration.
     const legacy = migrateLegacy(parsed)
+    // PARSED, but no index this build recognises (`{}`, `null`, `[]`, a v2 without its projects list,
+    // a v3 without entries, a newer build's version): the run's index is rebuilt from nothing exactly
+    // as for an unparsable file (R44 / re-review NEW-1). A readable EMPTY v2/v3 index is not this.
+    if (legacy === EMPTY_WORKSPACE) this.indexRebuiltThisRun = true
+    this.indexReadState = legacy === EMPTY_WORKSPACE ? 'unreadable' : 'read'
     if (legacy.projects.length) this.pendingV2Backup = raw
     return legacy
   }
@@ -456,6 +552,9 @@ export class WorkspaceStore {
       // layouts happens later, in `fileToProject`, which is the first point that knows what the
       // project file actually carries.
       entry.layoutViewports = sanitizeLayoutViewports(entry.layoutViewports)
+      // Same rule for the "Share with team" handover record: it decides whether this desktop may
+      // write an SSH project's file at all, so only a well-formed record is honoured.
+      entry.handedOffTo = sanitizeHandedOffTo(entry.handedOffTo)
     }
     this.index = index
     const built: LoadedEntry[] = []
@@ -518,6 +617,7 @@ export class WorkspaceStore {
               cwd: e.cwd,
               closed: e.closed,
               closedAt: e.closedAt,
+              handedOffTo: e.handedOffTo,
               viewport: e.viewport,
               defaultAccountId: e.defaultAccountId,
               breadcrumbs: e.breadcrumbs,
@@ -541,6 +641,7 @@ export class WorkspaceStore {
               ssh: e.ssh,
               closed: e.closed,
               closedAt: e.closedAt,
+              handedOffTo: e.handedOffTo,
               viewport: e.viewport,
               defaultAccountId: e.defaultAccountId,
               breadcrumbs: e.breadcrumbs,
@@ -802,6 +903,9 @@ export class WorkspaceStore {
     ssh: NonNullable<Project['ssh']>,
     file: ProjectSettingsFileV1
   ): Promise<boolean> {
+    // Handed to a hosted team: the server core owns the host's `.nodeterm/` now. The cache keeps
+    // this machine's copy; nothing is pushed over the server's.
+    if (this.index?.entries.find((x) => x.id === projectId)?.handedOffTo) return false
     const io = this.remoteIO
     if (!io?.writeSettings) return false
     try {
@@ -1032,6 +1136,7 @@ export class WorkspaceStore {
       id: e.id,
       closed: e.closed,
       closedAt: e.closedAt,
+      handedOffTo: e.handedOffTo,
       viewport: e.viewport,
       defaultAccountId: e.defaultAccountId,
       breadcrumbs: e.breadcrumbs,
@@ -1114,6 +1219,31 @@ export class WorkspaceStore {
     const run = this.saveChain.then(() => this.saveNow(workspace, opts.localOnly === true))
     this.saveChain = run.catch(() => {})
     return run
+  }
+
+  /**
+   * A RENDERER's whole-workspace save (the `workspace:save` IPC). Exactly `save()`, plus the
+   * pending-adoption rule (see `pendingAdoptions`). The merge runs inside the chain step, never
+   * before the enqueue: an await ahead of it would let a later save overtake this one.
+   */
+  private saveFromRenderer(workspace: Workspace, localOnly: boolean): Promise<void> {
+    const run = this.saveChain.then(async () =>
+      this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(workspace) : workspace, localOnly))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  /** `workspace` plus the store's own copy of every pending adoption it does not carry. Runs on
+   *  `saveChain`. An entry whose file cannot be read right now is left out, as before this rule. */
+  private async withPendingAdoptions(workspace: Workspace): Promise<Workspace> {
+    const carried = new Set(workspace.projects.map((p) => p.id))
+    const missing: Project[] = []
+    for (const id of this.pendingAdoptions) {
+      if (carried.has(id)) continue
+      const own = await this.readLocalRef(id)
+      if (own) missing.push(own)
+    }
+    return missing.length ? { ...workspace, projects: [...workspace.projects, ...missing] } : workspace
   }
 
   /** The parse of `lastWritten.get(file)`, cached per raw string (see `lastWrittenParsed`). Throws
@@ -1403,6 +1533,8 @@ export class WorkspaceStore {
     // ssh caches: bump rev on change so a later remote write can win; mirror write in Task 8.
     for (const e of index.entries) {
       if (!e.ssh || !e.cache) continue
+      if (e.handedOffTo) continue // handed to a hosted team: the server core is the only writer now
+      // (`markUnmirrored` may still add a handed-off id; every consumer of that debt refuses it.)
       const prevRev = this.revs.get(e.id) ?? 0
       const previousCache = this.index?.entries.find((old) => old.id === e.id && old.cache)?.cache
       const changedSinceLoad = !(previousCache && sameProjectContent(previousCache, e.cache))
@@ -1581,11 +1713,16 @@ export class WorkspaceStore {
    * index entry owns the id for good.
    */
   async probeFolder(folder: string): Promise<Project | null> {
+    return (await this.probeFolderFile(folder))?.project ?? null
+  }
+
+  /** `probeFolder` plus the file's own `rev`, from the SAME read (`adoptFolder` continues it). */
+  private async probeFolderFile(folder: string): Promise<{ project: Project; rev: number } | null> {
     const read = await this.readProjectFile(folder, false)
     // No `localExec`: this folder is being ADOPTED (its project.json may have been cloned from
     // anywhere), so its nodes come up with no custom shell and no extra ssh args — the safe
     // defaults. Only values this machine typed itself are ever restored (@shared/node-exec).
-    return read ? fileToProject(read.file, { id: freshProjectId(), cwd: folder }) : null
+    return read ? { project: fileToProject(read.file, { id: freshProjectId(), cwd: folder }), rev: fileRev(read.file) } : null
   }
 
   /**
@@ -1605,6 +1742,112 @@ export class WorkspaceStore {
     } catch (err) {
       return (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'absent' : 'unreadable'
     }
+  }
+
+  /**
+   * HEADLESS adoption (`team bootstrap`): add the folder at `cwd` as a project of this core and
+   * save it, so the canvas authority can read it before it is shared. One project per REAL path:
+   * an entry whose folder resolves to the same directory is reused, never duplicated, because the
+   * desktop names the folder by whatever path it holds and a symlink must not mint a second
+   * project. A reused project that was closed is reopened. A folder with a project file is adopted
+   * with `probeFolder` semantics (fresh project id, node ids kept — they are tmux session names),
+   * and its `rev` continues from the file's own. One without becomes an empty project named after
+   * the folder.
+   *
+   * Every refusal is one that keeps the only copy of something: a project file that is present
+   * but cannot be read (see `projectFileState`) — whether or not an entry already names the folder
+   * (a reused entry whose file did not load is an `unavailable` placeholder with no content, which
+   * the authority could not read) — and an index this load could not read, which the save below
+   * would replace with one holding only the adopted project (and, when an earlier load this run did
+   * read it, `sweepRemovedDataFiles` would then delete every inline project's data file with it).
+   * Nothing here sidelines a corrupt file either; it is left in place for the user to fix. The root,
+   * the home directory and any folder containing the home are refused with E_BAD_CWD
+   * (`containsHome`): every teammate, Viewers included, may read any file under a shared folder.
+   *
+   * `home` expands the SSH project's `~` paths and drops its SSH-only node flags
+   * (`localizeAdoptedNode`), on a reused project too: a browser's "Open folder…" or an older
+   * desktop mirror push can have left that entry holding the SSH view. The server runs as the same
+   * user the desktop logged in as, so the home is the same. For a project the canvas authority
+   * already governs, the save is overlaid with the authority's own content (it owns shared
+   * content), so this localizes only a project that is not shared yet.
+   *
+   * The whole read-modify-write runs ON `saveChain`: a save queued meanwhile would otherwise write
+   * an index built before this project existed over the one that adds it. A created project stays
+   * in `pendingAdoptions` until a renderer loads it, so a browser tab that loaded before this call
+   * cannot drop it with its next autosave.
+   */
+  adoptFolder(cwd: string, opts: { home: string }): Promise<AdoptFolderResult> {
+    const run = this.saveChain.then(() => this.adoptFolderNow(cwd, opts))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private async adoptFolderNow(cwd: string, opts: { home: string }): Promise<AdoptFolderResult> {
+    if (!path.isAbsolute(cwd)) throw codedError('E_BAD_CWD', `Not an absolute path: ${cwd}`)
+    let real: string
+    try {
+      real = await fs.realpath(cwd)
+      if (!(await fs.stat(real)).isDirectory()) throw new Error('not a directory')
+    } catch {
+      throw codedError('E_BAD_CWD', `Not a directory on this host: ${cwd}`)
+    }
+    if (await containsHome(real, opts.home)) {
+      throw codedError(
+        'E_BAD_CWD',
+        `Refusing to share ${real}: it is the home directory or contains it, and every teammate, Viewers included, could read every file in it. Share a project folder instead.`
+      )
+    }
+    // `load` does not queue on `saveChain`, so calling it from this chain step cannot deadlock.
+    // Read-only (no sideline): adoption must not rename some OTHER project's conflict-marked file.
+    const workspace = structuredClone(await this.load({ sideline: false }))
+    // Set by the load just above. A load running beside it reads the same file, so it can only
+    // report a different state if the file itself changed in between.
+    if (this.indexReadState === 'unreadable') {
+      throw codedError('E_ADOPT_FAILED', `This server's workspace index could not be read; fix or move ${this.indexPath} first.`)
+    }
+    for (const p of workspace.projects) {
+      if (!p.cwd || p.ssh) continue
+      const theirs = await fs.realpath(p.cwd).catch(() => p.cwd as string)
+      if (theirs !== real) continue
+      if (p.unavailable) {
+        throw codedError('E_ADOPT_FAILED', `${projectFilePath(real)} could not be read; fix it before sharing this folder.`)
+      }
+      const nodes = p.nodes.map((n) => localizeAdoptedNode(n, opts.home))
+      const localized = nodes.some((n, i) => n !== p.nodes[i])
+      if (localized) p.nodes = nodes
+      const reopened = p.closed === true
+      if (reopened) {
+        p.closed = false
+        delete p.closedAt
+      }
+      if (localized || reopened) await this.saveNow(workspace, false)
+      return { projectId: p.id, projectName: p.name, created: false }
+    }
+    const state = await this.projectFileState(real)
+    if (state === 'unreadable') throw codedError('E_ADOPT_FAILED', `Could not read ${projectFilePath(real)}.`)
+    let project: Project
+    if (state === 'present') {
+      const probed = await this.probeFolderFile(real)
+      if (!probed) throw codedError('E_ADOPT_FAILED', `${projectFilePath(real)} is not a project file this server can read.`)
+      project = { ...probed.project, nodes: probed.project.nodes.map((n) => localizeAdoptedNode(n, opts.home)) }
+      // The save numbers the file from `revs` (+1). Without this the fresh id has no entry and the
+      // file would go back to rev 1, while every other writer keeps a project file's rev rising.
+      this.revs.set(project.id, probed.rev)
+    } else {
+      project = {
+        id: freshProjectId(),
+        name: clampProjectName(folderName(real)) || 'Project',
+        color: SYSTEM_NODE_COLORS[workspace.projects.length % SYSTEM_NODE_COLORS.length],
+        cwd: real,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: []
+      }
+    }
+    workspace.projects.push(project)
+    if (!workspace.activeProjectId) workspace.activeProjectId = project.id
+    await this.saveNow(workspace, false)
+    this.pendingAdoptions.add(project.id)
+    return { projectId: project.id, projectName: project.name, created: true }
   }
 
   localRefPaths(): string[] {
@@ -1630,6 +1873,7 @@ export class WorkspaceStore {
       cwd: e.cwd,
       closed: e.closed,
       closedAt: e.closedAt,
+      handedOffTo: e.handedOffTo,
       viewport: e.viewport,
       defaultAccountId: e.defaultAccountId,
       breadcrumbs: e.breadcrumbs,
@@ -1681,9 +1925,18 @@ export class WorkspaceStore {
     return adopted
   }
 
-  /** The ssh entry ids of the current index — what the connected-project poll iterates. */
+  /** The ssh entry ids of the current index: the IDENTITY list ("this project runs on someone
+   *  else's machine", connected or not, handed off or not), which the session-memory and dev-ports
+   *  scope checks read. */
   sshProjectIds(): string[] {
     return (this.index?.entries ?? []).filter((e) => e.ssh).map((e) => e.id)
+  }
+
+  /** The ssh entry ids this desktop still keeps in sync — what the connected-project poll and the
+   *  agent-status push iterate. Leaves out a project handed to a hosted team: the server core on its
+   *  host owns its file and sessions now, so it is never polled again. */
+  pollableSshProjectIds(): string[] {
+    return (this.index?.entries ?? []).filter((e) => e.ssh && !e.handedOffTo).map((e) => e.id)
   }
 
   /**
@@ -1891,6 +2144,9 @@ export class WorkspaceStore {
    * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
    * Consequence: ONE permanently unavailable local ref or one never-cached SSH project turns
    * existence pruning off for EVERY project, leaving only the 30-day identity TTL.
+   * It does NOT read `indexRebuiltThisRun` (R64/M2): for the mirror an index rebuilt from nothing is
+   * an answer, because a wrongly pruned identity costs one hook event to restore. Live links, whose
+   * "gone" is an irreversible revoke, ask `knownNodeIdsStrict`.
    * Parses through `parsedLastWritten`, so a mirror flush re-parses no unchanged project.json.
    */
   knownNodeIds(): Set<string> | undefined {
@@ -1911,6 +2167,17 @@ export class WorkspaceStore {
       for (const n of nodes) if (n && typeof n.id === 'string') ids.add(n.id)
     }
     return ids
+  }
+
+  /**
+   * `knownNodeIds`, for a caller whose "not in any project" is IRREVERSIBLE — a live link, which a node
+   * gone ends and revokes server-side (R40). Also undefined for the rest of a run whose index was
+   * rebuilt from nothing (`indexRebuiltThisRun`, R44): an empty index written over a lost
+   * workspace.json is not a read of the projects it lost.
+   */
+  knownNodeIdsStrict(): Set<string> | undefined {
+    if (this.indexRebuiltThisRun) return undefined
+    return this.knownNodeIds()
   }
 
   /**
@@ -1975,6 +2242,22 @@ export class WorkspaceStore {
       }
     }
     return out
+  }
+
+  /**
+   * Does THIS machine hold an undelivered launch (`pendingLaunch`) for `nodeId` in `projectId`?
+   * Read from the entry's machine-local exec overlay (`localExec`, where every ref kind keeps it),
+   * with the entry's own node copy as a fallback. Same id semantics as `persistedCanvases`. Agent
+   * messaging asks it to tell a node that has not STARTED yet from one whose pane is unproven.
+   */
+  heldLaunch(projectId: string, nodeId: string): boolean {
+    for (const e of this.index?.entries ?? []) {
+      if ((e.project ? e.project.id : e.id) !== projectId) continue
+      if (e.localExec?.[nodeId]?.pendingLaunch) return true
+      const nodes = e.project?.nodes ?? e.cache?.nodes ?? []
+      return nodes.some((n) => n.id === nodeId && !!n.pendingLaunch)
+    }
+    return false
   }
 
   /**
@@ -2151,6 +2434,7 @@ export class WorkspaceStore {
           cwd: e.cwd,
           closed: e.closed,
           closedAt: e.closedAt,
+          handedOffTo: e.handedOffTo,
           viewport: e.viewport,
           defaultAccountId: e.defaultAccountId,
           breadcrumbs: e.breadcrumbs,
@@ -2210,6 +2494,7 @@ export class WorkspaceStore {
             cwd: e.cwd,
             closed: e.closed,
             closedAt: e.closedAt,
+            handedOffTo: e.handedOffTo,
             viewport: e.viewport,
             defaultAccountId: e.defaultAccountId,
             breadcrumbs: e.breadcrumbs,
@@ -2359,6 +2644,10 @@ export class WorkspaceStore {
     if (!e) return null
 
     if (e.ssh && e.cache) {
+      // Handed to a hosted team: the server core is the only writer of this file now. Refused
+      // BEFORE the transform, so the local cache never diverges and the renderer is never told
+      // about a change that will not land.
+      if (e.handedOffTo) return null
       const updated = transform(serializeProjectFile(e.cache))
       if (updated === null) return { file: e.cache, written: false }
       let parsed: ProjectFileV1
@@ -2431,6 +2720,7 @@ export class WorkspaceStore {
           ssh: e.ssh,
           closed: e.closed,
           closedAt: e.closedAt,
+          handedOffTo: e.handedOffTo,
           viewport: e.viewport,
           defaultAccountId: e.defaultAccountId,
           breadcrumbs: e.breadcrumbs,
@@ -2451,6 +2741,9 @@ export class WorkspaceStore {
    * session — the canvas node is gone on both machines while the tmux session keeps running.
    */
   private async mirrorSshCache(e: IndexEntryV3): Promise<void> {
+    // Handed to a hosted team: the server core is the only writer now. Together with
+    // `reconcileSsh`'s guard this covers every `remoteIO.write`, whatever the caller checked.
+    if (e.handedOffTo) return
     if (!e.ssh || !e.cache || !this.remoteIO) return
     const rescued = await this.rescueRemoteNodes(e)
     // AFTER the rescue: it replaces e.cache with the merged copy, which is what must land.
@@ -2498,7 +2791,7 @@ export class WorkspaceStore {
     }
     this.revs.set(e.id, e.cache.rev)
     return fileToProject(e.cache, {
-      id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt,
+      id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
       viewport: e.viewport, defaultAccountId: e.defaultAccountId, breadcrumbs: e.breadcrumbs,
       closedSessions: e.closedSessions, layoutViewports: e.layoutViewports,
       capabilityAck: e.capabilityAck, localExec: e.localExec
@@ -2577,6 +2870,7 @@ export class WorkspaceStore {
    * Returns the adopted project (for the caller to surface) or null when our cache stood/pushed.
    */
   private async reconcileSsh(e: IndexEntryV3, pushIfStanding = true): Promise<Project | null> {
+    if (e.handedOffTo) return null // handed to a hosted team: the server core is the only writer now
     if (!e.ssh || !this.remoteIO) return null
     const res = await this.remoteIO.read(e.id, e.ssh)
     if (res.status === 'error') {
@@ -2646,7 +2940,7 @@ export class WorkspaceStore {
       if (owed) this.unmirrored.add(e.id)
       else this.unmirrored.delete(e.id) // pure adopt: the server copy IS the truth now — nothing owed
       return fileToProject(adopted, {
-        id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt,
+        id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
         viewport: e.viewport, defaultAccountId: e.defaultAccountId, breadcrumbs: e.breadcrumbs,
         closedSessions: e.closedSessions, layoutViewports: e.layoutViewports,
         capabilityAck: e.capabilityAck, localExec: e.localExec
@@ -2662,7 +2956,7 @@ export class WorkspaceStore {
         this.revs.set(e.id, e.cache.rev)
         this.unmirrored.add(e.id) // the merged set must land on the server
         merged = fileToProject(e.cache, {
-          id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt,
+          id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
           viewport: e.viewport, defaultAccountId: e.defaultAccountId, breadcrumbs: e.breadcrumbs,
           closedSessions: e.closedSessions, layoutViewports: e.layoutViewports,
           capabilityAck: e.capabilityAck, localExec: e.localExec
@@ -2702,18 +2996,28 @@ function nodesMissingFrom(base: CanvasNodeState[], from: CanvasNodeState[]): Can
 }
 
 /** A labeled grey placeholder for a ref whose file can't be read right now. */
-function unavailableProject(e: { id: string; name: string; color: string; closed?: boolean; closedAt?: number; cwd?: string; ssh?: Project['ssh'] }): Project {
+function unavailableProject(e: {
+  id: string; name: string; color: string; closed?: boolean; closedAt?: number
+  handedOffTo?: HandedOffTo; cwd?: string; ssh?: Project['ssh']
+}): Project {
   return {
     id: e.id, name: e.name, color: e.color,
     viewport: { x: 0, y: 0, zoom: 1 }, nodes: [],
     ...(e.cwd ? { cwd: e.cwd } : {}), ...(e.ssh ? { ssh: e.ssh } : {}),
     ...(e.closed ? { closed: true } : {}),
     ...(e.closedAt ? { closedAt: e.closedAt } : {}),
+    // The placeholder is what the renderer saves back for this entry, so the guard must ride it:
+    // an unreachable handed-off project must stay handed off.
+    ...(e.handedOffTo ? { handedOffTo: e.handedOffTo } : {}),
     unavailable: true
   }
 }
 
-/** Normalize legacy on-disk shapes (v1 single canvas, v2 projects) into a v2-shaped workspace. */
+const isObjectEntry = (e: unknown): boolean => typeof e === 'object' && e !== null && !Array.isArray(e)
+
+/** Normalize legacy on-disk shapes (v1 single canvas, v2 projects) into a v2-shaped workspace.
+ *  Anything else answers `EMPTY_WORKSPACE` itself (by identity: `loadInner` reads that as "no index
+ *  this build recognises"). */
 function migrateLegacy(parsed: unknown): Workspace {
   const ws = parsed as Partial<Workspace> & Partial<WorkspaceV1>
   if (ws?.version === 2 && Array.isArray(ws.projects)) {

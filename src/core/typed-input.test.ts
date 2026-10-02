@@ -123,6 +123,26 @@ describe('typeThenSubmitWhenSettled', () => {
     expect(result).toBe('pasted-not-submitted')
   })
 
+  it('withholds the Enter when canSubmit says something now owns the keyboard', async () => {
+    const surface = { ...fakeSurface({ lag: 0 }), canSubmit: vi.fn(async () => false) }
+
+    const result = await typeThenSubmitWhenSettled('hello', surface, noWait)
+
+    expect(result).toBe('pasted-not-submitted')
+    expect(surface.canSubmit).toHaveBeenCalledTimes(1)
+    expect(surface.submit).not.toHaveBeenCalled()
+  })
+
+  it('asks canSubmit only once the text is on screen, then submits', async () => {
+    const surface = { ...fakeSurface({ lag: 1 }), canSubmit: vi.fn(async () => true) }
+
+    const result = await typeThenSubmitWhenSettled('hello', surface, noWait)
+
+    expect(result).toBe(true)
+    expect(surface.canSubmit).toHaveBeenCalledTimes(1)
+    expect(surface.submit).toHaveBeenCalledTimes(1)
+  })
+
   it('types nothing for a message with no visible characters', async () => {
     const surface = fakeSurface({})
 

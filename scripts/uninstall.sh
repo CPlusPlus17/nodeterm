@@ -36,7 +36,8 @@
 #     with a warning — they are harmless: the installed hook command is self-guarded and becomes
 #     a silent no-op once the script it points to is deleted.
 #   - macOS and Linux. On Windows use the NSIS uninstaller (Add/Remove Programs), then delete
-#     %APPDATA%\node-terminal and %USERPROFILE%\.nodeterm.
+#     %APPDATA%\node-terminal, %USERPROFILE%\.nodeterm and (once no nodeterm-sessionhost-v2.exe
+#     runs) %LOCALAPPDATA%\nodeterm\session-host.
 set -u
 
 DRY_RUN=0
