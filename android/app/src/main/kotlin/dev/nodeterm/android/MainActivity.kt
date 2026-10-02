@@ -19,6 +19,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.core.content.ContextCompat
+import dev.nodeterm.android.ui.AllComputersScreen
 import dev.nodeterm.android.ui.HostScreen
 import dev.nodeterm.android.ui.HostsScreen
 import dev.nodeterm.android.ui.NodetermTheme
@@ -28,7 +29,7 @@ import dev.nodeterm.android.ui.SourceControlScreen
 import dev.nodeterm.android.ui.TerminalScreen
 import dev.nodeterm.protocol.model.BackStack
 
-/** The screens. A plain back stack: six destinations, one deep link (the pairing URL). */
+/** The screens. A plain back stack: seven destinations, one deep link (the pairing URL). */
 sealed interface Route {
     data object Hosts : Route
     data class PairHost(val code: String? = null) : Route
@@ -37,6 +38,8 @@ sealed interface Route {
     data class Terminal(val hostId: String, val nodeId: String, val title: String) : Route
     /** One project's source control on that computer (audit A29). */
     data class SourceControl(val hostId: String, val projectId: String) : Route
+    /** Every paired computer's Inbox and Usage, merged (audit A55). Names no computer of its own. */
+    data object AllComputers : Route
 }
 
 /**
@@ -99,6 +102,9 @@ class Navigator(initial: BackStack<Route>) {
             is Route.Host -> listOf("host", r.hostId, r.tab.toString())
             is Route.Terminal -> listOf("terminal", r.hostId, r.nodeId, r.title)
             is Route.SourceControl -> listOf("git", r.hostId, r.projectId)
+            // A new name, not a new shape: a stack saved before this route existed decodes as before,
+            // and a build without it drops the entry (decode answers null) instead of guessing.
+            Route.AllComputers -> listOf("all")
         }
 
         private fun decode(parts: List<String>): Route? = when (parts.firstOrNull()) {
@@ -109,6 +115,7 @@ class Navigator(initial: BackStack<Route>) {
             "host" -> parts.getOrNull(1)?.let { Route.Host(it, parts.getOrNull(2)?.toIntOrNull() ?: 0) }
             "terminal" -> if (parts.size == 4) Route.Terminal(parts[1], parts[2], parts[3]) else null
             "git" -> if (parts.size == 3) Route.SourceControl(parts[1], parts[2]) else null
+            "all" -> Route.AllComputers
             else -> null
         }
     }
@@ -250,6 +257,7 @@ private fun AppContent(nav: Navigator) {
             is Route.Host -> HostScreen(nav, r.hostId, r.tab)
             is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
             is Route.SourceControl -> SourceControlScreen(nav, r.hostId, r.projectId)
+            Route.AllComputers -> AllComputersScreen(nav)
         }
     }
 }

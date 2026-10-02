@@ -1,6 +1,8 @@
 package dev.nodeterm.android.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
@@ -36,15 +39,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.ConnState
 import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.TransportKind
+import dev.nodeterm.protocol.model.AllComputers
 import dev.nodeterm.protocol.model.PairedHost
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -96,9 +103,39 @@ fun HostsScreen(nav: Navigator) {
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
+                // Every computer's Inbox and Usage on one screen (audit A55), once a second one is paired.
+                if (AllComputers.offered(hosts.size)) {
+                    item(key = "all-computers") {
+                        // From what each session already holds: listing the computers list dials nothing.
+                        val total = rememberListings(hosts).sumOf { AllComputers.needsYou(it.snapshot) }
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
+                                .clickable { nav.push(Route.AllComputers) }
+                        ) {
+                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("All computers", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        "Inbox and usage from every computer",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                NeedsYouBadge(total)
+                            }
+                        }
+                    }
+                }
                 items(hosts, key = { it.id }) { host ->
                     val session = graph.connections.session(host.id)
                     val state by session.state.collectAsState()
+                    // The needs-you count on the row (audit A55): from the listing this session already
+                    // holds (an open screen's, the background check's), never a dial of its own.
+                    val snapshot by session.snapshot.collectAsState()
+                    val needsYou = AllComputers.needsYou(snapshot)
                     // Whether a token is STORED, never its value: decrypting it here was a Keystore
                     // round trip on the main thread per row per recomposition, and it waited on
                     // SecureStore's lock behind any connection decrypting meanwhile (audit A47).
@@ -117,7 +154,8 @@ fun HostsScreen(nav: Navigator) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 ColorDot(stateColor(state))
                                 Spacer(Modifier.width(10.dp))
-                                Text(host.name, style = MaterialTheme.typography.titleMedium)
+                                Text(host.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                NeedsYouBadge(needsYou)
                             }
                             Text(
                                 "${host.user}@${host.host}",
@@ -158,6 +196,22 @@ fun HostsScreen(nav: Navigator) {
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } }
         )
     }
+}
+
+/** "2 need you", in the NEEDS YOU badge's colours; nothing for 0. */
+@Composable
+private fun NeedsYouBadge(count: Int) {
+    if (count <= 0) return
+    Text(
+        if (count == 1) "1 needs you" else "$count need you",
+        color = NtColors.attention,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(NtColors.attention.copy(alpha = 0.16f))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    )
 }
 
 fun routeSummary(host: PairedHost, hasRelayToken: Boolean): String {

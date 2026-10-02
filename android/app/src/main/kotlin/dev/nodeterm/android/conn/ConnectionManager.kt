@@ -421,9 +421,14 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         runCatching { graph.hosts.claimLive(events, OnScreen(nodes = setOf(nodeId)), notify = false) }
     }
 
-    /** A refresh the USER asked for (Refresh, Try again). */
-    fun refresh() {
-        scope.launch { refreshNow(Trigger.USER) }
+    /**
+     * A refresh the USER asked for (Refresh, Try again), by default. The All computers screen re-lists
+     * every computer as the app's own foreground refresh instead ([Trigger.AUTO], audit A55): it may
+     * show a first approval code, but it does not lift a computer's held refusal; that computer's own
+     * Try again does.
+     */
+    fun refresh(trigger: Trigger = Trigger.USER) {
+        scope.launch { refreshNow(trigger) }
     }
 
     /**

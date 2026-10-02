@@ -379,7 +379,9 @@ prompt only once the hold ends; a terminal showing an overlay instead of its pan
 offer, approval code, lost view) hides nothing; and one still connecting leaves its session's events
 for a later listing, which the attach settles at once from the latest listing. Other computers are not
 polled while one is open, so theirs still come only from the background check, and the Settings
-text, the README and the notifier's comment now say exactly that. A computer the user just left is
+text, the README and the notifier's comment now say exactly that. The All computers screen (`A55`)
+is not polled either: it re-lists every computer once when it opens (and on Refresh), and while its
+Inbox tab is on screen every computer's Inbox counts as on screen. A computer the user just left is
 one of them: its connection can stay open until it drops or the background check closes it, and a
 change it pushes meanwhile is no longer re-listed (it used to be, and so announced live; the review
 of A73). What that push carried is not recorded as seen, so the background check announces it. The
@@ -417,6 +419,35 @@ The plan, the answer run against `QuickActions` (every answer the plan offers is
 sends), the outcomes and the hand-off's encoding are unit-tested; the PendingIntents, the receiver, the
 work, its dial trigger and the tap's route are pinned in the source, and whether the actions show and
 answer on a phone is a device check.
+
+`AllComputersTest` covers the All computers screen and the needs-you counts (`A55`). iOS merges its
+Agents feed across every paired connection and shows one Usages section per connection that reports
+usage (docs/mobile-usage-inbox.md); Android had one computer's Inbox and Usage, inside that
+computer's screen, and the computers list showed no count. Now each computer's row shows how many of
+its approvals and questions are open, read from the listing its session already holds (the open
+screen's, the background check's, or the last one this process made), so the list dials nothing;
+before a computer's first listing in a process its row shows no count. With two or more computers
+paired, the list starts with "All computers": every computer's Inbox and Usage on one screen. The
+rules are the pure `AllComputers` and `InboxFeed`: events of every computer newest first (a stable
+sort, so the same moment keeps the computers' order), open cards above the archive, the working
+sessions in the computers' order rather than by time (their time moves with every tool call), every
+card keyed and labelled by its computer (a name two computers share gets `user@host`, and the same
+computer paired twice a number), and one Usage section per computer whose mirror has accounts in its
+`usage` block. A computer's own Inbox tab is the same `InboxFeed` of that one computer, so the two
+cannot sort or count differently. Opening the screen (and coming back to it, or Refresh) re-lists
+every paired computer once through its normal connect path, so a relay leg goes through
+`RelayApprovalGate`; it is not polled after that. That re-list is the app's own foreground refresh
+(`Trigger.AUTO`), not a tap on each computer: a computer that has never approved this phone shows its
+approval code on this screen, labelled with its computer, but one whose approval was refused or went
+unanswered keeps its hold, and says so with a Try again of its own (`Trigger.USER`). Lifting every
+hold on every visit would raise the desktop's dialog again, each time, on a computer the user did not
+ask about and may not be at (`A05`/`A23`). Open, Approve and Answer on a card go to the card's own
+computer: its session and connection, and its relay leg for a node of that computer's SSH projects.
+The cards are the Inbox tab's composables (`InboxFeedList`, `UsageCard`), not copies. The rules are
+unit-tested; the screen, the row count and the route (saved in the back stack as `["all"]`, a name
+of its own, so every earlier entry restores as before and a build that does not know it drops just
+that entry) are type-checked and pinned in the source, and how the screen looks and answers on a
+phone is a device check.
 
 `PhoneIdentityTest` and `BackupRulesTest` cover what leaves the phone (`A51`). `allowBackup="false"`
 stops cloud backup, but an app that targets Android 12 or later is still copied by a
@@ -714,6 +745,22 @@ later fix left to a device.
     session. Away from the desktop's network, on a computer this phone has never connected to through
     the relay, a new approval's notification offers Open rather than Approve, and nothing appears on
     the desktop. Tapping Approve twice quickly sends one answer. *(A25, A05, A06)*
+
+### All computers
+
+60. Pair two computers. Each row of the computers list shows "N need you" once that computer has
+    been listed (opened, or checked in the background), and nothing before. "All computers" at the
+    top of the list opens one screen: its Inbox lists both computers' cards newest first, each
+    naming its computer; Approve, Answer and Open on a card act on that card's computer (try one on
+    each, through the relay and on the same network), and its Usage tab shows one section per
+    computer that reports usage, with the computer's name and when it was measured. Away from the
+    network of a computer that has never approved this phone through the relay, opening the screen
+    shows that computer's approval code under its name; deny it there, and opening the screen again
+    shows the refusal with a Try again and puts no dialog on that desktop until Try again is tapped.
+    With the screen on its Inbox tab, raise a permission prompt on one desktop and tap Refresh: its
+    card appears on top, and no notification follows, then or later. Open a terminal from a card and
+    come back, and kill the process in the background: the screen and its tab come back. *(A55, A05,
+    A22, A43, A73)*
 
 ## Known gaps
 

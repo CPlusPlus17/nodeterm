@@ -48,8 +48,9 @@ import java.util.concurrent.TimeUnit
  * each paired computer, and the app re-lists the computer on screen every 8 s, and when it pushes a
  * change (audit A73). Other computers are not polled, and a change one pushes over a connection still
  * open from a screen the user left is not re-listed, so their notifications come from the background
- * check only. What the user is looking at ([OnScreen]) is recorded as seen instead of announced. A
- * real push leg is backend work.
+ * check only. The All computers screen (audit A55) re-lists every computer once when it opens, and on
+ * Refresh, not every 8 s. What the user is looking at ([OnScreen]; on that screen's Inbox, every
+ * computer's Inbox) is recorded as seen instead of announced. A real push leg is backend work.
  *
  * A notification's tap opens that session's terminal, and an approval or a question carries the
  * answers the Inbox card offers (audit A25): which ones is [InboxNotificationActions.plan], and an

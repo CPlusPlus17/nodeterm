@@ -36,6 +36,7 @@ written for it and tested where the layer allows, and the numbered
 | Inbox: approvals, questions, finished turns | ✓ | Held hook approvals are answered deterministically (never with keystrokes); a multi-select question lists its options but is answered in the session; each card shows its node's context % when known |
 | Read-ack (reading a finished session clears it on the computer) | ✓ | `inbox.ack` over the relay, `~/.nodeterm/acks` over SSH |
 | Usage (rate limits per account) | ✓ | From the agent-status mirror, with a pace line ("5h usage pace faster") when the reset time is known |
+| All computers: every paired computer's Inbox and Usage on one screen | ✓ | With two or more computers paired: cards newest first across computers, each naming its computer and answered on it; one Usage section per computer that reports usage. Each computer's row shows how many of its approvals and questions are open, from its last listing (the list dials nothing) |
 | Notifications | local | See "Notifications" below |
 
 ## Build
@@ -100,8 +101,9 @@ are also debuggable, which hands the phone's pairing credentials to anyone with 
   Linux, where node-pty ships no prebuild, not built at all) and `src/main/node-pty-patch.test.ts` red
   until you run `npm install` or `npm run rebuild` again (`bootstrap-windows.bat` on Windows). The
   SSH tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
-- **`app/`** — the Compose UI on top: pairing, the computers list, a computer's Sessions / Board /
-  Inbox / Usage tabs, the terminal screen, a project's source control, settings, background
+- **`app/`** — the Compose UI on top: pairing, the computers list (each with its needs-you count),
+  a computer's Sessions / Board / Inbox / Usage tabs, the All computers screen (every computer's
+  Inbox and Usage), the terminal screen, a project's source control, settings, background
   notifications.
 
 ## Notifications
@@ -117,16 +119,17 @@ leg, so this app polls instead: checked about every 15 minutes in the background
 floor), and live for the computer whose screen is open, which the app re-lists every 8 seconds.
 Other paired computers are not polled while you look at one, so their notifications still come from
 the background check only. That includes a computer you just left: the app may still hold its
-connection for a while, but no longer re-lists it when it pushes a change. Real-time push on Android
-needs an FCM leg in the backend.
+connection for a while, but no longer re-lists it when it pushes a change. The All computers screen
+is not polled either: it re-lists every computer once when you open it, and again on Refresh.
+Real-time push on Android needs an FCM leg in the backend.
 
 The live check leaves out what you are looking at: nothing of a computer is announced while its
-Inbox tab is on screen, and nothing a session's terminal shows while it is attached. Those events
-count as seen, so no later check announces them either. An approval the computer is holding for an
-answer (a hook-reply approval) is still announced with its terminal open, because Claude paints that
-prompt only once the hold ends. A terminal that shows an error, a relay offer or an approval code
-instead of the session hides nothing, and one still connecting leaves the session's events for the
-next check.
+Inbox tab (or the All computers Inbox) is on screen, and nothing a session's terminal shows while it
+is attached. Those events count as seen, so no later check announces them either. An approval the
+computer is holding for an answer (a hook-reply approval) is still announced with its terminal open,
+because Claude paints that prompt only once the hold ends. A terminal that shows an error, a relay
+offer or an approval code instead of the session hides nothing, and one still connecting leaves the
+session's events for the next check.
 
 Tapping a notification opens that session's terminal; Back from it lands on the computer's Inbox. An
 approval's notification carries **Approve** and **Deny**, and a question's carries its options when it

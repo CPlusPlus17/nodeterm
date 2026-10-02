@@ -49,6 +49,7 @@ import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.TransportKind
+import dev.nodeterm.protocol.model.AllComputers
 import dev.nodeterm.protocol.model.NewSessionChoice
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -79,7 +80,8 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
         onStopOrDispose { session.stopWatching() }
     }
 
-    val needsYou = snapshot.status?.inbox?.events?.count { it.actionable } ?: 0
+    // One count for this tab, the computer's row in the list and the All computers screen (A55).
+    val needsYou = AllComputers.needsYou(snapshot)
     // New session goes through nodeterm the app (the relay's `projects.registerNode`): on the LAN
     // (direct SSH) that is the relay leg opened next to it, and where this phone has none the button
     // stays, disabled, with the reason (audit A26) — it used to vanish without a word.

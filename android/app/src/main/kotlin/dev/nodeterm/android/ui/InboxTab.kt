@@ -49,10 +49,12 @@ import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.QuickActions
 import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
-import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.AgentStatusFile
+import dev.nodeterm.protocol.model.ComputerLabel
+import dev.nodeterm.protocol.model.ComputerListing
 import dev.nodeterm.protocol.model.ContextFill
 import dev.nodeterm.protocol.model.InboxEvent
+import dev.nodeterm.protocol.model.InboxFeed
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.model.QuestionChoices
@@ -68,36 +70,50 @@ import java.util.Locale
  * The Agents feed (docs/mobile-usage-inbox.md): unresolved approvals and questions on top — with
  * deterministic Approve/Deny for a held hook-reply approval — then live activity, then the archive.
  * Read/unread is phone-local, like iOS; `resolved` from the computer only moves cards out of the
- * actionable list.
+ * actionable list. This is one computer's; the All computers screen merges every computer's through
+ * the same [InboxFeed] and [InboxFeedList] (audit A55).
  */
 @Composable
 fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: ProjectsSnapshot) {
-    val context = LocalContext.current
-    val graph = NodetermApp.graph(context)
-    val scope = rememberCoroutineScope()
-    // Saveable, so an open archive stays open after a terminal opened from it (audit A43).
-    var showArchive by rememberSaveable { mutableStateOf(false) }
-    val inbox = snapshot.status?.inbox
-    val events = inbox?.events.orEmpty().sortedByDescending { it.ts }
-    val actionable = events.filter { it.actionable }
-    val archived = events.filterNot { it.actionable }
-    val working = snapshot.status?.nodes.orEmpty()
-        .filter { (id, st) -> st.state == AgentState.WORKING && inbox?.nodes?.get(id)?.activity != null }
-
-    LaunchedEffect(actionable.map { it.id }) { graph.hosts.markSeen(actionable) }
+    val graph = NodetermApp.graph(LocalContext.current)
     // While this tab is on screen, the live refresh announces none of this computer's events; it
     // records them as seen, so the background check does not announce them later either (A73).
     LifecycleStartEffect(hostId) {
         val showing = session.onScreen.showInbox()
         onStopOrDispose { showing.close() }
     }
+    val name = graph.hosts.get(hostId)?.name ?: "Computer"
+    val feed = InboxFeed.of(listOf(ComputerListing(ComputerLabel(hostId, name), snapshot)))
+    InboxFeedList(nav, feed, showComputer = false, emptyText = "Nothing needs you right now.")
+}
 
-    fun titleOf(nodeId: String): String =
-        snapshot.findNode(nodeId)?.second?.let { displayTitle(it, snapshot) } ?: snapshot.statusOf(nodeId)?.name ?: "Session"
+/** What a feed card calls its session: the agent's session name, else the node's title, else "Session". */
+internal fun feedTitle(snapshot: ProjectsSnapshot, nodeId: String): String =
+    snapshot.findNode(nodeId)?.second?.let { displayTitle(it, snapshot) } ?: snapshot.statusOf(nodeId)?.name ?: "Session"
 
-    fun open(nodeId: String) = nav.push(Route.Terminal(hostId, nodeId, titleOf(nodeId)))
+/**
+ * The cards of [feed]: one computer's Inbox tab, or every computer's merged ([showComputer]: each card
+ * then names its computer). Every card acts on ITS OWN computer (audit A55): Open opens the session on
+ * the computer the card came from, and an answer goes through that computer's session, since
+ * [QuickActions] answers over the one connection it is handed, and a merged feed holds cards of
+ * several computers.
+ */
+@Composable
+internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolean, emptyText: String) {
+    val context = LocalContext.current
+    val graph = NodetermApp.graph(context)
+    val scope = rememberCoroutineScope()
+    // Saveable, so an open archive stays open after a terminal opened from it (audit A43).
+    var showArchive by rememberSaveable { mutableStateOf(false) }
 
-    fun run(label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String) {
+    LaunchedEffect(feed.actionable.map { it.key }) { graph.hosts.markSeen(feed.actionable.map { it.event }) }
+
+    fun openOn(from: ComputerListing, nodeId: String) =
+        nav.push(Route.Terminal(from.computer.hostId, nodeId, feedTitle(from.snapshot, nodeId)))
+
+    fun runOn(from: ComputerListing, label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String) {
+        // The card's own computer, whichever screen shows it.
+        val session = graph.connections.session(from.computer.hostId)
         scope.launch {
             try {
                 val result = try {
@@ -111,103 +127,145 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                 when (result) {
                     QuickActions.Result.SENT -> Toast.makeText(context, label, Toast.LENGTH_SHORT).show()
                     QuickActions.Result.ALREADY_HANDLED -> Toast.makeText(context, "Already handled.", Toast.LENGTH_SHORT).show()
-                    QuickActions.Result.OPEN_SESSION -> open(nodeId)
+                    QuickActions.Result.OPEN_SESSION -> openOn(from, nodeId)
                     QuickActions.Result.EXPIRED -> {
                         Toast.makeText(context, "The request timed out on the computer. Answer it in the session.", Toast.LENGTH_LONG).show()
-                        open(nodeId)
+                        openOn(from, nodeId)
                     }
                 }
                 session.refreshNow()
             } catch (e: Exception) {
-                Toast.makeText(context, e.message ?: "Couldn't reach the computer.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, e.message ?: "Couldn't reach ${from.computer.label}.", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    if (events.isEmpty() && working.isEmpty()) {
+    if (feed.isEmpty) {
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Nothing needs you right now.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(emptyText, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
     }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(actionable, key = { "a-${it.id}" }) { ev ->
-            EventCard(ev, titleOf(ev.nodeId), snapshot, inbox?.nodes?.get(ev.nodeId)?.contextPercent, highlight = true, onOpen = { open(ev.nodeId) }) {
-                if (ev.kind == InboxKind.APPROVAL) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            run("Approved.", { c -> QuickActions.answerApproval(c, ev, allow = true) }, ev.nodeId)
-                        }) { Text("Approve") }
-                        OutlinedButton(onClick = {
-                            run("Denied.", { c -> QuickActions.answerApproval(c, ev, allow = false) }, ev.nodeId)
-                        }) { Text("Deny") }
-                        TextButton(onClick = { open(ev.nodeId) }) { Text("Open") }
-                    }
-                } else {
-                    // One rule for what the card offers and what the answer path accepts (audit A57).
-                    when (val choices = QuestionChoices.of(ev)) {
-                        is QuestionChoices.Answer -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            choices.rows.forEachIndexed { i, row ->
-                                OutlinedButton(onClick = {
-                                    run("Answered.", { c -> QuickActions.answerQuestion(c, ev, i) }, ev.nodeId)
-                                }, modifier = Modifier.fillMaxWidth()) { Text(row, maxLines = 2) }
-                            }
-                        }
-                        // Multi-select: shown so the card says what is asked, but plain text, not
-                        // buttons. The picker's toggle/submit keys are unmeasured, so it is answered
-                        // in the session (QuestionChoices says why).
-                        is QuestionChoices.ReadOnly -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                QuestionChoices.SEVERAL_NOTE,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            choices.rows.forEach { row ->
-                                Text(
-                                    row,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(start = 8.dp)
-                                )
-                            }
-                            TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
-                        }
-                        QuestionChoices.None -> TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
-                    }
-                }
+        items(feed.actionable, key = { "a-${it.key}" }) { item ->
+            val ev = item.event
+            EventCard(
+                ev, feedTitle(item.from.snapshot, ev.nodeId), item.from.snapshot, item.contextPercent,
+                computer = item.from.computer.label.takeIf { showComputer },
+                highlight = true,
+                onOpen = { openOn(item.from, ev.nodeId) }
+            ) {
+                EventActions(
+                    ev,
+                    open = { nodeId -> openOn(item.from, nodeId) },
+                    run = { label, block, nodeId -> runOn(item.from, label, block, nodeId) }
+                )
             }
         }
-        items(working.keys.toList(), key = { "w-$it" }) { nodeId ->
-            val now = inbox?.nodes?.get(nodeId)
+        items(feed.working, key = { "w-${it.key}" }) { live ->
+            val now = live.now
+            val nodeId = live.nodeId
             Column(
-                Modifier.fillMaxWidth().background(NtColors.panel, RoundedCornerShape(10.dp)).clickable { open(nodeId) }.padding(12.dp),
+                Modifier.fillMaxWidth().background(NtColors.panel, RoundedCornerShape(10.dp)).clickable { openOn(live.from, nodeId) }.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                if (showComputer) ComputerLine(live.from.computer.label)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     StatusBadge(dev.nodeterm.protocol.model.SessionBucket.RUNNING)
                     Spacer(Modifier.width(8.dp))
-                    Text(titleOf(nodeId), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(feedTitle(live.from.snapshot, nodeId), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                now?.prompt?.let { Text("You: $it", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                now?.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                ContextIndicator(now?.contextPercent)
+                now.prompt?.let { Text("You: $it", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                now.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                ContextIndicator(now.contextPercent)
             }
         }
-        if (archived.isNotEmpty()) {
+        if (feed.archived.isNotEmpty()) {
             item(key = "archive-toggle") {
                 TextButton(onClick = { showArchive = !showArchive }) {
-                    Text(if (showArchive) "Hide archive" else "Archive (${archived.size})")
+                    Text(if (showArchive) "Hide archive" else "Archive (${feed.archived.size})")
                 }
             }
             if (showArchive) {
-                items(archived, key = { "r-${it.id}" }) { ev ->
-                    EventCard(ev, titleOf(ev.nodeId), snapshot, inbox?.nodes?.get(ev.nodeId)?.contextPercent, highlight = false, onOpen = { open(ev.nodeId) }) {}
+                items(feed.archived, key = { "r-${it.key}" }) { item ->
+                    val ev = item.event
+                    EventCard(
+                        ev, feedTitle(item.from.snapshot, ev.nodeId), item.from.snapshot, item.contextPercent,
+                        computer = item.from.computer.label.takeIf { showComputer },
+                        highlight = false,
+                        onOpen = { openOn(item.from, ev.nodeId) }
+                    ) {}
                 }
             }
         }
     }
+}
+
+/**
+ * What an open card offers. [open] and [run] are bound to the card's own computer by [InboxFeedList].
+ */
+@Composable
+private fun EventActions(
+    ev: InboxEvent,
+    open: (nodeId: String) -> Unit,
+    run: (label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String) -> Unit
+) {
+    if (ev.kind == InboxKind.APPROVAL) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                run("Approved.", { c -> QuickActions.answerApproval(c, ev, allow = true) }, ev.nodeId)
+            }) { Text("Approve") }
+            OutlinedButton(onClick = {
+                run("Denied.", { c -> QuickActions.answerApproval(c, ev, allow = false) }, ev.nodeId)
+            }) { Text("Deny") }
+            TextButton(onClick = { open(ev.nodeId) }) { Text("Open") }
+        }
+    } else {
+        // One rule for what the card offers and what the answer path accepts (audit A57).
+        when (val choices = QuestionChoices.of(ev)) {
+            is QuestionChoices.Answer -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                choices.rows.forEachIndexed { i, row ->
+                    OutlinedButton(onClick = {
+                        run("Answered.", { c -> QuickActions.answerQuestion(c, ev, i) }, ev.nodeId)
+                    }, modifier = Modifier.fillMaxWidth()) { Text(row, maxLines = 2) }
+                }
+            }
+            // Multi-select: shown so the card says what is asked, but plain text, not
+            // buttons. The picker's toggle/submit keys are unmeasured, so it is answered
+            // in the session (QuestionChoices says why).
+            is QuestionChoices.ReadOnly -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    QuestionChoices.SEVERAL_NOTE,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                choices.rows.forEach { row ->
+                    Text(
+                        row,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+                TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
+            }
+            QuestionChoices.None -> TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
+        }
+    }
+}
+
+/** The computer a card on a merged screen came from (audit A55). */
+@Composable
+private fun ComputerLine(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
 }
 
 @Composable
@@ -217,6 +275,8 @@ private fun EventCard(
     snapshot: ProjectsSnapshot,
     /** The node's context-window fill (`inbox.nodes[nodeId].contextPercent`), when known. */
     contextPercent: Double?,
+    /** The card's computer, on a merged screen (audit A55); null on a computer's own Inbox. */
+    computer: String?,
     highlight: Boolean,
     onOpen: () -> Unit,
     actions: @Composable () -> Unit
@@ -234,6 +294,7 @@ private fun EventCard(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        computer?.let { ComputerLine(it) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 when (ev.kind) {
@@ -307,12 +368,20 @@ fun UsageTab(snapshot: ProjectsSnapshot) {
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(usage.accounts, key = { it.accountId ?: "system" }) { account -> UsageCard(account, snapshot.status) }
-        item { Text("Updated ${relativeAge(usage.updatedAt)} ago", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        updatedAgo(usage.updatedAt)?.let { item { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
     }
 }
 
+/** "Updated 5m ago" for a usage snapshot taken at [ts]; "Updated just now" for a fresh one; null for no time. */
+internal fun updatedAgo(ts: Long, now: Long = System.currentTimeMillis()): String? = when (val age = relativeAge(ts, now)) {
+    "" -> null
+    "now" -> "Updated just now"
+    else -> "Updated $age ago"
+}
+
+/** One account's usage. Also drawn, per computer, by the All computers screen (audit A55). */
 @Composable
-private fun UsageCard(account: UsageAccount, status: AgentStatusFile?) {
+internal fun UsageCard(account: UsageAccount, status: AgentStatusFile?) {
     // The same resolver the sessions list uses, so a managed account is never titled by its UUID.
     val title = account.accountId?.let { AccountNames.managed(it, status) }
         ?: account.label ?: account.email ?: AccountNames.SYSTEM
