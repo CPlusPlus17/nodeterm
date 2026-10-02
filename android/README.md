@@ -155,7 +155,10 @@ types nothing into whatever prompt the session shows by then: it says to answer 
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
 and the phone remembers, for each computer, the ones it has announced, you have read or you had on
 screen for a day after it last saw them (longer when the computer's clock runs ahead), so nothing
-still eligible is forgotten. Forgetting a computer forgets that too; pairing it again keeps it.
+still eligible is forgotten. Forgetting a computer forgets that too; pairing it again keeps it. One
+event can reach the phone through two computers: a paired desktop lists the sessions of its SSH
+projects, and so does the SSH server they run on when you added that one too. It is still one event:
+announcing, reading or looking at it under either computer counts for both.
 
 A notification names the session, the computer and the kind of event ("Needs you — build-bot",
 "Needs approval"), but not the event's own text: the command, file or question, or the agent's last

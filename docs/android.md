@@ -660,7 +660,15 @@ memory backstop no real Inbox reaches), so nothing still eligible is forgotten. 
 event id is `<ts>-<seq>` with a counter that restarts with each app run, so two computers can mint
 the same id in the same millisecond, and with one phone-wide log the first computer's event would
 have silenced the second one's notification. Every entry is filed under the pairing id of the
-computer whose listing it came from. Forgetting a computer drops its entries; pairing the same
+computer whose listing it came from, with the node its event belongs to. The node is what keeps one
+event that reaches the phone through two pairings from being announced twice: a desktop's listing
+carries the nodes of its SSH projects, and the SSH host it drives, when the phone added that one too,
+lists the slice the desktop pushes there (`A27`), with the same event ids. So an event also counts
+as seen when another pairing recorded the same id for the same node, and meeting it that way records
+it under this pairing too, so forgetting the other one later does not announce it again. A real
+collision, two computers minting the same id for different nodes, stays apart; the same id for the
+same node on two computers would need one node id on both (a canvas committed to two repositories)
+and the same millisecond and counter value. Forgetting a computer drops its entries; pairing the same
 computer again (a new pairing id) carries them over, since its ids continue, so pairing again
 announces nothing a second time; and nothing is recorded for a computer no longer paired. The
 phone-wide log of the previous build (and the older bare id set) migrates on first use as seen for
@@ -1022,7 +1030,10 @@ later fix left to a device.
     with a session's terminal attached, none for that session, except a held hook-reply approval.
     Another paired computer's events arrive only from the background check. *(A73)*
 46. Each event notifies once: an event announced once is not announced again by later refreshes, by
-    the background check, or after the next APK is installed over this one. *(A48)*
+    the background check, or after the next APK is installed over this one. With a desktop paired and
+    the SSH server one of its projects runs on added too (item 64), an approval in that project
+    notifies once, not once per computer, and reading it on either computer's Inbox keeps the other
+    quiet. *(A48, A27)*
 47. The lock screen: with "Show details in notifications" off (the default), a notification shows its
     title ("Needs you — <session>" or "Completed — <session>"), the kind and the computer, but no
     command, question or last message; turned on, the shade shows those too. With the lock screen set

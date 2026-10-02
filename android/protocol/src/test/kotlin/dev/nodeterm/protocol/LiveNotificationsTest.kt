@@ -124,8 +124,8 @@ class LiveNotificationsTest {
         val feed = listOf(held("h", "open"), ev("keyed", "open"))
         // Notifications off: the prompt in the pane is recorded, the held approval is not spent.
         assertEquals(emptyList(), log.claimLive(computer, feed, onScreen, notify = false))
-        assertTrue(log.isSeen(computer, "keyed"))
-        assertFalse(log.isSeen(computer, "h"), "a held approval nobody could see was recorded as seen")
+        assertTrue(log.isSeen(computer, ev("keyed")))
+        assertFalse(log.isSeen(computer, ev("h")), "a held approval nobody could see was recorded as seen")
         // Notifications on: announced once, whether the terminal is still open or the user left it.
         clock.now += 8_000
         assertEquals(listOf("h"), ids(log.claimLive(computer, feed, onScreen, notify = true)))
@@ -146,7 +146,7 @@ class LiveNotificationsTest {
         assertEquals(listOf("h", "other"), ids(split.offScreen), "a held approval is not in the pane about to show")
         assertEquals(emptyList(), split.shown)
         assertEquals(listOf("h", "other"), ids(log.claimLive(computer, feed, opening, notify = true)))
-        assertFalse(log.isSeen(computer, "q"), "a pane that never showed was recorded as seen")
+        assertFalse(log.isSeen(computer, ev("q")), "a pane that never showed was recorded as seen")
         // The attach failed and an overlay covers the pane: the next listing announces it.
         clock.now += 8_000
         assertEquals(listOf("q"), ids(log.claimLive(computer, feed, OnScreen.NOTHING, notify = true)))
@@ -160,7 +160,7 @@ class LiveNotificationsTest {
         assertEquals(listOf("h"), ids(log.claimLive(computer, feed, OnScreen(opening = setOf("open")), notify = true)))
         // HostSession.notePaneShown, on the attach: records what the pane shows, announces nothing.
         assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen(nodes = setOf("open")), notify = false))
-        assertTrue(log.isSeen(computer, "d"))
+        assertTrue(log.isSeen(computer, ev("d")))
         // The user looked and left before the next refresh: nothing about it afterwards.
         clock.now += 3_000
         assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen.NOTHING, notify = true))
@@ -210,7 +210,7 @@ class LiveNotificationsTest {
         assertEquals(emptyList(), log.claimLive(computer, feed, onScreen, notify = true))
         // Back from the terminal: what it showed was seen there.
         assertEquals(emptyList(), log.claimAnnounceable(computer, feed))
-        assertTrue(log.isSeen(computer, "mine"))
+        assertTrue(log.isSeen(computer, ev("mine")))
     }
 
     @Test
@@ -218,8 +218,8 @@ class LiveNotificationsTest {
         val log = SeenLog(MemStorage(), Clock(t0))
         val feed = listOf(ev("shown", "open"), ev("offscreen", "other"))
         assertEquals(emptyList(), log.claimLive(computer, feed, OnScreen(nodes = setOf("open")), notify = false))
-        assertTrue(log.isSeen(computer, "shown"))
-        assertFalse(log.isSeen(computer, "offscreen"), "an event nobody saw was spent while notifications were off")
+        assertTrue(log.isSeen(computer, ev("shown")))
+        assertFalse(log.isSeen(computer, ev("offscreen")), "an event nobody saw was spent while notifications were off")
         // Turned on later: only what the user never looked at is announced.
         assertEquals(listOf("offscreen"), ids(log.claimLive(computer, feed, OnScreen.NOTHING, notify = true)))
     }
@@ -243,7 +243,7 @@ class LiveNotificationsTest {
             log.claimLive(computer, feed, OnScreen(inbox = true), notify = true)
         }
         assertEquals(1, storage.writes)
-        assertEquals(t0, SeenLog.decode(storage.raw!!, clock.now).hosts[computer]?.get("a"))
+        assertEquals(t0, SeenLog.decode(storage.raw!!, clock.now).anchors(computer)?.get("a"))
         // A feed with nothing announceable in it is not even read back.
         val reads = storage.reads
         assertEquals(emptyList(), log.claimLive(computer, listOf(feed[1], feed[2]), OnScreen.NOTHING, notify = true))
