@@ -12,7 +12,8 @@
 //          "linkHandler": ["<OSC 8 URI>", ...],
 //          "fontSize": px, "originUnavailable": <bool, omit xterm's internal input-origin event>,
 //          "taps": [{"col": c, "row": <viewport row>, "move": [dx, dy], "moves": [[dx,dy], ...], "fingers": n,
-//                    "before": [action, ...], "after": [action, ...], "frameDelay": ms}],
+//                    "startTime": ms, "endTime": ms, "before": [action, ...], "after": [action, ...],
+//                    "frameDelay": ms, "rafInterval": ms}],
 //          "copySheet": <bool>}
 //         (every field but copyLimit is optional; with no "screen" the buffer is 80×24 and empty)
 // stdout: one JSON object:
@@ -22,7 +23,7 @@
 //    "linkHandler": [{"opened": [url, ...]}],
 //    "taps": [{"prevented": bool, "movePrevented": bool, "opened": [url, ...], "scrolls": [[up, notches], ...],
 //              "scrollsBeforeFrame": [...], "scrollFrames": [{"frame": n, "up": bool, "notches": n}],
-//              "inputs": [text, ...], "reports": [text, ...]}],
+//              "inputs": [text, ...], "reports": [text, ...], "scrollStops": [{"frame": n, "time": ms}], "endedAt": ms}],
 //    "copySheet": {"raw": "<the JSON string the page handed onCopySheet>", "calls": n},
 //    "confirmCalls": n}
 // where an onCopy call's argument is reported as {"length": n, "sameAsInput": bool}, so a payload of
@@ -35,8 +36,11 @@
 // getCell(col).extended.urlId for the cells of an OSC 8 link, whose URI `_core._oscLinkService` holds.
 // The screen element sits at (4, 2) with 10×20 px cells; a tap is a touchstart at the cell's centre,
 // touchmoves at offsets in `moves` (or one `move`), and a touchend at the end point. `fingers` > 1
-// starts with that many touches. Actions are {"nt": fn, "args": [...]}, {"event": "blur"|"pagehide"|"hidden"|
-// "touchcancel"|"multitouch"}, {"frame": true}, {"timers": true}, {"data": text}, {"report": text},
+// starts with that many touches. A move's optional third entry is its timestamp; untimed events
+// default to timestamp0 and never synthesize momentum. `rafInterval` sets following frame intervals.
+//
+// Actions are {"nt": fn, "args": [...]}, {"event": "touchstart"|"touchmove"|"blur"|"pagehide"|"hidden"|
+// "touchcancel"|"multitouch", "move": [dx,dy]}, {"frame": true}, {"frames": n}, {"timers": true}, {"data": text}, {"report": text},
 // {"mouse": text} or {"binary": text}. Data/paste fire xterm's user-origin event; SGR mouse fires
 // it too, while generated reports and legacy mouse do not.
 // They run before touchstart or after touchend, before the queued
@@ -324,6 +328,10 @@ function actions(items) {
       nt[action.nt](...(action.args || []))
     } else if (action.event) {
       if (action.event === 'touchstart') dispatch('touchstart', { touches: [touchAt(10, 10)], timeStamp: frameTime })
+      else if (action.event === 'touchmove') dispatch('touchmove', {
+        touches: [touchAt(10 + action.move[0], 10 + action.move[1])], timeStamp: frameTime,
+        preventDefault() {}
+      })
       else if (action.event === 'touchcancel') dispatch('touchcancel', { touches: [], changedTouches: [] })
       else if (action.event === 'multitouch') dispatch('touchstart', { touches: [touchAt(10, 10), touchAt(60, 10)] })
       else if (action.event === 'hidden') {

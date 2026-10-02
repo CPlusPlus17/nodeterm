@@ -59,7 +59,9 @@ class TerminalJsKineticTest {
 
     @Test
     fun `decay follows elapsed time at different frame rates and survives a zero first delta`() {
-        val totals = listOf(8, 16, 32).map { interval -> distance(run { put("rafInterval", interval); put("frameDelay", interval) }) }
+        val totals = listOf(120, 60, 30).map { hz ->
+            distance(run { put("rafInterval", 1000.0 / hz); put("frameDelay", 1000.0 / hz) })
+        }
         assertTrue(totals.max() - totals.min() <= 1, "time-based motion keeps distance across frame rates: $totals")
         assertTrue(distance(run { put("frameDelay", 0) }) > 10, "a same-frame release still starts on the next frame")
     }
@@ -88,12 +90,16 @@ class TerminalJsKineticTest {
             putJsonArray("after") {
                 add(buildJsonObject { put("frames", 2) })
                 add(buildJsonObject { put("event", "touchstart") })
+                add(buildJsonObject { put("event", "touchmove"); put("move", buildJsonArray { add(JsonPrimitive(0)); add(JsonPrimitive(-40)) }) })
             }
         }
-        assertEquals(13, distance(result), "only the first two already-emitted frames remain")
+        assertEquals(15, distance(result), "thirteen emitted old notches plus the two new reverse notches")
+        assertEquals(false to 2, scrolls(result).last(), "new movement cannot reawaken the retired fling")
         assertEquals(2, stops(result).size)
         assertEquals(2, stops(result).last().jsonObject["frame"]!!.jsonPrimitive.int,
             "the interruption reaches the native queue immediately")
+        assertEquals(3, result["scrollFrames"]!!.jsonArray.last().jsonObject["frame"]!!.jsonPrimitive.int,
+            "native stop precedes the fresh gesture's delivery")
     }
 
     @Test
