@@ -23,6 +23,27 @@ export const CHAT_LIVE_RELOAD_MIN_MS = 1500
 export const CHAT_OPTIMISTIC_WORKING_MS = 15_000
 
 /**
+ * Extra tail reloads after a turn ends, in ms from the working -> idle edge. Claude Code fires its
+ * Stop hook (our `done`) BEFORE it appends the turn's final reply to the transcript — measured ~50 ms
+ * apart — so the one reload at `done` reads the file too early, the live refresh has already
+ * stopped (`planLiveReload` skips once the agent is idle), and the reply only appeared after
+ * reopening the view. A fixed schedule rather than "retry until the last message is the
+ * assistant's": a turn that ends on a tool call already has an assistant message last while its
+ * final text is still unwritten.
+ */
+export const TURN_END_RELOAD_DELAYS_MS: readonly number[] = [500, 2000]
+
+/**
+ * Does a turn-end reload keep the unconfirmed sends on screen (`applyTail`'s `carryUnconfirmed`)?
+ * Every reload but the LAST in the schedule does: a prompt sent right as the turn ended may not be
+ * in the transcript yet. The last one reconciles outright — a send that never landed must not
+ * linger — unless the agent is working again, i.e. that prompt is the turn now running.
+ */
+export function turnEndReloadCarries(s: { final: boolean; working: boolean }): boolean {
+  return !s.final || s.working
+}
+
+/**
  * How often an open chat view re-reads the pane's screen for the agent's own dialogs
  * (shared/agents/claude-screen.ts) — they fire no hook, so this is the only way to disable the
  * composer while one is up. One local `tmux capture-pane` per tick.
