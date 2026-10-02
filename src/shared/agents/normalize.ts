@@ -135,6 +135,9 @@ export interface NormalizedAgentEvent {
   backgroundSubagentIds?: string[]
   /** Host-observed start time for display-only renderer reload replay. */
   subagentStartedAt?: number
+  /** Host-observed time of the subagent's last transcript chunk, replayed with the start so a
+   *  reloaded card keeps its remaining silence window (see `WORKING_STALE_MS`). */
+  subagentLastActivityAt?: number
   // grok StopCancelled only: normalized state-less so the mirror can make the session-aware badge
   // decision (a subagent cancellation must not end its parent session).
   cancelReason?:
