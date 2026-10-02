@@ -180,6 +180,12 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
    *  for anyone. `patch: null` switches the project off, `undefined` leaves it as it is (the kill
    *  switch alone). Every write prunes vanished projects. */
   const [dispatchNotice, setDispatchNotice] = useState('')
+  // Declared HERE, above every reader, on purpose (#1090): `dispatchBindingFor` closes over it and
+  // `dispatchStale` below calls that during render. A `const` declared further down (it used to sit
+  // after the early returns) is in its temporal dead zone at that call, so the moment dispatch was
+  // switched on for the active project every Settings open threw a ReferenceError and blanked the
+  // whole page. TypeScript does not flag a closure that reads a later `const`.
+  const repository = githubConfig?.repository ?? view?.project?.detectedRepository
   /** What the person consents to when they pick a column: the repository and the column's title
    *  and GitHub label as they are NOW (@shared/board-dispatch `binding`). */
   const dispatchBindingFor = (columnId: string): string | undefined =>
@@ -228,7 +234,10 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
     : dispatchConfig?.agentId === 'codex'
       ? codexAccounts.filter((a) => !a.host && !a.pending).map((a) => ({ id: a.id, label: a.label }))
       : []
-  const dispatchStale = !!dispatchConfig && dispatchBindingFor(dispatchConfig.columnId) !== dispatchConfig.binding
+  // Before the first status read the detected repository is simply not known yet; "it changed since
+  // you switched this on" would be a confident wrong answer on every open, so wait for the read.
+  const dispatchStale = !!dispatchConfig && (repository !== undefined || view !== null) &&
+    dispatchBindingFor(dispatchConfig.columnId) !== dispatchConfig.binding
 
   /** `GitHubHostController.status(projectId)` MASKS the auth block for a project that is not
    *  approved on this machine (`ghAuthenticated: false, activeProvider: null, tokenPresent: false`)
@@ -363,7 +372,6 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
   }
 
   const enabled = !!githubConfig
-  const repository = githubConfig?.repository ?? view?.project?.detectedRepository
   const approved = enabled && !!view?.project?.approved
   // The repository approval lets the board READ; writes also need this machine to have approved the
   // column mapping now in the (git-shared) project file. Only an explicit false withholds it.
