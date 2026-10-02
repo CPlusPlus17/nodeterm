@@ -102,6 +102,11 @@ class GradleCiCoverageTest {
     }
 
     @Test
+    fun `private beta checks require the beta branch or opt in and tested unsigned release inputs`() {
+        betaPolicy(read(androidWorkflow))
+    }
+
+    @Test
     fun `CodeQL compiles and analyses the app's and the protocol module's Kotlin`() {
         val kotlinJobs = jobs(read(androidWorkflow)).filter { (_, job) ->
             steps(job).any { isCodeqlInit(it) && "java-kotlin" in value(it, "languages").orEmpty() }
@@ -362,6 +367,95 @@ class GradleCiCoverageTest {
 
         private fun indent(line: String) = line.length - line.trimStart().length
         private fun skip(line: String) = line.isBlank() || line.trimStart().startsWith("#")
+
+        /** CI prepares verified release inputs; local signing never becomes a public artifact. */
+        internal fun betaPolicy(yaml: String) {
+            val allJobs = jobs(yaml)
+            val beta = allJobs["beta-checks"] ?: throw AssertionError("no private beta checks job")
+            val header = beta.takeWhile { it.trim() != "steps:" }.map(String::trim)
+            fun expression(value: String?): String = value.orEmpty().removePrefix("${'$'}{{")
+                .removeSuffix("}}").filterNot(Char::isWhitespace)
+            val gate = "(github.event_name=='workflow_dispatch'&&inputs.prepare_beta)||" +
+                "(github.event_name=='push'&&github.ref=='refs/heads/claude/android-ios-parity-75kfem')"
+            assertEquals(
+                gate,
+                expression(value(header, "if")),
+                "private beta checks must require this beta branch's push or an opted-in manual dispatch",
+            )
+            val needs = value(header, "needs") ?: throw AssertionError("private beta checks have no prerequisites")
+            assertTrue(needs.startsWith("[") && needs.endsWith("]"), "beta prerequisites must be an explicit job list")
+            val prerequisites = needs.removeSurrounding("[", "]").split(',').map { it.trim().removeSurrounding("'").removeSurrounding("\"") }
+            assertTrue(
+                prerequisites.containsAll(listOf("protocol", "app-release")),
+                "private beta checks must wait for protocol tests and the unsigned R8 release",
+            )
+
+            val lines = yaml.lines()
+            val env = lines.indexOfFirst { it.trimEnd() == "env:" && indent(it) == 0 }
+            assertTrue(env >= 0, "the beta branch needs workflow-level version defaults")
+            val envLines = lines.drop(env + 1).takeWhile { skip(it) || indent(it) > 0 }.map(String::trim)
+            val versionCode = value(envLines, "NODETERM_BETA_VERSION_CODE")?.toLongOrNull()
+            assertTrue(versionCode != null && versionCode in 2..2_100_000_000L, "the beta version code must exceed the initial public debug build")
+            val versionName = value(envLines, "NODETERM_BETA_VERSION_NAME").orEmpty()
+            assertTrue(Regex("[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[1-9][0-9]*").matches(versionName), "the branch's version name must identify a beta")
+            val dispatch = lines.indexOfFirst { it.trim() == "workflow_dispatch:" && indent(it) == 2 }
+            assertTrue(dispatch >= 0, "private beta inputs must be declared on workflow_dispatch")
+            val dispatchLines = lines.drop(dispatch + 1).takeWhile { skip(it) || indent(it) > 2 }
+            val prepare = dispatchLines.indexOfFirst { it.trim() == "prepare_beta:" }
+            assertTrue(prepare >= 0, "manual dispatch must expose the beta opt-in")
+            val prepareLines = dispatchLines.drop(prepare + 1).takeWhile { skip(it) || indent(it) > indent(dispatchLines[prepare]) }.map(String::trim)
+            assertEquals("boolean", value(prepareLines, "type"), "beta opt-in must be boolean")
+            assertEquals("false", value(prepareLines, "default"), "ordinary manual runs must not prepare a beta")
+
+            val release = allJobs["app-release"] ?: throw AssertionError("no unsigned release job")
+            val releaseBuild = steps(release).single { runsGradlew(it) && it.any { line -> ":app:assembleRelease" in line } }
+            val validator = releaseBuild.indexOfFirst { "python3 tools/check-beta-version.py" in it }
+            val build = releaseBuild.indexOfFirst { ":app:assembleRelease" in it }
+            assertTrue(validator >= 0 && validator < build, "selected beta versions must pass the shared packager rules before Gradle builds")
+            val provenance = steps(beta).single { value(it, "BETA_VERSION_CODE") != null && value(it, "BETA_VERSION_NAME") != null }
+            for ((key, input, default) in listOf(
+                Triple("NODETERM_ANDROID_VERSION_CODE", "beta_version_code", "NODETERM_BETA_VERSION_CODE"),
+                Triple("NODETERM_ANDROID_VERSION_NAME", "beta_version_name", "NODETERM_BETA_VERSION_NAME"),
+            )) {
+                assertEquals(
+                    "($gate)&&(inputs.$input||env.$default)||''",
+                    expression(value(releaseBuild, key)),
+                    "release version overrides must use the same beta gate and version defaults",
+                )
+                assertEquals(
+                    "inputs.$input||env.$default",
+                    expression(value(provenance, key.removePrefix("NODETERM_ANDROID_").let { "BETA_$it" })),
+                    "release provenance must use the build's version fallback",
+                )
+                for ((id, job) in allJobs) {
+                    if (id == "app-release") continue
+                    assertTrue(steps(job).none { value(it, key) != null }, "job $id exports a beta release version override")
+                }
+            }
+
+            val releaseUpload = steps(release).single {
+                uses(it)?.startsWith("actions/upload-artifact@") == true && value(it, "name") == "nodeterm-android-release-unsigned"
+            }
+            assertEquals("android/app/build/outputs/apk/release/*-unsigned.apk", value(releaseUpload, "path"))
+            assertEquals("error", value(releaseUpload, "if-no-files-found"), "a missing unsigned APK must fail the release input job")
+            for ((id, job) in allJobs) {
+                for (step in steps(job)) {
+                    if (id in setOf("app-release", "beta-checks")) {
+                        assertTrue(step.none { "secrets." in it }, "beta build inputs must not receive a signing secret")
+                    }
+                    if (uses(step)?.startsWith("actions/upload-artifact@") != true) continue
+                    val path = value(step, "path").orEmpty()
+                    if (".apk" !in path && "/apk" !in path) continue
+                    // Existing public debug builds are deliberately signed with the repository key
+                    // (A10). Beta/release artifacts must contain unsigned build inputs only.
+                    if (id == "app" && path == "android/app/build/outputs/apk/debug/*.apk") continue
+                    assertTrue(
+                        id == "app-release" && path == "android/app/build/outputs/apk/release/*-unsigned.apk",
+                        "job $id uploads an APK outside the unsigned release input contract: $path",
+                    )
+                }
+            }
+        }
 
         /** The top-level `jobs:` of a workflow, as each job's non-comment lines (its id line excluded). */
         internal fun jobs(yaml: String): Map<String, List<String>> {

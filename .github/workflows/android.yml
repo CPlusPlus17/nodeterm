@@ -80,6 +80,19 @@ on:
       - 'src/main/remote-ssh/ssh-project.ts'
       - 'src/server/config.ts'
   workflow_dispatch:
+    inputs:
+      prepare_beta:
+        description: Build versioned release inputs and run private-beta checks (sign locally)
+        type: boolean
+        default: false
+      beta_version_code:
+        description: Android version code; increase for each beta update
+        type: string
+        default: '2'
+      beta_version_name:
+        description: Beta version name (for example 0.1.0-beta.1)
+        type: string
+        default: '0.1.0-beta.1'
 
 # One group per ref for every job here, the Kotlin CodeQL job included. Only pull request runs are
 # cancelled in progress: a push run never is, so a push to main (which carries the Kotlin CodeQL
@@ -91,6 +104,13 @@ concurrency:
 
 permissions:
   contents: read
+
+# This feature branch has no workflow on cached main yet, so workflow_dispatch alone cannot prepare
+# its first beta. Keep a versioned unsigned beta path on this exact branch's pushes until A68/PR
+# readiness; all other refs retain the ordinary app versions. No private key enters Actions.
+env:
+  NODETERM_BETA_VERSION_CODE: '2'
+  NODETERM_BETA_VERSION_NAME: '0.1.0-beta.1'
 
 # Every job runs gradle/actions/setup-gradle before ./gradlew (audit A69). It checks the committed
 # android/gradle/wrapper/gradle-wrapper.jar against Gradle's published wrapper checksums, so a jar that
@@ -175,8 +195,8 @@ jobs:
           name: nodeterm-android-debug
           path: android/app/build/outputs/apk/debug/*.apk
 
-  # R8 runs only for the release build type, and the debug APK above is the one distributed. Building
-  # the release here (unsigned; no signing secrets exist or are needed) makes a missing -dontwarn in
+  # R8 runs only for the release build type. Building the release here (unsigned; no signing secrets
+  # exist or are needed) makes a missing -dontwarn in
   # app/proguard-rules.pro fail CI instead of the first real release (audit A37): R8 reports the missing
   # class. It reports no missing -keep, so tools/check-r8-output.sh then checks that the keeps it names
   # matched (the WebView bridge, the worker, BouncyCastle's provider tables, one exception name). A NEW
@@ -201,11 +221,24 @@ jobs:
 
       - name: Build release APK (R8)
         working-directory: android
-        run: ./gradlew :app:assembleRelease --stacktrace
+        env:
+          NODETERM_ANDROID_VERSION_CODE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.prepare_beta) || (github.event_name == 'push' && github.ref == 'refs/heads/claude/android-ios-parity-75kfem')) && (inputs.beta_version_code || env.NODETERM_BETA_VERSION_CODE) || '' }}
+          NODETERM_ANDROID_VERSION_NAME: ${{ ((github.event_name == 'workflow_dispatch' && inputs.prepare_beta) || (github.event_name == 'push' && github.ref == 'refs/heads/claude/android-ios-parity-75kfem')) && (inputs.beta_version_name || env.NODETERM_BETA_VERSION_NAME) || '' }}
+        run: |
+          python3 tools/check-beta-version.py
+          ./gradlew :app:assembleRelease --stacktrace
 
       - name: Check the R8 keeps matched
         working-directory: android
         run: sh tools/check-r8-output.sh app/build/outputs/mapping/release
+
+      # Build inputs only: an unsigned APK cannot be installed. The private key and finished APK
+      # stay on the owner's machine; Actions artifacts on a public repo are not private downloads.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nodeterm-android-release-unsigned
+          path: android/app/build/outputs/apk/release/*-unsigned.apk
+          if-no-files-found: error
 
       # On a missing-class failure R8 writes the -dontwarn lines it wanted to missing_rules.txt here.
       - uses: actions/upload-artifact@v4
@@ -214,6 +247,107 @@ jobs:
           name: r8-release-outputs
           path: android/app/build/outputs/mapping/release
           if-no-files-found: ignore
+
+  beta-checks:
+    name: Private beta checks
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.prepare_beta) || (github.event_name == 'push' && github.ref == 'refs/heads/claude/android-ios-parity-75kfem') }}
+    needs: [protocol, app-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: tmux for delivery and SSH interop tests
+        run: sudo apt-get update -q && sudo apt-get install -y -q tmux
+
+      - name: Install desktop dependencies
+        run: npm ci
+
+      - name: Desktop type check
+        run: npm run typecheck
+
+      - name: Phone delivery and ack tests
+        run: >-
+          npx vitest run
+          src/core/pty-background-write.test.ts
+          src/core/pty-background-write-over.test.ts
+          src/core/pty-shadow.test.ts
+          src/core/tmux-control-client.test.ts
+          src/core/tmux-control.test.ts
+          src/core/remote-send-keys.realtmux.test.ts
+          src/core/remote-ssh/control-master.test.ts
+          src/core/ack-sweep.test.ts
+          src/core/agent-status-mirror.test.ts
+          src/core/agent-status-mirror.restart.test.ts
+          src/main/remote-ssh/ssh-project.test.ts
+          src/main/remote-ssh/ssh-project.acks.test.ts
+          src/main/remote/relay-host-service.test.ts
+          src/main/remote/host-service.presence.test.ts
+          src/main/remote/standing-host.test.ts
+          src/main/remote/android-interop-fixture.guard.test.ts
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Android tools for APK signing regression tests
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;36.0.0"'
+
+      - name: Verify private beta packaging with real Android tools
+        run: NODETERM_ANDROID_TEST_SDK="$ANDROID_HOME" python3 -m unittest discover -s android/tools -p 'test_*beta*.py' -v
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: nodeterm-android-release-unsigned
+          path: beta-inputs/apk
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: r8-release-outputs
+          path: beta-inputs/r8
+
+      - name: Release input provenance
+        env:
+          BETA_VERSION_CODE: ${{ inputs.beta_version_code || env.NODETERM_BETA_VERSION_CODE }}
+          BETA_VERSION_NAME: ${{ inputs.beta_version_name || env.NODETERM_BETA_VERSION_NAME }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          def sha(path):
+              with path.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          apks = list(pathlib.Path('beta-inputs/apk').glob('*-unsigned.apk'))
+          if len(apks) != 1:
+              raise SystemExit('Expected exactly one unsigned release APK from this run')
+          r8 = pathlib.Path('beta-inputs/r8')
+          pathlib.Path('beta-build-inputs.json').write_text(json.dumps({
+              'schemaVersion': 1,
+              'sourceRevision': os.environ['GITHUB_SHA'],
+              'versionCode': int(os.environ['BETA_VERSION_CODE']),
+              'versionName': os.environ['BETA_VERSION_NAME'],
+              'unsignedApkArtifact': 'nodeterm-android-release-unsigned',
+              'r8Artifact': 'r8-release-outputs',
+              'unsignedApkSha256': sha(apks[0]),
+              'r8MappingSha256': sha(r8 / 'mapping.txt'),
+              'r8SeedsSha256': sha(r8 / 'seeds.txt'),
+              'signed': False,
+          }, indent=2) + '\n')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nodeterm-android-beta-build-inputs
+          path: beta-build-inputs.json
+          if-no-files-found: error
 
   # CodeQL for the Android companion's Kotlin (audit A69): the protocol module (the NaCl box, the relay
   # client, pairing, SSH host-key pinning) and the app (the Keystore-held secrets, the terminal WebView
