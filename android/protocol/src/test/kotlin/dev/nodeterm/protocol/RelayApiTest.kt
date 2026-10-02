@@ -3,11 +3,16 @@ package dev.nodeterm.protocol
 import dev.nodeterm.protocol.relay.OkHttpRelayTransport
 import dev.nodeterm.protocol.relay.RelayApi
 import dev.nodeterm.protocol.relay.RelayApiException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.Dns
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -156,6 +161,55 @@ class RelayApiTest {
                 withTimeout(1_000) { request.join() }
                 assertTrue(request.isCancelled)
                 assertTrue(exchange.socket.closed.await(1, TimeUnit.SECONDS), "coroutine cancellation must cancel OkHttp's call")
+            }
+        }
+    }
+
+    @Test
+    fun `join and device mint deadlines include waiting for a busy dispatcher`() = runBlocking<Unit> {
+        for (mint in listOf(false, true)) {
+            Exchange(Reply.SILENT_HEADERS).use { exchange ->
+                exchange.client.dispatcher.maxRequests = 1
+                val blocker = exchange.client.newCall(Request.Builder().url("http://memory.test/blocker").build())
+                val blockerFinished = CountDownLatch(1)
+                blocker.enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) { blockerFinished.countDown() }
+                    override fun onResponse(call: Call, response: Response) {
+                        response.close()
+                        blockerFinished.countDown()
+                    }
+                })
+                try {
+                    assertTrue(exchange.socket.waiting.await(2, TimeUnit.SECONDS), "the blocker must occupy the dispatcher")
+                    val failure = assertFailsWith<RelayApiException> {
+                        withTimeout(3_000) {
+                            if (mint) exchange.api().mintDevice("phone", "host-device", "host-key", "Phone", null)
+                            else exchange.api().join("device-token", "host-id")
+                        }
+                    }
+                    assertTrue(failure.message!!.startsWith("Couldn't reach the relay:"), failure.message)
+                    val queued = exchange.client.dispatcher.queuedCalls().single()
+                    assertTrue(queued.isCanceled(), "the expired queued request must be cancelled before it can run")
+                    assertEquals(1, exchange.client.dispatcher.runningCallsCount(), "the blocker must still occupy the dispatcher")
+                } finally {
+                    blocker.cancel()
+                    assertTrue(blockerFinished.await(1, TimeUnit.SECONDS), "the blocker must release the dispatcher")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `a caller's shorter deadline remains coroutine cancellation`() = runBlocking<Unit> {
+        for (mint in listOf(false, true)) {
+            Exchange(Reply.SILENT_HEADERS).use { exchange ->
+                assertFailsWith<TimeoutCancellationException> {
+                    withTimeout(150) {
+                        if (mint) exchange.api(10_000).mintDevice("phone", "host-device", "host-key", "Phone", null)
+                        else exchange.api(10_000).join("device-token", "host-id")
+                    }
+                }
+                assertTrue(exchange.socket.closed.await(1, TimeUnit.SECONDS), "the caller's deadline must cancel the active call")
             }
         }
     }

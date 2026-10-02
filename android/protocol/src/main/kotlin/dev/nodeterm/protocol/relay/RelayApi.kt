@@ -4,6 +4,7 @@ import dev.nodeterm.protocol.model.J
 import dev.nodeterm.protocol.model.J.l
 import dev.nodeterm.protocol.model.J.s
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -75,7 +76,13 @@ class RelayApi(
         return RelayDevice(token, body.s("hostId") ?: "", body.l("exp") ?: 0)
     }
 
-    private suspend fun post(path: String, json: JsonObject): JsonObject = suspendCancellableCoroutine { cont ->
+    private suspend fun post(path: String, json: JsonObject): JsonObject =
+        // OkHttp's call timeout begins after Dispatcher queueing. Start the phone's deadline here
+        // so a busy dispatcher cannot leave a token request waiting indefinitely before it runs.
+        withTimeoutOrNull(deadlineMs) { enqueuePost(path, json) }
+            ?: throw unreachable(IOException("request timed out"))
+
+    private suspend fun enqueuePost(path: String, json: JsonObject): JsonObject = suspendCancellableCoroutine { cont ->
         val req = Request.Builder()
             .url(apiBase.trimEnd('/') + path)
             .post(json.toString().toRequestBody(JSON))
