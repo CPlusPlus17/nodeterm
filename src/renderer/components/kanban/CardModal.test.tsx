@@ -37,7 +37,17 @@ const termMock = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }))
 vi.mock('./ModalTerminal', async () => {
   const { useEffect } = await import('react')
   return {
-    ModalTerminal: ({ nodeId, covered }: { nodeId: string; covered?: boolean }) => {
+    ModalTerminal: ({
+      nodeId,
+      covered,
+      projectId,
+      onOpenFile
+    }: {
+      nodeId: string
+      covered?: boolean
+      projectId?: string
+      onOpenFile?: (file: { path: string; projectId: string; ssh: boolean }) => void
+    }) => {
       useEffect(() => {
         termMock.mounts++
         return () => {
@@ -45,13 +55,35 @@ vi.mock('./ModalTerminal', async () => {
         }
       }, [])
       return (
-        <div className="kanban-modal__term" data-node-id={nodeId} data-covered={String(!!covered)} tabIndex={0}>
+        <div
+          className="kanban-modal__term"
+          data-node-id={nodeId}
+          data-project-id={projectId}
+          data-covered={String(!!covered)}
+          tabIndex={0}
+        >
           Terminal Mock
+          <button
+            className="modal-terminal-file-link"
+            onClick={() => onOpenFile?.({ path: '/project/docs/plan.md', projectId: 'p1', ssh: false })}
+          >
+            Open file
+          </button>
         </div>
       )
     }
   }
 })
+
+vi.mock('./LocalFilePreviewModal', () => ({
+  LocalFilePreviewModal: ({ file, onClose }: { file: { path: string }; onClose: () => void }) => (
+    <div className="local-file-preview-mock" data-path={file.path}>
+      <button className="local-file-preview-close" onClick={onClose}>
+        Close preview
+      </button>
+    </div>
+  )
+}))
 
 // The two ⌘M faces, stubbed to record the props they are handed.
 vi.mock('../../nodes/TerminalMarkdownView', () => ({
@@ -118,6 +150,55 @@ describe('CardModal', () => {
   afterEach(() => {
     resetDialogStack()
     document.body.innerHTML = ''
+  })
+
+  it('opens a terminal file link in an overlay without leaving the Kanban card', () => {
+    const session: KanbanSession = {
+      id: 'node-term-preview',
+      title: 'Preview docs',
+      color: '#0a84ff',
+      kind: 'terminal',
+      spawn: { cwd: '/project' }
+    }
+    const onClose = vi.fn()
+    const onOpenCanvas = vi.fn()
+    const root = createRoot(host)
+
+    act(() =>
+      root.render(
+        <CardModal
+          projectId="p1"
+          session={session}
+          columnTitle="To Do"
+          board={board}
+          onChangeBoard={vi.fn()}
+          onClose={onClose}
+          onOpenCanvas={onOpenCanvas}
+          onRename={vi.fn()}
+          onEditSticky={vi.fn()}
+          onSetIcon={vi.fn()}
+          onBrowserNav={vi.fn()}
+        />
+      )
+    )
+
+    // File links resolve against the CARD's project, which the modal hands to its live viewer.
+    expect(document.body.querySelector<HTMLElement>('.kanban-modal__term')?.dataset.projectId).toBe('p1')
+    act(() => {
+      document.body.querySelector<HTMLButtonElement>('.modal-terminal-file-link')!.click()
+    })
+    const preview = document.body.querySelector<HTMLElement>('.local-file-preview-mock')
+    expect(preview?.dataset.path).toBe('/project/docs/plan.md')
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onOpenCanvas).not.toHaveBeenCalled()
+
+    act(() => {
+      document.body.querySelector<HTMLButtonElement>('.local-file-preview-close')!.click()
+    })
+    expect(document.body.querySelector('.local-file-preview-mock')).toBeNull()
+    expect(document.body.querySelector('.kanban-modal')).toBeTruthy()
+
+    act(() => root.unmount())
   })
 
   // #291 review: the header slot decided smiley-vs-icon on the RAW stored value, while

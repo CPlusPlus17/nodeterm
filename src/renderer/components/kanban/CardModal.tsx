@@ -66,6 +66,10 @@ import { canChat } from '@shared/agents/config'
 import { effectiveAccountId } from '../../lib/accountChip'
 import { useSettings } from '../../state/settings'
 import { chipFor, commandTooltip } from '../../lib/keybindingOverrides'
+import {
+  LocalFilePreviewModal,
+  type LocalFileTarget
+} from './LocalFilePreviewModal'
 import { ChatPanelFallback } from '../../nodes/ChatPanelFallback'
 
 // Code-split exactly like the canvas node's: ChatPanel carries the markdown renderer, and the
@@ -140,6 +144,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const [editingTitle, setEditingTitle] = useState(false)
   const [title, setTitle] = useState(session.title)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [previewFile, setPreviewFile] = useState<LocalFileTarget | null>(null)
   // Sticky body: rendered markdown until clicked, the plain textarea while editing (mirrors
   // StickyNode's toggle, so the canvas and the card can't disagree about how a note reads).
   const [editingNote, setEditingNote] = useState(false)
@@ -650,6 +655,8 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                       searchOpen={searchOpen}
                       onCloseSearch={() => setSearchOpen(false)}
                       covered={mdOpen}
+                      projectId={projectId}
+                      onOpenFile={setPreviewFile}
                     />
                     {/* The ⌘M face is laid OVER the live viewer (the pane anchors it), never swapped
                         in for it: ModalTerminal stays mounted, so its co-attach does not detach and
@@ -709,6 +716,9 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
           {panelOpen && <BoardLogPanel card={session} mentionables={mentionables} />}
         </div>
       </div>
+      {previewFile && (
+        <LocalFilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+      )}
     </div>,
     document.body
   )

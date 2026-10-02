@@ -1492,7 +1492,9 @@ export function TerminalNode({
               send(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: id } })),
         copy: (text) => window.nodeTerminal.clipboard.writeText(text),
         openFile: (abs) =>
-          send(new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: activeIsSsh } })),
+          send(
+            new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: activeIsSsh, view: true } })
+          ),
         revealInExplorer: (abs) =>
           send(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } })),
         revealInOs: (abs) => window.nodeTerminal.shell.reveal(abs),
@@ -3310,7 +3312,10 @@ export function TerminalNode({
         if (isDir) window.dispatchEvent(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } }))
         else
           window.dispatchEvent(
-            new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: projectFs().ssh } })
+            // `view`: a link asks to SEE the file, so a local .html renders as a page (Canvas.openFile).
+            new CustomEvent('nodeterm:open-file', {
+              detail: { path: abs, ssh: projectFs().ssh, view: true }
+            })
           )
       }
       // Shift+Cmd/Ctrl+click → the OS default app (a directory → the OS file manager). The same

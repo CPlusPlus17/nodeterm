@@ -995,10 +995,31 @@ export function isMediaFile(path: string): boolean {
   return isVideoFile(path) || isAudioFile(path)
 }
 
+const HTML_EXTS = ['html', 'htm']
+
+/** True when a local file can be rendered as a page inside a WebNode. */
+export function isHtmlFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  return HTML_EXTS.includes(ext)
+}
+
 /** True when a path looks like a playable video file (by extension). */
 export function isVideoFile(path: string): boolean {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   return VIDEO_EXTS.includes(ext)
+}
+
+/** Pick the canvas surface for a file. HTML renders as a page only when the caller asked to VIEW
+ *  it (`renderHtml` — a terminal link, not Explorer/⌘K, where .html means "edit the source"), and
+ *  only locally: a WebNode serves a file off THIS machine's disk, so an SSH project's page stays in
+ *  the editor. Every other preview works through EditorNode's routed fs. */
+export function fileViewerKind(
+  path: string,
+  opts: { sshFs?: boolean; renderHtml?: boolean } = {}
+): 'editor' | 'video' | 'web' {
+  if (opts.renderHtml && !opts.sshFs && isHtmlFile(path)) return 'web'
+  if (isMediaFile(path)) return 'video'
+  return 'editor'
 }
 
 /** Creates a video player node for a video file (streamed via nt-media://). When `sshFs` is true,

@@ -21,7 +21,7 @@ import { useProjects } from '../../state/projects'
 import { useSession } from '../../session/session'
 import { isHostedReadOnly } from '../../state/hostedTeams'
 import { useSettings } from '../../state/settings'
-import { isMacPlatform } from '@shared/platform-utils'
+import { isMacPlatform, isWindowsPlatform } from '@shared/platform-utils'
 import {
   FONT_ZOOM_NODE_ATTR,
   requestTerminalFontZoom,
@@ -34,11 +34,24 @@ import { clipboardImages, droppedPaths, pasteHasText, pastedFiles } from '../../
 import { guardMiddleClickPaste } from '../../terminal/middle-click'
 import { attachCopyOnSelect } from '../../terminal/copy-on-select'
 import {
+  cachedCwd,
+  createFileLinkProvider,
   createOsc8LinkHandler,
   createUrlLinkProvider,
+  fileMissMessage,
   installLinkClickFallback,
-  installLinkContextMenu
+  installLinkContextMenu,
+  makeDirListingLookup,
+  type UnverifiedPath
 } from '../../terminal/file-links'
+import { isBrowserRuntime } from '../../bridge/runtime'
+import { fileLinkDialect } from '../../terminal/file-link-dialect'
+import { hostPlatformFor } from '../../terminal/host-platform'
+import { sshFs } from '../../terminal/ssh-fs'
+import { cardFileLinkRoute } from '../../lib/cardFileLinks'
+import { projectSessionSource } from '../LiveLinkChip'
+import type { LocalFileTarget } from './LocalFilePreviewModal'
+import type { FsApi } from '@shared/types'
 import { urlLinkMenuItems } from '../../terminal/link-menu'
 import { ContextMenu } from '../ContextMenu'
 import { parseOsc52 } from '../../terminal/osc52'
@@ -114,11 +127,44 @@ interface ModalTerminalProps {
    * completion, which a quick ⌘M can precede). Same rules as the canvas node's ⌘M face.
    */
   covered?: boolean
+  /** The project this CARD belongs to — not necessarily the active one (the Omni board opens cards
+   *  from every project). File links resolve against this project's filesystem; absent = no file
+   *  links (see `cardFileLinkRoute`). */
+  projectId?: string
+  /** A file link was activated: the card modal previews it in its own overlay instead of uncovering
+   *  the canvas. Absent = file links are not offered at all. */
+  onOpenFile?: (file: LocalFileTarget) => void
 }
 
-export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covered = false }: ModalTerminalProps) {
+export function ModalTerminal({
+  nodeId,
+  spawn,
+  searchOpen,
+  onCloseSearch,
+  covered = false,
+  projectId,
+  onOpenFile
+}: ModalTerminalProps) {
   const session = useSession()
   const { api } = session
+  // Read at click time from the lifecycle effect, which runs once per mount.
+  const projectIdRef = useRef(projectId)
+  projectIdRef.current = projectId
+  const onOpenFileRef = useRef(onOpenFile)
+  onOpenFileRef.current = onOpenFile
+  // MIRROR TerminalNode: the path dialect belongs to the core that owns the filesystem, never this
+  // window's OS. A ref, so resolving it never re-runs the lifecycle effect.
+  const corePlatformRef = useRef<string | null>(null)
+  useEffect(() => {
+    let live = true
+    corePlatformRef.current = null
+    void hostPlatformFor(api).then((platform) => {
+      if (live) corePlatformRef.current = platform
+    })
+    return () => {
+      live = false
+    }
+  }, [api])
   const hostRef = useRef<HTMLDivElement>(null)
   const middleClickPaste = useSettings((st) => st.settings.terminalMiddleClickPaste)
   // Chromium pastes the X PRIMARY selection into xterm's hidden textarea on middle click — a path
@@ -177,8 +223,8 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     hasSelection: () => !!termRef.current?.hasSelection(),
     enabled: !reportsOwnCopy(spawn.agentId as AgentId | undefined)
   })
-  // Right-click on a URL → the canvas node's link menu, URL rows only (no file links here — see the
-  // link wiring in the lifecycle effect).
+  // Right-click on a URL → the canvas node's link menu, URL rows only (file rows act on the active
+  // project — see the link wiring in the lifecycle effect).
   const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; url: string } | null>(null)
 
   // Same search machinery as the canvas node: capture-indexed matches + xterm highlight.
@@ -256,26 +302,103 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     let dead = false
     const cleanups: Array<() => void> = []
 
-    // MIRROR TerminalNode's link wiring, minus file links. The provider handles Cmd/Ctrl+click on
-    // URL text when mouse-reporting is off (plain-shell sessions); the capture-phase fallback is
-    // what works under tmux/agent mouse-reporting — the norm, and the only path on which the OSC 8
-    // linkHandler above can ever fire in a tmux-backed session (xterm's own link activation is
-    // swallowed by the mouse report, see installLinkClickFallback). File links stay a canvas-node
-    // affordance: the modal has no project-fs/dialect routing, and resolving a path against the
-    // wrong machine is worse than not linking it — hence fileEnabled: false, not stub deps that
-    // pretend to resolve.
+    // MIRROR TerminalNode's link wiring. The URL provider handles Cmd/Ctrl+click on URL text when
+    // mouse-reporting is off (plain-shell sessions); the capture-phase fallback is what works under
+    // tmux/agent mouse-reporting — the norm, and the only path on which the OSC 8 linkHandler above
+    // can ever fire in a tmux-backed session (xterm's own link activation is swallowed by the mouse
+    // report, see installLinkClickFallback).
+    // File links use main's token model and lookup unchanged, but resolve against the CARD's project
+    // (`cardFileLinkRoute`), not the active one: the Omni board opens cards from every project, and
+    // resolving a path against the wrong machine is worse than not linking it — so any doubt (no
+    // project, a relay/server core, a session on a host the project's fs does not cover, an unknown
+    // core platform) turns file links off. An activated file opens in the card's own preview.
     const openUrl = (uri: string): void => window.nodeTerminal.shell.openExternal(uri)
+    const route = () => {
+      const id = projectIdRef.current
+      if (!id || !onOpenFileRef.current) return null
+      const project = useProjects.getState().projects.find((p) => p.id === id)
+      return cardFileLinkRoute({ project, source: projectSessionSource(id), spawn })
+    }
+    const projectFs = (): FsApi | null => {
+      const r = route()
+      if (!r) return null
+      return r.ssh ? sshFs(projectIdRef.current!) : api.fs
+    }
+    const pathConvention = (): { windows?: boolean } | null => {
+      const r = route()
+      if (!r) return null
+      const dialect = fileLinkDialect({
+        source: 'local',
+        browserRuntime: isBrowserRuntime(),
+        viewerWindows: isWindowsPlatform(),
+        corePlatform: corePlatformRef.current,
+        sshProject: r.sshProject,
+        standaloneSsh: r.standaloneSsh
+      })
+      return dialect ? { windows: dialect === 'windows' } : null
+    }
+    const lookup = makeDirListingLookup(
+      async (dir) => {
+        const fs = projectFs()
+        if (!fs) throw new Error('no filesystem to check it on')
+        return fs.list(dir)
+      },
+      3000,
+      pathConvention
+    )
+    const getCwd = (): string | undefined => spawn.cwd || undefined
+    // The pane's CURRENT directory — the second anchor for a relative path (see CwdSources).
+    const getLiveCwd = cachedCwd(() => api.pty.paneCwd(nodeId))
+    const fileEnabled = (): boolean => pathConvention() !== null
+    const openFile = (abs: string, isDir: boolean): void => {
+      const r = route()
+      const id = projectIdRef.current
+      if (!r || !id) return
+      if (isDir) {
+        // The Explorer drawer only shows the ACTIVE project; revealing a folder of another project's
+        // card there would show the wrong tree.
+        if (id === useProjects.getState().activeProjectId)
+          window.dispatchEvent(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } }))
+        else
+          window.dispatchEvent(
+            new CustomEvent('nodeterm:toast', {
+              detail: { kind: 'error', message: `Open this card's project to reveal ${abs}` }
+            })
+          )
+        return
+      }
+      onOpenFileRef.current?.({ path: abs, projectId: id, ssh: r.ssh })
+    }
+    const onMissing = (token: string, miss: { tried: string[]; unverified?: UnverifiedPath[] }): void => {
+      window.dispatchEvent(
+        new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: fileMissMessage(token, miss) } })
+      )
+    }
     term.registerLinkProvider(createUrlLinkProvider(term, openUrl))
+    term.registerLinkProvider(
+      createFileLinkProvider(term, {
+        getCwd,
+        getLiveCwd,
+        lookup,
+        activate: openFile,
+        convention: pathConvention
+      })
+    )
     if (term.element) {
       cleanups.push(
         installLinkClickFallback(term, term.element, {
-          getCwd: () => undefined,
-          lookup: () => Promise.resolve({ exists: false, dir: false }),
-          activateFile: () => {},
+          getCwd,
+          getLiveCwd,
+          lookup,
+          activateFile: openFile,
+          onMissing,
           openUrl,
-          fileEnabled: () => false
+          fileEnabled,
+          convention: pathConvention
         }).dispose
       )
+      // Right-click stays URL-only here: the canvas node's file rows (download, reveal in the OS,
+      // open a terminal) act on the active project, which may not be this card's.
       cleanups.push(
         installLinkContextMenu(term, term.element, {
           getCwd: () => undefined,

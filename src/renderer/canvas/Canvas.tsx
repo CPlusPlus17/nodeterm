@@ -833,7 +833,7 @@ import {
   nodeSshFor,
   createVideoNode,
   createWebNode,
-  isMediaFile,
+  fileViewerKind,
   duplicateNode,
   flowToNodeStates,
   addSelectionToGroup,
@@ -5555,26 +5555,40 @@ export function Canvas() {
     [confirmAndMount]
   )
 
-  /** Open a file as a code editor node on the canvas. `sshFs` must be passed explicitly by the
+  /** Open a file in the appropriate canvas viewer. Markdown/text, images and PDFs use EditorNode
+   *  (which already provides their previews), audio/video use VideoNode, and a LOCAL .html opened
+   *  with `renderHtml` (a terminal link / card preview — never Explorer or ⌘K, where the user is
+   *  editing the source) renders in a WebNode: a sandboxed <webview>, no node integration, the
+   *  same surface `show-web --file` uses. `sshFs` must be passed explicitly by the
    *  caller: only genuinely-remote, Explorer-opened files in an SSH project pass `true`; native
    *  dialog / quick-open paths are LOCAL and stay local (so their ⌘S never writes to the host).
    *  A file that is already open focuses its existing node instead of stacking a duplicate;
    *  a fresh node is born `selected` so React Flow elevates it above the node stack. */
   const openFile = useCallback(
-    (filePath: string, center?: { x: number; y: number }, sshFs?: boolean) => {
+    (
+      filePath: string,
+      center?: { x: number; y: number },
+      sshFs?: boolean,
+      opts: { renderHtml?: boolean } = {}
+    ) => {
       const existing = nodesRef.current.find(
-        (n) => (n.type === 'editor' || n.type === 'video') && n.data?.filePath === filePath
+        (n) =>
+          (n.type === 'editor' || n.type === 'video' || n.type === 'web') &&
+          n.data?.filePath === filePath
       )
       if (existing) {
         focusNodeRef.current(existing.id)
         return
       }
+      const viewerKind = fileViewerKind(filePath, { sshFs, renderHtml: opts.renderHtml })
       setNodes((ns) => [
         ...ns.map((n) => (n.selected ? { ...n, selected: false } : n)),
         {
-          ...(isMediaFile(filePath)
-            ? createVideoNode(ns.length, filePath, center ?? viewCenter(), sshFs)
-            : createEditorNode(ns.length, filePath, center ?? viewCenter(), sshFs)),
+          ...(viewerKind === 'web'
+            ? createWebNode(ns.length, { filePath }, center ?? viewCenter())
+            : viewerKind === 'video'
+              ? createVideoNode(ns.length, filePath, center ?? viewCenter(), sshFs)
+              : createEditorNode(ns.length, filePath, center ?? viewCenter(), sshFs)),
           selected: true
         }
       ])
@@ -5745,15 +5759,29 @@ export function Canvas() {
   }, [showExplorer])
 
   // Cmd+click file links inside terminal output (TerminalNode dispatches these — it has no
-  // direct line to the canvas). Files open as editor nodes; directories reveal in Explorer.
+  // direct line to the canvas). A link activated from a Kanban card must also uncover the canvas:
+  // creating a selected viewer behind the full-page board would make a successful click look dead.
   useEffect(() => {
+    const uncoverCanvas = (): void => {
+      const projectId = useProjects.getState().activeProjectId
+      if (isGlobalKanbanOpen() || isKanbanOpen(projectId)) showCanvas(projectId)
+    }
     const onOpen = (e: Event): void => {
-      const d = (e as CustomEvent<{ path: string; ssh?: boolean }>).detail
-      if (d?.path) openFile(d.path, undefined, d.ssh)
+      const d = (e as CustomEvent<{ path: string; ssh?: boolean; view?: boolean }>).detail
+      if (d?.path) {
+        uncoverCanvas()
+        // `view` = a terminal link / card preview asking to SEE the file: a local .html renders as a
+        // page. Explorer, ⌘K and the files node leave it unset and keep editing the source. A
+        // browser tab has no <webview>, so it always gets the editor.
+        openFile(d.path, undefined, d.ssh, { renderHtml: !!d.view && !isBrowserRuntime() })
+      }
     }
     const onReveal = (e: Event): void => {
       const d = (e as CustomEvent<{ path: string }>).detail
-      if (d?.path) revealProjectFile(d.path)
+      if (d?.path) {
+        uncoverCanvas()
+        revealProjectFile(d.path)
+      }
     }
     // A file-manager node asking for a terminal in the folder it is showing. Same
     // no-direct-line-to-the-canvas pattern as the two above.

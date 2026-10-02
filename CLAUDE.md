@@ -1654,8 +1654,15 @@ session.
   found" + Copy path; "Couldn't check: <reason>" when its existence could not be checked) — its
   press was already swallowed, and a silent swallow reads as broken.
   Downloads report in a `DownloadStrip` floated over the terminal, not in a drawer that may be
-  shut. The kanban card modal gets URL rows only (no file links there) and no "Open in canvas
-  browser" (the node would land under the board).
+  shut. The kanban card modal's right-click menu has URL rows only and no "Open in canvas
+  browser" (the node would land under the board). Its Cmd/Ctrl+click DOES follow file links, with
+  main's token model and lookup, but routed by the CARD's project, not the active one
+  (`lib/cardFileLinks.ts` — the Omni board opens cards from every project; any doubt turns file
+  links off): a file opens in `LocalFilePreviewModal` over the card (HTML copied into the agent-web
+  jail and shown under its strict CSP; source text in a browser tab, which has no webview), whose
+  "Open on canvas" is offered only for a card of the active project. On the canvas a LOCAL `.html`
+  opened by a link or that button renders as a WebNode (`fileViewerKind`'s `renderHtml`, carried as
+  `view: true` on `nodeterm:open-file`); Explorer, ⌘K and the files node still open it in the editor.
   **Hovering a link says what a click opens** (`terminal/link-hover.ts`): the RESOLVED absolute
   path — which of the two cwds held it — plus the gestures, `<abs> (⌘-click to open · ⇧⌘-click to
   open with default app)` (Ctrl/Shift+Ctrl off-mac; a directory reads "reveal" / "open in
