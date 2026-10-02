@@ -86,7 +86,10 @@ object SshScripts {
     """.trimIndent()
 
     /**
-     * Browse: emits a meta block, then EXACTLY the `projects.list` blob shape (workspace.json ·
+     * Browse: emits a meta block (the data dir, tmux, `$HOME`, and `relay=1|0`: whether
+     * `~/.nodeterm/relay.json` is there — the desktop writes it while its phone host is registered at
+     * the relay and removes it when remote access is turned off, relay-advertise.ts; audit A26), then
+     * EXACTLY the `projects.list` blob shape (workspace.json ·
      * live `nt-*` sessions on `node-terminal` · agent-status.json), so the relay and SSH paths share
      * one parser — then what a desktop that drives this computer over SSH left here (audit A27):
      *
@@ -111,6 +114,7 @@ object SshScripts {
         printf 'ud=%s\n' "${'$'}NT_UD"
         printf 'tmux=%s\n' "${'$'}NT_TMUX"
         printf 'home=%s\n' "${'$'}HOME"
+        if [ -s "${'$'}HOME/.nodeterm/relay.json" ]; then printf 'relay=1\n'; else printf 'relay=0\n'; fi
         printf '%s\n' '$META_END'
         if [ -n "${'$'}NT_UD" ]; then cat "${'$'}NT_UD/workspace.json" 2>/dev/null; fi
         printf '\n%s\n' '${ProjectsParser.PROJECTS_MARK}'

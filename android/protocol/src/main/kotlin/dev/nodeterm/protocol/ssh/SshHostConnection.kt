@@ -99,6 +99,16 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     @Volatile private var onClosed: ((String?) -> Unit)? = null
     @Volatile private var userData: String? = null
 
+    /**
+     * Whether the computer advertised its relay (`~/.nodeterm/relay.json`) at the last listing: the
+     * desktop writes that file while its phone host is registered at the relay and removes it when
+     * remote access is turned off (src/main/remote/relay-advertise.ts). A relay token the phone holds
+     * outlives that toggle, so this is what tells "remote access is off on the computer" apart from a
+     * working relay leg (audit A26). Null before the first listing, or when the listing did not say.
+     */
+    @Volatile var relayAdvertised: Boolean? = null
+        private set
+
     @Volatile private var closedFired = false
 
     private fun fireClosed(reason: String?) {
@@ -155,6 +165,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         // Nothing found is not "a computer with no sessions": it means we are looking in the wrong
         // place (audit A02 shipped exactly that as an empty list), or at a nodeterm whose data dir we
         // cannot know (a Server Edition with another --data-dir). Say so instead.
+        relayAdvertised = out.relayAdvertised
         if (out.nothingFound) throw HostException(NO_USER_DATA)
         userData = ud
         val base = ProjectsParser.parseBlob(out.blob)

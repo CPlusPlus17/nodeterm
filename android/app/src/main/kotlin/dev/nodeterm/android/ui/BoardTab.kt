@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.android.Navigator
+import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.CardLabelEdit
@@ -96,7 +98,13 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     // relay leg opened next to the SSH connection, on a tap (audit A26). Where this phone has no
     // relay leg the controls stay, disabled, and say why; so they do on the board of a project another
     // desktop drives over SSH, which is that desktop's to write (A27).
-    val boardRoute = session.route(Capability.BOARD_WRITES, project)
+    // Re-asked on each listing (it says whether the computer advertises its relay right now) and when
+    // a late adoption stores the phone's relay leg in the background (the secrets' revision, the host
+    // record), which no listing announces. Asking stores nothing and decrypts nothing (audit A47).
+    val graph = NodetermApp.graph(context)
+    val secretsRevision by graph.secure.revision.collectAsState()
+    val hostRecords by graph.hosts.hosts.collectAsState()
+    val boardRoute = remember(snapshot, project, secretsRevision, hostRecords) { session.route(Capability.BOARD_WRITES, project) }
     val readOnlyReason = (boardRoute as? LegRouting.Leg.Unavailable)?.reason
 
     if (project == null) {

@@ -5418,8 +5418,10 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      (`HostBrowseTest` reads only the slices' heartbeat and file name, the Server Edition's data
      dir and the socket names from the desktop's sources) and checks the phone's
      `.answer` / `acks/<node>.seen` against names copied from `pending-approvals.ts` /
-     `ack-sweep.ts`, and nothing tests `relay.json` — a change to those owes a hand edit of the
-     Android tests. The fixture implements host-service's
+     `ack-sweep.ts`, and `relay.json` only by its presence (the phone reads its absence as "remote
+     access is off", audit A26; `HostBrowseTest` reads its path and its removal on stop from
+     `relay-advertise.ts` / `standing-host.ts`), never its content — a change to those owes a hand
+     edit of the Android tests. The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
      types, so it sits in `tsconfig.node.json` and `npm run typecheck` checks it on every CI run;
      it passes nothing through a cast (`android-interop-fixture.guard.test.ts`, audit A67). Two

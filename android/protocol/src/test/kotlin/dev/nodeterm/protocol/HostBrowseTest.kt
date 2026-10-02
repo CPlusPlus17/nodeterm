@@ -191,6 +191,18 @@ class HostBrowseTest {
         assertTrue(HostBrowse.split("${SshScripts.META_START}\nud=\n${SshScripts.META_END}\n${SshScripts.RMT_MARK}\n${SshScripts.END_MARK}\n").nothingFound)
     }
 
+    /** The review of A26: whether the computer advertises its relay right now, from the meta block. */
+    @Test
+    fun `the meta block says whether the computer advertises its relay`() {
+        fun meta(lines: String) = HostBrowse.split("${SshScripts.META_START}\nud=/ud\n$lines${SshScripts.META_END}\n${SshScripts.END_MARK}\n")
+        assertEquals(true, meta("relay=1\n").relayAdvertised)
+        assertEquals(false, meta("relay=0\n").relayAdvertised)
+        assertNull(meta("").relayAdvertised, "a block that does not say is unknown, not 'off'")
+        assertNull(meta("relay=yes\n").relayAdvertised)
+        // Only the meta block counts: a project file or session name cannot claim it.
+        assertNull(HostBrowse.split("${SshScripts.META_START}\nud=/ud\n${SshScripts.META_END}\nrelay=1\n${SshScripts.END_MARK}\n").relayAdvertised)
+    }
+
     @Test
     fun `the install metadata line says what the block says, and nothing it does not`() {
         assertEquals("nodeterm server 0.2.17 · 1e56f83 · installed 2026-09-01", MirrorServer("0.2.17", "1e56f83", "2026-09-01T10:00:00Z").describe())
@@ -234,5 +246,18 @@ class HostBrowseTest {
         assertTrue(ssh.contains("const socket = opts.socket ?? '${TmuxNames.REMOTE_SOCKET}'"))
         assertTrue(Regex("""'new-session',\s*'-A',\s*'-s',\s*posixQuote\(opts\.sessionId\),\s*'-c',""").containsMatchIn(ssh), "sessions start in the node's folder")
         assertTrue(text(File(repo, "src/core/agent-status-mirror.ts")).contains("export interface MirrorServer"))
+        // `relay=` reads the file the desktop writes while its phone host is registered at the relay,
+        // and removes when the host stops (remote access turned off): its absence is "off" (A26).
+        val advertise = text(File(repo, "src/main/remote/relay-advertise.ts"))
+        assertTrue(advertise.contains("const FILE = path.join(os.homedir(), '.nodeterm', 'relay.json')"))
+        assertTrue(SshScripts.browse().contains("[ -s \"\$HOME/.nodeterm/relay.json\" ]"))
+        val host = text(File(repo, "src/main/remote/standing-host.ts"))
+        val stop = host.substring(host.indexOf("function stop(): void {")).let { it.substring(0, it.indexOf("\n  }\n")) }
+        assertTrue(stop.contains("void removeRelayAdvertisement()"), stop)
+        assertTrue(
+            Regex("""const want = enabled && relayAllowed\(\)\s+if \(want && !running\) start\(\)\s+else if \(!want && running\) stop\(\)""")
+                .containsMatchIn(host),
+            "turning remote access off stops the host"
+        )
     }
 }

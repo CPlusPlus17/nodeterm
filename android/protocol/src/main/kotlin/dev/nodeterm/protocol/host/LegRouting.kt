@@ -48,10 +48,24 @@ object LegRouting {
 
     /** Whether this phone can reach the computer's relay leg next to its primary connection. */
     enum class RelayLeg {
-        /** A relay block, its host key and a stored device token, and the route allows the relay. */
+        /**
+         * A relay block, its host key and a stored device token, the route allows the relay, and the
+         * computer was not seen with remote access off.
+         */
         AVAILABLE,
         /** The phone holds no relay leg: remote access was off at pairing and has not been adopted since. */
         NOT_SET_UP,
+        /**
+         * The phone holds no relay leg yet, but the computer advertises one (remote access is on
+         * there): late adoption has not run, or failed, on this connection. A refresh adopts it.
+         */
+        NOT_PICKED_UP,
+        /**
+         * The phone holds a relay leg, but the computer is not advertising its relay right now: remote
+         * access was turned off on it after the phone got its token. The token is kept (turning remote
+         * access back on makes it work again); a dial would only wait out the relay's timeout.
+         */
+        REMOTE_ACCESS_OFF,
         /** The phone has one, but the user set this computer to "Only on my network". */
         ROUTE_SSH_ONLY,
         /**
@@ -74,13 +88,36 @@ object LegRouting {
      * Facts the relay leg's availability comes from. Pure, so the app and its tests agree.
      * [addedOverSsh] (a computer added by its SSH address, audit A27) wins over the rest: such a
      * computer has no relay leg, whatever else the phone holds.
+     *
+     * [relayConfigured] is what the phone STORES (a relay block, its host key, a device token — asked
+     * by presence, never by decrypting it, so a screen may ask while composing; audit A47).
+     * [relayAdvertised] is what the computer said at the last listing over direct SSH (whether its
+     * `~/.nodeterm/relay.json` is there), null when unknown (not on SSH, or not listed yet). Unknown
+     * never takes a leg away: it is what the relay connection itself, or a first connect, looks like.
      */
-    fun relayLeg(relayConfigured: Boolean, sshOnlyRoute: Boolean, addedOverSsh: Boolean = false): RelayLeg = when {
+    fun relayLeg(
+        relayConfigured: Boolean,
+        sshOnlyRoute: Boolean,
+        addedOverSsh: Boolean = false,
+        relayAdvertised: Boolean? = null
+    ): RelayLeg = when {
         addedOverSsh -> RelayLeg.ADDED_OVER_SSH
+        !relayConfigured && relayAdvertised == true -> RelayLeg.NOT_PICKED_UP
         !relayConfigured -> RelayLeg.NOT_SET_UP
+        relayAdvertised == false -> RelayLeg.REMOTE_ACCESS_OFF
         sshOnlyRoute -> RelayLeg.ROUTE_SSH_ONLY
         else -> RelayLeg.AVAILABLE
     }
+
+    /**
+     * Whether a listing over direct SSH should run late adoption now: the phone holds no relay leg
+     * and the computer advertises one, and either the user asked (Refresh, Try again, opening the
+     * computer) or the advertisement has just appeared on this connection (remote access was turned
+     * on while the phone watched). Not on every poll: each attempt mints a token against the API.
+     */
+    fun adoptAfterListing(relay: RelayLeg, advertisedBefore: Boolean?, advertisedNow: Boolean?, userAsked: Boolean): Boolean =
+        (relay == RelayLeg.NOT_SET_UP || relay == RelayLeg.NOT_PICKED_UP) && advertisedNow == true &&
+            (userAsked || advertisedBefore == false)
 
     /**
      * Where [cap] goes. [primary] is the open connection's transport (null: not connected yet), with
@@ -95,6 +132,8 @@ object LegRouting {
         return when (relay) {
             RelayLeg.AVAILABLE -> Leg.Relay
             RelayLeg.NOT_SET_UP -> Leg.Unavailable(notSetUp(cap))
+            RelayLeg.NOT_PICKED_UP -> Leg.Unavailable(notPickedUp(cap))
+            RelayLeg.REMOTE_ACCESS_OFF -> Leg.Unavailable(remoteAccessOff(cap))
             RelayLeg.ROUTE_SSH_ONLY -> Leg.Unavailable(sshOnly(cap))
             RelayLeg.ADDED_OVER_SSH -> Leg.Unavailable(addedOverSsh(cap))
         }
@@ -119,10 +158,30 @@ object LegRouting {
     fun reach(primary: TransportKind?, primaryCaps: HostCapabilities?, relay: RelayLeg): Map<Capability, Leg> =
         Capability.entries.associateWith { route(it, primary, primaryCaps, relay) }
 
+    /**
+     * The pickup it promises is real: every listing over direct SSH (the host screen's 8 s refresh,
+     * and Refresh) reads whether the computer advertises its relay, and adopts it when it newly does
+     * ([adoptAfterListing]).
+     */
     private fun notSetUp(cap: Capability) =
         "${cap.what} goes through nodeterm on the computer, which this phone reaches through the relay, and " +
             "this phone has no relay connection to it yet. Turn on remote access in nodeterm → Settings → Phone; " +
-            "the phone picks it up the next time it connects on your network."
+            "the phone picks it up on its next refresh on your network."
+
+    /** Remote access IS on: telling the user to turn it on would be the A26 error text again. */
+    private fun notPickedUp(cap: Capability) =
+        "${cap.what} goes through nodeterm on the computer, which this phone reaches through the relay. Remote " +
+            "access is on there, but this phone has not picked up its relay connection yet: tap Refresh on the " +
+            "computer's screen to try again."
+
+    /**
+     * The phone holds a token, but the computer stopped advertising its relay. Without this the
+     * controls showed enabled and a tap waited out the relay's handshake timeout before failing.
+     */
+    private fun remoteAccessOff(cap: Capability) =
+        "${cap.what} goes through nodeterm on the computer, which this phone reaches through the relay, and " +
+            "remote access is off on the computer right now. Turn it on in nodeterm → Settings → Phone; the phone " +
+            "notices on its next refresh."
 
     /**
      * A computer added by its SSH address: unlike [notSetUp], nothing on the computer can switch the

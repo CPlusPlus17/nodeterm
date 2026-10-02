@@ -680,6 +680,53 @@ class SshTransportTest {
         }
     }
 
+    /**
+     * The review of A26: a relay token the phone holds outlives the computer's remote-access toggle.
+     * Each listing says whether the computer advertises its relay right now (`~/.nodeterm/relay.json`,
+     * written while the desktop's phone host is registered and removed when it stops), and with it
+     * off the app's verbs are unavailable with that reason instead of a tap that waits out the relay.
+     */
+    @Test
+    fun `each listing says whether the computer advertises its relay, and off takes the stored leg away`() = runBlocking<Unit> {
+        val ad = File(dotNodeterm, "relay.json")
+        try {
+            relayAdvertisementRoundTrip(ad)
+        } finally {
+            ad.delete()
+        }
+    }
+
+    private suspend fun relayAdvertisementRoundTrip(ad: File) {
+        connect().use { conn ->
+            assertNull(conn.relayAdvertised, "unknown before the first listing")
+            conn.listProjects()
+            assertEquals(false, conn.relayAdvertised, "no relay.json: remote access is off")
+            val off = LegRouting.relayLeg(relayConfigured = true, sshOnlyRoute = false, relayAdvertised = conn.relayAdvertised)
+            assertEquals(LegRouting.RelayLeg.REMOTE_ACCESS_OFF, off)
+            for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS, Capability.GIT)) {
+                val leg = assertIs<LegRouting.Leg.Unavailable>(LegRouting.route(cap, conn.kind, conn.capabilities, off), "$cap")
+                assertTrue(leg.reason.contains("remote access is off on the computer"), leg.reason)
+            }
+
+            // Remote access turned on while the phone watches: the same connection's next listing sees it.
+            dotNodeterm.mkdirs()
+            ad.writeText("""{"v":1,"hostId":"h","hostPublicKeyB64":"k","relayEndpoint":"wss://relay.nodeterm.dev","hostDeviceId":"d"}""" + "\n")
+            conn.listProjects()
+            assertEquals(true, conn.relayAdvertised)
+            assertEquals(LegRouting.RelayLeg.AVAILABLE, LegRouting.relayLeg(true, false, relayAdvertised = conn.relayAdvertised))
+            // A phone without a token adopts it now, on the poll, without a new connection.
+            assertTrue(LegRouting.adoptAfterListing(LegRouting.RelayLeg.NOT_PICKED_UP, false, conn.relayAdvertised, userAsked = false))
+
+            // An empty file is no advertisement; a removed one is off again.
+            ad.writeText("")
+            conn.listProjects()
+            assertEquals(false, conn.relayAdvertised)
+            ad.delete()
+            conn.listProjects()
+            assertEquals(false, conn.relayAdvertised)
+        }
+    }
+
     @Test
     fun `send keys types literally, even text that starts with a dash`() = runBlocking<Unit> {
         connect().use { conn ->

@@ -67,7 +67,13 @@ object HostBrowse {
         /** projectId → the slice file's text. */
         val slices: List<Pair<String, String>>,
         /** A folder holding `.nodeterm/project.json` → that file's text. */
-        val projectFiles: List<Pair<String, String>>
+        val projectFiles: List<Pair<String, String>>,
+        /**
+         * Whether the computer advertises its relay right now (`~/.nodeterm/relay.json`, present
+         * only while the desktop's phone host is registered at the relay; audit A26), or null when
+         * the meta block did not say.
+         */
+        val relayAdvertised: Boolean? = null
     ) {
         /**
          * Nothing of nodeterm's was found: no data dir, no session a desktop runs here, no slice.
@@ -82,6 +88,11 @@ object HostBrowse {
         val meta = if (metaEnd >= 0) raw.substring(0, metaEnd) else ""
         val rest = if (metaEnd >= 0) raw.substring(metaEnd + SshScripts.META_END.length).removePrefix("\n") else raw
         val ud = meta.lineSequence().firstOrNull { it.startsWith("ud=") }?.removePrefix("ud=")?.takeIf { it.isNotBlank() }
+        val relay = when (meta.lineSequence().firstOrNull { it.startsWith("relay=") }?.removePrefix("relay=")?.trim()) {
+            "1" -> true
+            "0" -> false
+            else -> null
+        }
 
         val blob = StringBuilder()
         val rmt = ArrayList<String>()
@@ -109,7 +120,7 @@ object HostBrowse {
             }
         }
         close()
-        return Output(metaEnd >= 0, ud, blob.toString(), rmt.distinct(), slices, files)
+        return Output(metaEnd >= 0, ud, blob.toString(), rmt.distinct(), slices, files, relay)
     }
 
     /**

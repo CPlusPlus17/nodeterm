@@ -61,9 +61,19 @@ it on that tap and keeps it until the connection is dropped. Which leg answers i
 `LegRouting.route` (`android/protocol`, `LegRoutingTest`): the primary connection when its
 capabilities include the verb, else the relay leg when the phone holds one (a relay block and a
 stored device token — often minted while on SSH by late adoption — and a route other than "Only on
-my network"), else unavailable with a reason. The screens ask the same function, so an unavailable
-control is shown **disabled with that reason** (New session, the board's card actions, the session
-menu's wake/refresh/rename), never hidden; the Source control screen (`A29`) says it in place of the
+my network"), else unavailable with a reason. Holding a token is not enough on its own: it outlives
+the desktop's remote-access toggle, so every listing over SSH also reads whether the computer
+advertises its relay right now (`relay=1|0` in the browse script's meta block: is
+`~/.nodeterm/relay.json` there, which the desktop writes while its phone host is registered at the
+relay and removes when it stops). A token with no advertisement is "remote access is off on the
+computer" (`RelayLeg.REMOTE_ACCESS_OFF`), not a tap that waits out the relay's 20 s handshake; an
+advertisement with no token yet is picked up by late adoption on the user's refresh, or by the
+8 s refresh as soon as it appears (`LegRouting.adoptAfterListing`), and says so meanwhile instead
+of "turn on remote access". The token is asked by presence (`SecureStore.hasRelayToken`, no Keystore
+decrypt), because the screens ask the routing while composing (`A47`). The screens ask the same
+function, so an unavailable control is shown **disabled with that reason** (New session, whose
+reason is the Sessions list's first row; the board's card actions; the session menu's
+wake/refresh/rename), never hidden; the Source control screen (`A29`) says it in place of the
 repository. The relay dial still goes through `RelayApprovalGate` with the caller's trigger: these
 are taps (`Trigger.USER`), so the first one on a desktop that has not pinned the phone shows the
 approval code on the screen that asked (the host screen, or Source control), and a background path
@@ -264,8 +274,10 @@ The plan and the decisions still open are in [`android-handover.md`](android-han
 A test caveat (audit `A64`): the relay leg's `projects.list` blob and mirror now come from the
 desktop's code, but the SSH leg still hand-copies desktop shapes — the v3 index and project files,
 `agent-status.json`, the `agent-status-<projectId>.json` slices, and the `~/.nodeterm/pending` and
-`acks` files — and nothing tests `~/.nodeterm/relay.json`. A desktop change to one of those fails
-no Android test; it needs the matching hand edit in `SshTransportTest`. That is how a wrong userData path (`A02`: the desktop's
+`acks` files — and `~/.nodeterm/relay.json` only by its presence (`SshTransportTest` writes it, and
+`HostBrowseTest` reads its path and its removal when the phone host stops from the desktop's sources);
+its content, which late adoption reads, is tested nowhere. A desktop change to one of those fails no
+Android test; it needs the matching hand edit in `SshTransportTest`. That is how a wrong userData path (`A02`: the desktop's
 directory is `node-terminal`, not `nodeterm`) once passed its test; the fixture now uses the real
 name, and `SshScriptsTest` runs the prelude under `/bin/sh` against both spellings. The parser unit
 tests (`ModelTest`, `UsagePaceTest`) also feed hand-written blobs, on purpose: they pin how the
@@ -820,7 +832,13 @@ later fix left to a device.
     On a desktop that has not pinned this phone, the first of these shows the approval code on the
     host screen. With remote access off (re-pair with it off), and again with the route "Only on my
     network", the New session button, the card actions and the menu items are shown disabled with a
-    reason that matches the case, and none of them opens a relay connection. *(A26)*
+    reason that matches the case (New session's is the first row of the Sessions list, and the last
+    session stays reachable above the button), and none of them opens a relay connection. Then, with
+    the host screen open on the same network: turn remote access OFF on a computer this phone already
+    holds a relay token for — within one refresh (8 s) the controls turn disabled with "remote access
+    is off on the computer", and no tap waits for the relay; turn it back ON — within one refresh
+    they are enabled again. On a phone paired with it off, turning it on while the host screen is
+    open enables them within a refresh or two, with no reconnect. *(A26)*
 
 ### Source control
 
@@ -965,10 +983,14 @@ later fix left to a device.
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over
   SSH for some of these; Android deliberately does not (the host verbs exist because that write
-  breaks past `MAX_ARG_STRLEN` and cannot reach an SSH project's file at all). The cost: a phone
-  whose computer has remote access OFF (so it holds no relay leg) cannot do them on the LAN at all,
-  where iOS can for a local folder project whose file still fits in one argv string. The controls
-  say so instead of vanishing.
+  breaks past `MAX_ARG_STRLEN` and cannot reach an SSH project's file at all). The cost: while the
+  computer has remote access OFF the phone cannot do them on the LAN at all (a relay token it got
+  while remote access was on does not help: there is no relay to reach), where iOS can for a local
+  folder project whose file still fits in one argv string. The controls say so instead of vanishing.
+  How fast they notice is one listing: a toggle changed while no screen of that computer is open is
+  seen when one is (the desktop's `relay.json` is the signal, and it can lag a desktop that crashed
+  or quit with remote access on: the file stays, and a tap then waits out the relay before saying
+  the computer did not answer).
 - **Source control is the desktop's git bridge, and only that** (audit `A29`). Over direct SSH the
   phone has no git of its own: it opens the relay leg next to SSH for it, as for the other app-only
   verbs, so a phone with no relay leg (remote access off, or the route "Only on my network") cannot

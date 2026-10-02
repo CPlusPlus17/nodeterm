@@ -99,9 +99,13 @@ fun displayTitle(node: NodeInfo, snapshot: ProjectsSnapshot): String =
         ?: Agent.of(node.agentId)?.label
         ?: "Terminal"
 
+/**
+ * [newSessionNote] is why New session is unavailable (audit A26), shown as the list's first row while
+ * the button below stays disabled: a box of its own beside the button covered the last sessions.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: ProjectsSnapshot) {
+fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: ProjectsSnapshot, newSessionNote: String? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var menuFor by remember { mutableStateOf<NodeInfo?>(null) }
@@ -121,16 +125,20 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
 
     val projects = snapshot.openProjects().filter { it.sessions.isNotEmpty() }
     if (projects.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text(
-                if (snapshot.fetchedAt == 0L) "Loading sessions…" else "No sessions on this computer yet.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Column(Modifier.fillMaxSize()) {
+            newSessionNote?.let { NewSessionNote(it) }
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    if (snapshot.fetchedAt == 0L) "Loading sessions…" else "No sessions on this computer yet.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         return
     }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+        if (newSessionNote != null) item(key = "new-session-note") { NewSessionNote(newSessionNote) }
         for (project in projects) {
             item(key = "p-${project.id}") {
                 ProjectHeader(project, onSourceControl = { nav.push(Route.SourceControl(hostId, project.id)) })
@@ -257,6 +265,17 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
             dismissButton = { TextButton(onClick = { ending = null }) { Text("Cancel") } }
         )
     }
+}
+
+/** Why New session is disabled, said once at the top of the list (audit A26), like the Board's read-only note. */
+@Composable
+private fun NewSessionNote(reason: String) {
+    Text(
+        reason,
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 /**

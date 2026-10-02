@@ -37,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 sealed interface ConnState {
     data object Idle : ConnState
@@ -113,7 +114,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 }
                 _sshWarning.value = null
                 adopt(ssh)
-                scope.launch { runCatching { adoptRelayIfAdvertised(ssh, host) } }
+                adoptInBackground(ssh)
                 return ssh
             } catch (e: kotlinx.coroutines.CancellationException) {
                 dialed?.let { c -> scope.launch(Dispatchers.IO) { runCatching { c.close() } } }
@@ -185,10 +186,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     /**
      * The phone holds a relay leg for [host]: the same three facts the relay block needs to dial. Never
      * for a computer added by its SSH address, which has none (audit A27).
+     *
+     * The token is asked by PRESENCE ([SecureStore.hasRelayToken]: the preferences alone, no Keystore
+     * decrypt, no waiting on the store's lock), never by reading it: the screens ask [route] while
+     * composing, on every listing (audit A47). Reading it there also answered "no relay leg" during a
+     * keystore hiccup, and the controls then told a user whose remote access is on to turn it on.
+     * What dials ([connectLocked], [viaRelay]) still reads the token itself.
      */
     private fun relayConfigured(host: PairedHost): Boolean =
-        !host.manual && host.relay != null && host.relayHostKeyB64 != null &&
-            graph.secure.getString(SecureStore.relayTokenKey(host.id)) != null
+        !host.manual && host.relay != null && host.relayHostKeyB64 != null && graph.secure.hasRelayToken(host.id)
 
     private suspend fun dialRelay(
         relay: RelayBlock,
@@ -217,14 +223,18 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 
     /**
      * Whether the relay leg can be opened next to the primary connection. Read fresh each time: a
-     * late adoption ([adoptRelayIfAdvertised]) mints the token while connected over SSH.
+     * late adoption ([adoptRelayIfAdvertised]) mints the token while connected over SSH, and each
+     * listing over SSH says whether the computer advertises its relay right now (remote access may
+     * have been turned off since the phone got its token). Cheap enough to ask while composing: no
+     * secret is decrypted (see [relayConfigured]).
      */
     fun relayLeg(): LegRouting.RelayLeg {
         val host = graph.hosts.get(hostId) ?: return LegRouting.RelayLeg.NOT_SET_UP
         return LegRouting.relayLeg(
             relayConfigured = relayConfigured(host),
             sshOnlyRoute = graph.hosts.route(hostId) == RoutePreference.SSH_ONLY,
-            addedOverSsh = host.manual
+            addedOverSsh = host.manual,
+            relayAdvertised = (conn as? SshHostConnection)?.relayAdvertised
         )
     }
 
@@ -360,6 +370,22 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         override fun pin(fingerprint: String) = graph.hosts.update(host.id) { it.copy(sshHostKeyFingerprint = fingerprint) }
     }
 
+    /** One late adoption at a time: a connect and a listing may both ask for it. */
+    private val adopting = AtomicBoolean(false)
+
+    /** [adoptRelayIfAdvertised] over [ssh], in the background, unless one is already running. */
+    private fun adoptInBackground(ssh: SshHostConnection) {
+        val host = graph.hosts.get(hostId) ?: return
+        if (!adopting.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                runCatching { adoptRelayIfAdvertised(ssh, host) }
+            } finally {
+                adopting.set(false)
+            }
+        }
+    }
+
     /**
      * LATE ADOPTION (relay-advertise.ts): a phone paired while remote access was off has no relay leg.
      * While the standing host is up, the computer advertises its relay identity in
@@ -407,7 +433,16 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     suspend fun refreshNow(trigger: Trigger = Trigger.AUTO) {
         val listed = try {
             val c = ensureConnected(trigger)
+            val ssh = c as? SshHostConnection
+            val advertisedBefore = ssh?.relayAdvertised
             c.listProjects().also {
+                // A listing over SSH says whether the computer advertises its relay right now. A
+                // phone without a relay leg adopts it on the user's refresh, or as soon as remote
+                // access is turned on while this connection watches (audit A26: the reason on a
+                // disabled control promises that pickup).
+                if (ssh != null && LegRouting.adoptAfterListing(relayLeg(), advertisedBefore, ssh.relayAdvertised, userAsked = trigger == Trigger.USER)) {
+                    adoptInBackground(ssh)
+                }
                 _snapshot.value = it
                 _lastError.value = null
             }

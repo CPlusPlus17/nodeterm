@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -86,7 +85,13 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     // (direct SSH) that is the relay leg opened next to it, and where this phone has none the button
     // stays, disabled, with the reason (audit A26) — it used to vanish without a word.
     val offersNew = state is ConnState.Connected && NewSessionChoice.offeredProjects(snapshot).isNotEmpty()
-    val newRoute = session.route(Capability.REGISTER_NODE)
+    // Re-asked when what the routing reads changes: the connection, each listing (it says whether the
+    // computer advertises its relay right now), and the stored relay leg — a late adoption stores a
+    // token in the background, which moves the secrets' revision and the host record, not the listing.
+    val secretsRevision by graph.secure.revision.collectAsState()
+    val hostRecords by graph.hosts.hosts.collectAsState()
+    val newRoute = remember(state, snapshot, secretsRevision, hostRecords) { session.route(Capability.REGISTER_NODE) }
+    val newBlocked = (newRoute as? LegRouting.Leg.Unavailable)?.reason
     val relayApproval by session.relayApproval.collectAsState()
 
     Scaffold(
@@ -114,25 +119,18 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
         },
         floatingActionButton = {
             if (tab == 0 && offersNew) {
-                val blocked = newRoute as? LegRouting.Leg.Unavailable
-                if (blocked == null) {
+                if (newBlocked == null) {
                     ExtendedFloatingActionButton(
                         onClick = { newSession = true },
                         icon = { Icon(Icons.Filled.Add, null) },
                         text = { Text("New session") }
                     )
                 } else {
-                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            blocked.reason,
-                            Modifier.widthIn(max = 300.dp).background(NtColors.panel2).padding(10.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Button(onClick = {}, enabled = false) {
-                            Icon(Icons.Filled.Add, null)
-                            Text("New session")
-                        }
+                    // Kept as small as the FAB it stands in for: its reason is the Sessions list's
+                    // first row (a floating box of five to seven lines covered the last sessions).
+                    Button(onClick = {}, enabled = false) {
+                        Icon(Icons.Filled.Add, null)
+                        Text("New session")
                     }
                 }
             }
@@ -185,7 +183,7 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
             }
             tabStates.SaveableStateProvider(tab) {
                 when (tab) {
-                    0 -> SessionsTab(nav, hostId, session, snapshot)
+                    0 -> SessionsTab(nav, hostId, session, snapshot, newSessionNote = newBlocked?.takeIf { offersNew })
                     1 -> BoardTab(nav, hostId, session, snapshot)
                     2 -> InboxTab(nav, hostId, session, snapshot)
                     else -> UsageTab(snapshot)

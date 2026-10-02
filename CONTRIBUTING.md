@@ -118,7 +118,8 @@ applicable here":
    **hand-copied**: `SshTransportTest` writes the v3 `workspace.json` index, the project files,
    `agent-status.json`, the status slices and the held request in `~/.nodeterm/pending` itself, and
    checks the `.answer` and `acks/<node>.seen` files the phone writes against names copied from
-   `pending-approvals.ts` and `ack-sweep.ts`; nothing tests `relay.json`. A change to one of those
+   `pending-approvals.ts` and `ack-sweep.ts`; `relay.json` is tested only by its presence (the phone
+   reads its absence as "remote access is off"), not its content. A change to one of those
    needs the matching hand edit in the Android tests. Its interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
