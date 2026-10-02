@@ -34,4 +34,3 @@ export async function runAckSweep(): Promise<void> {
     remoteCommand: REMOTE_ACK_SWEEP_CMD, remoteInput: remoteAckSweepInput(ids('FIXTURE_ACK_REMOTE'))
   })
 }
-
