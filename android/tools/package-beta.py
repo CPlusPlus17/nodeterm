@@ -119,13 +119,43 @@ def certificate(keystore, alias, password_path, keytool):
                      "-storepass:file", str(password_path)], "Signing certificate inspection")
 
 
+def parse_verified_signer(output):
+    failure = "APK must have one verified signer and an APK Signature Scheme v2 signature."
+    lines = output.splitlines()
+    counts = [line for line in lines if line.startswith("Number of signers")]
+    v2 = [line for line in lines if line.startswith("Verified using v2 scheme")]
+    if (counts and counts != ["Number of signers: 1"]) or v2 != ["Verified using v2 scheme (APK Signature Scheme v2): true"]:
+        raise PackagingError(failure)
+    certificates = [line for line in lines if line.startswith("Signer") and "certificate SHA-256" in line]
+    signers, ranges = set(), []
+    for line in certificates:
+        indexed = re.fullmatch(r"Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+        if indexed:
+            if len(certificates) != 1:
+                raise PackagingError(failure)
+            signers.add(indexed[1].lower())
+            continue
+        # ApkSignerTool prints SDK ranges for v3.1 instead of numbered signer labels. Preserve
+        # the single-certificate policy across ranges, rather than counting each range as a key.
+        ranged = re.fullmatch(r"Signer \(minSdkVersion=([1-9][0-9]{0,9})(?: \(dev release=true\))?, "
+                              r"maxSdkVersion=([1-9][0-9]{0,9})\) certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+        if not ranged:
+            raise PackagingError(failure)
+        minimum, maximum = int(ranged[1]), int(ranged[2])
+        if not minimum <= maximum <= 2_147_483_647:
+            raise PackagingError(failure)
+        ranges.append((minimum, maximum))
+        signers.add(ranged[3].lower())
+    ranges.sort()
+    if len(signers) != 1 or any(previous[1] >= current[0] for previous, current in zip(ranges, ranges[1:])):
+        raise PackagingError(failure)
+    return next(iter(signers))
+
+
 def verified_signer(apk, apksigner):
     output = run_tool([str(apksigner), "verify", "--verbose", "--print-certs", str(apk)],
                       "APK signature verification").decode("utf-8")
-    signers = re.findall(r"^Signer #[0-9]+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$", output, re.M)
-    if len(signers) != 1 or not re.search(r"^Verified using v2 scheme .*: true$", output, re.M):
-        raise PackagingError("APK must have one verified signer and an APK Signature Scheme v2 signature.")
-    return signers[0].lower()
+    return parse_verified_signer(output)
 
 
 def require_unsigned(apk, archive, apksigner):
@@ -225,6 +255,7 @@ def package_beta(args):
             raise PackagingError("Build inputs changed during APK alignment.")
         run_tool([str(tools["apksigner"]), "sign", "--ks", str(args.keystore), "--ks-key-alias", args.key_alias,
                   "--ks-pass", "file:" + str(store_password), "--key-pass", "file:" + str(key_password),
+                  "--v2-signing-enabled", "true",
                   "--v4-signing-enabled", "false",
                   "--out", str(signed), str(aligned)], "APK signing")
         actual_signer = verified_signer(signed, tools["apksigner"])

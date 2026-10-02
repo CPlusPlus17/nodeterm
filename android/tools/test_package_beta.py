@@ -222,6 +222,16 @@ sys.exit(result.returncode)
         self.assertEqual(first_metadata["signerSha256"], second_metadata["signerSha256"])
         self.assertGreater(second_metadata["versionCode"], first_metadata["versionCode"])
 
+    def test_requires_v2_even_when_the_signing_tools_default_to_disabled(self):
+        wrapper = self.signer_wrapper("default-v2-disabled", before_sign='''    if "--v2-signing-enabled" not in arguments:
+        arguments[1:1] = ["--v2-signing-enabled", "false"]''')
+        result = self.package(**{"build-tools-dir": wrapper})
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        apk = self.output / ("nodeterm-android-" + VERSION_NAME + ".apk")
+        output = self.tool([str(self.tools / "apksigner"), "verify", "--verbose", "--print-certs", str(apk)]).decode()
+        self.assertIn(self.pin, output)
+        self.assertRegex(output, r"Verified using v2 scheme .*: true")
+
     def test_rejects_debuggable_apk(self):
         self.refused(self.package(apk=self.fixture_apk("debuggable", debug=True)), "debuggable")
 
