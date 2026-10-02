@@ -448,6 +448,10 @@ class TerminalController(
     @SuppressLint("SetJavaScriptEnabled")
     fun createWebView(context: Context): WebView = WebView(context).apply {
         val gen = page.build()
+        // AndroidView otherwise supplies WRAP_CONTENT. WebView uses that height policy to force
+        // Chromium's HTML layout height to zero, even when Compose measures a large native view;
+        // the page's full-height terminal then fits to one row (A85).
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         setBackgroundColor(Color.BLACK)
         settings.javaScriptEnabled = true
         settings.allowFileAccess = false // assets stay readable; nothing else on disk is
