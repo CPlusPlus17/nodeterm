@@ -482,7 +482,7 @@ describe('ChatPanel — a sent built-in that opens a dialog in the TUI', () => {
   it('/rewind is sent, THEN the view flips to the terminal (the dialog is there, and the next Enter would answer it)', async () => {
     const onShowTerminal = vi.fn(() => {
       // The flip happens only after the pane accepted the text.
-      expect(sendText).toHaveBeenCalledWith(NODE, '/rewind')
+      expect(sendText).toHaveBeenCalledWith(NODE, '/rewind', { typed: true })
     })
     await hook('done')
     await renderWith(onShowTerminal)
