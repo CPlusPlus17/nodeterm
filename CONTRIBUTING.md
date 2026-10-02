@@ -120,7 +120,10 @@ applicable here":
    checks the `.answer` and `acks/<node>.seen` files the phone writes against names copied from
    `pending-approvals.ts` and `ack-sweep.ts`; `relay.json` is tested only by its presence (the phone
    reads its absence as "remote access is off"), not its content. A change to one of those
-   needs the matching hand edit in the Android tests. Its interop fixture
+   needs the matching hand edit in the Android tests. `AckSweepInteropTest` additionally runs
+   the actual Android `.seen` producer against the desktop's local/remote consumers: each consumer
+   requires positive ownership before reading/deleting a file, and remote ownership is the union
+   of all projects on that host. Keep this behavior compatible with iOS. Its interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
    The Android workflow runs on every file that fixture bundles (`src/core`, `src/shared`,

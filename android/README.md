@@ -6,7 +6,7 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-> **Status (2026-10-02): device verification pending.** CI builds the debug APK, and the release blockers
+> **Status (2026-10-02): private beta preparation; device verification pending.** CI builds the debug APK, and the release blockers
 > and medium bugs an audit found are fixed on this branch and tested where the code allows — but the
 > app has **not yet been run on a phone**. The plan and what is still open are in
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
@@ -43,13 +43,12 @@ written for it and tested where the layer allows, and the numbered
 
 ## Before using it away from your computer
 
-The device pass is still outstanding. The latest local quick-answer fixes (`A78`–`A80`) have not
+The device pass is still outstanding. The latest local fixes (`A78`–`A82`) have not
 been pushed or built by CI; a previous CI APK does not include them.
 
-1. In this repository's [Android workflow](https://github.com/CPlusPlus17/nodeterm/actions/workflows/android.yml),
-   choose a successful run for `claude/android-ios-parity-75kfem`, download
-   `nodeterm-android-debug`, unzip it and install `app-debug.apk`. Install updates over the existing
-   app to keep pairings. The desktop must also include the host-side fixes you want to test.
+1. Prepare and install the [private beta](#private-beta) below from a successful run of the current
+   branch. The desktop must also include the host-side fixes you want to test. Future private beta
+   updates use the same private signer and a higher version code, preserving pairings.
 2. At the computer, turn on remote access in Settings → Phone, pair, and open the computer in the
    app. If either screen asks for a first relay approval, compare and approve its code there.
 3. Turn the phone's Wi-Fi off. Open a terminal over mobile data, send a harmless command, answer a
@@ -77,13 +76,73 @@ run on it (its embedded Kotlin compiler rejects the version while compiling the 
 CI builds the debug APK on every change under `android/` or to the desktop code the protocol tests
 run (`.github/workflows/android.yml`; its path filter says which) and attaches it to the run. The
 debug APK is not minified. Only the release build type runs R8 (`app/proguard-rules.pro`), and CI
-builds it too, unsigned and not published
+builds it too, attaching unsigned build inputs
 (`./gradlew :app:assembleRelease`, then `tools/check-r8-output.sh`). A missing `-dontwarn` therefore
 fails CI rather than a first release (R8 reports the missing class), and so does one of the keeps the
 script checks when it stops matching (the WebView bridge, the worker, BouncyCastle's provider tables,
 one exception name). A keep that NEW reflection needs is not detected, because R8 renames or drops
 such code without a word; add the keep and a line in `tools/check-r8-output.sh`. None of this proves
 a minified APK works on a phone; none has been run on one.
+
+## Private beta
+
+This path prepares an APK for your own phone. The private signing key and signed APK stay on your
+machine. The tool and CI changes described here are local and unpushed; no nodeterm release APK has
+been signed or installed in this session. Actions artifacts on a public repository are downloadable
+by other signed-in users, so they contain only unsigned build inputs and checks.
+
+1. After the required checks, push `claude/android-ios-parity-75kfem`: pushes to this exact branch
+   prepare unsigned beta inputs with version code `2`, name `0.1.0-beta.1`. Increase the workflow's
+   `NODETERM_BETA_VERSION_CODE/NAME` for later branch betas. Once the workflow exists on the default
+   branch, manual **prepare_beta** runs can select a branch and override those versions; GitHub
+   [requires that default-branch workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
+   for manual dispatch. Each later update needs a higher code. Wait for **Protocol**,
+   **App release (R8, unsigned)** and **Private beta checks** to succeed.
+2. Download `nodeterm-android-release-unsigned`, `r8-release-outputs`, and
+   `nodeterm-android-beta-build-inputs` from that same run. Extract them into separate directories.
+   Check out the exact `sourceRevision` in `beta-build-inputs.json`, and match its version fields.
+   The unsigned APK cannot be installed.
+3. Use a private Android signing keystore you keep outside the repository. If this is your first
+   private build, create one with JDK `keytool -genkeypair` and retain it for all later updates.
+   Record the certificate's SHA-256 fingerprint using `keytool -list -v`; this public fingerprint
+   is the expected signer pin. The committed `app/debug.keystore` is public and the packager rejects
+   it. Keep the keystore and passwords backed up privately; changing the signer prevents updates.
+4. Put each password in a separate local file with permissions `0600`, containing one password line.
+   On Linux or macOS with Python 3.11+, a JDK, and Android build-tools 36.0.0, run the following from
+   the checked-out repository. Replace the local paths and fingerprint with yours; take the versions
+   and revision from the downloaded input metadata.
+
+   ```sh
+   python3 android/tools/package-beta.py \
+     --apk /path/to/unsigned/app-release-unsigned.apk \
+     --r8-dir /path/to/r8-release-outputs \
+     --build-inputs /path/to/beta-build-inputs.json \
+     --keystore /private/path/android-beta.p12 --key-alias nodeterm-beta \
+     --store-password-file /private/path/store-password \
+     --key-password-file /private/path/key-password \
+     --expected-signer-sha256 YOUR_CERTIFICATE_SHA256 \
+     --version-code 2 --version-name 0.1.0-beta.1 \
+     --source-revision FULL_COMMIT_SHA_FROM_BETA_BUILD_INPUTS \
+     --build-tools-dir "$ANDROID_HOME/build-tools/36.0.0" \
+     --output-dir /private/path/nodeterm-beta-1
+   ```
+
+   The output directory must be new or empty. The tool matches the APK and R8 checksums to the input
+   metadata from that CI run, and checks the package, versions, SDK levels,
+   `debuggable=false`, R8 runtime keeps, alignment and the APK signature. Only after those checks
+   pass does it produce the APK, its `.sha256`, and `beta-metadata.json` with the signer and source
+   revision. This verifies packaging; it does not prove the app works on a phone.
+5. Verify the checksum in the output directory (`sha256sum -c *.sha256` on Linux, or
+   `shasum -a 256 -c *.sha256` on macOS). Sideload that APK onto your phone, then run the mobile-data
+   preflight above and the [device checklist](../docs/android.md#device-checklist), including item 5
+   on this minified build.
+
+If the public debug build is already installed, Android will reject the private signer as an update
+to it. Moving to the private beta requires a deliberate one-time uninstall through Android
+settings; uninstalling deletes every pairing and the phone's identity. Revoke the stale
+phone entries on the computers and pair again. The packager never uninstalls or installs anything.
+Clearing storage alone does not change an installed APK's signing certificate; uninstall the debug
+APK before installing the private one.
 
 Every CI job that runs `./gradlew` first checks `gradle/wrapper/gradle-wrapper.jar` against Gradle's
 published checksums (`gradle/actions/setup-gradle`, which also caches `~/.gradle`). Dependabot opens
@@ -190,14 +249,15 @@ iOS app does receive the detail, in the push the desktop sends.
 - The phone's relay identity (a Curve25519 box key) and SSH identity (an Ed25519 seed) are
   generated on the device and stored encrypted under an Android Keystore AES-GCM key. Only their
   public halves are ever sent anywhere; the next point is how the private halves can still be taken.
-- **The debug APK is debuggable, and it is the only build there is.** AGP marks every debug build
+- **The debug APK is debuggable.** AGP marks every debug build
   `android:debuggable`, so anyone with adb access to your unlocked phone while USB debugging is on
   (from a computer the phone has authorized, or by accepting the prompt on it) can read the app's
   files with `adb shell run-as dev.nodeterm.android` and attach a debugger to the running app. The
   Keystore never hands out the key those files are sealed under, but it lets any code running as the
   app use it, so that is enough to pull the phone's pairing credentials: the SSH private key your computers
-  accept, the relay box secret and the relay device token. A signed, non-debuggable release build does
-  not exist yet. Until it does, keep USB and wireless debugging off when you are not using them.
+  accept, the relay box secret and the relay device token. A signed, non-debuggable release build
+  has a local [private-beta packaging path](#private-beta), but no signed nodeterm release has been
+  built or device-tested in this session. Keep USB and wireless debugging off when not using them.
 - **If someone else may have had adb access, pairing again is not enough.** The phone keeps its SSH
   key, its relay box key and its relay device id through a re-pair, so each computer would trust the
   same keys again. Give the phone a new identity before it pairs:

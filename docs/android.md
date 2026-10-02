@@ -280,12 +280,50 @@ The required full protocol tests and app type-check could not start: system Grad
 a recovered Gradle 9.5.1 fails initializing its socket-based lock service in this sandbox. Real
 tmux/SSH checks and adb are also blocked by socket permissions. `npm run typecheck` is blocked by
 missing desktop dependencies, and `npm ci --offline --ignore-scripts` cannot complete from the cache.
+That command deletes `node_modules` and leaves node-pty unpatched/unbuilt; a desktop checkout
+recovers with `npm install` or `npm run rebuild` once dependencies can be installed.
 GitHub DNS is unavailable, so fetching, downloading an APK, pushing and checking Android CI were
 not possible. **No device checklist item has been run in this session.** The checks below describe
 earlier work; they do not establish that these local commits pass the full suite or work on a phone.
 
 No relay verb or payload changes in this continuation. The desktop fix serves Android and iOS;
 @eneskirca should check the iOS direct-SSH answer path for the same copy-mode and exit-status hazards.
+
+Private beta preparation adds bounded relay HTTP requests (`A81`) and owned read-ack consumption
+(`A82`). `RelayApiTest` passed all six methods with real cached OkHttp, Okio, serialization and
+coroutines, using in-memory sockets for stalled headers/body, trickling responses and cancellation;
+the deadline also bounds dispatcher queueing and preserves a caller's shorter cancellation.
+Three initial and three follow-up mutation checks were caught. This is a direct compiler run
+(Kotlin 2.3.20, language 2.2), not the
+required Gradle suite or a live backend test. The ack changes retain foreign files before reading or
+deleting them and aggregate ownership across every project on an SSH host; Android's producer format
+stays the same, with new producer/consumer interop coverage. iOS should preserve the same ack format
+and confirm multiple-desktop behavior with @eneskirca.
+
+For `A82`, five desktop suites pass 225 tests (ack sweep, mirror, remote ack/project teardown), and
+the actual Android producer plus real desktop consumers pass two ack interop methods and the new
+bundle path-coverage check under that cached compiler. Eight mutations were caught; a focused
+strict TypeScript check of the ack core/new fixture also passes. The separate fixture guard's
+`tsc --listFilesOnly` child fails with `EPERM` here, so its full check remains unverified.
+
+The [private beta procedure](../android/README.md#private-beta) keeps the signing key and finished
+APK local. Pushes to the exact takeover branch prepare versioned unsigned beta inputs without a
+PR; manual CI beta inputs provide the later optional path once the workflow is on the default branch.
+Both select an unsigned release, R8 reports and provenance;
+the beta checks require protocol/release success, desktop type-check and delivery/ack tests, and
+real-tool packaging regressions. Local packaging verifies the expected private signer, release
+manifest, R8 keeps, alignment and checksum. **No nodeterm app APK has been built, signed or installed
+in this session.** Packaging fixture APKs prove the tool's gates only. `A50` remains open until an
+actual signed non-debuggable APK is delivered and tested.
+
+Beta tooling checks pass 22 real SDK packaging fixture tests plus one selected-version environment
+test (12 cases), with 13 packaging mutations and one version-validation bypass caught. Seven CI
+configuration tests pass under the cached compiler; six workflow mutations are caught. Nine existing
+device/contributor documentation tests pass under that runner. The extracted Gradle version
+expressions also pass nine boundary/default cases; this does not run Gradle configuration. The full
+protocol/app Gradle commands were retried after these changes and still stop before project tasks at
+the lock service; desktop type-check still stops at missing `electron-vite/node` types. No push or
+continuation CI result is available.
 
 `android/protocol` has no Android dependency and is tested on a JVM (`./gradlew -p protocol test`):
 
@@ -371,7 +409,8 @@ nothing, so a new reflection or name-dependent target (a new `Class.forName`, a 
 from a string) builds green without its keep. It needs its own keep and a line in
 `tools/check-r8-output.sh`. `R8RulesTest` re-derives the classes Android lacks from the jars the
 protocol module ships to the app, and requires a keep for every WorkManager worker in the app sources.
-The debug APK stays unminified and is the one distributed. The app has no instrumented tests and has
+The debug APK stays unminified. CI attaches unsigned release inputs; the private-beta path signs
+them locally. The app has no instrumented tests and has
 **not been run on a device**, minified or not; the [device checklist](#device-checklist) below is what
 a first device pass has to run. An audit of the code found release blockers; the fixed ones are
 marked in its index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md).
@@ -809,8 +848,11 @@ later fix left to a device.
 
 ### Install, update and what stays on the phone
 
-1. Install the CI debug APK (artifact `nodeterm-android-debug`) and pair a computer. Install the next
-   CI APK over it without uninstalling: it installs as an update and the pairing is still there.
+1. For beta readiness, install two consecutive private betas using the same private signer and
+   increasing version codes; pair on the first and update to the second without uninstalling, keeping
+   the pairing. Also check the committed-debug-key path separately with two CI debug APKs (artifact
+   `nodeterm-android-debug`). Migrating from debug to private beta needs one deliberate uninstall
+   because the signing certificates differ; revoke the stale phone entries and pair again.
    *(A10)*
 2. Pairings survive a restart: force-stop the app, reboot the phone, reopen the app. The computer is
    still listed and connects on both routes without pairing again, the desktop's Settings → Phone
@@ -827,7 +869,7 @@ later fix left to a device.
    new phone's setup) leaves the app there with no computers and no pins. Pair it too, then revoke
    one of the two phones on an entitled (Pro) desktop: the other keeps working. A cloud backup
    restored onto a fresh install brings back nothing of the app either. *(A51)*
-5. Once a release signing key exists: install the signed, minified release APK and run the pairing,
+5. With the private-beta signing key: install the signed, minified release APK and run the pairing,
    SSH, relay, OSC 52 copy, links and Copy sheet, and background-notification items on it, since that is where code R8 could
    have broken runs (BouncyCastle's provider tables on the first connect, the WebView bridge, the
    WorkManager worker). An error message names a real exception class, not an obfuscated one.
@@ -874,7 +916,10 @@ later fix left to a device.
     *(A49, A74)*
 12. On cellular, off the LAN: connect through the relay. The desktop shows the SAS dialog and the phone
     shows the same code; approve. Reconnect later: no second prompt. On another pairing press Deny: the
-    phone says it was not approved and does not dial again until Try again. *(A65, A30)*
+    phone says it was not approved and does not dial again until Try again. Briefly enable airplane
+    mode during connection, then recover: a stalled relay token request fails within about 30 s
+    rather than connecting indefinitely; leaving the screen cancels it, and reopening can connect.
+    *(A65, A30, A81)*
 13. Leave the phone in the background for 15 minutes or more with a paired computer that has never
     approved it over the relay: no SAS dialog appears on the desktop. *(A05, A17, A23)*
 14. Put the desktop to sleep (or pull its network) while the phone is connected over SSH: within about
@@ -983,7 +1028,11 @@ later fix left to a device.
     terminal mounted and with its project offscreen/released, so the first background answer also
     works. A missing session must not type into a longer session name sharing its prefix.
     *(A12, A57, A65, A78, A79, A80)*
-42. Open a finished session on the phone: the desktop's unread dot clears. *(A65)*
+42. Open a finished session on the phone: the desktop's unread dot clears. On a host that runs its
+    own nodeterm and is driven over SSH by another desktop, repeat for each desktop's sessions while
+    both sweepers run: the owning desktop's unread dot/Done card clears and the other's pending
+    acknowledgment is retained for its owner. Repeat with two SSH projects on the same host and
+    after an owning desktop restarts with an old unresolved Done card. *(A65, A82)*
 43. A background notification arrives within about 15 minutes; tapping it opens that session's
     terminal, with that computer's Inbox one Back away: at launch, with the app in the background, and
     with the app open on another computer. *(A11, A19, A25)*
@@ -1198,16 +1247,12 @@ later fix left to a device.
   but another desktop's sessions are, the listing shows that desktop's projects and nothing of the
   `node-terminal` sessions of a nodeterm whose data dir the phone could not find (a Server Edition
   with `--data-dir` elsewhere), and nothing says they are missing.
-- **Read-acks of a driven session can miss the desktop that drives it.** The phone writes
-  `~/.nodeterm/acks/<nodeId>.seen` on the computer, and two sweepers read that directory when the
-  computer also runs its own nodeterm under the same user: the computer's own (`src/core/ack-sweep.ts`) and the driving
-  desktop's over SSH (`sweepRemoteAcks`, `src/main/remote-ssh/ssh-project.ts`). Both consume every
-  `.seen` they find, whichever node it names, so when the computer's own sweep runs first, the
-  driving desktop's unread dot and Done card for that session do not clear (and the other way round
-  for the computer's own sessions). iOS writes the same file and has the same race. The fix is on the
-  desktop: each sweeper consuming only the acks of nodes it owns. On a computer with no nodeterm of
-  its own (the driven dev host) there is one sweeper and no race. Held approvals are not affected:
-  each hook waits for its own `.answer` file.
+- **Read-ack ownership is locally fixed; device validation remains open** (`A82`). Both the local
+  `src/core/ack-sweep.ts` consumer and `sweepRemoteAcks` require ownership before reading/removing
+  `~/.nodeterm/acks/<nodeId>.seen`. Remote ownership combines all connected projects on the host.
+  Retained local files are retried when ownership changes, including restored unresolved Done
+  cards. Android's actual producer/consumer interop is covered; the multi-desktop device case and
+  iOS verification remain pending. Held approvals continue to use each hook's own `.answer` file.
 - **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and new sessions
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over
@@ -1285,14 +1330,15 @@ later fix left to a device.
   Wi-Fi, a VPN), it is whichever the OS lists first, which may not be the one the phone can reach;
   the relay then still serves. The refresh needs a relay connection, so a phone that only ever uses
   "Only on my network" keeps the pairing's address and keys, and the iOS app does not read `lan` yet.
-- **No signed release build** (audit `A50`). The only APK there is to install is the debug build,
+- **Signed release delivery and device pass pending** (audit `A50`). The debug build
   and AGP marks every debug build debuggable: anyone with adb access to the unlocked phone while USB
   debugging is on can read the app's files (`run-as`) and attach a debugger to the running app, whose
   code can use the Keystore key those files are sealed under. That is the phone's pairing
   credentials: the SSH key its computers accept, the relay box secret and the relay device token.
-  android/README.md says so under Security. A signed, non-debuggable release needs a release
-  `signingConfig` fed from CI secrets, published artifacts, and the README and `ANDROID_APP_URL`
-  pointed at them. Until then the desktop's Android link opens the `android/` source folder and both
+  android/README.md says so under Security. A private beta now has a local signing/verification
+  tool and opt-in versioned unsigned CI inputs, documented in the README; its key and signed APK
+  stay off Actions. No actual signed nodeterm APK or phone result is available in this session.
+  The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.
 - **Dictation is the phone's own recognizer, not Whisper** (audit `A59`). The input bar's mic uses

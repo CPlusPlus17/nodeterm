@@ -66,7 +66,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76` · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b` · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 📝 documented in `33af5e7` (README warning); the signed non-debuggable release is still open · The only distributable build is a debuggable APK, so Keystore-protected secrets can be pulled over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 📝 private-beta packaging implemented locally; actual signed delivery and phone validation remain open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -97,6 +97,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A78](#a78) | medium | | small | protocol/bug | ✅ locally fixed in `bb5b3e54`; full checks pending · Desktop quick answers can hit a prefix-matched or newly selected pane, be swallowed by copy mode, or reorder concurrent writes |
 | [A79](#a79) | medium | | small | protocol/bug | ✅ locally fixed in `e64665c3`; full checks pending · Direct-SSH quick answers can be swallowed by copy mode and an absent SSH exit status can report success |
 | [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; full checks pending · The control client's startup attach reply consumes the first queued command's reply slot |
+| [A81](#a81) | medium | | small | runtime/bug | ✅ locally fixed in `86390a49`, `7e11e93c`; full checks pending · Relay join and device mint can hang on stalled mobile connections and ignore coroutine cancellation |
+| [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; full checks pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
 
 ## A01
 
@@ -1610,6 +1612,16 @@ Ship a signed, non-debuggable release build (configure signingConfig and publish
 > 
 > **A related, unverified distribution problem:** debug APKs built on CI are signed with a per-runner debug keystore. If that keystore is freshly generated each run, one CI artifact cannot update another in place. Uninstalling first wipes the Keystore and the prefs, which forces a re-pair.
 
+**Private-beta continuation (2026-10-02):** local signing/verification is implemented in
+`android/tools/package-beta.py`; exact takeover-branch pushes (or later opted-in manual CI runs)
+version the unsigned AGP release and gate its
+provenance on protocol, release and desktop/packaging checks. The tool verifies APK/R8 hashes from
+that run's input metadata, rejects the public debug key, requires the expected private certificate,
+checks non-debuggable release metadata/alignment/signature, and emits an APK/checksum/metadata set
+only after success. Keys and signed APKs stay local: Actions artifacts on a public repo are not
+private downloads. Real Android-tool regressions use disposable fixture keys/APKs, not an app build.
+No signed nodeterm APK or phone result exists here; delivery and device checks leave `A50` open.
+
 ## A51
 
 **allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned**
@@ -2381,3 +2393,39 @@ The local fix reserves and consumes the startup reply before resolving stdin com
 the client if attach fails. Behavioral regressions feed the initial reply after a command is
 already queued and verify that only the command's own reply resolves it. Test children now emit the
 startup block too. Full real-tmux and device verification remain pending.
+
+## A81
+
+**Relay HTTP token requests can stall indefinitely (continuation, 2026-10-02).**
+
+`RelayApi` shared the long-lived WebSocket client, whose read timeout is deliberately zero, with
+join/device HTTP calls. A server accepting a connection but stalling its headers or body could
+leave the app connecting indefinitely. Blocking `execute` inside `withContext(IO)` did not cancel
+the call when the coroutine was cancelled.
+
+The local fix gives HTTP its own finite I/O limits and a 30-second total deadline, applies that
+deadline even to an injected client, and keeps coroutine cancellation bound to `Call.cancel` until
+the response body is closed. A coroutine deadline also covers OkHttp dispatcher queueing while
+preserving an outer caller's cancellation. WebSocket reads and wire shapes are unchanged. Six regression methods
+run real OkHttp over in-memory sockets, covering both endpoints, stalled headers/body, trickling
+body, cancellation, dispatcher queueing, caller deadlines and successful wire shapes. Three initial
+and three follow-up mutation checks are caught. Required Gradle, live
+backend, roaming and device verification remain pending.
+
+## A82
+
+**Shared read-ack files are stolen by other desktops (continuation, 2026-10-02).**
+
+The local sweeper read and deleted every `.seen` file under `~/.nodeterm/acks` before establishing
+ownership. The remote shell did the same glob for a shared SSH host. Whichever desktop swept first
+could consume another desktop's acknowledgment, leaving its unread badge/card intact forever.
+
+Local consumption now requires positive mirror ownership, including an unresolved own inbox card
+whose old node entry expired after restart. Unknown files remain unread and untouched; retained
+files bypass the directory-mtime cache because ownership can appear without another phone write.
+The remote manager forms the union of every connected project's nodes per host and sends validated
+IDs on stdin; the shell reads/deletes only that allowlist, and its output is checked against it.
+Regression tests cover two owners, late ownership, expired-node inbox cards, multiple projects on
+one host and refusal of unexpected output. Android interop uses the actual `SshScripts.ackRead`
+producer against the desktop's real local/remote consumers. File names/content stay compatible with
+iOS; @eneskirca should validate multi-desktop behavior. Full checks and device execution remain open.

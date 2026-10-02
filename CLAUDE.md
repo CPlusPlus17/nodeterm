@@ -5430,7 +5430,12 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      `ack-sweep.ts`, and `relay.json` only by its presence (the phone reads its absence as "remote
      access is off", audit A26; `HostBrowseTest` reads its path and its removal on stop from
      `relay-advertise.ts` / `standing-host.ts`), never its content — a change to those owes a hand
-     edit of the Android tests. The fixture implements host-service's
+     edit of the Android tests. `AckSweepInteropTest` additionally runs the actual Android `.seen`
+     producer against the desktop's local/remote consumers. Those consumers require positive
+     ownership before reading/deleting files; remote ownership aggregates all projects on a host.
+     The ack-only fixture shares its implementation with `host-fixture.ts` and needs no relay
+     sockets/crypto dependencies. Keep the format and consumer behavior compatible with iOS.
+     The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
      types, so it sits in `tsconfig.node.json` and `npm run typecheck` checks it on every CI run;
      it passes nothing through a cast (`android-interop-fixture.guard.test.ts`, audit A67). Two

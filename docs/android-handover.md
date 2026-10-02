@@ -1,19 +1,22 @@
-# Android companion: handover (2026-09-26)
+# Android companion: handover (updated 2026-10-02)
 
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A80`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A82`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
 - The Android app exists (`android/`), and **CI builds it with AGP**: a debug APK and, since `A37`,
-  a minified release build that runs R8 (unsigned; no release key exists). The protocol tests pass in
-  CI too.
+  a minified release build that runs R8. The new private-beta path versions that unsigned release
+  through exact takeover-branch pushes or later manual CI inputs and signs/verifies it locally.
+  No private key or signed nodeterm APK
+  exists in this session. Historical protocol tests pass in CI; continuation CI is unverified.
 - **It has never been run on a phone.** Of the audit's 77 findings, all 9 release blockers (WP1 +
   WP2), every WP4 medium bug and nearly all of WP6 are fixed on the branch; 73 of the original 77
-  findings are fixed. `A56` was deliberately not built and `A50` is documented only. Batch D and
+  findings are fixed. `A56` was deliberately not built; `A50` has a local private-beta packaging
+  path but signed delivery/device validation remain open. Batch D and
   the six batch E follow-ups have landed. Remaining gaps are listed under "What is still open".
   Earlier changes were unit/interop-tested where the layer allows and type-checked,
   but **nothing has run on a device**. Do not hand the APK to anyone until the device pass (WP3) has
@@ -27,6 +30,39 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
+
+### Private beta preparation (2026-10-02): local pipeline and reliability fixes
+
+The user wants a privately sideloaded APK for their own phone. A signed APK is not published to
+Actions or a public release: artifacts on a public repository are downloadable by other signed-in
+users. `android/tools/package-beta.py` signs the unsigned AGP release locally, rejects the public
+debug key and unexpected signer, checks release metadata, R8 keeps and APK alignment/signature,
+then emits APK/checksum/provenance together. Version overrides leave ordinary builds unchanged.
+Pushes to this exact takeover branch build versioned unsigned beta inputs and run **Private beta
+checks**; optional manual **prepare_beta** inputs work once the workflow exists on the default branch
+(a GitHub requirement; cached main has no Android workflow). The beta checks require the
+protocol/release jobs, desktop type-check and delivery/ack tests, and
+real-tool packaging regressions. See the [private-beta procedure](../android/README.md#private-beta).
+
+- `A81` (`86390a49`, `7e11e93c`): relay join/device HTTP calls have a 30-second total deadline and finite I/O
+  timeouts, including dispatcher queueing. Coroutine cancellation closes the call through
+  response-body consumption and preserves a caller's shorter deadline. Six real
+  OkHttp regressions pass over in-memory sockets; three initial and three follow-up mutation checks
+  are caught. WebSocket reads remain
+  long-lived and request/response shapes stay the same. Full Gradle/backend/device checks pending.
+- `A82` (`010240e0`): read acknowledgments are consumed only by a positive owner. Local mirror ownership includes
+  unresolved own inbox cards after restart; a retained foreign file is retried if ownership changes.
+  Remote ownership aggregates every connected project on the host before the shell reads/removes
+  files. Android's existing producer contract is covered in the same change and remains compatible
+  with iOS; @eneskirca should verify the multi-desktop behavior on iOS.
+- Packaging uses fixture APKs and disposable test keys for regression tests. Those fixtures are
+  **not the nodeterm app**. No APK has been built, signed or installed for the user here. Required
+  full checks, latest-remote reconciliation, CI and all 64 device items remain open. `A68` is deferred.
+  Packaging commits `d5f561ec`, `817fd923` pass 22 SDK-backed tests and 13 mutations. The selected
+  beta-version environment guard passes 12 cases and catches its bypass. Ack verification passes
+  225 desktop tests, three cached-compiler interop/path checks and eight mutations. CI config passes
+  seven checks/six mutations in `6efde5f1`, and existing device/contributor docs pass nine checks. See `android.md`
+  for the cached compiler/dependency limits; full required checks remain blocked before execution.
 
 ### Continuation (2026-10-02): local fixes, full checks and device pass still pending
 
@@ -149,13 +185,15 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Device pass first:** install the latest successful branch CI APK and run all 64 items in
+1. **Build and install the private beta, then device pass:** use the latest successful branch
+   workflow's unsigned release/R8 inputs and local private signing procedure. Run all 64 items in
    `android.md`. Before leaving the computer, also run the README's mobile-data preflight. Record
    results and turn every failure into a finding. No device result has been recorded yet.
 2. **Finish continuation verification and pick a known gap.** Fetch the latest branch before
    reconciling these local commits, run the required full checks, then push and confirm Android CI.
    Batch D and E are done; do not repeat their completed work. Remaining examples: the live backend
-   join contract, read-ack ownership, offscreen Sleeping nodes and non-Claude permission flags.
+   join contract, offscreen Sleeping nodes and non-Claude permission flags. Read-ack ownership is
+   locally fixed in `A82`; finish its full interop and device verification.
 3. **`A68` last.** `push: branches: [main]` + `pull_request`, no `merge_group` (see the verifier).
    After it, pushes to this branch no longer run the Android workflow until a PR exists, which is why
    it waits until everything else is verified.
@@ -189,7 +227,10 @@ section before starting, since the verifier corrections take precedence):
   `paragraphContaining` has the same walk-up limit A32 fixed in terminal.js: below a run of more than
   32 continuing full-width rows the paragraph it returns does not contain the row, so a link there is
   missed. One-character fix (`MAX_JOIN_ROWS - 1`), owed with its own vitest.
-- **A10 trade-off.** The debug key is public by the user's decision; a release key does not exist.
+- **A10/A50 trade-off.** The debug key is public by the user's decision. The private-beta packager
+  rejects it; a private signer is supplied locally and must be retained for updates. Moving from
+  debug to private beta requires a deliberate uninstall/re-pair once. No real private key or APK has
+  been created in this session.
 - **Server-e2e and native-module vitest suites** could not run in this sandbox (`npm ci
   --ignore-scripts` skips the native builds, and there is no `ssh` client); the same 14 tests and 31
   files fail identically on the pre-session commit. Desktop CI does not run on branch pushes here,
@@ -228,7 +269,7 @@ when it did not deliver. iOS can adopt `reason` unchanged; an older phone keeps 
 | Repo / branch | `CPlusPlus17/nodeterm`, branch `claude/android-ios-parity-75kfem` (pushed) |
 | Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; `2dd539f` this handover; then the WP1/WP2/WP4 fixes listed in the progress log (`af1f820` … `0db0b6e`) |
 | PR | none (do not open one unless asked) |
-| CI | `.github/workflows/android.yml`: **Protocol**, **App** (`assembleDebug`), **App release** (R8, unsigned) and **CodeQL (Kotlin)**. Historical green runs are described above; continuation commits are unpushed and CI-unverified |
+| CI | `.github/workflows/android.yml`: **Protocol**, **App** (`assembleDebug`), **App release** (R8, unsigned), **CodeQL (Kotlin)** and **Private beta checks** on exact takeover-branch pushes or opted-in manual runs. Historical green runs are described above; continuation commits are unpushed and CI-unverified |
 
 What is in the tree:
 
@@ -268,7 +309,9 @@ Verified:
 - The relay join request shape. The client sends `{deviceToken, hostId}` to `POST /v1/relay/join`
   and accepts `pairingToken | token | joinToken` in the reply, but it has not been checked against
   the live backend (the backend repo is not here).
-- Release/minified builds on a device. R8 runs for release in CI (`A37`: `assembleRelease` plus `tools/check-r8-output.sh`), but no minified APK has been installed or run, and no release signing key exists.
+- Release/minified builds on a device. R8 runs for release in CI (`A37`: `assembleRelease` plus
+  `tools/check-r8-output.sh`). Local private packaging is implemented, but no actual signed
+  nodeterm APK has been made or installed and no real private signing key is available here.
 - **Caveat on the tests:** since `A64` the relay leg's `projects.list` blob comes from the
   desktop's own assembly (`src/core/projects-list-blob.ts`, shared with `src/main/index.ts`) and its
   mirror entries from the real mirror writer; the session list inside the blob and the mirror's
@@ -378,7 +421,8 @@ template. Mention @eneskirca for the mobile implications: the pairing-key pin fr
 3. **A09**: relay-route SSH-project nodes; the desktop attaches them over the project's ControlMaster.
    Done.
 4. **Distribution**: a committed public debug key for sideloading (`A10`). Done. A real release
-   signing key and a store listing are still to come.
+   key/store listing were deferred. The 2026-10-02 continuation prepares a private sideloaded beta:
+   sign locally with a retained private key; no public release or store listing is requested.
 
 ## Device checklist
 
@@ -421,9 +465,13 @@ WP4 and nearly all of WP6 are fixed on the branch, but nothing has run on a devi
 1. If a phone is available: run the device checklist in docs/android.md (#device-checklist) with the
    latest CI APK, record results in docs/android.md → "What is verified", and turn every failure into
    a finding.
-2. Fetch the latest branch and reconcile the local A78/A79/A80 commits. Finish their required full
+2. Fetch the latest branch and reconcile the local A78–A82 and private-beta commits. Finish their required full
    checks, then pick from the known gaps under "What is still open". Batch D and E are done.
    Keep A68 last, when the branch is ready for a PR; no merge_group.
+3. Push only after the required verification is available, confirm Android CI (including Private beta
+   checks), download unsigned APK/R8/provenance from one run, sign locally with the retained private
+   key and expected signer pin, and run the mobile-data preflight plus all 64 device items on the
+   signed minified APK. The latest continuation has no actual app artifact or device results.
 
 Before each push run the protocol tests (cd android/protocol && gradle test --offline; an existing
 npm install at the repo root is enough), the offline type-check (cd android/tools/typecheck && gradle
