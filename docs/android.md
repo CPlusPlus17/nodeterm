@@ -296,6 +296,14 @@ unchanged.
 
 ## What is verified, and how
 
+**Post-beta scroll investigation (`A86`):** after checkpoint `cf0487a3`, the user reports poor
+scroll responsiveness on both Wi-Fi and mobile-data VPN, so a VPN-only cause is not supported.
+Controlled SSH/tmux measurements identify amplified discrete wheel steps,
+missing fling and distance clipping on fast movement; they do not establish the phone's rendering
+cost or a sole transport cause. A bounded desktop replay of the real DOM renderer showed no queue
+backlog at that load. The [finding](android-audit-2026-09.md#a86) records the evidence and
+remaining traces. No source, phone setting or installed APK changed for this investigation.
+
 **Current local beta (2026-10-02):** restored host access allowed reconciling remote tip
 `82940e17` in `990f90c6` and building the actual app locally. The first AGP 8.9.1 release exposed
 R8 Kotlin-metadata warnings (`A83`). The corrected source
@@ -1118,7 +1126,8 @@ later fix left to a device.
 19. Non-ASCII renders over SSH: Claude's rounded borders, accented letters, CJK, emoji. *(A03)*
 20. Swipe to scroll the tmux history. A copy the pane makes reaches Android's clipboard (OSC 52) with a
     "Copied N lines" toast: in tmux's copy-mode (Ctrl, then b, then [ from the key row and the input
-    bar), or from an application such as vim (`"+y`). *(A65, A85)*
+    bar), or from an application such as vim (`"+y`). Record slow/fast drag gain, reversal and
+    movement after finger lift. *(A65, A85, A86)*
 21. A large OSC 52 copy. In the pane, run
     `printf '\033]52;c;%s\a' "$(head -c 150000 /dev/zero | tr '\0' x | base64 | tr -d '\n')"`
     (the desktop's tmux passes an application's OSC 52 on): the phone says it is too large to copy and

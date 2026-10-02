@@ -3,7 +3,7 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A85`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A86`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
@@ -35,6 +35,17 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
+
+### Post-beta scroll responsiveness investigation (2026-10-02)
+
+After beta checkpoint `cf0487a3`, the user reports slow scrolling on both Wi-Fi and mobile-data VPN
+(`A86`), so a VPN-only cause is not supported. Controlled private
+SSH/tmux measurements show five rows per wheel notch, coarse drag gain, no fling and clipping
+above 20 notches per call. TCP_NODELAY improves some loopback output-tail measurements but does
+not explain every rate. Desktop DOM replay shows no backlog at that load; the phone's renderer
+and real-network timing are unmeasured. Next compare
+gesture gain/coalescing/order, socket behavior and phone renderer traces. This is diagnosis only;
+no source, phone setting or installed APK changed. The signed-beta evidence below still holds.
 
 ### Intended Pixel beta updated; direct SSH and pre-attach tmux history verified (2026-10-02)
 

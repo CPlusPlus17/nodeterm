@@ -15,6 +15,11 @@ it is talking to.
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
 > [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
 
+**Post-beta report:** the user reports slow scrolling on both Wi-Fi and mobile-data VPN (`A86`).
+History is reachable, but drag gain, batching and phone rendering need investigation; a bounded
+desktop DOM replay showed no backlog at that load. This is diagnostic work;
+the installed beta remains unchanged. See the [finding](../docs/android-audit-2026-09.md#a86).
+
 ## What it does
 
 The APK is built by CI. Manual SSH and basic terminal input have partial real-device evidence;

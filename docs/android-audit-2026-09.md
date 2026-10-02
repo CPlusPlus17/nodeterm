@@ -105,6 +105,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 open; diagnosis only · Scroll responsiveness is poor despite reachable tmux history |
 
 ## A01
 
@@ -2542,3 +2543,39 @@ History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link 
 
 Checklist items 20 and 23
 cover history and viewport sizing without adding or removing any of the 64 items.
+
+## A86
+
+**Scroll responsiveness is poor despite reachable tmux history (post-beta investigation, 2026-10-02).**
+
+- Severity: **medium**; effort: medium; area: performance; kind: gap
+- Locations: `android/app/src/main/assets/terminal/terminal.js` touch handlers,
+  `TerminalController.Bridge.onScroll`, `SshHostConnection.SshStream.scroll`
+
+The user reports slow scrolling on both Wi-Fi and mobile-data VPN after the signed-beta checkpoint
+`cf0487a3`, so a VPN-only cause is not supported. History is reachable; the issue is responsiveness
+and gesture behavior. No new APK has been deployed for this diagnosis.
+
+In a bounded private MINA/SSH/tmux fixture at 52×45, 240 wheel notches over two seconds move 1195
+history rows: the first notch enters copy mode and later notches move five rows each. Production
+JavaScript emits a notch per roughly 18.2 CSS pixels at font 13 and has no fling. This amplifies
+drag distance into coarse steps. A single 700-CSS-pixel movement requests 38 notches, but SSH clamps
+the call to 20, losing distance.
+
+The fixture's connected socket has TCP_NODELAY disabled. At 30/60 Hz, its output-tail measurement
+is about 40.8 ms with that setting versus 1.2–1.4 ms enabled; at 120 Hz both remain around 41 ms.
+Writer-queue tails stay below 0.5 ms, so this controlled loopback run shows no host writer backlog.
+These results do not establish TCP_NODELAY as the sole cause. Android uses xterm's DOM renderer,
+while desktop defaults to WebGL.
+
+The actual 194452-byte, two-second SSH capture was replayed through bundled xterm's DOM renderer
+in Electron 42 / Chrome 148 under Xvfb, at 426×684 CSS pixels and DPR 1. Normal `renderRows` mean
+was 0.14 ms, p95 at most 0.3 ms; with JIT-less mode requested, mean was 1.5 ms and p95 at most
+1.9 ms. Pending writes peaked at one and 1622 bytes, with no final backlog, unrendered output or
+long tasks and a stable 60 Hz animation-frame cadence. This excludes base64/DOM queue backlog as
+the primary cause at this bounded desktop load; it does not establish Pixel performance.
+
+No actual phone performance trace or RTT emulation has run. First compare gesture gain/inertia,
+frame coalescing and ordering, and TCP_NODELAY; then measure actual phone renderer frame timing
+and network behavior before choosing a fix. Existing checklist item 20
+covers slow/fast dragging, reversal and finger lift; the checklist remains 64 items.
