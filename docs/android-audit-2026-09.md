@@ -97,17 +97,18 @@ the audit's proposal, the handover's progress log says how and why.
 | [A75](#a75) | low |  | small | critic/gap | ✅ fixed in `437e359` · The New session account picker lists managed Claude accounts by raw UUID |
 | [A76](#a76) | low |  | small | critic/gap | ✅ fixed in `6966f25` · Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
 | [A77](#a77) | low |  | small | critic/bug | ✅ fixed in `0a2a1aa` · IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
-| [A78](#a78) | medium | | small | protocol/bug | ✅ locally fixed in `bb5b3e54`; protocol646/app type-check pass; phone verification pending · Desktop quick answers can hit a prefix-matched or newly selected pane, be swallowed by copy mode, or reorder concurrent writes |
-| [A79](#a79) | medium | | small | protocol/bug | ✅ locally fixed in `e64665c3`; protocol646/app type-check pass; phone verification pending · Direct-SSH quick answers can be swallowed by copy mode and an absent SSH exit status can report success |
-| [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; protocol646/app type-check pass; phone verification pending · The control client's startup attach reply consumes the first queued command's reply slot |
-| [A81](#a81) | medium | | small | runtime/bug | ✅ locally fixed in `86390a49`, `7e11e93c`; protocol646/app type-check pass; phone verification pending · Relay join and device mint can hang on stalled mobile connections and ignore coroutine cancellation |
-| [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; protocol646/app type-check pass; phone verification pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
+| [A78](#a78) | medium | | small | protocol/bug | ✅ locally fixed in `bb5b3e54`; protocol658/app type-check pass; phone verification pending · Desktop quick answers can hit a prefix-matched or newly selected pane, be swallowed by copy mode, or reorder concurrent writes |
+| [A79](#a79) | medium | | small | protocol/bug | ✅ locally fixed in `e64665c3`; protocol658/app type-check pass; phone verification pending · Direct-SSH quick answers can be swallowed by copy mode and an absent SSH exit status can report success |
+| [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; protocol658/app type-check pass; phone verification pending · The control client's startup attach reply consumes the first queued command's reply slot |
+| [A81](#a81) | medium | | small | runtime/bug | ✅ locally fixed in `86390a49`, `7e11e93c`; protocol658/app type-check pass; phone verification pending · Relay join and device mint can hang on stalled mobile connections and ignore coroutine cancellation |
+| [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; protocol658/app type-check pass; phone verification pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
-| [A86](#a86) | medium | | medium | performance/gap | 🟡 beta-3 mitigations verified mechanically but user still reports lag and too little movement; A87 correction protocol646/type-check pass; corrected-phone/user feel open · Scroll responsiveness is poor despite reachable tmux history |
-| [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol646/type-check pass, 31 JS/actor/wiring mutations caught; corrected-phone feel pending · Automatic xterm reports cancel a swipe and discard queued movement |
-| [A88](#a88) | medium | | small | tooling/bug | ✅ locally fixed in `fed68fb3`; 32 Python tests and ten mutations pass; subsequent CI confirmation required · New SDK signer labels make private-beta verification reject the expected certificate |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 beta 5 still stops mid-swipe/no coast; A89 stable-target code-7 update passes build/sign/install/protocol658, 35 JS+11 native+3 CSS mutants caught; latest phone/user checks await unlock · Scroll responsiveness is poor despite reachable tmux history |
+| [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; corrected-phone feel pending · Automatic xterm reports cancel a swipe and discard queued movement |
+| [A88](#a88) | medium | | small | tooling/bug | ✅ locally fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; next CI confirmation required · New SDK signer labels make private-beta verification reject the expected certificate |
+| [A89](#a89) | medium | | small | runtime/bug | ✅ locally fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass, protocol658/type-check/code-7 delivery pass; device checks await unlock · Repaint detaches the touched text span and loses continued drag/release events |
 
 ## A01
 
@@ -2630,10 +2631,31 @@ and 25 distinct presentations versus 11 over twelve gestures. First invocations 
 versus 84–90 ms; this supports more frequent delivered updates, without establishing terminal FPS
 or end-to-end SSH latency. Both traces and queries are retained in the private beta-4 evidence.
 
-**Still open.** Validate corrected-beta fast dragging, finger lift, Esc, reversal and actual user feel
-on Wi-Fi and mobile VPN. Custom tmux wheel bindings and kinetic fling remain open; queued requested
-distance drains after finger lift, but no velocity-based fling is implemented. Existing checklist item 20
-covers these checks; the checklist remains 64 items.
+**Beta-4 user feedback and bounded fling correction.** The user reports that beta 4 moves more
+lines but lacks momentum after finger lift. `1ad2e944` adds a velocity fling sampled over 120 ms,
+released within 80 ms of recent movement at 0.45–3 CSS pixels/ms. Exponential decay uses a
+240-ms constant, stops at 0.06 pixels/ms, and has hard 1000-ms/1200-pixel caps. Existing calls
+carry at most 20 notches; frame gaps over 250 ms stop movement. `53462f96` adds `onScrollStop`
+for new touch/input/reset/font/lifecycle barriers without typing into the pane. Queued keys/replies
+and the in-flight operation survive; bytes already handed to SSH's writer/network cannot be recalled.
+Automatic xterm reports preserve coast. No host/payload/SSH-file contract or iOS fixture changed.
+
+All 658 protocol tests in 63 suites pass with zero failures/errors/skips (59 seconds), plus offline
+app `compileKotlin` (10 seconds). Thirty-five JS and eleven new native mutations were caught;
+seven strengthened kinetic tests and real bundled-xterm coast/report behavior pass. Private
+`0.1.0-beta.5` / code `6` uses source `1ad2e94455a7adfb85d41212b12d36df39695324`; actual AGP
+release built in 47 seconds and passed every R8 keep. Retained-signer packaging verifies metadata,
+signature, 16-KB alignment and source/hash provenance. APK SHA-256:
+`7cc68d384aeb21ab40800fa7c83f006dfbfefba16dd2e945967c8c5376f17655`.
+It updated the intended Pixel in place with code-6/non-debuggable metadata and notification
+permission confirmed. The user still reports continuous swiping stops and requires lifting; the
+controlled test shows no coast after command completion. `A89` records the detached target cause
+and stable-screen fix. Beta-6 build/sign/update passes; actual momentum and user feel await unlock.
+
+**Still open.** Validate corrected-beta fast dragging, coast after finger lift, stopping on new
+touch/Esc/lifecycle changes, reversal and actual user feel on Wi-Fi and mobile VPN. Custom tmux
+wheel bindings remain open. Existing checklist item 20 covers these checks; the checklist remains
+64 items.
 
 ## A87
 
@@ -2680,8 +2702,9 @@ positions 25, 45, 70, 100, 130 on the same five 1000-native-pixel/350-ms swipes,
 These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel;
 corrected-beta user follow-up remains open under `A86`.
 
-**Residual:** an unbracketed user paste whose entire content exactly matches an SGR mouse report
-can still take the automatic-report path. Recheck this edge if the input-origin adapter changes.
+**Residual:** a direct xterm/browser unbracketed user paste whose entire content exactly matches
+an SGR mouse report can still take the automatic-report path. The native draft submission now
+cancels JS/native scrolling before paste (`53462f96`/`1ad2e944`). Recheck this edge if the input-origin adapter changes.
 No host verb, payload, mirror or SSH-visible file contract changed, so iOS owes no payload fixture
 update for this fix. Revalidate the pinned internal xterm input-origin adapter on a bundle upgrade.
 
@@ -2691,19 +2714,70 @@ update for this fix. Revalidate the pinned internal xterm input-origin adapter o
 
 - Severity: **medium**; effort: small; area: tooling; kind: bug
 - Locations: `android/tools/package-beta.py` `verified_signer`/signing command,
-  `test_beta_signer.py`, `test_package_beta.py`
+  `test_beta_signer.py`, `test_package_beta.py`, `test_beta_sdk.py`
 
-The verifier assumes one `Signer #1 certificate SHA-256 digest` line. Newer SDK `apksigner`
-versions can report the same certificate for non-overlapping SDK ranges, including a development
-release label, so an otherwise valid expected signer is rejected by the old parser. The observed CI
-packaging run failed at this same signer/v2 gate, but its raw tool output was not captured; the
-precise CI cause remains unconfirmed until further evidence.
+The original verifier assumes one `Signer #1 certificate SHA-256 digest` line. `fed68fb3`
+added strict SDK-range labels and explicit v2 signing, with 32 local tests and ten mutations.
+CI run `37058184031` at `9ced6781` still failed five of 32 private-packaging tests at the same
+signer/v2 gate; protocol, debug, release and CodeQL passed. The runner image includes SDK 37,
+and the old fixture chose its highest lexical tools/platform instead of the installed SDK 36/35.
+The raw CI verifier report was not captured. A local reproduction with official SDK 37 now
+confirms a real format discrepancy: verification exits 0, v2 is true and there is one signer,
+but its certificate label is `V3.0 Signer:`. The earlier range-only hypothesis did not cover it.
 
-**Fix:** `fed68fb3` accepts either the numbered signer or well-formed non-overlapping SDK ranges,
-requires exactly one certificate across all ranges, rejects malformed/overlapping ranges or extra
-signers, and keeps the expected certificate pin and explicit verified v2 requirement. The signing
-command now explicitly enables v2, instead of relying on tool defaults. All 32 Python packaging tests
-and ten mutations pass locally, including real SDK fixtures and range-label/policy failures. A
-successful subsequent Android workflow must confirm the observed CI failure is repaired; local parser
-and fixture tests alone do not establish Actions success. No key, APK, app code or phone setting
-changed from this tooling correction.
+**SDK-37 follow-up (`f5fd3821`):** accept exact `V2 Signer:`/`V3.0 Signer:` single labels with a required
+`Number of signers: 1`, and exact V3.0/V3.1 SDK-range labels with the existing one-certificate,
+non-overlapping-range policy. Older indexed/range reports remain supported. Consider every APK
+signer certificate line except source stamps; reject duplicate or conflicting certificates and
+unknown/V3.2 hybrid classical/PQC identities rather than silently ignoring them. The expected certificate pin and
+verified v2 gate are unchanged; signing explicitly enables v2. Fixtures now require the explicitly
+installed SDK 36/platform 35, with exact reproduction overrides, and signature-gate failures
+include safe verifier diagnostics from a disposable test key/APK only.
+
+All 39 Python tests pass against each real SDK 36/37; six new parser and four fixture-selection
+mutants are caught. Removing the single-label support also kills the actual SDK-37 acceptance
+fixture. Proof/logs are in `.nodeterm/android-beta-build-4/ci-verification/` (working evidence:
+`/tmp/nodeterm-beta4-ci-check/`). The next green Android workflow must confirm observed CI repair;
+local reproduction establishes the SDK-37 bug, not captured output from the original failed job.
+No private key, APK, app code or phone setting changed from this tooling correction.
+
+
+## A89
+
+**Repaint detaches the touched text span and loses continued drag/release events (2026-10-02).**
+
+- Severity: **medium**; effort: small; area: runtime; kind: bug
+- Locations: `android/app/src/main/assets/terminal/index.html` terminal CSS,
+  xterm DOM renderer row spans, `TerminalJsXtermInteractionTest`
+
+The user reports that beta 5 stops during continuous swiping and only moves again after lifting.
+The intended Pixel's controlled gesture updates history 0→15 at 369 ms, 25 at 391 ms and 30 at
+412 ms, then remains fixed through 1.4 seconds after the ADB swipe command completes at 561 ms.
+That is command completion, not a measured physical touchend timestamp. There is no verified coast.
+The real bundled DOM renderer replaces row text spans during a redraw, detaching the element
+that received touchstart. Later touchmove/touchend still target that detached span and no longer
+bubble to the live page handlers. Tests dispatching events directly on the terminal host missed
+this target-lifetime failure.
+
+**Fix (`c4b1f6cf`):** set `.xterm-screen { touch-action: none; }` and
+`.xterm-rows, .xterm-rows * { pointer-events: none; }`. Hit testing chooses the stable screen
+behind painted text, keeping later move/end events connected across redraws. Existing fling,
+ordered 20-notch batching, automatic-report routing and native stop/input/lifecycle barriers remain.
+
+The actual bundled-xterm regression verifies the old span is removed, subsequent events on it
+lose the live handler, and computed production CSS instead targets the connected screen so
+continued movement and release coast survive a real redraw (24 notches versus one). A real
+Electron 42.11.3 / Chromium 148.0.7778.280 probe of the shipped page confirms `elementFromPoint`
+hits the stable connected screen across redraws; original CSS hits the detached span. This closes
+the jsdom hit-test limitation for desktop Chromium, not actual Pixel touch behavior. All 658
+protocol tests in 63 suites pass with zero failures/errors/skips (67 seconds), plus offline app
+`compileKotlin` (8 seconds). Three CSS mutations are caught alongside 35 JS and eleven native
+mutations. Private `0.1.0-beta.6` / code `7` uses source `c4b1f6cf1009f293a658b6331d2ed1ab80aa36c6`;
+actual AGP release built in 43 seconds and passed every R8 keep. Retained-signer packaging verifies
+metadata/signature/16-KB alignment/source hashes and preserves all 149 payloads. APK SHA-256:
+`4947133a6ccf9c2b1e775e76d7c24f564e087cf036e59eac4dca08162a076d3c`.
+The intended Pixel received a same-signer update preserving app data; notification permission is confirmed. It is
+locked; post-update SSH reopening and physical drag/coast/new-touch/Esc/lifecycle checks await
+unlock. Private evidence is in `.nodeterm/android-beta-build-6/` and `.nodeterm/android-beta-6/`.
+No host verb, payload, mirror or SSH-visible file contract changed; no iOS fixture change is owed.
+Actual user feel, mobile-beta-6 checks, custom wheel bindings, FPS and the full device pass remain open.
