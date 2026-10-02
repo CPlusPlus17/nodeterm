@@ -246,7 +246,7 @@ describes as the future. The Android client implements what the host actually se
 | Source control (`A29`) | `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd, …}`, `cwd` = the project's folder from `projects.list`; the desktop jails it to its project folders and hands each verb to its `GitService` | through the relay leg opened next to SSH (`A26`); the screen says why when the phone has none. There is no SSH git of its own (see Known gaps) |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
-| Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`, typed through the node's existing session; a node of an SSH project is typed on its host over that project's ControlMaster (exact pane target, copy mode cancelled first), and answers `sent:false` (the phone opens the session) while that master is down or the host has no such session; an older desktop gets attach → wait for paint → write → linger | `tmux send-keys -l`; a node of an SSH project goes through the relay leg (`A09`) |
+| Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`; local tmux answers resolve the exact session to a pane ID, cancel copy mode and type there, also while mounted. Complete writes are ordered per node. SSH-project answers use the project's ControlMaster; unavailable sessions return `sent:false` (the phone opens the session). An older desktop gets attach → wait for paint → write → linger | resolve the exact session to a pane ID, cancel copy mode, then `tmux send-keys -l` there; missing exit status or any command failure opens the session without resending. SSH-project nodes go through the relay leg (`A09`) |
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
 the shared pty. An `OP.Resized` still shows a "sized to another screen · fit this screen" hint.
@@ -264,6 +264,28 @@ phone treats as "open the session" — never a guessed keystroke. The iOS app ca
 unchanged.
 
 ## What is verified, and how
+
+**Continuation checks (2026-10-02, cached branch base `6afd8f53`):** the new `A78`–`A80` fixes are
+local and have not run in CI. Six targeted desktop unit suites pass (170 tests), and eleven
+production mutations fail the relevant regressions. These run with a cached Vitest 4.1.9 runtime;
+the lockfile's runtime is 4.1.11. Two additional relay verb suites could not load because Electron
+is missing. The new SSH shell tests compile and execute
+with a cached Kotlin 2.3.20 compiler, minimal model dependencies and temporary test assertion stubs:
+three shell tests pass, covering both sockets, copy mode, literal answers/Enter/Escape and errors;
+four shell mutations fail. An isolated adapter containing the actual SSH `sendKeys` method refuses
+null/nonzero exit status; restoring null-as-success fails that check. This is narrower than compiling
+the full SSH transport or running JUnit/MINA.
+
+The required full protocol tests and app type-check could not start: system Gradle is absent, and
+a recovered Gradle 9.5.1 fails initializing its socket-based lock service in this sandbox. Real
+tmux/SSH checks and adb are also blocked by socket permissions. `npm run typecheck` is blocked by
+missing desktop dependencies, and `npm ci --offline --ignore-scripts` cannot complete from the cache.
+GitHub DNS is unavailable, so fetching, downloading an APK, pushing and checking Android CI were
+not possible. **No device checklist item has been run in this session.** The checks below describe
+earlier work; they do not establish that these local commits pass the full suite or work on a phone.
+
+No relay verb or payload changes in this continuation. The desktop fix serves Android and iOS;
+@eneskirca should check the iOS direct-SSH answer path for the same copy-mode and exit-status hazards.
 
 `android/protocol` has no Android dependency and is tested on a JVM (`./gradlew -p protocol test`):
 
@@ -956,7 +978,11 @@ later fix left to a device.
     rather than saying "Already handled." *(A38)*
 41. Answer a single-select AskUserQuestion from the Inbox, through the relay and over the network: the
     answer lands in the live session in one tap. A multi-select question lists its options read-only
-    beside "Open session". *(A12, A57, A65)*
+    beside "Open session". Repeat with the pane scrolled into tmux copy mode: the answer reaches the
+    application and leaves copy mode, on both routes. Through the relay repeat with the desktop's
+    terminal mounted and with its project offscreen/released, so the first background answer also
+    works. A missing session must not type into a longer session name sharing its prefix.
+    *(A12, A57, A65, A78, A79, A80)*
 42. Open a finished session on the phone: the desktop's unread dot clears. *(A65)*
 43. A background notification arrives within about 15 minutes; tapping it opens that session's
     terminal, with that computer's Inbox one Back away: at launch, with the app in the background, and

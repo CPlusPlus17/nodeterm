@@ -583,6 +583,15 @@ the user's own `tmux -L node-terminal attach`, a second nodeterm on the same soc
 painter). The session reaper subtracts ours via the `shadowed` seam — a shadow is a real client but
 not a watcher, so a shadowed session must stay exactly as cullable as an idle detached one.
 
+**Background answers bind to a pane, not a changing selection.** `PtyManager.backgroundWrite`
+resolves an exact `=session:` target to `%paneId`, cancels copy mode and sends to that ID, including
+while its painter is mounted. Serialize the complete probe/cancel/send delivery per node so stream
+chunks retain their order; unrelated nodes must not wait behind it. A control client consumes its
+startup `attach-session` reply before resolving stdin commands. Each `command()` takes one tmux
+command, with one reply block; do not combine the probe/cancel/send into a command list. Unconfirmed
+delivery is never retried. Android's SSH script uses the same pane binding and requires exit status
+zero; the unchanged relay verb benefits iOS too (continuation audit A78–A80).
+
 The count is carried numerically rather than collapsed at parse time **because the subtraction
 needs it**: a session holding our shadow AND a real client must still read as attached, and a
 boolean could only be forced to false — reaping the session out from under whoever that other

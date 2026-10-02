@@ -6,7 +6,7 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-> **Status (2026-09-26): not ready for users.** CI builds the debug APK, and the release blockers
+> **Status (2026-10-02): device verification pending.** CI builds the debug APK, and the release blockers
 > and medium bugs an audit found are fixed on this branch and tested where the code allows — but the
 > app has **not yet been run on a phone**. The plan and what is still open are in
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
@@ -40,6 +40,26 @@ written for it and tested where the layer allows, and the numbered
 | Usage (rate limits per account) | ✓ | From the agent-status mirror, with a pace line ("5h usage pace faster") when the reset time is known |
 | All computers: every paired computer's Inbox and Usage on one screen | ✓ | With two or more computers paired: cards newest first across computers, each naming its computer and answered on it; one Usage section per computer that reports usage. Each computer's row shows how many of its approvals and questions are open, from its last listing (the list dials nothing) |
 | Notifications | local | See "Notifications" below |
+
+## Before using it away from your computer
+
+The device pass is still outstanding. The latest local quick-answer fixes (`A78`–`A80`) have not
+been pushed or built by CI; a previous CI APK does not include them.
+
+1. In this repository's [Android workflow](https://github.com/CPlusPlus17/nodeterm/actions/workflows/android.yml),
+   choose a successful run for `claude/android-ios-parity-75kfem`, download
+   `nodeterm-android-debug`, unzip it and install `app-debug.apk`. Install updates over the existing
+   app to keep pairings. The desktop must also include the host-side fixes you want to test.
+2. At the computer, turn on remote access in Settings → Phone, pair, and open the computer in the
+   app. If either screen asks for a first relay approval, compare and approve its code there.
+3. Turn the phone's Wi-Fi off. Open a terminal over mobile data, send a harmless command, answer a
+   question and a held approval, then reconnect after briefly enabling airplane mode. Confirm the
+   answers on the computer. This also checks the live relay join contract, still unverified here.
+4. Keep the computer awake, nodeterm running, remote access on, and the intended project/session
+   mounted and awake. Offscreen Sleeping sessions remain a known relay gap. Background
+   notifications use Android's periodic worker and may take longer than 15 minutes; there is no FCM.
+5. Record these results, then finish the [64-item device checklist](../docs/android.md#device-checklist).
+   A successful build alone does not verify pairing, input or connectivity on the phone.
 
 ## Build
 

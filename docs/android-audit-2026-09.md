@@ -8,7 +8,9 @@ Prioritised plan and handover: [`android-handover.md`](android-handover.md).
 
 **Status of fixes.** A fixed finding is marked `✅ fixed in <sha>` in the index, and a finding
 deliberately not built is marked `📝` with the reason; its section below
-keeps the original audit text (line numbers still refer to `2f58918`). Where the fix departs from
+keeps the original audit text (line numbers still refer to `2f58918`). Continuation findings
+`A78`–`A80` were confirmed against cached branch tip `6afd8f53` on 2026-10-02; their local
+fix commits have not been pushed or checked by the full suite, CI or a phone. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
 ## Index
@@ -92,6 +94,9 @@ the audit's proposal, the handover's progress log says how and why.
 | [A75](#a75) | low |  | small | critic/gap | ✅ fixed in `437e359` · The New session account picker lists managed Claude accounts by raw UUID |
 | [A76](#a76) | low |  | small | critic/gap | ✅ fixed in `6966f25` · Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
 | [A77](#a77) | low |  | small | critic/bug | ✅ fixed in `0a2a1aa` · IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
+| [A78](#a78) | medium | | small | protocol/bug | ✅ locally fixed in `bb5b3e54`; full checks pending · Desktop quick answers can hit a prefix-matched or newly selected pane, be swallowed by copy mode, or reorder concurrent writes |
+| [A79](#a79) | medium | | small | protocol/bug | ✅ locally fixed in `e64665c3`; full checks pending · Direct-SSH quick answers can be swallowed by copy mode and an absent SSH exit status can report success |
+| [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; full checks pending · The control client's startup attach reply consumes the first queued command's reply slot |
 
 ## A01
 
@@ -2333,3 +2338,46 @@ Use `Modifier.padding(padding).consumeWindowInsets(padding).imePadding()` in Ter
 > 
 > 4. **Version note.** The bytecode cited (material3 1.8.2) is the JetBrains desktop stub. The Android build uses material3 from BOM 2025.06.00 (1.3.x), which has the same Scaffold inset logic.
 
+
+## A78
+
+**Desktop quick-answer false success (continuation, 2026-10-02).**
+
+Re-read at cached branch tip `6afd8f53`: `PtyManager.backgroundWrite` sent live answers through
+its painter and released answers through a name-targeted control command. Neither cancelled copy
+mode; a missing name could match a longer session name. Multi-step delivery also needs to preserve
+write order and pin the resolved pane across awaits.
+
+The local fix resolves `=session:` to a numeric pane ID once, cancels copy mode there and sends hex
+bytes to that same pane. Complete calls queue per node, including live and released paths; another
+node remains independent. Unconfirmed channels are retired without retrying keys. Regression tests
+judge delivered bytes, prefix collisions, active-pane changes, cancellation failure and concurrent
+write order. Real-tmux cases are added but cannot run in this socket-restricted sandbox.
+
+## A79
+
+**Direct-SSH quick-answer false success (continuation, 2026-10-02).**
+
+`SshScripts.sendKeys` used an exact session target but did not leave copy mode, so tmux could return
+zero while the application received nothing. `SshHostConnection.sendKeys` also accepted a missing
+SSH exit status as success.
+
+The local fix resolves and validates the pane ID, cancels copy mode and types into that ID, and
+requires exit status zero. Lookup/cancel/send failures propagate. Three generated-shell regression
+tests pass under a cached compiler; four shell mutations and the null-as-success mutation are
+caught. Full protocol, MINA, real tmux and device execution remain pending.
+
+## A80
+
+**Control-mode startup reply consumes a queued command (continuation, 2026-10-02).**
+
+`ControlModeClient.start` launches `attach-session`, which has its own control reply block. The
+client previously queued only stdin commands and shifted that queue for every reply. When a pane
+probe was queued immediately after start, the empty startup reply resolved it; its actual reply
+then belonged to the next command. A socket-free reproduction against the real client confirmed
+this mismatch.
+
+The local fix reserves and consumes the startup reply before resolving stdin commands, and retires
+the client if attach fails. Behavioral regressions feed the initial reply after a command is
+already queued and verify that only the command's own reply resolves it. Test children now emit the
+startup block too. Full real-tmux and device verification remain pending.

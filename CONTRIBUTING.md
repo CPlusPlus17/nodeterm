@@ -136,6 +136,12 @@ Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
 forces you to *declare* every member, but a no-op stub compiles fine while doing nothing.
 
+Background answers must resolve the exact tmux session to a pane ID, cancel copy mode, and type
+into that same ID. Preserve per-node write order across the whole delivery and never retry an
+unconfirmed send. Control clients consume the startup attach reply before matching stdin replies;
+each control command gets one reply block, so do not combine multiple commands into one call.
+Android's SSH transport also requires exit status zero before reporting an answer sent.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as
