@@ -724,6 +724,8 @@ export async function startServer(
     await armServerNodeIdentity(hookServer, () => workspaceStore.persistedCanvases())
   } catch (error) {
     console.warn('[node-identity] no secret — hook identity unavailable, running legacy', error)
+    // Issue #1088: a verified-only refusal must be able to say the cause is this instance.
+    hookServer.setNodeIdentityUnavailable(error)
   }
 
   // The Server Edition has the same local app-server, signed node tokens, and persistent canvas
