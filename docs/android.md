@@ -316,6 +316,13 @@ manifest, R8 keeps, alignment and checksum. **No nodeterm app APK has been built
 in this session.** Packaging fixture APKs prove the tool's gates only. `A50` remains open until an
 actual signed non-debuggable APK is delivered and tested.
 
+The user confirmed a first private beta; its retained RSA-3072 PKCS12 signer is now prepared in
+the original workspace's ignored `.nodeterm/android-beta-signing/`, outside the temporary source
+checkout. The directory is `0700` and every file `0600`; passwords stay in separate local files.
+The private-key entry, certificate fingerprint and distinction from the public debug certificate
+are verified. Source exports contain none of these private files. Preserve a private backup for
+future APK updates. The actual app APK, CI run and device results are still missing.
+
 Beta tooling checks pass 22 real SDK packaging fixture tests plus one selected-version environment
 test (12 cases), with 13 packaging mutations and one version-validation bypass caught. Seven CI
 configuration tests pass under the cached compiler; six workflow mutations are caught. Nine existing

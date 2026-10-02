@@ -11,8 +11,8 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 - The Android app exists (`android/`), and **CI builds it with AGP**: a debug APK and, since `A37`,
   a minified release build that runs R8. The new private-beta path versions that unsigned release
   through exact takeover-branch pushes or later manual CI inputs and signs/verifies it locally.
-  No private key or signed nodeterm APK
-  exists in this session. Historical protocol tests pass in CI; continuation CI is unverified.
+  The first retained private signer is now prepared in Git-ignored local state; no signed nodeterm
+  APK exists in this session. Historical protocol tests pass in CI; continuation CI is unverified.
 - **It has never been run on a phone.** Of the audit's 77 findings, all 9 release blockers (WP1 +
   WP2), every WP4 medium bug and nearly all of WP6 are fixed on the branch; 73 of the original 77
   findings are fixed. `A56` was deliberately not built; `A50` has a local private-beta packaging
@@ -30,6 +30,21 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
+
+### First private signing identity prepared (2026-10-02)
+
+The user confirmed this is their first private beta. A retained RSA-3072 PKCS12 signer, alias
+`nodeterm-beta`, is prepared in the original workspace's Git-ignored
+`.nodeterm/android-beta-signing/` (outside the temporary source checkout). The directory is `0700`
+and every file is `0600`. Separate local password files feed `keytool`/the packager without putting
+passwords in arguments or logs. The exported certificate hashes to the locally recorded signer
+pin, is a `PrivateKeyEntry` with a 3072-bit RSA key, and differs from the committed public debug
+certificate. Keep this directory in a private backup: source exports deliberately exclude it.
+
+This resolves the missing signer, not `A50` delivery. No actual nodeterm APK has been built or
+signed. GitHub DNS, Gradle's lock-service sockets and adb/USB access are still unavailable here.
+Next obtain one final green CI run's APK/R8/provenance, package with this retained signer, then
+install and complete the mobile-data preflight/device checklist. No PR is opened; `A68` stays last.
 
 ### Private beta preparation (2026-10-02): local pipeline and reliability fixes
 
@@ -229,8 +244,8 @@ section before starting, since the verifier corrections take precedence):
   missed. One-character fix (`MAX_JOIN_ROWS - 1`), owed with its own vitest.
 - **A10/A50 trade-off.** The debug key is public by the user's decision. The private-beta packager
   rejects it; a private signer is supplied locally and must be retained for updates. Moving from
-  debug to private beta requires a deliberate uninstall/re-pair once. No real private key or APK has
-  been created in this session.
+  debug to private beta requires a deliberate uninstall/re-pair once. The first retained private
+  key is prepared in ignored local state; no real app APK has been built or signed in this session.
 - **Server-e2e and native-module vitest suites** could not run in this sandbox (`npm ci
   --ignore-scripts` skips the native builds, and there is no `ssh` client); the same 14 tests and 31
   files fail identically on the pre-session commit. Desktop CI does not run on branch pushes here,
@@ -311,7 +326,7 @@ Verified:
   the live backend (the backend repo is not here).
 - Release/minified builds on a device. R8 runs for release in CI (`A37`: `assembleRelease` plus
   `tools/check-r8-output.sh`). Local private packaging is implemented, but no actual signed
-  nodeterm APK has been made or installed and no real private signing key is available here.
+  nodeterm APK has been made or installed. A retained private signing key is now prepared locally.
 - **Caveat on the tests:** since `A64` the relay leg's `projects.list` blob comes from the
   desktop's own assembly (`src/core/projects-list-blob.ts`, shared with `src/main/index.ts`) and its
   mirror entries from the real mirror writer; the session list inside the blob and the mirror's

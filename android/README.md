@@ -102,8 +102,13 @@ by other signed-in users, so they contain only unsigned build inputs and checks.
    `nodeterm-android-beta-build-inputs` from that same run. Extract them into separate directories.
    Check out the exact `sourceRevision` in `beta-build-inputs.json`, and match its version fields.
    The unsigned APK cannot be installed.
-3. Use a private Android signing keystore you keep outside the repository. If this is your first
-   private build, create one with JDK `keytool -genkeypair` and retain it for all later updates.
+3. Use a private Android signing keystore you keep outside version control, preferably outside the
+   checkout. This first-beta session has prepared one in the original workspace's already ignored
+   `.nodeterm/android-beta-signing/`: alias `nodeterm-beta`, certificate pin in
+   `signing-identity.json`, and separate password files. Keep that entire directory backed up
+   privately; it is not included in the source bundle or patch. If starting on another machine
+   without an existing private signer, create one with JDK `keytool -genkeypair` and retain it for
+   all later updates.
    Record the certificate's SHA-256 fingerprint using `keytool -list -v`; this public fingerprint
    is the expected signer pin. The committed `app/debug.keystore` is public and the packager rejects
    it. Keep the keystore and passwords backed up privately; changing the signer prevents updates.
@@ -162,7 +167,8 @@ required check. `GradleCiCoverageTest` pins all of this. The wrapper properties 
 debug APK over an older one without uninstalling — uninstalling wipes every pairing. The other side
 of "public": anyone can sign an APK that installs as an update over a debug build and inherits its
 data, including the keys your computers trust. **Install debug APKs only from this repository's CI
-or your own build.** Release builds will need their own private key; none exists yet. Debug builds
+or your own build.** Private release builds use their own retained signer; this first-beta session
+has prepared it in ignored local state, with actual APK delivery still pending. Debug builds
 are also debuggable, which hands the phone's pairing credentials to anyone with adb access to it
 (see [Security](#security)).
 

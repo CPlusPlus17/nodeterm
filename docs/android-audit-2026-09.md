@@ -66,7 +66,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76` · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b` · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 📝 private-beta packaging implemented locally; actual signed delivery and phone validation remain open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 📝 private-beta packaging and retained signer ready locally; actual signed delivery and phone validation remain open · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -1620,6 +1620,8 @@ that run's input metadata, rejects the public debug key, requires the expected p
 checks non-debuggable release metadata/alignment/signature, and emits an APK/checksum/metadata set
 only after success. Keys and signed APKs stay local: Actions artifacts on a public repo are not
 private downloads. Real Android-tool regressions use disposable fixture keys/APKs, not an app build.
+The user confirmed the first private beta and its retained signer is prepared in ignored local
+state (RSA-3072 PKCS12, restricted directory/files, verified certificate pin distinct from debug).
 No signed nodeterm APK or phone result exists here; delivery and device checks leave `A50` open.
 
 ## A51
