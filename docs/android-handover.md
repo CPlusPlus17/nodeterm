@@ -13,9 +13,12 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   and signs/verifies it locally; a verified local AGP build is also authorized for this first beta.
   The first retained private signer is prepared in Git-ignored local state, and its signed beta
   is installed on the intended Pixel 10 Pro (Android 17 / API 37). The wrong-MI8 test installation
-  and its newly authorized SSH key were removed. Current CI is
-  unverified and was waived for this local beta; final local checks pass all 609 protocol tests
-  and the offline app type-check, after the test-only A84/layout/history regressions.
+  and its newly authorized SSH key were removed. The user authorized local builds for the private
+  beta; current checks pass all 638 protocol tests in 61 suites with zero skips and the offline
+  app type-check. The code-4 scroll update built/signed locally and updated the Pixel in place;
+  controlled swipes verify reduced drag gain, reversal and Esc cancellation. Push is now authorized;
+  branch workflows remain enabled and each push owes
+  a green Android CI verification.
 - **Basic direct SSH, font/keyboard resizing and pre-attach tmux history work on the intended Pixel; full device checks are open.** Of the audit's 77 findings, 73 are fixed on the branch:
   all 9 release blockers (WP1 + WP2), every WP4 medium bug, the WP5 parity gaps and nearly all of
   WP6, plus the follow-ups of batch E. Four remain: `A25` is fixed in the app but push needs FCM
@@ -26,7 +29,11 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   harmless command in a controlled temporary test tmux window. The user confirms its terminal
   opens with Wi-Fi off over mobile-data WireGuard. QR/code pairing, relay, reconnect/background/
   answer behavior and the full 64-item device pass remain unverified.
-- Next check reconnect, background behavior and needed answers, then run the
+- `A86` scroll mitigations account for tmux's five-row wheel steps, batch by frame, preserve fast
+  swipe distance, serialize scroll/input and enable SSH TCP_NODELAY. Thirty mutations were caught;
+  phone feel/rendering, custom wheel bindings and kinetic fling remain open.
+- Next check perceived scroll smoothness on Wi-Fi/mobile VPN, reconnect, background behavior and
+  needed answers, then run the
   **device checklist** in [`android.md`](android.md#device-checklist) (64 items) if a phone is
   available. Then pick from the known gaps under "What is still open", with `A68` last. No PR is
   open, and none should be opened unless the user asks.
@@ -36,7 +43,36 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
-### Post-beta scroll responsiveness investigation (2026-10-02)
+### Scroll mitigations implemented; private beta-3 updated on the intended Pixel (2026-10-02)
+
+`e6bdb157` enables TCP_NODELAY on connected SSH sockets. `245b42e6` measures row height once per
+gesture, accounts for stock tmux's five rows per wheel notch and batches same-direction movement
+by animation frame, preserving fast-swipe distance in ordered calls of at most 20 notches.
+`2c5d15a8` adds one bounded serial `TerminalActions` drain per accepted stream. Suspended relay
+RPCs preserve direction/input order; input cancels unsent scroll and follows the in-flight call.
+Retiring the viewer cancels/clears its queue, while native raw/resume writes cancel page scrolling
+first and remain bound to the accepted stream. `40c4ee49` cancels page scrolling again immediately
+before delayed paste Enter. No external host verb, payload or SSH-visible file contract changed;
+this fix needs no iOS payload/interop fixture update.
+
+The full restored-source protocol suite passed 638 tests in 61 suites, with zero failures, errors
+or skips (51 seconds); the final offline app `compileKotlin` passed (7 seconds). Thirty mutations were caught:
+two SSH socket-policy, fourteen JavaScript and fourteen actor/native-wiring mutations.
+Private `0.1.0-beta.3` / code `4` from `40c4ee49592e2f92fc7e6e9b548ba88a33b1e2d3` built locally
+in 49 seconds, passed every R8 keep and retained-signer packaging. Signature, alignment and
+source/hash provenance were verified with all 149 ZIP payloads unchanged by signing. Its in-place
+update preserved manual SSH registration/key/pin and notification permission; the app reopens the
+Linux host over SSH with a 56×48 owned test terminal. Five identical controlled swipes finish at
+history position 25 versus beta 2's 85; reversal moves 25 to 20 and the actual Esc chip leaves copy
+mode. The phone returned to Sessions and refreshed; only the owned test session was removed, with
+all user panes untouched. Private proof/screenshot/package checks are in
+`.nodeterm/android-beta-build-3/`, including `device-checks.json`. Actual perceived phone
+smoothness, renderer timing, updated-beta Wi-Fi/mobile-VPN feel and custom tmux wheel bindings
+remain unverified; no kinetic fling is implemented. `A86` stays open for those checks. Push is
+user-authorized, branch CI triggers remain enabled and every requested push requires a green
+Android workflow verification. No PR is requested and `A68` remains deferred.
+
+### Post-beta scroll responsiveness investigation (2026-10-02, before mitigation)
 
 After beta checkpoint `cf0487a3`, the user reports slow scrolling on both Wi-Fi and mobile-data VPN
 (`A86`), so a VPN-only cause is not supported. Controlled private
@@ -313,26 +349,31 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Remaining device checks, starting with reconnect, background behavior and needed answers.** Code-3 beta is installed on the
+1. **Finish the remaining scroll feel checks.** Code-4 local AGP/R8/signing/update and controlled
+   drag gain, reversal and Esc cancellation on the intended Pixel passed. Check fast movement,
+   finger lift and perceived smoothness on Wi-Fi/mobile VPN. Phone renderer timing/custom wheel bindings
+   and kinetic fling remain open under `A86`. Current checks pass all 638 protocol tests and the
+   offline app type-check, with 30 mutations caught. Push is authorized; run required checks before
+   each push and confirm the branch's Android workflow is green afterward.
+2. **Remaining device checks, starting with reconnect, background behavior and needed answers.** Code-4 beta is installed on the
    intended Pixel, with manual SSH authentication, project listing, input, font/keyboard resizing
-   and pre-attach tmux history verified. Local AGP/signing/update and all 609 protocol tests plus
-   offline app type-check pass. The user confirms Wi-Fi-off mobile-data WireGuard terminal access.
+   and pre-attach tmux history verified. The user confirms Wi-Fi-off mobile-data WireGuard terminal access.
    Before leaving the computer, check needed answers, reconnect after airplane mode and background
    behavior. Record results and run all 64 items in `android.md`; turn every failure into a finding.
    QR/code pairing, relay and every complete checklist item remain open. Future
-   private betas retain the same signer and increase the version code above `3`.
-2. **Pick a remaining known gap.** Batch D and E are done; do not repeat their completed work.
+   private betas retain the same signer and increase the version code above the installed beta.
+3. **Pick a remaining known gap.** Batch D and E are done; do not repeat their completed work.
    Remaining examples: the live backend join contract, offscreen Sleeping nodes and non-Claude
    permission flags. Read-ack ownership is locally fixed in `A82`; finish its device verification.
    For iOS adoption, @eneskirca should read `relayApproved` and `sshHostKeyFingerprints` in the sealed
    `/pair` answer and `lan` beside `projects.list` output; iOS also needs to send `boxPublicKey`
    there for late-adoption approval and the revoke cut, and should key notification seen state
    by computer.
-3. **`A68` last, when a PR is requested.** `push: branches: [main]` + `pull_request`, no
+4. **`A68` last, when a PR is requested.** `push: branches: [main]` + `pull_request`, no
    `merge_group` (see the verifier). After it, pushes to this branch no longer run the Android
-   workflow until a PR exists. No PR should be opened unless asked. Current CI remains unverified
-   and was waived for this local beta; a later CI release path still requires checks before push,
-   green Android CI and APK/R8/provenance from the same successful run.
+   workflow until a PR exists. No PR should be opened unless asked. The first local beta build had
+   a CI waiver; the newly requested push still requires green Android CI afterward. A later CI
+   release path requires APK/R8/provenance from the same successful run.
 
 **Known gaps and caveats:**
 
@@ -421,14 +462,15 @@ when it did not deliver. iOS can adopt `reason` unchanged; an older phone keeps 
 | Repo / branch | `CPlusPlus17/nodeterm`, branch `claude/android-ios-parity-75kfem` (pushed) |
 | Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; `2dd539f` this handover; then every fix and feature in the progress log, newest first (`git log` on the branch) |
 | PR | none (do not open one unless asked) |
-| CI | `.github/workflows/android.yml`: **Protocol**, **App** (`assembleDebug`), **App release** (R8, unsigned), **CodeQL (Kotlin)** and **Private beta checks** on exact takeover-branch pushes or opted-in manual runs. Historical green runs are described above; continuation commits are unpushed and CI-unverified |
+| CI | `.github/workflows/android.yml`: **Protocol**, **App** (`assembleDebug`), **App release** (R8, unsigned), **CodeQL (Kotlin)** and **Private beta checks** on exact takeover-branch pushes or opted-in manual runs. The private artifacts use authorized local builds; each requested push requires green Android workflow verification |
 
 What is in the tree:
 
 - `android/protocol` is pure Kotlin/JVM with no Android dependency. It holds the NaCl port, the relay
   client, the host RPC, pairing, direct SSH over sshj, the parsers, and the pure rules the app's
   screens use (most app logic lives here so it can be tested). The remote branch had 589 tests
-  before these continuation additions; the full reconciled suite remains to be run. Its JVM tests
+  before these continuation additions; the current full suite passes 638 tests in 61 suites with
+  zero failures, errors or skips. Its JVM tests
   include desktop interop and SSH harnesses. The
   interop tests run the desktop's own `connectHostSession` / `createPairingService` through
   `android/protocol/src/test/interop/host-fixture.ts`; the SSH tests use Apache MINA sshd with a
@@ -467,16 +509,20 @@ Verified:
   certificate, and the Server Edition / driven-host browse.
 - The remote `send-keys` line the desktop generates for SSH-project nodes, under a real `/bin/sh`
   and tmux (not over a real ControlMaster).
-- The debug APK builds with AGP in historical CI runs. The current private AGP 8.10.1 release
+- The debug APK builds with AGP in historical CI runs. The installed private AGP 8.10.1 release
   built locally, passed R8 keeps, and runs on the intended Pixel with real direct-SSH browse/input
   proof. The wrong-MI8 test installation and SSH key were removed. See the newest progress entries.
+- The `A86` mitigations pass the full 638-test protocol suite, offline app type-check and 30
+  mutation checks. Code-4 local AGP/R8/signing/update and controlled drag gain/reversal/Esc checks
+  passed on the intended Pixel, preserving SSH identities/configuration and notification permission.
 
 **Not verified:**
 
-- **Remaining phone behavior.** The intended Pixel has the corrected code-3
+- **Remaining phone behavior.** The intended Pixel has the code-4
   beta; basic manual SSH and pre-attach tmux history work. Mobile-data WireGuard terminal access is
   user-confirmed. QR/code pairing, relay, reconnect/background/answer behavior and the full 64-item
-  checklist remain unverified.
+  checklist remain unverified. Code-4 controlled scroll gain/reversal/Esc checks passed; perceived
+  smoothness, actual phone renderer timing, custom wheel bindings and kinetic fling remain open under `A86`.
 - The relay join request shape. The client sends `{deviceToken, hostId}` to `POST /v1/relay/join`
   and accepts `pairingToken | token | joinToken` in the reply, but it has not been checked against
   the live backend (the backend repo is not here).
@@ -639,22 +685,26 @@ Continue the Android companion work on branch claude/android-ios-parity-75kfem o
 Start by reading docs/android-handover.md (progress log, "What is still open", environment notes,
 conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). 73 of the
 77 findings and the batch E follow-ups are fixed on the branch. The first signed private beta is
-updated to code 3 on the intended Pixel 10 Pro with basic manual direct-SSH browse/input proof.
+updated to code 3 on the intended Pixel 10 Pro with basic manual direct-SSH browse/input proof;
+the code-4 A86 scroll update has built/signed/updated locally with controlled drag gain/reversal/Esc proof.
 A85 fixes a one-row terminal caused by WRAP_CONTENT WebView layout parameters; the corrected beta
 fills 52×45 and shows pre-attach tmux history after swiping. The wrong-MI8 test installation/key
 were removed. The user confirms terminal access over mobile-data WireGuard with Wi-Fi off.
 QR/code pairing, relay, reconnect/background/answer behavior and the full device checklist remain open.
 
-1. Check reconnect, background behavior and needed answers, then all 64 device items on the intended Pixel in
+1. Check remaining A86 perceived smoothness on Wi-Fi/mobile VPN, reconnect, background behavior
+   and needed answers and all 64 device items on the intended Pixel in
    docs/android.md (#device-checklist). Record results in "What is verified" and turn every failure
    into a finding. Code-3 build/sign/update, identity persistence, SSH browse/input, font/keyboard
-   resizing and pre-attach tmux history are verified; all 609 protocol tests and the offline app
+   resizing and pre-attach tmux history are verified; all 638 protocol tests and the offline app
    type-check pass. Mobile-data WireGuard terminal access is user-confirmed with Wi-Fi off; QR/code
-   pairing, relay, reconnect/background/answer behavior and every complete checklist item remain open. Future private betas retain the same signer and use a version code above 3.
+   pairing, relay, reconnect/background/answer behavior and every complete checklist item remain open.
+   A86 phone feel/renderer timing, custom wheel bindings and kinetic fling remain open. Future
+   private betas retain the same signer and use a higher version code.
 2. Reconcile newer branch work before changing code, then pick from the remaining known gaps.
-   Batch D and E are done. The user authorized this local build instead of Actions; current CI
-   remains unverified. A later CI release path requires checks before push, green Android CI and
-   APK/R8/provenance from one successful run.
+   Batch D and E are done. The user authorized this local build instead of Actions and has now
+   authorized pushing the branch. Each push requires checks first and green Android CI afterward;
+   a later CI release path requires APK/R8/provenance from one successful run.
 3. Keep A68 last, when a PR is requested. Do not open a PR unless asked.
 
 Before each push run the protocol tests (cd android/protocol && gradle test --offline; an existing

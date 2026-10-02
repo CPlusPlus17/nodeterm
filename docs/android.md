@@ -296,15 +296,32 @@ unchanged.
 
 ## What is verified, and how
 
-**Post-beta scroll investigation (`A86`):** after checkpoint `cf0487a3`, the user reports poor
-scroll responsiveness on both Wi-Fi and mobile-data VPN, so a VPN-only cause is not supported.
-Controlled SSH/tmux measurements identify amplified discrete wheel steps,
-missing fling and distance clipping on fast movement; they do not establish the phone's rendering
-cost or a sole transport cause. A bounded desktop replay of the real DOM renderer showed no queue
-backlog at that load. The [finding](android-audit-2026-09.md#a86) records the evidence and
-remaining traces. No source, phone setting or installed APK changed for this investigation.
+**Scroll update (`A86`):** after checkpoint `cf0487a3`, the user reports poor responsiveness on
+both Wi-Fi and mobile-data VPN. Controlled SSH/tmux measurements found amplified wheel steps,
+fast-swipe clipping and some TCP_NODELAY-sensitive latency; a bounded desktop DOM replay showed
+no backlog at that load. The implemented mitigations match drag distance to stock tmux's five-row
+wheel steps, batch by frame without losing distance, serialize scroll/input, cancel unsent scroll
+before input and enable SSH TCP_NODELAY. No external host/payload contract or phone setting changed.
+All 638 protocol tests in 61 suites passed with zero failures, errors or skips (51 seconds), and
+the final offline app `compileKotlin` passed (7 seconds); 30 mutations were caught. Private
+`0.1.0-beta.3` / code `4` from `40c4ee49592e2f92fc7e6e9b548ba88a33b1e2d3` built locally in
+49 seconds, passed every R8 keep and retained-signer packaging, and updated the intended Pixel in
+place. Signature, alignment and source/hash provenance passed; all 149 ZIP payloads were unchanged
+by signing. APK SHA-256: `dda44df7ebb541afccd18b428634d66246349ccb62fd202917b77a333fbadba3`.
+Manual SSH registration/key/pin and notification permission survived. The app reopens the intended
+Linux host over SSH and its controlled test terminal fills 56×48. Five identical 1000-native-pixel,
+350-ms downward swipes reached positions 25, 40, 55, 70, 85 on beta 2 versus 5, 10, 15, 20, 25 on
+beta 3. Reversal moved 25 to 20 and the actual Esc chip left copy mode. The phone returned to
+Sessions and refreshed; only the owned test session was removed, with user panes untouched.
+Private proof/screenshot/installed-package checks are in `.nodeterm/android-beta-build-3/`,
+including `device-checks.json`. These establish drag gain/order/input cancellation, not FPS
+or perceived smoothness. The tiny isolated UI-frame samples are not a WebView renderer trace.
+Actual updated-beta Wi-Fi/mobile-VPN feel/rendering and custom wheel bindings remain unverified; kinetic fling is not
+implemented. The [finding](android-audit-2026-09.md#a86) records the evidence and limits. Push is
+authorized, each requested push requires green Android workflow verification, no PR is requested
+and `A68` stays deferred.
 
-**Current local beta (2026-10-02):** restored host access allowed reconciling remote tip
+**Installed beta history (2026-10-02):** restored host access allowed reconciling remote tip
 `82940e17` in `990f90c6` and building the actual app locally. The first AGP 8.9.1 release exposed
 R8 Kotlin-metadata warnings (`A83`). The corrected source
 `fa71cb08072f399f24a81bfb361ea852a0275f3b` uses AGP 8.10.1 with Kotlin 2.2.0, wrapper Gradle 8.14.3
@@ -371,7 +388,7 @@ intended Linux host's terminal opens over mobile data. This is separate from the
 checks above. Mobile reconnect, approvals/questions, background behavior and the full 64-item
 checklist remain open.
 
-History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link tests with zero skips. Both JavaScript swipe-direction/disabled-scroll mutations, the real-SSH wheel-direction mutation and the two native layout-policy mutations were caught; production sources were restored. **Final verification:** all 609 protocol tests passed in 59 suites with zero failures, errors or skips (52 seconds); the offline app `compileKotlin` passed (7 seconds).
+History regressions in `d6619bf6` pass 47 focused real Gradle SSH/terminal/link tests with zero skips. Both JavaScript swipe-direction/disabled-scroll mutations, the real-SSH wheel-direction mutation and the two native layout-policy mutations were caught; production sources were restored. **Beta-2 verification:** all 609 protocol tests passed in 59 suites with zero failures, errors or skips (52 seconds); the offline app `compileKotlin` passed (7 seconds).
 
 The full desktop type-check and 679 desktop tests passed, with three platform skips. The offline
 Gradle app type-check passed, and 23 Python beta-tool tests passed with real SDK APK/signature
@@ -382,16 +399,17 @@ command-not-found handler delays the literal `-R` command, and an earlier no-exi
 Escape in the shared pane's Readline state, corrupting the next `echo` into `cho`. The test-only fix
 in `1d6b04cc` isolates a fresh non-login pane and initialization environment per test. That earlier
 full protocol rerun passed all 606 tests with zero failures, errors or skips; both harness mutations were caught,
-and the fixed test source was restored before that rerun. Current GitHub Actions verification
-remains open; the user authorized this local build instead of requiring CI for the first beta.
+and the fixed test source was restored before that rerun. The user authorized this local build
+instead of requiring CI for the first beta; each newly requested push still requires green Android
+workflow verification.
 
 Device results are partial: item 1 has first-install evidence and item 5 has install,
 non-debuggable, initial-launch and basic direct-SSH/terminal-input evidence on the intended Pixel.
 Manual SSH key/pin/project checks also cover parts of items 10 and 63. No complete item has passed.
 The private update preserved manual SSH registration and its identities; pre-attach tmux history
 is visible in the controlled test window. QR/code pairing, relay,
-mobile reconnect/background/answer behavior and the full 64-item pass remain open. The final complete protocol
-run after the added layout/history tests passed all 609 tests, as recorded above. Use the
+mobile reconnect/background/answer behavior and the full 64-item pass remain open. The current complete protocol
+run after the scroll mitigations passed all 638 tests, as recorded above. Use the
 [private-beta procedure](../android/README.md#private-beta), which accepts same-build local
 APK/R8/source/version/hash provenance with `buildOrigin: "local"`.
 
@@ -455,8 +473,8 @@ checkout. The directory is `0700` and every file `0600`; passwords stay in separ
 The private-key entry, certificate fingerprint and distinction from the public debug certificate
 are verified. Source exports contain none of these private files. Preserve a private backup for
 future APK updates. The wrong MI8 installation was removed; the same first signed APK is now on
-the intended Pixel and updated in place to the code-3 sizing fix. Current CI and the full phone
-pass remain open.
+the intended Pixel and updated in place to the code-3 sizing fix. The full phone pass remains open;
+each requested push requires green Android workflow verification.
 
 Beta tooling checks pass 22 real SDK packaging fixture tests plus one selected-version environment
 test (12 cases), with 13 packaging mutations and one version-validation bypass caught. Seven CI
@@ -556,7 +574,8 @@ protocol module ships to the app, and requires a keep for every WorkManager work
 The debug APK stays unminified. CI attaches unsigned release inputs; the private-beta path signs
 them locally. The app has no instrumented tests. The actual private minified APK is installed on
 the intended Pixel and has listed real projects and delivered basic terminal input over SSH.
-The corrected code-3 update resizes for font/keyboard changes and exposes pre-attach tmux history. Remaining
+The corrected code-3 update resizes for font/keyboard changes and exposes pre-attach tmux history;
+code 4 verifies reduced drag gain, reversal and Esc cancellation. Remaining
 relay and device behavior are unverified; the
 [device checklist](#device-checklist) below is what the full device pass has to run. An audit of the code found release blockers; the fixed ones are
 marked in its index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md).
@@ -1004,7 +1023,8 @@ on the intended Pixel 10 Pro (Android 17 / API 37, Vanadium WebView `154.0.8037.
 SSH key/pin authentication, 17 real projects listed and basic terminal input executed. The wrong
 MI8 installation and its newly authorized SSH key were removed. The terminal-sizing/history
 failure `A85` is fixed in code-3 beta, with a 52×45 viewport and pre-attach tmux history visible after
-swiping. The update preserved SSH registration/key/pin and notification permission. No complete
+swiping. The code-4 scroll mitigation update also preserved SSH registration/key/pin and notification
+permission and verified reduced drag gain, reversal and Esc cancellation. No complete
 item below has passed. Run these
 on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
@@ -1536,7 +1556,9 @@ later fix left to a device.
   tool and opt-in versioned unsigned CI inputs, documented in the README; its key and signed APK
   stay off Actions. The first private minified APK is installed on the intended Pixel and basic
   SSH listing/input works. The code-3 update fixes sizing/history (`A85`) and preserves identities;
-  full validation remains open.
+  code-4 scroll mitigations pass protocol/type-check and local AGP/R8/signing checks, and its
+  in-place update verifies identity persistence, reduced drag gain, reversal and Esc cancellation.
+  Perceived smoothness, renderer timing and full validation remain open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.

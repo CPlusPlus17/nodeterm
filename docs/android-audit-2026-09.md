@@ -12,8 +12,8 @@ keeps the original audit text (line numbers still refer to `2f58918`). Continuat
 `A78`–`A80` were confirmed against cached branch tip `6afd8f53` on 2026-10-02; their local
 fix commits were initially checked only within a restricted sandbox. Later local AGP work found
 `A83`, and the first full local protocol run found the test-isolation fault `A84`; current build,
-full-suite and phone verification are tracked in the handover. CI remains
-unverified. Where the fix departs from
+full-suite and phone verification are tracked in the handover. The private APKs use authorized
+local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
 ## Index
@@ -97,15 +97,15 @@ the audit's proposal, the handover's progress log says how and why.
 | [A75](#a75) | low |  | small | critic/gap | ✅ fixed in `437e359` · The New session account picker lists managed Claude accounts by raw UUID |
 | [A76](#a76) | low |  | small | critic/gap | ✅ fixed in `6966f25` · Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
 | [A77](#a77) | low |  | small | critic/bug | ✅ fixed in `0a2a1aa` · IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
-| [A78](#a78) | medium | | small | protocol/bug | ✅ locally fixed in `bb5b3e54`; full checks pending · Desktop quick answers can hit a prefix-matched or newly selected pane, be swallowed by copy mode, or reorder concurrent writes |
-| [A79](#a79) | medium | | small | protocol/bug | ✅ locally fixed in `e64665c3`; full checks pending · Direct-SSH quick answers can be swallowed by copy mode and an absent SSH exit status can report success |
-| [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; full checks pending · The control client's startup attach reply consumes the first queued command's reply slot |
-| [A81](#a81) | medium | | small | runtime/bug | ✅ locally fixed in `86390a49`, `7e11e93c`; full checks pending · Relay join and device mint can hang on stalled mobile connections and ignore coroutine cancellation |
-| [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; full checks pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
+| [A78](#a78) | medium | | small | protocol/bug | ✅ locally fixed in `bb5b3e54`; protocol638/app type-check pass; phone verification pending · Desktop quick answers can hit a prefix-matched or newly selected pane, be swallowed by copy mode, or reorder concurrent writes |
+| [A79](#a79) | medium | | small | protocol/bug | ✅ locally fixed in `e64665c3`; protocol638/app type-check pass; phone verification pending · Direct-SSH quick answers can be swallowed by copy mode and an absent SSH exit status can report success |
+| [A80](#a80) | medium | | small | protocol/bug | ✅ locally fixed in `0f39c33f`; protocol638/app type-check pass; phone verification pending · The control client's startup attach reply consumes the first queued command's reply slot |
+| [A81](#a81) | medium | | small | runtime/bug | ✅ locally fixed in `86390a49`, `7e11e93c`; protocol638/app type-check pass; phone verification pending · Relay join and device mint can hang on stalled mobile connections and ignore coroutine cancellation |
+| [A82](#a82) | medium | | medium | protocol/bug | ✅ locally fixed in `010240e0`; protocol638/app type-check pass; phone verification pending · Read-ack sweeps delete files owned by other desktops and lose acknowledgments |
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
-| [A86](#a86) | medium | | medium | performance/gap | 🟡 open; diagnosis only · Scroll responsiveness is poor despite reachable tmux history |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 mitigations implemented in `e6bdb157`, `245b42e6`, `2c5d15a8`, `40c4ee49`; protocol638/type-check pass, code-4 update/drag gain/reversal/Esc verified; actual feel/inertia open · Scroll responsiveness is poor despite reachable tmux history |
 
 ## A01
 
@@ -2554,11 +2554,11 @@ cover history and viewport sizing without adding or removing any of the 64 items
 
 The user reports slow scrolling on both Wi-Fi and mobile-data VPN after the signed-beta checkpoint
 `cf0487a3`, so a VPN-only cause is not supported. History is reachable; the issue is responsiveness
-and gesture behavior. No new APK has been deployed for this diagnosis.
+and gesture behavior. The initial investigation changed no source, installed APK or phone setting.
 
 In a bounded private MINA/SSH/tmux fixture at 52×45, 240 wheel notches over two seconds move 1195
 history rows: the first notch enters copy mode and later notches move five rows each. Production
-JavaScript emits a notch per roughly 18.2 CSS pixels at font 13 and has no fling. This amplifies
+JavaScript at checkpoint `cf0487a3` emits a notch per roughly 18.2 CSS pixels at font 13 and has no fling. This amplifies
 drag distance into coarse steps. A single 700-CSS-pixel movement requests 38 notches, but SSH clamps
 the call to 20, losing distance.
 
@@ -2575,7 +2575,39 @@ was 0.14 ms, p95 at most 0.3 ms; with JIT-less mode requested, mean was 1.5 ms a
 long tasks and a stable 60 Hz animation-frame cadence. This excludes base64/DOM queue backlog as
 the primary cause at this bounded desktop load; it does not establish Pixel performance.
 
-No actual phone performance trace or RTT emulation has run. First compare gesture gain/inertia,
-frame coalescing and ordering, and TCP_NODELAY; then measure actual phone renderer frame timing
-and network behavior before choosing a fix. Existing checklist item 20
-covers slow/fast dragging, reversal and finger lift; the checklist remains 64 items.
+**Implemented mitigations (2026-10-02).** `e6bdb157` enables TCP_NODELAY on the connected SSH
+socket. `245b42e6` measures row height once per gesture and accounts for stock tmux's five rows per
+wheel notch, batches same-direction movement by animation frame and preserves fast-swipe distance
+in ordered calls of at most 20 notches. `2c5d15a8` adds one bounded serial `TerminalActions` drain
+per accepted stream; suspended relay RPCs cannot reorder reversals or input. Input cancels unsent
+scrolls and follows the in-flight call; retiring the viewer clears/cancels the queue. Native raw
+chips and resume writes cancel page scrolling first, and callbacks remain bound to their accepted
+stream. `40c4ee49` also cancels scrolling immediately before the delayed paste Enter. No host verb,
+payload or SSH-visible file contract changed; this fix needs no iOS payload/interop fixture change.
+
+The full restored-source protocol suite passed **638 tests in 61 suites**, with zero failures,
+errors or skips (51 seconds); the final offline app `compileKotlin` passed (7 seconds). **30 mutations** were
+caught: two SSH socket-policy, fourteen JavaScript gesture/input and fourteen actor/native-wiring
+mutations. Private beta `0.1.0-beta.3` / code `4` from
+`40c4ee49592e2f92fc7e6e9b548ba88a33b1e2d3` built locally in 49 seconds, passed every R8 keep
+and retained-signer packaging; signature, source/hash provenance and alignment were verified, with
+all 149 ZIP payloads unchanged by signing. Its in-place update on the intended Pixel succeeded,
+preserving manual SSH registration/key/pin and notification permission. Push is
+user-authorized and each requested push requires green Android workflow verification; no PR is
+requested and `A68` remains deferred.
+
+**Controlled Pixel proof.** The updated app reopens the intended Linux host over SSH and the owned
+test terminal fills 56×48. Five identical downward swipes of 1000 native pixels over 350 ms produced
+history positions 25, 40, 55, 70, 85 on beta 2, versus 5, 10, 15, 20, 25 on beta 3. Reversal moved
+25 to 20; the actual Esc chip left copy mode (`pane_in_mode=0`). A screenshot records the controlled
+test history. The phone returned to Sessions and refreshed; only the owned test session was removed,
+with user panes untouched. These establish reduced drag gain, reversal and input cancellation, not smoother
+rendering. Isolated `gfxinfo` samples contained only 11/12 frames and 5/6 janky frames respectively;
+they establish no FPS improvement and are not a WebView renderer trace.
+
+**Still open.** Real perceived phone smoothness and renderer timing, updated-beta Wi-Fi/mobile-VPN
+feel and custom tmux wheel bindings are unverified. The change preserves already requested distance after finger
+lift; it adds no kinetic fling. No isolated phone performance trace or RTT emulation has run.
+Validate fast dragging, finger lift and perceived smoothness on Wi-Fi and mobile VPN before claiming
+the responsiveness gap resolved. Existing checklist item 20 covers these checks;
+the checklist remains 64 items.
