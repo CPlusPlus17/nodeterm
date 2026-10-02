@@ -10,7 +10,7 @@ import { execFileSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { pasteBufferName } from './tmux-naming'
-import { localTypedArgs, typedLines, typedStdin, TYPED_TAB } from './typed-input'
+import { localTypedArgs, localTypedEnv, typedLines, typedStdin, TYPED_TAB } from './typed-input'
 import { remoteTypedArgs } from './remote-ssh/control-master'
 import { makeTmuxTmpdir } from './tmux-test-socket'
 
@@ -35,13 +35,6 @@ let binDir: string
 const env = (): NodeJS.ProcessEnv => ({ ...process.env, TMUX_TMPDIR: work })
 const tmux = (args: string[]): string =>
   execFileSync(TMUX as string, args, { encoding: 'utf8', env: env() })
-/**
- * The environment the typed SCRIPT runs under: only what it needs, never this process's. The script
- * names tmux by absolute path and uses shell builtins; inheriting `process.env` into a `sh -c` hands
- * the shell variables nobody chose (CodeQL: indirect uncontrolled command line). The SSH leg below
- * gets the same treatment, as `tmux-paste.realtmux.test.ts` does.
- */
-const scriptEnv = (): NodeJS.ProcessEnv => ({ PATH: '/usr/bin:/bin', TMUX_TMPDIR: work })
 
 beforeAll(() => {
   if (!TMUX) return
@@ -103,8 +96,8 @@ function drain(session: string, out: string): string {
 function type(leg: 'local' | 'ssh', session: string, text: string): void {
   const stdin = typedStdin(typedLines(text))
   if (leg === 'local') {
-    execFileSync('/bin/sh', localTypedArgs(TMUX as string, SOCKET, session, pasteBufferName()), {
-      env: scriptEnv(),
+    execFileSync('/bin/sh', localTypedArgs(SOCKET, session, pasteBufferName()), {
+      env: localTypedEnv(TMUX as string, env()),
       input: stdin
     })
     return
@@ -160,6 +153,23 @@ describe.skipIf(TMUX === null || process.platform === 'win32')('typed delivery t
 
         expect(drain(session, out)).toBe('after copy mode')
       })
+
+      if (leg === 'local') {
+        it('runs a tmux whose path has spaces and quotes: the path is never script text', () => {
+          const session = 'nt-ty-path-local'
+          const out = recorderPane(session)
+          const odd = path.join(work, "it's a dir")
+          fs.mkdirSync(odd)
+          fs.symlinkSync(TMUX as string, path.join(odd, 'tmux'))
+
+          execFileSync('/bin/sh', localTypedArgs(SOCKET, session, pasteBufferName()), {
+            env: localTypedEnv(path.join(odd, 'tmux'), env()),
+            input: typedStdin(typedLines('one\ntwo'))
+          })
+
+          expect(drain(session, out)).toBe(`one${NEWLINE_KEY}two`)
+        })
+      }
 
       it('leaves no buffer behind', () => {
         const session = `nt-ty-buf-${leg}`

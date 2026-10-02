@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   TYPED_TAB,
+  localTypedArgs,
+  localTypedEnv,
   typeThenSubmitWhenSettled,
   typedInputScript,
   typedLines,
@@ -128,5 +130,17 @@ describe('typeThenSubmitWhenSettled', () => {
 
     expect(result).toBe(false)
     expect(surface.typed).toEqual([])
+  })
+})
+
+describe('localTypedArgs / localTypedEnv', () => {
+  it('keeps the tmux path out of the shell command: it rides the environment', () => {
+    const args = localTypedArgs('node-terminal', 'nt-a', 'nt-paste-0123456789ab')
+
+    const env = localTypedEnv("/opt/it's here/tmux", { HOME: '/h' })
+
+    expect(args).toHaveLength(2)
+    expect(args[1]).toContain('"$NT_TYPED_TMUX" -L node-terminal')
+    expect(env).toEqual({ HOME: '/h', NT_TYPED_TMUX: "/opt/it's here/tmux" })
   })
 })

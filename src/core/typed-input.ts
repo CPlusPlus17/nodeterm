@@ -1,5 +1,4 @@
 import type { TextDeliveryResult } from '../shared/text-delivery'
-import { posixQuote } from '../shared/ssh'
 import { assertPasteTarget } from './tmux-naming'
 import { ENVELOPE_SETTLE_POLLS, ENVELOPE_SETTLE_POLL_MS, type SettleOptions } from './settled-submit'
 
@@ -50,9 +49,9 @@ export function typedLines(text: string): string[] {
 }
 
 /**
- * The script that types stdin into the pane. `tmux` is a shell word that runs tmux (a quoted
- * absolute path locally, `tmux` on an SSH host); `target` and `buffer` are validated here, since
- * they are spliced in. Every failure exits non-zero, and a paste that fails after its load drops
+ * The script that types stdin into the pane. `tmux` is a FIXED shell word that runs tmux
+ * (`"$NT_TYPED_TMUX"` locally, see `localTypedArgs`; `tmux` on an SSH host) — never a path spliced in.
+ * `target` and `buffer` are validated here, since they are spliced in. Every failure exits non-zero, and a paste that fails after its load drops
  * the buffer rather than leaving the user's line in the server's buffer stack (see PasteDelivery).
  */
 export function typedInputScript(tmux: string, socket: string, target: string, buffer: string): string {
@@ -73,9 +72,22 @@ export function typedInputScript(tmux: string, socket: string, target: string, b
   ].join('\n')
 }
 
-/** The same script, as `sh -c` argv for a local run (stdin carries the text). */
-export function localTypedArgs(tmuxPath: string, socket: string, target: string, buffer: string): string[] {
-  return ['-c', typedInputScript(posixQuote(tmuxPath), socket, target, buffer)]
+/** Where a local run's script finds tmux (`localTypedEnv`). */
+export const TYPED_TMUX_ENV = 'NT_TYPED_TMUX'
+
+/**
+ * The same script, as `sh -c` argv for a local run (stdin carries the text). Nothing in it comes
+ * from outside: the tmux path is found by a PATH lookup, so it reaches the script through the
+ * environment (`localTypedEnv`), never as script text or an argument to the shell. (CodeQL's
+ * indirect command-line rule flagged it both spliced in through `posixQuote` and passed as `$1`.)
+ */
+export function localTypedArgs(socket: string, target: string, buffer: string): string[] {
+  return ['-c', typedInputScript(`"$${TYPED_TMUX_ENV}"`, socket, target, buffer)]
+}
+
+/** The environment for `localTypedArgs`: this process's, plus the tmux the script runs. */
+export function localTypedEnv(tmuxPath: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, [TYPED_TMUX_ENV]: tmuxPath }
 }
 
 /** What stdin the script reads: one line per line, each LF-terminated so the last is read too. */

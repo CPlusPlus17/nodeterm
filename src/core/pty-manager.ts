@@ -84,7 +84,7 @@ import {
   pasteBufferName,
   runPasteDelivery
 } from './tmux-naming'
-import { localTypedArgs, typeThenSubmitWhenSettled } from './typed-input'
+import { localTypedArgs, localTypedEnv, typeThenSubmitWhenSettled } from './typed-input'
 import { encodeSendKeysHex } from './tmux-control'
 import {
   ZELLIJ_NESTING_ENV,
@@ -287,6 +287,25 @@ function runWithStdin(file: string, args: readonly string[], input: string): Pro
     stdin.end(input)
   }
   return p as unknown as Promise<unknown>
+}
+
+/**
+ * The typed chat delivery's LOCAL leg (core/typed-input.ts): `/bin/sh` running the fixed script,
+ * with the tmux path in `env`. Kept apart from `runWithStdin` so the one helper that starts a shell
+ * only ever receives that fixed script — a shared runner handed `/bin/sh` by one caller is a shell
+ * for every caller's arguments (CodeQL reads it that way, and so should a reviewer). Same bounds
+ * as `runWithStdin`: `PROC_TIMEOUT_MS`, rejection on a non-zero exit, a swallowed EPIPE.
+ */
+function runTypedScript(args: readonly string[], input: string, env: NodeJS.ProcessEnv): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile('/bin/sh', [...args], { timeout: PROC_TIMEOUT_MS, env }, (err) =>
+      err === null ? resolve() : reject(err)
+    )
+    child.stdin?.on('error', () => {
+      /* child gone; the exit code is what decides success */
+    })
+    child.stdin?.end(input)
+  })
 }
 
 // Minimal tmux config so the user's ~/.tmux.conf never interferes. The tmux server
@@ -5003,7 +5022,8 @@ export class PtyManager {
       return null
     } else {
       const tmuxPath = this.tmuxPath
-      type = (stdin) => runWithStdin('/bin/sh', localTypedArgs(tmuxPath, TMUX_SOCKET, target, pasteBufferName()), stdin)
+      type = (stdin) =>
+        runTypedScript(localTypedArgs(TMUX_SOCKET, target, pasteBufferName()), stdin, localTypedEnv(tmuxPath))
       submit = () => runAsync(tmuxPath, localTmuxEnterArgs(TMUX_SOCKET, target))
     }
     if (this.typedInFlight.has(target)) return false
