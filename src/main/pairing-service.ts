@@ -89,7 +89,8 @@ export interface PairingRelayDeps {
    * is written, and say whether it is pinned (A07-late). index.ts runs `stillPaired` INSIDE the
    * approved-devices queue (`pinApprovedDeviceIf`), which is what keeps a revoke's unpin from being
    * overtaken: a revoke removes the agent.json entry before it queues its unpin, so a check that runs
-   * after the unpin can no longer find the entry. Optional: absent ⇒ a phone whose key was recorded
+   * after the unpin can no longer find the entry (a revoke lists it again only when that unpin could
+   * not be written, while the key is still pinned). Optional: absent ⇒ a phone whose key was recorded
    * without being pinned approves on its first relay connect, as before, and the `/pair` answer does
    * not promise otherwise.
    */
@@ -274,10 +275,11 @@ export interface PairingService {
   /** All paired devices (token stripped) from ~/.nodeterm/agent.json. */
   listDevices(): Promise<PublicDevice[]>
   /**
-   * Revoke a device: drop its agent.json entry, delete its authorized_keys line, AND take its Pro
-   * entitlement back on the relay backend. The two legs are reported separately — see
-   * `DeviceRevokeResult`; this never throws, because a failure the caller cannot see is exactly
-   * how the server leg went missing in the first place.
+   * Revoke a device: drop its agent.json entry, delete its authorized_keys line, unpin its relay key
+   * and close the relay sessions it has open (A07-revoke), AND take its Pro entitlement back on the
+   * relay backend. The legs are reported separately — see `DeviceRevokeResult`; this never throws,
+   * because a failure the caller cannot see is exactly how the server leg went missing in the first
+   * place.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
   /** Live re-probe of sshd (127.0.0.1:22), for the Remote Login warning's auto-clear. */
@@ -984,41 +986,67 @@ export function createPairingService(
   // The relay device id is read BEFORE either write and kept even when the local leg fails: the
   // entitlement is what authorizes the server leg, not the local write's success, and a phone the
   // user asked to remove should stop being minted Pro either way.
+  //
+  // The relay leg runs LAST, inside the same unit, and only after agent.json no longer lists the
+  // device: the standing host's late pin (`approvePairedRelayKey`, A07-late) pins a key a listed
+  // pairing recorded, so an unpin queued while the entry is still there could be undone by it. If
+  // the unpin cannot be written, the pin may survive, and the phone's next relay connect would be
+  // approved with no dialog (revocation.ts: the caller MUST retry and MUST NOT show "Removed"). So
+  // the entry is put back where it was and `local` is false: the device stays listed, which is the
+  // same partial state as an agent.json write that failed, and Revoke retries the whole thing. The
+  // key is still pinned in that case, so listing the device again gives the late pin nothing new.
   const revokeDevice = async (id: string): Promise<DeviceRevokeResult> => {
-    const { local, relayId, found, unpin } = await serialize(async () => {
-      const entry = readDevices(await readAgentJson()).find((d) => d.id === id)
+    const { local, relayId, found, relay } = await serialize(async () => {
+      const before = readDevices(await readAgentJson())
+      const entry = before.find((d) => d.id === id)
       const relayId = entry?.relayDeviceId
       const boxKey = entry?.relayBoxKey
       const found = !!entry
+      let devices: DeviceEntry[]
       try {
         await removeAuthorizedKeysForDevice(id)
         await removeAdministratorsKeysForDevice(id)
         const obj = await readAgentJson()
-        const devices = removeDevice(readDevices(obj), id)
+        devices = removeDevice(readDevices(obj), id)
         await writeAgentJson({ ...obj, devices })
-        // The relay pin made at pairing goes with the device, and so do the relay sessions that
-        // key has open — unless another pairing of the same phone (a re-pair keeps its box key) is
-        // still listed: that pairing still authorizes the phone, its pin and its session.
-        const unpin = boxKey && !devices.some((d) => d.relayBoxKey === boxKey) ? boxKey : undefined
-        return { local: true, relayId, found, unpin }
       } catch (err) {
         // Reported, not thrown: `local:false` is what the UI turns into "try again", and the
         // server leg below is still worth running. The detail belongs in the log.
         console.warn('[pairing] local revoke failed:', err)
-        return { local: false, relayId, found, unpin: undefined }
+        return { local: false, relayId, found, relay: undefined }
       }
-    })
-    if (unpin && relayDeps?.revokeRelayKey) {
-      // Unpins the key (the NEXT relay handshake from it needs the SAS approval again) and closes
-      // the relay sessions it has open right now. Not part of `local`: the device is already gone
-      // from agent.json, so a "try again" would find nothing to retry; the log keeps the detail.
-      const outcome = await relayDeps.revokeRelayKey(unpin).catch((err) => {
+      // The relay pin made at pairing goes with the device, and so do the relay sessions that key
+      // has open — unless another pairing of the same phone (a re-pair keeps its box key) is still
+      // listed: that pairing still authorizes the phone, its pin and its session.
+      if (!entry || !boxKey || devices.some((d) => d.relayBoxKey === boxKey) || !relayDeps?.revokeRelayKey) {
+        return { local: true, relayId, found, relay: undefined }
+      }
+      // Unpins the key, then closes the relay sessions it has open right now (peer-revoker.ts).
+      // A revoker that throws said nothing about the pin, so it counts as an unpin that failed.
+      const outcome = await relayDeps.revokeRelayKey(boxKey).catch((err) => {
         console.warn('[pairing] could not revoke the phone relay key:', err)
         return null
       })
-      if (outcome && !outcome.persisted) console.warn('[pairing] could not unpin the phone relay key')
-      if (outcome && !outcome.killed) console.warn('[pairing] could not close the phone relay session')
-    }
+      if (outcome?.persisted) {
+        if (outcome.killed) return { local: true, relayId, found, relay: 'ok' as const }
+        // The pin is gone, so the phone cannot come back; a session whose close threw may still be
+        // half open, and the UI says so rather than "Removed".
+        console.warn('[pairing] could not close the phone relay session')
+        return { local: true, relayId, found, relay: 'cut-unconfirmed' as const }
+      }
+      console.warn('[pairing] could not unpin the phone relay key; keeping the device listed so Revoke can be retried')
+      try {
+        const obj = await readAgentJson()
+        const now = readDevices(obj).filter((d) => d.id !== id)
+        const at = Math.min(Math.max(before.findIndex((d) => d.id === id), 0), now.length)
+        await writeAgentJson({ ...obj, devices: [...now.slice(0, at), entry, ...now.slice(at)] })
+      } catch (err) {
+        // Both writes failed: the device is gone and its pin may not be. Still `local:false`, so
+        // the UI does not report a clean removal.
+        console.warn('[pairing] could not keep the device listed after the failed unpin:', err)
+      }
+      return { local: false, relayId, found, relay: 'unpin-failed' as const }
+    })
     // A device paired before `relayDeviceId` was recorded still falls back to OUR id — which is
     // not a guess. `id` is the per-pairing `randomUUID()` above, and when the phone sent no id of
     // its own the mint sent exactly this value as the row's `deviceId` (see `phoneDeviceId`), so
@@ -1047,7 +1075,7 @@ export function createPairingService(
           relayDeps?.getEntitlement() ?? null
         )
       : 'skipped'
-    return { local, server }
+    return relay ? { local, server, relay } : { local, server }
   }
 
   const approvePairedRelayKey = async (boxPublicKeyB64: string): Promise<boolean> => {

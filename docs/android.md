@@ -91,7 +91,14 @@ relay phone is paired". The late pin's "still paired?" check runs inside the pin
 revoke racing a handshake cannot leave the key pinned. No new file is involved: the key is the one
 the scan already authorized, and someone who could edit `agent.json` has a shell as the user, which
 could edit the pin store just as well. Revoking the device drops the pin and closes any relay session
-the phone has open at that moment.
+the phone has open at that moment. The phone then redials (about 1.5 s after a drop while its screen
+is open), and for the rest of that desktop run such a handshake raises no SAS dialog: the standing
+host leaves it unapproved, so the phone hears "Awaiting host approval.", and closes it a few seconds
+later (`REVOKED_PHONE_DENY_MS`), which the phone reads as a refusal and stops dialing on its own, as
+after Deny. Pairing the phone again lets it back in (the pin or the recorded key is checked first);
+after a desktop restart a dial from it shows the dialog again, as for any unpinned phone. If the
+desktop cannot write the unpin, the device stays listed and Settings → Phone says to try again,
+because the surviving pin would let the phone back in without a dialog.
 
 **What direct SSH will not do.** It never creates a tmux session (the desktop injects the hook
 environment at creation, which the phone cannot reproduce) and never touches nodes of the desktop's
@@ -827,8 +834,11 @@ later fix left to a device.
    pairing ends with "Paired, and approved for remote access.", and the first relay connect later
    raises no SAS dialog on the desktop. Revoke the phone there (Settings → Phone → Revoke) while it
    has a terminal open over the relay (route Only through the relay): that terminal ends at once, SSH
-   is refused, and a relay connect needs the SAS approval again. Against an older desktop the toast
-   says an approval is still owed, and the first relay connect shows the code. *(A07, A07-revoke)*
+   is refused, and the phone's automatic redial shows a code for a few seconds and then says the
+   computer did not approve it, while the desktop shows no dialog at all; it stops dialing until Try
+   again, which ends the same way. Restart nodeterm on the desktop and tap Try again: now the SAS
+   dialog appears (deny it). Against an older desktop the toast says an approval is still owed, and
+   the first relay connect shows the code. *(A07, A07-revoke)*
 9. A pairing code whose computer does not answer (the desktop quit after showing the QR, or the phone
    is on another network) ends within about 45 s with a sentence, not an exception name, and Back
    during the wait works without a hang. An expired or already-used code shows the desktop's one-line

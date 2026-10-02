@@ -15,7 +15,9 @@
 //     when the pairing minted a relay leg (audit A07), and otherwise on its first handshake here while
 //     its pairing, which recorded the key, is still listed (`pinPairedPhone`, A07-late);
 //   - is cut on REVOCATION: forgetting a phone unpins its key and then closes the sessions it has
-//     open (`killStandingHostSessionsByPeerKey`, called by peer-revoker.ts).
+//     open (`killStandingHostSessionsByPeerKey`, called by peer-revoker.ts). For the rest of the app
+//     run the forgotten phone's reconnects are then refused the way a Deny refuses them, with no
+//     dialog (`REVOKED_PHONE_DENY_MS`), unless pairing it again pinned or recorded its key.
 //
 // The heavy lifting (relay wiring, RPC/frame handlers, fs jail, canvas mirror, approval gate) is
 // shared with the interactive host via `connectHostSession`. Pin/lookup logic is the pure,
@@ -52,6 +54,16 @@ const MIN_REFRESH_MS = 15_000
 const DEFAULT_TTL_MS = 120_000
 // Bounded backoff for reconnect after a socket close / mint failure.
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15_000]
+/**
+ * How long a phone revoked during this run is left unapproved before its session is closed (see
+ * `revokedThisRun`). Until then every request it makes is answered "Awaiting host approval.", and
+ * the close after that is what a human's Deny looks like to a phone: the Android client reads a
+ * close after it was told it awaits approval as a refusal and stops dialing on its own
+ * (RelayConnector → RelayApprovalGate). Closed at once, the phone may not have heard that yet and
+ * would read an ordinary failure, which it retries every few seconds. Long enough for its first
+ * request over a slow relay, short enough that the approval code it shows meanwhile is a flash.
+ */
+export const REVOKED_PHONE_DENY_MS = 3_000
 
 interface HostTokenResponse {
   pairingToken: string
@@ -131,16 +143,34 @@ export interface StandingHost {
 // the order index.ts constructs the two in.
 const runningHosts = new Set<(peerKeyB64: string) => number>()
 
+// The phone keys revoked during this app run (review of A07-revoke). Cutting a phone's session makes
+// it redial (the Android client does so about 1.5 s after a drop while its screen is open), and with
+// its key unpinned and its pairing gone, that handshake used to raise the SAS dialog for the phone
+// the user had just removed, where approving it would pin the key again. Such a handshake is now
+// refused without a dialog (`REVOKED_PHONE_DENY_MS`). Module-level, so a revoke while remote access
+// is off counts too. Checked only after the pin and the paired-phone check, so pairing the phone
+// again (which pins or records its key) lets it in. In memory on purpose: after a restart the phone
+// gets the dialog again, as any unpinned phone does, and a desktop that cannot write the unpin keeps
+// the device listed instead (pairing-service.ts `revokeDevice`).
+const revokedThisRun = new Set<string>()
+
 /**
  * Close every standing-host relay session whose phone is `peerKeyB64`, and withdraw any approval
  * dialog still pending for it. The kill half of revoking a phone: unpinning its key only refuses
  * the NEXT handshake, while a session already open keeps serving terminals, files and the canvas
  * (see revocation.ts). Sessions of every other key are untouched. Returns how many were closed.
+ * The key is remembered for the rest of the run (`revokedThisRun`), whether or not a host runs now.
  */
 export function killStandingHostSessionsByPeerKey(peerKeyB64: string): number {
+  if (peerKeyB64) revokedThisRun.add(peerKeyB64)
   let closed = 0
   for (const revokePeer of [...runningHosts]) closed += revokePeer(peerKeyB64)
   return closed
+}
+
+/** Test seam: forget every key revoked so far (the set otherwise lives as long as the process). */
+export function resetRevokedPhonesForTests(): void {
+  revokedThisRun.clear()
 }
 
 export interface StandingHostOptions {
@@ -182,6 +212,8 @@ export function initStandingHost(
     approvalPub: string | null
     approvalId: string | null
     refreshTimer: ReturnType<typeof setTimeout> | null
+    /** A phone revoked during this run: the close that refuses it (see `REVOKED_PHONE_DENY_MS`). */
+    denyTimer: ReturnType<typeof setTimeout> | null
   }
 
   let enabled = false
@@ -212,6 +244,13 @@ export function initStandingHost(
     cleared: (id) => send(IPC.remoteHostPeerPendingCleared, { id })
   })
 
+  function clearDenyTimer(p: Pooled): void {
+    if (p.denyTimer) {
+      clearTimeout(p.denyTimer)
+      p.denyTimer = null
+    }
+  }
+
   function removeFromPool(p: Pooled): void {
     if (p.approvalId) approvals.clear(p.approvalId)
     p.presence.leave()
@@ -219,6 +258,7 @@ export function initStandingHost(
       clearTimeout(p.refreshTimer)
       p.refreshTimer = null
     }
+    clearDenyTimer(p)
     pool.delete(p)
     p.session.close()
   }
@@ -322,6 +362,21 @@ export function initStandingHost(
         return
       }
     }
+    // The user forgot this phone during this run, and this is it redialing (its session was cut by
+    // the revoke). No dialog for it: leave it unapproved, so it hears "Awaiting host approval.", and
+    // then close it as a Deny would, which the phone reads as a refusal (review of A07-revoke).
+    if (revokedThisRun.has(pub)) {
+      console.info('[standing-host] refused a phone revoked during this run')
+      clearDenyTimer(pooled)
+      pooled.denyTimer = setTimeout(() => {
+        pooled.denyTimer = null
+        if (!pool.has(pooled)) return
+        removeFromPool(pooled)
+        ensurePool()
+      }, REVOKED_PHONE_DENY_MS)
+      pooled.denyTimer.unref?.()
+      return
+    }
     // Keep the handshake-bound consent record after a browse socket closes (#819). The
     // human may still compare its SAS and pin this exact identity until the bounded deadline.
     pooled.approvalPub = pub
@@ -365,7 +420,8 @@ export function initStandingHost(
         presence: createPhonePresence(),
         approvalPub: null,
         approvalId: null,
-        refreshTimer: null
+        refreshTimer: null,
+        denyTimer: null
       }
       pooled.session = connectHostSession({
         url: RELAY_URL,
@@ -397,6 +453,7 @@ export function initStandingHost(
             clearTimeout(pooled.refreshTimer)
             pooled.refreshTimer = null
           }
+          clearDenyTimer(pooled)
           pool.delete(pooled)
           ensurePool() // a listener/session dropped → top the pool back up
         }

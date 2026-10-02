@@ -189,9 +189,9 @@ iOS app does receive the detail, in the push the desktop sends.
 
   A computer without Pro cannot revoke the old relay device token at the relay (that request is
   signed with the Pro entitlement), so whoever took it may still reach that computer through the
-  relay with the old box key. The revoke unpinned that key, so the computer shows its approval dialog
-  with a code before it lets it in: approve a phone there only while your own phone is showing the
-  same code.
+  relay with the old box key. The revoke unpinned that key, so the computer refuses it without a
+  dialog until nodeterm there restarts, and after that shows its approval dialog with a code before it
+  lets it in: approve a phone there only while your own phone is showing the same code.
 - Dictation (the terminal input bar's mic) goes through the phone's speech recognition service,
   which on most phones is Google's and may send what you say to its servers; it is not the on-device
   Whisper of the desktop and iOS. The microphone is used only after a tap on the mic, until the

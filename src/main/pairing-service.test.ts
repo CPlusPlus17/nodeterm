@@ -510,30 +510,92 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
     }
   })
 
-  it('a relay revoke that could not persist, close, or run at all never fails the device removal', async () => {
+  it('reports the relay leg: done, or unpinned with a session it could not confirm closed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const service = createPairingService(relayDeps())
     try {
-      for (const outcome of [
+      const pair = async () => {
+        const s = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+        return String((await postSealed(s.pairPort, { token: s.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })).deviceId)
+      }
+      const clean = await pair()
+      expect(await service.revokeDevice(clean)).toEqual({ local: true, server: 'skipped', relay: 'ok' })
+      // The pin is gone, so the phone cannot come back; the UI must not call that a clean removal.
+      revokeOutcome = async () => ({ persisted: true, killed: false })
+      const halfCut = await pair()
+      expect(await service.revokeDevice(halfCut)).toEqual({ local: true, server: 'skipped', relay: 'cut-unconfirmed' })
+      expect(deviceIds()).not.toContain(halfCut)
+      expect(warn.mock.calls.map((c) => String(c[0]))).toContain('[pairing] could not close the phone relay session')
+    } finally {
+      service.stop()
+      warn.mockRestore()
+    }
+  })
+
+  // revocation.ts: `persisted:false` means the pin may SURVIVE, so the phone's next relay connect would
+  // be approved with no dialog; the caller MUST retry and MUST NOT show "Removed". The device stays
+  // listed (in its place) with `local:false`, and Revoke retries the whole revoke.
+  it('a relay key it could not unpin keeps the device listed, so Revoke can be retried', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const service = createPairingService(relayDeps())
+    try {
+      for (const failed of [
         async () => ({ persisted: false, killed: true }),
-        async () => ({ persisted: true, killed: false }),
+        async () => ({ persisted: false, killed: false }),
+        // A revoker that throws said nothing about the pin.
         async (): Promise<never> => {
           throw new Error('fixture')
         }
       ]) {
-        revokeOutcome = outcome
+        seed()
+        revokes.length = 0
         const s = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
         const resp = await postSealed(s.pairPort, { token: s.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
-        expect(await service.revokeDevice(String(resp.deviceId))).toMatchObject({ local: true })
+        const id = String(resp.deviceId)
+        expect(deviceIds()).toEqual(['dev-a', 'dev-b', id])
+        // The entry is gone from agent.json BEFORE the unpin is queued (the A07-late late pin must
+        // not find it), whatever happens after.
+        let listedDuringUnpin: string[] | null = null
+        revokeOutcome = async () => {
+          listedDuringUnpin = deviceIds()
+          return failed()
+        }
+        // Moved to the front, so putting it back must restore its place, not append it.
+        const reordered = agentJson()
+        const all = reordered.devices as DeviceEntry[]
+        writeFileSync(AGENT_JSON, JSON.stringify({ ...reordered, devices: [all[2], all[0], all[1]] }), { mode: 0o600 })
+
+        expect(await service.revokeDevice(id)).toEqual({ local: false, server: 'skipped', relay: 'unpin-failed' })
+        expect(listedDuringUnpin).toEqual(['dev-a', 'dev-b'])
+        expect(deviceIds()).toEqual([id, 'dev-a', 'dev-b'])
+        const kept = (agentJson().devices as DeviceEntry[])[0]
+        expect(kept.relayBoxKey).toBe(phoneBox) // the record a retry needs
+        expect(authKeys()).not.toContain(`nodeterm-ios-${id}`) // the SSH leg did go
+        expect(statSync(AGENT_JSON).mode & 0o777).toBe(0o600)
+
+        revokeOutcome = async () => ({ persisted: true, killed: true })
+        expect(await service.revokeDevice(id)).toEqual({ local: true, server: 'skipped', relay: 'ok' })
+        expect(deviceIds()).toEqual(['dev-a', 'dev-b'])
+        expect(revokes).toEqual([phoneBox, phoneBox])
       }
-      expect(revokes).toEqual([phoneBox, phoneBox, phoneBox])
-      const logged = warn.mock.calls.map((c) => String(c[0]))
-      expect(logged).toContain('[pairing] could not unpin the phone relay key')
-      expect(logged).toContain('[pairing] could not close the phone relay session')
-      expect(logged).toContain('[pairing] could not revoke the phone relay key:')
     } finally {
       service.stop()
       warn.mockRestore()
+    }
+  })
+
+  it('no relay leg to run (no key recorded, or another pairing keeps it) reports none', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      expect(await service.revokeDevice('dev-a')).toEqual({ local: true, server: 'skipped' })
+      const first = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const a = await postSealed(first.pairPort, { token: first.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      const second = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      await postSealed(second.pairPort, { token: second.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      expect(await service.revokeDevice(String(a.deviceId))).toEqual({ local: true, server: 'skipped' })
+      expect(revokes).toEqual([])
+    } finally {
+      service.stop()
     }
   })
 

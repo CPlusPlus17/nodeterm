@@ -180,6 +180,42 @@ describe('PhoneSection revoke feedback', () => {
     expect(text).not.toMatch(/Removed “/)
   })
 
+  // revocation.ts: a relay key that could not be unpinned may let the phone back in with no
+  // approval code, so "Removed" is exactly what must not be said. Main keeps the device listed.
+  it('says the phone’s remote access is still there when its relay key could not be unpinned', async () => {
+    stubBridge({ local: false, server: 'skipped', relay: 'unpin-failed' })
+    mount()
+    await act(async () => undefined)
+
+    const text = await revokeFlow()
+    expect(text).toMatch(/remote access away/i)
+    expect(text).toMatch(/still listed — try again/i)
+    expect(text).not.toMatch(/Removed “/)
+    expect(text).toContain('Enes’ iPhone') // the row is still there to retry from
+  })
+
+  it('warns that a relay session may still be open, and keeps the Pro receipt beside it', async () => {
+    stubBridge({ local: true, server: 'ok', relay: 'cut-unconfirmed' })
+    mount()
+    await act(async () => undefined)
+
+    const text = await revokeFlow()
+    expect(text).toMatch(/could not be confirmed closed/i)
+    expect(text).toMatch(/quit and reopen nodeterm/i)
+    expect(text).toMatch(/within 7 days/i)
+    expect(text).not.toMatch(/try again/i)
+  })
+
+  it('a relay leg that went through adds nothing to the usual receipt', async () => {
+    stubBridge({ local: true, server: 'ok', relay: 'ok' })
+    mount()
+    await act(async () => undefined)
+
+    const text = await revokeFlow()
+    expect(text).toMatch(/Removed “Enes’ iPhone”\. Its Pro ends/)
+    expect(text).not.toMatch(/remote session|remote access away/i)
+  })
+
   it('warns when the call itself never answered', async () => {
     stubBridge(new Error('E_UNSUPPORTED'))
     mount()

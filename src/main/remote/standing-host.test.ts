@@ -91,7 +91,13 @@ vi.mock('./host-service', () => ({
 const relayHostKills = vi.fn((_pub: string) => {})
 vi.mock('./relay-host', () => ({ killRelayHostsByPeerKey: (pub: string) => relayHostKills(pub) }))
 
-import { initStandingHost, killStandingHostSessionsByPeerKey, type StandingHostOptions } from './standing-host'
+import {
+  initStandingHost,
+  killStandingHostSessionsByPeerKey,
+  resetRevokedPhonesForTests,
+  REVOKED_PHONE_DENY_MS,
+  type StandingHostOptions
+} from './standing-host'
 import { createPeerRevoker } from './peer-revoker'
 import { IPC } from '../../shared/ipc'
 
@@ -138,6 +144,7 @@ beforeEach(() => {
   disk = { pubkeys: [] }
   persist.mockImplementation(async (update) => { disk = update(disk) })
   relayHostKills.mockReset()
+  resetRevokedPhonesForTests()
   keyError = null
   for (const key of Object.keys(ipc)) delete ipc[key]
   vi.stubGlobal(
@@ -151,6 +158,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const host of hosts.splice(0)) host.stop()
+  vi.useRealTimers()
   for (const p of presenceHub.peers()) presenceHub.leave(p.clientId)
   vi.unstubAllGlobals()
   resetPlatformForTests()
@@ -356,10 +364,10 @@ describe('revoking a phone cuts its live relay session (audit A07-revoke)', () =
     expect(phones()).toBe(1) // the revoked phone left the facepile; the other is still there
     expect(relayHostKills).toHaveBeenCalledWith('phone-A') // and any peer-desktop session of that key
 
-    // A reconnect from the revoked phone is no longer auto-approved: it gets the SAS prompt.
+    // A reconnect from the revoked phone is no longer auto-approved (the review of A07-revoke covers
+    // what it gets instead, below).
     const again = await bridge('phone-A')
     expect(again.session.approve).not.toHaveBeenCalled()
-    expect(pendingFor('phone-A')).toHaveLength(1)
     host.stop()
   })
 
@@ -408,6 +416,106 @@ describe('revoking a phone cuts its live relay session (audit A07-revoke)', () =
     expect(a.closed).toBe(1)
     expect(killStandingHostSessionsByPeerKey('phone-A')).toBe(0)
     expect(a.closed).toBe(1)
+  })
+})
+
+describe('a phone revoked during this run is refused without a dialog (review of A07-revoke)', () => {
+  // Cutting the session makes the phone redial (the Android client does so 1.5 s after a drop). With
+  // its key unpinned and its pairing gone, that handshake used to raise the SAS dialog for the phone
+  // the user had just removed, and approving it pinned the key again. It is now left unapproved, so
+  // every request it makes hears "Awaiting host approval.", and closed after REVOKED_PHONE_DENY_MS:
+  // what a human's Deny looks like to the phone, which then stops dialing on its own.
+
+  async function bridge(peer: string) {
+    const entry = sessions.at(-1)!
+    entry.peer = peer
+    entry.opts.onPeerReady(entry.session)
+    await settle()
+    sessions.at(-1)!.peer = null // the replacement listener has no phone yet
+    return entry
+  }
+  const dialogsFor = (pub: string) =>
+    sentToWin.filter((s) => s.channel === IPC.remoteHostPeerPending && (s.args[0] as { pub: string }).pub === pub)
+
+  it('a redial after the revoke raises no dialog, stays unapproved, and is closed like a Deny', async () => {
+    vi.useFakeTimers()
+    disk = { pubkeys: ['phone-A'] }
+    const host = makeHost()
+    host.setEnabled(true)
+    await settle()
+    const live = await bridge('phone-A')
+    expect(await createPeerRevoker().revoke('phone-A')).toEqual({ persisted: true, killed: true })
+    expect(live.closed).toBe(1)
+
+    const again = await bridge('phone-A')
+    expect(dialogsFor('phone-A')).toEqual([]) // nothing on the desk to approve by mistake
+    expect(again.session.approve).not.toHaveBeenCalled()
+    expect(phones()).toBe(1)
+    // Not at once: the phone must first hear that it awaits approval, or it reads a plain failure.
+    vi.advanceTimersByTime(REVOKED_PHONE_DENY_MS - 1)
+    expect(again.closed).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(again.closed).toBe(1)
+    expect(phones()).toBe(0)
+    expect(disk.pubkeys).toEqual([]) // and nothing pinned it again
+    await settle()
+    expect(sessions.filter((e) => e.closed === 0)).toHaveLength(1) // the pool is topped back up
+    host.stop()
+  })
+
+  it('a revoke while remote access is off counts too', async () => {
+    vi.useFakeTimers()
+    expect(killStandingHostSessionsByPeerKey('phone-Z')).toBe(0) // no host runs
+    const host = makeHost()
+    host.setEnabled(true)
+    await settle()
+    const later = await bridge('phone-Z')
+    expect(dialogsFor('phone-Z')).toEqual([])
+    vi.advanceTimersByTime(REVOKED_PHONE_DENY_MS)
+    expect(later.closed).toBe(1)
+    host.stop()
+  })
+
+  it('pairing the phone again lets it in, and another phone still gets the dialog', async () => {
+    vi.useFakeTimers()
+    let paired = false
+    const host = makeHost({ pinPairedPhone: async () => paired })
+    host.setEnabled(true)
+    await settle()
+    killStandingHostSessionsByPeerKey('phone-A')
+
+    const stranger = await bridge('phone-B')
+    expect(dialogsFor('phone-B')).toHaveLength(1)
+    vi.advanceTimersByTime(REVOKED_PHONE_DENY_MS)
+    expect(stranger.closed).toBe(0) // only the revoked key is refused
+
+    paired = true // re-paired with remote access off: the pairing recorded its key (A07-late)
+    const repaired = await bridge('phone-A')
+    expect(repaired.session.approve).toHaveBeenCalledOnce()
+    disk = { pubkeys: ['phone-A'] } // or re-paired with it on: the scan pinned it (A07)
+    paired = false
+    const pinned = await bridge('phone-A')
+    expect(pinned.session.approve).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(REVOKED_PHONE_DENY_MS)
+    expect([repaired.closed, pinned.closed]).toEqual([0, 0])
+    expect(dialogsFor('phone-A')).toEqual([])
+    host.stop()
+  })
+
+  it('a refused session that drops or is stopped first is not closed twice', async () => {
+    vi.useFakeTimers()
+    killStandingHostSessionsByPeerKey('phone-A')
+    const host = makeHost()
+    host.setEnabled(true)
+    await settle()
+    const dropped = await bridge('phone-A')
+    dropped.opts.onClose() // the phone hung up on its own
+    const stopped = await bridge('phone-A')
+    host.stop()
+    expect(stopped.closed).toBe(1)
+    vi.advanceTimersByTime(REVOKED_PHONE_DENY_MS)
+    expect([dropped.closed, stopped.closed]).toEqual([0, 1])
+    expect(phones()).toBe(0)
   })
 })
 
