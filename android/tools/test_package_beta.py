@@ -169,6 +169,7 @@ class PackageBetaTest(unittest.TestCase):
             (directory / tool).symlink_to(self.tools / tool)
         wrapper = directory / "apksigner"
         wrapper.write_text(f'''#!{sys.executable}
+import json
 import struct
 import subprocess
 import sys
@@ -190,6 +191,7 @@ sys.exit(result.returncode)
         self.assertEqual(0, result.returncode, result.stderr.decode())
         name = "nodeterm-android-" + VERSION_NAME + ".apk"
         self.assertEqual({name, name + ".sha256", "beta-metadata.json"}, {path.name for path in self.output.iterdir()})
+        self.assertEqual(0, self.output.stat().st_mode & 0o077, "private APK output must be inaccessible to other users")
         apk = self.output / name
         digest = hashlib.sha256(apk.read_bytes()).hexdigest()
         self.assertEqual(f"{digest}  {name}\n", (self.output / (name + ".sha256")).read_text())
@@ -276,6 +278,15 @@ sys.exit(result.returncode)
         apk.seek(position)
         apk.write(bytes([previous ^ 1]))''')
         self.refused(self.package(**{"build-tools-dir": wrapper}), "APK signature verification failed")
+
+    def test_rejects_inputs_changed_during_signing(self):
+        for number, change in enumerate(({"sourceRevision": "b" * 40}, {"note": "changed after validation"})):
+            inputs = self.fixture_inputs("changed-during-signing-" + str(number))
+            wrapper = self.signer_wrapper("changed-inputs-tools-" + str(number), before_sign=f'''    path = Path({str(inputs)!r})
+    recorded = json.loads(path.read_text())
+    recorded.update({change!r})
+    path.write_text(json.dumps(recorded))''')
+            self.refused(self.package(**{"build-tools-dir": wrapper, "build-inputs": inputs}), "Build inputs")
 
     def test_rejects_incorrect_password_without_printing_it(self):
         password = self.root / "wrong-password.txt"

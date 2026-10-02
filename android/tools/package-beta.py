@@ -146,7 +146,8 @@ def require_unsigned(apk, archive, apksigner):
 def verify_build_inputs(args):
     regular_file(args.build_inputs, "Build inputs metadata")
     try:
-        recorded = json.loads(args.build_inputs.read_text(encoding="utf-8"))
+        recorded_bytes = args.build_inputs.read_bytes()
+        recorded = json.loads(recorded_bytes.decode("utf-8"))
     except (ValueError, UnicodeError) as error:
         raise PackagingError("Build inputs metadata must be a JSON object.") from error
     expected = {"schemaVersion": 1, "signed": False, "sourceRevision": args.source_revision.lower(),
@@ -157,7 +158,7 @@ def verify_build_inputs(args):
             or type(recorded.get("schemaVersion")) is not int or type(recorded.get("versionCode")) is not int
             or any(recorded.get(key) != value for key, value in expected.items())):
         raise PackagingError("Build inputs metadata does not match the unsigned APK, R8 reports, revision and version.")
-    return expected
+    return {**expected, "buildInputsSha256": hashlib.sha256(recorded_bytes).hexdigest()}
 
 
 def package_beta(args):
@@ -206,7 +207,7 @@ def package_beta(args):
     with tempfile.TemporaryDirectory(prefix=".nodeterm-beta-", dir=args.output_dir.parent) as workspace:
         temporary = Path(workspace)
         artifacts = temporary / "artifacts"
-        artifacts.mkdir()
+        artifacts.mkdir(mode=0o700)
         aligned = temporary / "aligned.apk"
         artifact_name = f"nodeterm-android-{args.version_name}.apk"
         signed = artifacts / artifact_name
@@ -231,11 +232,13 @@ def package_beta(args):
             raise PackagingError("Signed APK certificate does not match the expected signer pin.")
         require_metadata(apk_metadata(signed, tools["aapt"]), args)
         run_tool([str(tools["zipalign"]), "-c", "-P", "16", "4", str(signed)], "Signed APK alignment verification")
+        if verify_build_inputs(args) != build_inputs:
+            raise PackagingError("Build inputs changed during APK signing.")
         digest = sha256(signed)
         (artifacts / (artifact_name + ".sha256")).write_text(f"{digest}  {artifact_name}\n", encoding="utf-8")
         metadata = {"schemaVersion": 1, **apk_metadata(signed, tools["aapt"]), "artifactName": artifact_name,
                     "signerSha256": actual_signer, "apkSha256": digest, "sourceRevision": args.source_revision.lower(),
-                    "unsignedApkSha256": build_inputs["unsignedApkSha256"], "buildInputsSha256": sha256(args.build_inputs),
+                    "unsignedApkSha256": build_inputs["unsignedApkSha256"], "buildInputsSha256": build_inputs["buildInputsSha256"],
                     "r8MappingSha256": build_inputs["r8MappingSha256"], "r8SeedsSha256": build_inputs["r8SeedsSha256"]}
         (artifacts / "beta-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         # All gates passed before the output becomes visible. A failed signing/verification leaves
