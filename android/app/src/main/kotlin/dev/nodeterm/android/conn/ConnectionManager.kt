@@ -24,6 +24,7 @@ import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.RelayBlock
 import dev.nodeterm.protocol.relay.RelayApi
 import dev.nodeterm.protocol.ssh.HostKeyPin
+import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshFallback
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.coroutines.CoroutineScope
@@ -238,9 +239,6 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     /** A relay connection held NEXT TO a direct-SSH one, for what SSH must not do (see [viaRelay]). */
     @Volatile private var sideRelay: HostConnection? = null
     private val sideMutex = Mutex()
-
-    /** This computer can be reached through the relay at all (a relay leg and its device token). */
-    val hasRelay: Boolean get() = relayLeg() == LegRouting.RelayLeg.AVAILABLE
 
     /**
      * Whether the relay leg can be opened next to the primary connection. Read fresh each time: a
@@ -471,7 +469,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             throw e
         } catch (e: Exception) {
             // Never null: an exception without a message must still say that the listing failed.
-            _lastError.value = e.message ?: e.javaClass.simpleName
+            // "Nothing found" offers the relay only when this phone has one to offer (review of A27b).
+            _lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message ?: e.javaClass.simpleName
             // A HostException is an ANSWER (the host refused, or the connection already reported its
             // own drop). Anything else is an unexpected transport failure: drop the connection so the
             // next refresh dials a fresh one instead of reusing a dead socket.

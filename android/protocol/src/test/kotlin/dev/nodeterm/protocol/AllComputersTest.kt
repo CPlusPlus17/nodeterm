@@ -331,8 +331,9 @@ class AllComputersTest {
         AppSourcePins.assertInOrder(
             AppSourcePins.blockAfter(connections, "suspend fun refreshNow("),
             "} catch (e: Exception) {",
-            // Never a null error: an exception without a message still says the listing failed.
-            "_lastError.value = e.message ?: e.javaClass.simpleName",
+            // Never a null error: an exception without a message still says the listing failed ("nothing
+            // found" picks its ending by the relay leg first, review of A27b).
+            "_lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message ?: e.javaClass.simpleName",
             "if (e !is HostException) disconnect()"
         )
         AppSourcePins.assertInOrder(

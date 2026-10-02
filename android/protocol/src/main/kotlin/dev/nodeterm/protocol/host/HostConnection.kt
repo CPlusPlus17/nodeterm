@@ -164,16 +164,42 @@ internal fun hostException(e: RpcException): HostException {
  * the node belongs to one of the desktop's SSH projects and lives on another host (audit A09). The
  * app offers to open it through the relay, where the desktop attaches it properly.
  *
- * [message] is that offer's text. [withoutRelay] is what to say instead when the phone has no relay
- * leg to offer — a computer whose remote access is off, or one added by its SSH address, which has
- * none at all (audit A27): the same fact, without promising a relay, and saying remote access is not
- * set up for this computer.
+ * [message] is that offer's text. [fact] is the same refusal with nothing about the relay, and
+ * [action] what the user would do with the session in nodeterm on the computer ("open it", "start
+ * it"). When the phone cannot offer the relay, [refusal] says why for the leg it has: remote access
+ * not set up (or a computer added by its SSH address, which has no relay at all — audit A27), off
+ * right now, not picked up yet, or this computer set to "Only on my network".
  */
 class NeedsRelayException(
     val nodeId: String,
     message: String,
-    val withoutRelay: String = "$message $NO_RELAY_TO_OFFER"
+    val fact: String = message,
+    val action: String = "open it"
 ) : HostException(message) {
+    /** The refusal for a phone with no relay leg at all: remote access isn't set up for this computer. */
+    val withoutRelay: String get() = refusal(LegRouting.RelayLeg.NOT_SET_UP)!!
+
+    /**
+     * What to say when the relay leg is [leg]; null when it is [LegRouting.RelayLeg.AVAILABLE], where
+     * the app offers the relay ([message]) instead. Each text names what is actually in the way, the
+     * way [LegRouting.route]'s reasons do: telling a user whose remote access is ON that it isn't set
+     * up (the review of A27b) sends them to a setting that is already right.
+     */
+    fun refusal(leg: LegRouting.RelayLeg): String? = when (leg) {
+        LegRouting.RelayLeg.AVAILABLE -> null
+        LegRouting.RelayLeg.NOT_SET_UP, LegRouting.RelayLeg.ADDED_OVER_SSH ->
+            "$fact Remote access isn't set up for this computer, so $action in nodeterm on the computer."
+        LegRouting.RelayLeg.REMOTE_ACCESS_OFF ->
+            "$fact Remote access is off on the computer right now: turn it on in nodeterm → Settings → Phone, or " +
+                "$action in nodeterm on the computer."
+        LegRouting.RelayLeg.NOT_PICKED_UP ->
+            "$fact Remote access is on there, but this phone has not picked up its relay connection yet: tap Refresh " +
+                "on the computer's screen and try again, or $action in nodeterm on the computer."
+        LegRouting.RelayLeg.ROUTE_SSH_ONLY ->
+            "$fact This computer is set to \"Only on my network (SSH)\": choose \"Automatic\" or \"Only through the " +
+                "relay\" in Settings → How to reach each computer, or $action in nodeterm on the computer."
+    }
+
     companion object {
         /** The sentence a refusal ends with when there is no relay leg to open it through. */
         const val NO_RELAY_TO_OFFER = "Remote access isn't set up for this computer, so open it in nodeterm on the computer."

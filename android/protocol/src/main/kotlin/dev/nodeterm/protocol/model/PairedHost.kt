@@ -41,7 +41,9 @@ data class PairedHost(
      * has no relay leg, ever — a Server Edition has no pairing service and a plain SSH host no
      * standing phone host — so the app fixes its route to SSH and never adopts a relay for it.
      * Persisted as `"manual": true`, which a build that predates it ignores (it then sees a paired
-     * computer with SSH and no relay, which is what this is).
+     * computer with SSH and no relay, which is what this is) — and drops: such a build rewrites the
+     * whole list on its next save with no `manual` key. So [fromJson] also reads the flag from the
+     * id, which survives that round trip ([MANUAL_ID_PREFIX]).
      */
     val manual: Boolean = false
 ) {
@@ -77,9 +79,19 @@ data class PairedHost(
     }
 
     companion object {
+        /**
+         * The id prefix of a computer added by its SSH address ([dev.nodeterm.protocol.ssh.ManualHost.newId]).
+         * A paired computer's id is the desktop's `randomUUID()` (pairing-service.ts), which never
+         * starts with it.
+         */
+        const val MANUAL_ID_PREFIX = "ssh-"
+
         fun fromJson(o: JsonObject): PairedHost? {
             val id = o.s("id") ?: return null
-            val manual = o.b("manual") == true
+            // The key, or the id when a build that predates the key saved the record without it: going
+            // back to such a build and forward again must not turn this computer into a paired one,
+            // with route choices, a relay adoption and "turn on remote access" advice (review of A27b).
+            val manual = o.b("manual") == true || id.startsWith(MANUAL_ID_PREFIX)
             return PairedHost(
                 id = id,
                 name = o.s("name") ?: "Computer",

@@ -252,8 +252,8 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                             } catch (e: NeedsRelayException) {
                                 // A node of an SSH project lives on its host: end it through the
                                 // relay, where the desktop reaches that host (audit A09). With no
-                                // relay leg, say so without offering one (A27).
-                                if (!session.hasRelay) throw HostException(e.withoutRelay)
+                                // relay leg to open, say what is in the way for this computer (A27).
+                                e.refusal(session.relayLeg())?.let { throw HostException(it) }
                                 session.viaRelay().attach(node.id, 80, 24, quiet).endSession()
                             }
                         } else {

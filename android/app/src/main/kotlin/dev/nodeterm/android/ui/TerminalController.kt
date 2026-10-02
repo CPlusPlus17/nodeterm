@@ -707,9 +707,10 @@ class TerminalController(
                 val msg = e.message ?: "This session opens through the relay."
                 main.post {
                     if (!slot.isCurrent(ticket)) return@post
-                    // No relay leg (remote access off, or a computer added by its SSH address — A27):
-                    // the same fact, said without offering a relay.
-                    state = if (session.hasRelay) TermState.RelayOffer(msg) else TermState.Ended(e.withoutRelay)
+                    // No relay leg to open (remote access not set up or off, the route set to SSH only,
+                    // or a computer added by its SSH address — A27): the same fact, with what is in
+                    // the way for this computer instead of a relay offer.
+                    state = e.refusal(session.relayLeg())?.let { TermState.Ended(it) } ?: TermState.RelayOffer(msg)
                 }
             } catch (e: Exception) {
                 // Includes our own cancel on ON_STOP (while connecting, or in afterAttach): the ticket

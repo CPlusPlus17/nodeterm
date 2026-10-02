@@ -87,9 +87,12 @@ on the computer in this order: the desktop app's (`~/Library/Application Support
 (`$NODETERM_DATA_DIR` when the SSH session carries it, then `~/.nodeterm-server`, the default in
 `src/server/config.ts`; a fresh install that has written only `install-meta.json` counts). A server
 started with `--data-dir` elsewhere is not found, and a computer with nothing found reads as "not
-found, here is where the phone looked", never as an empty computer. "Nothing found" is judged on
-what the listing can use: the desktop never deletes a status slice, so on a computer a desktop drove
-once the old ones stay, and a slice that is no data (stale, unreadable, misnamed) counts as nothing.
+found, here is where the phone looked", never as an empty computer; it ends by offering the relay
+only when the phone has a relay leg for the computer (`NothingFoundException.said`), and for a
+computer added by its SSH address it suggests checking the user instead. "Nothing found" is judged
+on what the listing can use: the desktop never deletes a status slice, so on a computer a desktop
+drove once the old ones stay, and a slice that is no data (stale, unreadable, misnamed) counts as
+nothing.
 It also lists the `nt-*` sessions on `nodeterm-rmt`, where a desktop ELSEWHERE runs the sessions of
 its SSH projects, and reads what that desktop leaves on this computer, since there is no
 `workspace.json` for those projects here:
@@ -148,22 +151,34 @@ list, its empty state and the Pair screen) adds one by host, port (22) and user;
   so nothing ever dials it in the background before an authenticated connect. The screen shows the
   pinned `SHA256:` fingerprint with the command that prints the computer's own
   (`ssh-keygen -lf` over `/etc/ssh/ssh_host_*_key.pub`) to compare. A refused key says to add the
-  line; an address already in the list (paired or added, same host in any case, port and user) is
-  refused with the name it has.
+  line. A login that could not finish (it timed out, or the connection dropped during it) says to
+  check the address and the network instead: sshj wraps both in the same `UserAuthException` as a
+  refusal, and only one with nothing behind it is the server saying no
+  (`SshHostConnection.isAuthRefusal`). An address already in the list (paired or added, same host
+  in any case, port and user) is refused with the name it has.
 - **SSH only.** The record is the paired one's with `"manual": true` (`PairedHost.manual`): no relay
   block, no host box key, `sshAvailable` true, and a `fromJson` that drops a relay a record might
   carry. Its route is fixed to SSH (`HostStore.route`), Settings shows no choice for it, the late
   relay adoption never runs for it, and `LegRouting.RelayLeg.ADDED_OVER_SSH` makes every relay verb
   (a new session, board writes, node actions, git) unavailable with "remote access isn't set up for
   this computer: it was added by its SSH address". A session that is not running, or a node of an SSH
-  project, is refused without the relay offer (`NeedsRelayException.withoutRelay`, which a paired
-  computer with remote access off now uses too). A changed host key stops with "forget it and add it
-  again". Forget works as for a paired computer, and its dialog says the phone's access is revoked by
-  removing the line ending in `nodeterm-android` from that `authorized_keys`.
+  project, is refused without the relay offer. Which refusal is said follows the relay leg the
+  phone has for the computer (`NeedsRelayException.refusal`): "remote access isn't set up" for one
+  added by address and for one the phone never got a relay leg for (paired with remote access off),
+  and otherwise what is actually in the way, the way `LegRouting`'s reasons name it: remote access
+  turned off since, a relay not picked up yet, or the route "Only on my network (SSH)". A changed
+  host key stops with "forget it and add it again". Forget works as for a paired computer, and its
+  dialog says the phone's access is revoked by removing the line ending in `nodeterm-android` from
+  that `authorized_keys`.
 - **Older builds.** A build that predates the flag ignores the `manual` key and reads a computer with
   SSH, no relay and the same pin. The add also stores the route `SSH_ONLY` for it, which such a build
   reads, so it does not dial a relay for it either (its late relay adoption could still read a
-  `relay.json` on that computer; this build never does).
+  `relay.json` on that computer; this build never does). Such a build also DROPS the key: it rewrites
+  the whole list on its next save (pairing or forgetting any computer, a late relay adoption) without
+  it. So the flag is also read from the id, the one thing that survives that round trip: an added
+  computer's id starts with `ssh-` (`PairedHost.MANUAL_ID_PREFIX`), and a paired one's is the
+  desktop's `randomUUID()`, which never does. Back on this build it is an added computer again, and a
+  relay block or box key that build adopted for it meanwhile is dropped on read.
 
 ## Protocol mapping
 
@@ -246,9 +261,10 @@ unchanged.
   added by its SSH address (`A27`, `ManualHostTest`, its own MINA server whose authenticator reads
   `~/.ssh/authorized_keys`): refused before the key line is installed (no pin, no record), the
   install command run under `/bin/sh`, then accepted and pinned to exactly the server's host key; a
-  later connect verifies that pin and another server at the address is refused; the form's checks,
-  the record's JSON (and what an older build reads of it), and the app's wiring, pinned in its
-  source.
+  later connect verifies that pin and another server at the address is refused; a server that drops
+  the connection during login is reported as unreachable, not as a refused key; the form's checks,
+  the record's JSON (and what an older build reads of it, and what this build reads back after an
+  older build saved it without the flag), and the app's wiring, pinned in its source.
   No desktop code runs on this leg: the test writes the files the desktop would have (the v3
   `workspace.json` index and project files, `agent-status.json`, the status slices, the held request
   in `~/.nodeterm/pending`), and checks what the phone writes against file names copied from
@@ -888,7 +904,10 @@ later fix left to a device.
     host screen. With remote access off (re-pair with it off), and again with the route "Only on my
     network", the New session button, the card actions and the menu items are shown disabled with a
     reason that matches the case (New session's is the first row of the Sessions list, and the last
-    session stays reachable above the button), and none of them opens a relay connection. Then, with
+    session stays reachable above the button), and none of them opens a relay connection. In both
+    cases a node of one of the desktop's SSH projects, opened, ended from the Sessions list or
+    answered from the Inbox, is refused without a relay offer: "remote access isn't set up" in the
+    first case, the "Only on my network (SSH)" setting named in the second. Then, with
     the host screen open on the same network: turn remote access OFF on a computer this phone already
     holds a relay token for — within one refresh (8 s) the controls turn disabled with "remote access
     is off on the computer", and no tap waits for the relay; turn it back ON — within one refresh

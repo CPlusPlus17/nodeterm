@@ -40,8 +40,11 @@ object ManualHost {
     /** The comment on the phone's `authorized_keys` line, which is how the user finds it to revoke it. */
     const val KEY_COMMENT = "nodeterm-android"
 
-    /** Prefix of a computer-added-by-address's local id (a paired one's is the desktop's deviceId). */
-    const val ID_PREFIX = "ssh-"
+    /**
+     * Prefix of a computer-added-by-address's local id (a paired one's is the desktop's deviceId). The
+     * record reads it back as [PairedHost.manual] when an older build's save dropped the key.
+     */
+    const val ID_PREFIX = PairedHost.MANUAL_ID_PREFIX
 
     const val MAX_NAME = 60
     private const val MAX_HOST = 253

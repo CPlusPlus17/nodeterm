@@ -62,6 +62,7 @@ import dev.nodeterm.protocol.model.QuestionChoices
 import dev.nodeterm.protocol.model.UsageAccount
 import dev.nodeterm.protocol.model.UsageLimit
 import dev.nodeterm.protocol.model.UsagePace
+import dev.nodeterm.protocol.ssh.NothingFoundException
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -121,9 +122,9 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
                     block(session.ensureConnected())
                 } catch (e: NeedsRelayException) {
                     // Direct SSH reaches only this computer; a node of one of its SSH projects is
-                    // answered where it lives, through the relay (audit A09). With no relay leg, say
-                    // so without offering one (A27).
-                    if (!session.hasRelay) throw HostException(e.withoutRelay)
+                    // answered where it lives, through the relay (audit A09). With no relay leg to
+                    // open, say what is in the way for this computer instead (A27 and its review).
+                    e.refusal(session.relayLeg())?.let { throw HostException(it) }
                     block(session.viaRelay())
                 }
                 when (result) {
@@ -137,7 +138,8 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
                 }
                 session.refreshNow()
             } catch (e: Exception) {
-                Toast.makeText(context, e.message ?: "Couldn't reach ${from.computer.label}.", Toast.LENGTH_LONG).show()
+                val text = (e as? NothingFoundException)?.said(session.relayLeg()) ?: e.message ?: "Couldn't reach ${from.computer.label}."
+                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
             }
         }
     }

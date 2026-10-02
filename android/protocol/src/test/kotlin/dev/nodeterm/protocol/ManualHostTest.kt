@@ -21,7 +21,11 @@ import dev.nodeterm.protocol.ssh.SshFallback
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import net.schmizz.sshj.common.DisconnectReason
+import net.schmizz.sshj.transport.TransportException
+import net.schmizz.sshj.userauth.UserAuthException
 import org.apache.sshd.server.SshServer
+import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
 import org.apache.sshd.server.config.keys.AuthorizedKeysAuthenticator
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
 import org.apache.sshd.server.session.ServerSession
@@ -29,6 +33,7 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -129,14 +134,50 @@ class ManualHostTest {
         assertFalse("manual" in paired.toJson())
         assertFalse(paired.manual)
         assertEquals("On your network", paired.sshLegName)
-        // A build that predates the flag ignores the key: what it then reads (this build, without the
-        // key) is a computer with SSH, no relay and the same pin — so it connects to it over SSH.
+        // A build that predates the flag ignores the key and reads the rest: SSH available, no relay
+        // block, no box key and the same pin — so it connects to it over SSH.
         val added = ManualHost.record(ok("box"), "SHA256:pin", id = "ssh-2", now = 9).toJson()
-        val asOlderBuild = PairedHost.fromJson(JsonObject(added - "manual"))!!
-        assertTrue(asOlderBuild.sshAvailable)
-        assertNull(asOlderBuild.relay)
-        assertEquals("SHA256:pin", asOlderBuild.sshHostKeyFingerprint)
+        assertEquals(JsonPrimitive(true), added["sshAvailable"])
+        assertFalse("relay" in added || "hostKeyB64" in added)
+        assertEquals(JsonPrimitive("SHA256:pin"), added["sshHostKeyFingerprint"])
         assertEquals(listOf("id", "name", "host", "port", "user", "sshAvailable", "sshHostKeyFingerprint", "pairedAt", "manual"), added.keys.toList())
+    }
+
+    @Test
+    fun `a computer added by address stays added by address after an older build saved the list without the flag`() {
+        // The review of A27b: a build that predates `manual` rewrites the WHOLE list on its next save
+        // (pairing or forgetting any computer, a late relay adoption) with no `manual` key, and may have
+        // adopted a relay for it meanwhile (its adoption has no host-key check to stop it). Coming back
+        // to this build must not turn it into a paired computer: route choices, a relay adoption and
+        // "turn on remote access" advice. The id is the one thing that survives the round trip.
+        val added = ManualHost.record(ok("box"), "SHA256:pin", now = 9)
+        val olderBuildSaved = JsonObject(
+            added.toJson() - "manual" + mapOf(
+                "hostKeyB64" to JsonPrimitive("A".repeat(43) + "="),
+                "relay" to JsonObject(
+                    mapOf(
+                        "hostId" to JsonPrimitive("h"),
+                        "hostPublicKeyB64" to JsonPrimitive("A".repeat(43) + "="),
+                        "relayEndpoint" to JsonPrimitive("wss://relay.nodeterm.dev")
+                    )
+                )
+            )
+        )
+        val back = PairedHost.fromJson(olderBuildSaved)!!
+        assertTrue(back.manual, "the id says it was added by address")
+        assertNull(back.relay)
+        assertNull(back.relayHostKeyB64)
+        assertEquals(added, back)
+        assertEquals(LegRouting.RelayLeg.ADDED_OVER_SSH, LegRouting.relayLeg(relayConfigured = false, sshOnlyRoute = true, addedOverSsh = back.manual))
+        // And the next save writes the flag again.
+        assertEquals(JsonPrimitive(true), back.toJson()["manual"])
+        // A paired computer's id is the desktop's randomUUID(), which never carries the prefix.
+        val paired = PairedHost.from(
+            PairingPayload.parse("""{"v":1,"host":"10.0.0.2","user":"u","token":"t","pairPort":1,"nodeterm":true,"name":"Box"}""")!!,
+            PairingResult(java.util.UUID.randomUUID().toString(), "tok", null, null)
+        )
+        assertFalse(PairedHost.fromJson(paired.toJson())!!.manual)
+        assertEquals(PairedHost.MANUAL_ID_PREFIX, ManualHost.ID_PREFIX)
     }
 
     @Test
@@ -293,6 +334,56 @@ class ManualHostTest {
         assertTrue(e.message!!.endsWith(ManualHost.UNREACHABLE_ADVICE), e.message)
     }
 
+    @Test
+    fun `an authentication that could not finish is not a refused key`() {
+        // The review of A27b, against sshj 0.39's own shapes: SSHClient.auth throws "Exhausted available
+        // authentication methods" whenever no method succeeded, with the cause of the last one's
+        // failure behind it; UserAuthImpl's promise chains an auth timeout and a transport error
+        // delivered while it waited into a UserAuthException. Only the cause-less one is a refusal.
+        val exhausted = "Exhausted available authentication methods"
+        assertTrue(SshHostConnection.isAuthRefusal(UserAuthException(exhausted, null as Throwable?)))
+        val timedOut = UserAuthException(exhausted, UserAuthException(TimeoutException("Timeout expired: 30000 MILLISECONDS")))
+        assertFalse(SshHostConnection.isAuthRefusal(timedOut))
+        assertIs<TimeoutException>(SshHostConnection.authFailureCause(timedOut))
+        val dropped = UserAuthException(exhausted, UserAuthException(TransportException(DisconnectReason.CONNECTION_LOST, "Broken transport")))
+        assertFalse(SshHostConnection.isAuthRefusal(dropped))
+        assertFalse(SshHostConnection.isAuthRefusal(UserAuthException(java.net.SocketException("Connection reset"))))
+        assertFalse(SshHostConnection.isAuthRefusal(java.io.IOException("not an auth failure at all")))
+    }
+
+    @Test
+    fun `a computer that drops the connection during login is told to check the network, not to add the key`() {
+        val root = Files.createTempDirectory("nt-manual-drop").toFile()
+        // A server that answers, then goes away while it is deciding about the key: what a VPN dropping
+        // or a server giving up mid-login looks like to the phone. sshj reports it as a UserAuthException.
+        val sshd = SshServer.setUpDefaultServer().apply {
+            host = "127.0.0.1"
+            port = 0
+            keyPairProvider = SimpleGeneratorHostKeyProvider(File(root, "hostkey.ser").toPath())
+            publickeyAuthenticator = PublickeyAuthenticator { _, _, session ->
+                session.close(true)
+                false
+            }
+            start()
+        }
+        try {
+            val address = ok("127.0.0.1", sshd.port.toString())
+            val pin = MemoryPin()
+            val e = assertFailsWith<HostException> {
+                SshHostConnection.connect(address.host, address.port, address.user, identity, pin, connectTimeoutMs = 5_000)
+            }
+            assertFalse(e is SshAuthRefusedException, "the key was never refused: ${e.message}")
+            assertFalse(e.message!!.contains("Exhausted"), "says what stopped it, not sshj's wrapper: ${e.message}")
+            assertNull(pin.value, "nothing authenticated, nothing pinned")
+            val first = assertFailsWith<HostException> { ManualHost.connectFirst(address, identity, connectTimeoutMs = 5_000) }
+            assertTrue(first.message!!.endsWith(ManualHost.UNREACHABLE_ADVICE), first.message)
+            assertFalse(first.message!!.contains("authorized_keys"), first.message)
+        } finally {
+            sshd.stop(true)
+            root.deleteRecursively()
+        }
+    }
+
     // ---- no relay, anywhere -------------------------------------------------------------------------
 
     @Test
@@ -315,10 +406,24 @@ class ManualHostTest {
     }
 
     @Test
-    fun `a refusal with no relay to offer says remote access isn't set up, and promises no relay`() {
-        val e = NeedsRelayException("n1", "It opens through the relay.")
-        assertEquals("It opens through the relay. ${NeedsRelayException.NO_RELAY_TO_OFFER}", e.withoutRelay)
+    fun `a refusal with no relay to offer says what is in the way for the leg the phone has, and promises no relay`() {
+        val e = NeedsRelayException("n1", "It opens through the relay.", fact = "It runs elsewhere.")
+        assertNull(e.refusal(RelayLeg.AVAILABLE), "a usable relay leg is offered instead")
+        assertEquals("It runs elsewhere. ${NeedsRelayException.NO_RELAY_TO_OFFER}", e.withoutRelay)
+        assertEquals(e.withoutRelay, e.refusal(RelayLeg.NOT_SET_UP))
+        assertEquals(e.withoutRelay, e.refusal(RelayLeg.ADDED_OVER_SSH))
         assertTrue(NeedsRelayException.NO_RELAY_TO_OFFER.startsWith("Remote access isn't set up for this computer"))
+        // The review of A27b: a paired computer with a relay leg, set to "Only on my network", is told
+        // which setting is in the way, the way LegRouting's own reason for that leg says it.
+        assertEquals(
+            "It runs elsewhere. This computer is set to \"Only on my network (SSH)\": choose \"Automatic\" or \"Only " +
+                "through the relay\" in Settings → How to reach each computer, or open it in nodeterm on the computer.",
+            e.refusal(RelayLeg.ROUTE_SSH_ONLY)
+        )
+        assertTrue(e.refusal(RelayLeg.REMOTE_ACCESS_OFF)!!.contains("Remote access is off on the computer right now"))
+        assertTrue(e.refusal(RelayLeg.NOT_PICKED_UP)!!.contains("tap Refresh"))
+        // What a session that is not running asks of the user is to START it there.
+        assertTrue(NeedsRelayException("n1", "x", fact = "Not running.", action = "start it").withoutRelay.endsWith("so start it in nodeterm on the computer."))
     }
 
     @Test
@@ -357,19 +462,36 @@ class ManualHostTest {
             AppSourcePins.blockAfter(session, "private suspend fun connectLocked("),
             "SshFallback.afterFailure(", "addedOverSsh = host.manual"
         )
-        // A08/A09 refusals with no relay leg say so, never the relay offer's text.
+        // A08/A09 refusals with no relay leg to open say what is in the way for THAT leg (the review of
+        // A27b: by `hasRelay` alone, "Only on my network" was told remote access isn't set up), never
+        // the relay offer's text; the leg is read once, so the offer and the refusal cannot disagree.
         AppSourcePins.assertInOrder(
             AppSourcePins.ui("TerminalController.kt"),
             "catch (e: NeedsRelayException)",
-            "if (session.hasRelay) TermState.RelayOffer(msg) else TermState.Ended(e.withoutRelay)"
+            "state = e.refusal(session.relayLeg())?.let { TermState.Ended(it) } ?: TermState.RelayOffer(msg)"
         )
         for (file in listOf("SessionsTab.kt", "InboxTab.kt")) {
             AppSourcePins.assertInOrder(
                 AppSourcePins.ui(file),
                 "catch (e: NeedsRelayException)",
-                "if (!session.hasRelay) throw HostException(e.withoutRelay)"
+                "e.refusal(session.relayLeg())?.let { throw HostException(it) }",
+                "session.viaRelay()"
             )
         }
+        for (file in listOf("TerminalController.kt", "SessionsTab.kt", "InboxTab.kt")) {
+            assertFalse(AppSourcePins.ui(file).contains("withoutRelay"), "$file chooses by the relay leg")
+        }
+        assertFalse(session.contains("val hasRelay"), "one way to ask: relayLeg()")
+        // "Nothing found" offers the relay only to a phone that has one to offer.
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(session, "suspend fun refreshNow("),
+            "c.listProjects()",
+            "_lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message"
+        )
+        AppSourcePins.assertInOrder(
+            AppSourcePins.ui("InboxTab.kt"),
+            "(e as? NothingFoundException)?.said(session.relayLeg()) ?: e.message"
+        )
     }
 
     @Test

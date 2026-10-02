@@ -18,6 +18,7 @@ import dev.nodeterm.protocol.pairing.SshIdentity
 import dev.nodeterm.protocol.ssh.HostBrowse
 import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
+import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import dev.nodeterm.protocol.ssh.SshScripts
 import kotlinx.coroutines.CoroutineStart
@@ -278,10 +279,27 @@ class SshTransportTest {
         }
     }
 
-    /** What a screen shows for [e] when the phone has no relay leg (A27): no relay offered, the reason given. */
+    /**
+     * What a screen shows for [e] when the phone has no relay leg to open (A27): no relay offered, and
+     * the reason that is actually in the way for that leg (the review of A27b).
+     */
     private fun assertNoRelayPromised(e: NeedsRelayException) {
         assertTrue(e.withoutRelay.contains("Remote access isn't set up for this computer"), e.withoutRelay)
-        assertFalse(e.withoutRelay.contains("opens through the relay"), e.withoutRelay)
+        assertNull(e.refusal(LegRouting.RelayLeg.AVAILABLE), "a usable relay leg is offered, not refused")
+        for (leg in LegRouting.RelayLeg.entries - LegRouting.RelayLeg.AVAILABLE) {
+            val said = assertNotNull(e.refusal(leg), "$leg")
+            assertTrue(said.startsWith(e.fact), "$leg: $said")
+            assertFalse(said.contains("opens through the relay"), "$leg: $said")
+        }
+        assertEquals(e.withoutRelay, e.refusal(LegRouting.RelayLeg.ADDED_OVER_SSH))
+        // A paired computer set to "Only on my network" HAS remote access: the refusal names the route
+        // setting in the way, never "isn't set up" (what InboxTab and SessionsTab used to say).
+        val sshOnly = e.refusal(LegRouting.RelayLeg.ROUTE_SSH_ONLY)!!
+        assertTrue(sshOnly.contains("\"Only on my network (SSH)\"") && sshOnly.contains("How to reach each computer"), sshOnly)
+        assertFalse(sshOnly.contains("isn't set up"), sshOnly)
+        for (leg in listOf(LegRouting.RelayLeg.NOT_PICKED_UP, LegRouting.RelayLeg.REMOTE_ACCESS_OFF)) {
+            assertFalse(e.refusal(leg)!!.contains("isn't set up"), "$leg: ${e.refusal(leg)}")
+        }
     }
 
     private class MemoryPin(var value: String? = null) : HostKeyPin {
@@ -1071,9 +1089,18 @@ class SshTransportTest {
         withoutOwnData {
             runBlocking {
                 connect().use { conn ->
-                    val e = assertFailsWith<HostException> { conn.listProjects() }
+                    val e = assertFailsWith<NothingFoundException> { conn.listProjects() }
                     assertEquals(SshHostConnection.NO_USER_DATA, e.message)
                     assertTrue(e.message!!.contains("~/.nodeterm-server") && e.message!!.contains("--data-dir"), e.message)
+                    // The relay is offered only to a phone that holds a relay leg (the review of A27b):
+                    // a computer added by its SSH address never has one.
+                    for (leg in LegRouting.RelayLeg.entries) {
+                        val said = e.said(leg)
+                        assertTrue(said.startsWith(SshHostConnection.NOT_FOUND), "$leg: $said")
+                        val offered = leg == LegRouting.RelayLeg.AVAILABLE || leg == LegRouting.RelayLeg.ROUTE_SSH_ONLY
+                        assertEquals(offered, said.contains("relay"), "$leg: $said")
+                    }
+                    assertTrue(e.said(LegRouting.RelayLeg.ADDED_OVER_SSH).contains("added as the user"))
                 }
             }
         }

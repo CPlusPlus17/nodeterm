@@ -85,6 +85,22 @@ class HostKeyChangedException(val expected: String, val actual: String) :
     )
 
 /**
+ * The browse found nothing of nodeterm's on the computer: not an empty computer, but the wrong place
+ * to look (audit A02). Its [message] ends by offering the relay; [said] picks the ending the phone can
+ * stand behind for the relay leg it has (review of A27b) — a computer added by its SSH address has no
+ * relay and never will, and one without a usable relay leg cannot be "connected through the relay".
+ */
+class NothingFoundException : HostException(SshHostConnection.NO_USER_DATA) {
+    fun said(leg: LegRouting.RelayLeg): String = when (leg) {
+        // The phone holds a relay leg: open, or one a route change opens.
+        LegRouting.RelayLeg.AVAILABLE, LegRouting.RelayLeg.ROUTE_SSH_ONLY -> SshHostConnection.NO_USER_DATA
+        LegRouting.RelayLeg.ADDED_OVER_SSH -> SshHostConnection.NO_USER_DATA_ADDED_OVER_SSH
+        LegRouting.RelayLeg.NOT_SET_UP, LegRouting.RelayLeg.NOT_PICKED_UP, LegRouting.RelayLeg.REMOTE_ACCESS_OFF ->
+            SshHostConnection.NO_USER_DATA_NO_RELAY
+    }
+}
+
+/**
  * [HostConnection] over direct SSH (the LAN leg a pairing installs a key for). Everything is POSIX
  * sh + tmux on the computer ([SshScripts]); what needs the DESKTOP APP rather than the machine —
  * renderer nudges, board writes, node registration, git through the app — is the relay's, and this
@@ -173,7 +189,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         if (out.nothingFound(now)) {
             // Still an answer about the nodes: none here is anyone's (no index, nothing driven).
             remember(ProjectsSnapshot.EMPTY)
-            throw HostException(NO_USER_DATA)
+            throw NothingFoundException()
         }
         userData = ud
         val base = ProjectsParser.parseBlob(out.blob)
@@ -353,8 +369,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         throw NeedsRelayException(
             nodeId,
             "This session runs on $where, which the phone reaches through your computer: it opens through the relay, not over your network.",
-            withoutRelay = "This session runs on $where, not on this computer, and the phone reaches it only through the relay. " +
-                NeedsRelayException.NO_RELAY_TO_OFFER
+            fact = "This session runs on $where, not on this computer, and the phone reaches it only through the relay."
         )
     }
 
@@ -374,9 +389,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             nodeId,
             "This session isn't running on the computer right now. Starting it over your network would leave it " +
                 "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer).",
-            withoutRelay = "This session isn't running on the computer right now, and the phone does not start it over " +
-                "SSH: it would run without status reporting. Remote access isn't set up for this computer, so start it " +
-                "in nodeterm on the computer."
+            fact = "This session isn't running on the computer right now, and the phone does not start it over " +
+                "SSH: it would run without status reporting.",
+            action = "start it"
         )
         else -> HostException(NOT_RUNNING_UNLISTED)
     }
@@ -616,11 +631,25 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             Thread(r, "nodeterm-ssh-watchdog").apply { isDaemon = true }
         }
 
-        const val NO_USER_DATA = "nodeterm's data wasn't found on this computer over SSH. The phone looked for the " +
+        /** What the browse looked for and did not find; [NothingFoundException] adds what to do about it. */
+        const val NOT_FOUND = "nodeterm's data wasn't found on this computer over SSH. The phone looked for the " +
             "desktop app's (~/Library/Application Support/node-terminal, ~/.config/node-terminal), the Server Edition's " +
             "(~/.nodeterm-server), and sessions a desktop runs here over SSH. A Server Edition started with --data-dir " +
-            "or NODETERM_DATA_DIR somewhere else is not found this way. Open nodeterm on the computer once, or connect " +
-            "through the relay."
+            "or NODETERM_DATA_DIR somewhere else is not found this way."
+
+        /** [NOT_FOUND] for a computer this phone can also reach through the relay. */
+        const val NO_USER_DATA = "$NOT_FOUND Open nodeterm on the computer once, or connect through the relay."
+
+        /** [NOT_FOUND] for a paired computer with no relay leg to offer (remote access isn't set up, or is off). */
+        const val NO_USER_DATA_NO_RELAY = "$NOT_FOUND Open nodeterm on the computer once."
+
+        /**
+         * [NOT_FOUND] for a computer added by its SSH address (audit A27): no relay, ever, and the user
+         * typed the login, so the wrong user is a likely cause; a dev host shows a driving desktop's
+         * sessions only once that desktop runs one there.
+         */
+        const val NO_USER_DATA_ADDED_OVER_SSH = "$NOT_FOUND Check that the computer was added as the user nodeterm " +
+            "runs as there. If nodeterm on another computer runs sessions here over SSH, they show once one is running."
 
         /** A driven project's session that is not running (audit A27): only its own desktop starts it. */
         const val DRIVEN_NOT_RUNNING = "This session isn't running on this computer. It belongs to nodeterm on another " +
@@ -630,6 +659,29 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         const val NOT_RUNNING_UNLISTED = "This session isn't running on this computer, and nodeterm on this computer " +
             "doesn't list it, so the phone has nothing to start it from. If nodeterm on another computer runs it here " +
             "over SSH, open it there."
+
+        /**
+         * Whether [e] is the server REFUSING this phone's key (or this user), as opposed to an
+         * authentication that could not finish. sshj 0.39 reports both as a [UserAuthException]:
+         * `SSHClient.auth` throws "Exhausted available authentication methods" whenever no method
+         * succeeded, and its cause is what stopped the last one — `UserAuthImpl`'s promise chains an
+         * auth timeout (`TimeoutException`) and a transport error delivered while it waited
+         * (`TransportException`, a socket `IOException`) into a [UserAuthException]. A clean refusal
+         * (the server answered `USERAUTH_FAILURE`) has nothing but [UserAuthException]s in its chain.
+         * Telling a user whose VPN dropped mid-login that the computer refused the key sends them to
+         * add the key again instead of checking the network.
+         */
+        internal fun isAuthRefusal(e: Throwable): Boolean = e is UserAuthException && authFailureCause(e) == null
+
+        /** The first cause behind [e]'s [UserAuthException]s that is not one (a timeout, a dropped transport), if any. */
+        internal fun authFailureCause(e: Throwable): Throwable? {
+            var c: Throwable? = e
+            var depth = 0
+            while (c is UserAuthException && depth++ < MAX_CAUSE_DEPTH) c = c.cause
+            return c?.takeIf { it !is UserAuthException }
+        }
+
+        private const val MAX_CAUSE_DEPTH = 16
 
         /** OpenSSH-style `SHA256:<unpadded base64>` of the host key blob. */
         fun fingerprint(key: PublicKey): String {
@@ -701,13 +753,17 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 runCatching { client.disconnect() }
                 if (client.isConnected) runCatching { client.socket?.close() }
                 mismatch?.let { throw it }
-                val detail = e.message ?: e.javaClass.simpleName
-                if (e is UserAuthException) {
+                if (isAuthRefusal(e)) {
                     throw SshAuthRefusedException(
-                        "Couldn't connect over SSH to $user@$host:$port: it did not accept this phone's key ($detail)."
+                        "Couldn't connect over SSH to $user@$host:$port: it did not accept this phone's key " +
+                            "(${e.message ?: e.javaClass.simpleName})."
                     )
                 }
-                throw HostException("Couldn't connect over SSH to $user@$host:$port ($detail).")
+                // An authentication that could not FINISH is a connection failure: say what stopped it
+                // (the timeout, the dropped transport), not sshj's "Exhausted available authentication
+                // methods" wrapped around it.
+                val why = authFailureCause(e) ?: e
+                throw HostException("Couldn't connect over SSH to $user@$host:$port (${why.message ?: why.javaClass.simpleName}).")
             }
             val conn = SshHostConnection(client)
             // The transport dying (network change, sleep, the computer going away) is the one event
