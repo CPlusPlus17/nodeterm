@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Terminal } from '@xterm/xterm'
 import {
-  createFileLinkProvider,
   createOsc8LinkHandler,
   makeDirListingLookup,
   matchFileTokens,
   matchUrlTokens,
   osc8UrlAt,
   paragraphContaining,
-  pathFromFileUrl,
   resolveFileToken,
   type BufferView
 } from './file-links'
@@ -38,114 +36,24 @@ describe('matchFileTokens', () => {
     expect(matchFileTokens('https://example.com/a/b plain word')).toEqual([])
   })
 
-  it('recognizes local file URLs and decodes their path', () => {
-    const [t] = matchFileTokens('open file:///Users/me/My%20Report/report.html now')
-    expect(t).toEqual({
-      text: 'file:///Users/me/My%20Report/report.html',
-      startIndex: 5,
-      path: '/Users/me/My Report/report.html',
-      fileUrl: true
-    })
-  })
-
-  it('refuses non-local file URL hosts and encoded separators', () => {
-    expect(matchFileTokens('file://server/share/report.html')).toEqual([])
-    expect(matchFileTokens('file:///tmp/a%2Fb.html')).toEqual([])
-  })
-
-  it('skips ~ paths (no home resolution in v1)', () => {
-    expect(matchFileTokens('~/notes.md')).toEqual([])
-  })
-})
-
-describe('pathFromFileUrl', () => {
-  it('accepts localhost and converts a Windows drive URL for a Windows-owned terminal', () => {
-    expect(pathFromFileUrl('file://localhost/tmp/report.html')).toBe('/tmp/report.html')
-    expect(pathFromFileUrl('file:///C:/Users/me/report.html', { windows: true })).toBe(
-      'C:/Users/me/report.html'
-    )
-  })
-
-  it('refuses browser-only URL suffixes that openPath cannot preserve', () => {
-    expect(pathFromFileUrl('file:///tmp/report.html#section')).toBeNull()
-    expect(pathFromFileUrl('file:///tmp/report.html?preview=1')).toBeNull()
-  })
-})
-
-describe('file URL-only provider', () => {
-  const term = (text: string): Terminal =>
-    ({
-      cols: 160,
-      buffer: {
-        active: {
-          length: 1,
-          getLine: (row: number) =>
-            row === 0
-              ? { isWrapped: false, translateToString: () => text }
-              : undefined
-        }
-      }
-    }) as unknown as Terminal
-
-  const linksFor = (text: string): Promise<import('@xterm/xterm').ILink[] | undefined> =>
-    new Promise((resolve) => {
-      createFileLinkProvider(term(text), {
-        getCwd: () => undefined,
-        lookup: async () => ({ exists: true, dir: false }),
-        activate: () => {},
-        pathEnabled: () => false,
-        activateFileUrl: () => {},
-        fileUrlEnabled: () => true
-      }).provideLinks(1, resolve)
-    })
-
-  it('offers explicit file URLs while keeping ordinary path tokens disabled', async () => {
-    await expect(linksFor('/Users/me/report.html')).resolves.toBeUndefined()
-    const links = await linksFor('file:///Users/me/report.html')
-    expect(links?.map((link) => link.text)).toEqual(['file:///Users/me/report.html'])
-  })
-
-  it('offers one existing file URL across Claude TUI rows with repeated indentation', async () => {
-    const prefix = '  Le même fichier en local : '
-    const head = 'file:///private/tmp/claude-501/project/74215372-82c3-45cd-'
-    const tail = '  adcd-865837a61b4c/scratchpad/maquette-options.html'
-    const cols = prefix.length + head.length
-    const rows = [prefix + head, tail]
-    const opened: Array<{ path: string; dir: boolean }> = []
-    const wrappedTerm = {
-      cols,
-      buffer: {
-        active: {
-          length: rows.length,
-          getLine: (row: number) =>
-            rows[row] === undefined
-              ? undefined
-              : { isWrapped: false, translateToString: (trim: boolean) =>
-                  trim ? rows[row].replace(/\s+$/, '') : rows[row].padEnd(cols) }
-        }
-      }
-    } as unknown as Terminal
-    const links = await new Promise<import('@xterm/xterm').ILink[] | undefined>((resolve) => {
-      createFileLinkProvider(wrappedTerm, {
-        getCwd: () => '/project',
-        lookup: async () => ({ exists: true, dir: false }),
-        activate: () => {},
-        activateFileUrl: (path, dir) => opened.push({ path, dir }),
-        fileUrlEnabled: () => true
-      }).provideLinks(2, resolve)
-    })
-
-    expect(links).toHaveLength(1)
-    expect(links![0].text).toBe(head + tail.slice(2))
-    expect(links![0].range.start).toEqual({ x: prefix.length + 1, y: 1 })
-    expect(links![0].range.end).toEqual({ x: tail.length, y: 2 })
-    links![0].activate({ metaKey: true, ctrlKey: false } as MouseEvent, links![0].text)
-    expect(opened).toEqual([
-      {
-        path: '/private/tmp/claude-501/project/74215372-82c3-45cd-adcd-865837a61b4c/scratchpad/maquette-options.html',
-        dir: false
-      }
+  it('matches home-relative ~/ paths with their tilde attached', () => {
+    expect(matchFileTokens('~/notes.md')).toEqual([
+      { text: '~/notes.md', startIndex: 0, path: '~/notes.md', line: undefined }
     ])
+    // Claude Code's plan-approval footer — the path the user Cmd+clicks.
+    const line = 'ctrl-g to edit in Vim · ~/.claude/plans/wondrous-rossum.md'
+    const [t] = matchFileTokens(line)
+    expect(t.text).toBe('~/.claude/plans/wondrous-rossum.md')
+    expect(t.path).toBe('~/.claude/plans/wondrous-rossum.md')
+    expect(line.slice(t.startIndex, t.startIndex + t.text.length)).toBe(t.text)
+    expect(matchFileTokens('(~/src/a.ts:12)')).toEqual([
+      { text: '~/src/a.ts:12', startIndex: 1, path: '~/src/a.ts', line: 12 }
+    ])
+  })
+
+  it('does not treat a mid-word tilde or ~user as a home path', () => {
+    expect(matchFileTokens('backup~/notes.md')).toEqual([])
+    expect(matchFileTokens('~alice/notes.md')).toEqual([])
   })
 })
 
@@ -168,6 +76,12 @@ describe('resolveFileToken', () => {
     expect(resolveFileToken('../x.ts', '~/proj/sub')).toBe('~/proj/x.ts')
     expect(resolveFileToken('../../../x.ts', '~/proj')).toBeNull() // .. may not pop the ~
     expect(resolveFileToken('/abs/x.ts', '~/proj')).toBe('/abs/x.ts') // absolutes unaffected
+  })
+
+  it('keeps a ~/ token home-rooted whatever the cwd, for the core to expand', () => {
+    expect(resolveFileToken('~/.claude/plans/p.md', '/root/nodeterm')).toBe('~/.claude/plans/p.md')
+    expect(resolveFileToken('~/a/../b.md', undefined)).toBe('~/b.md')
+    expect(resolveFileToken('~/../etc/passwd', '/x')).toBeNull() // .. may not pop the ~
   })
 })
 
@@ -232,26 +146,6 @@ describe('paragraphContaining', () => {
     }
     expect(matchUrlTokens(paragraphContaining(v, 1)!.text)[0].url).toBe(
       'https://claude.com/oauth?x=1'
-    )
-  })
-
-  it('joins a file URL when Claude repaints its content indent on the continuation row', () => {
-    const prefix = '  Le même fichier en local : '
-    const head = 'file:///private/tmp/claude-501/project/74215372-82c3-45cd-'
-    const tail = '  adcd-865837a61b4c/scratchpad/maquette-options.html'
-    const cols = prefix.length + head.length
-    const v = view(cols, [prefix + head, tail])
-
-    // Generic web-link joining stays strict: indented prose must never extend an HTTP URL.
-    expect(paragraphContaining(v, 1)!.startRow).toBe(1)
-
-    const p = paragraphContaining(v, 1, { indentedFileWraps: true })!
-    expect(p.startRow).toBe(0)
-    expect(p.text).toBe(prefix + head + tail.slice(2))
-    const [token] = matchFileTokens(p.text)
-    expect(token.text).toBe(head + tail.slice(2))
-    expect(token.path).toBe(
-      '/private/tmp/claude-501/project/74215372-82c3-45cd-adcd-865837a61b4c/scratchpad/maquette-options.html'
     )
   })
 

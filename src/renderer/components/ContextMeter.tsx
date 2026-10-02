@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useContextWindow } from '../state/contextWindow'
+import { useContextUsage } from '../state/contextWindow'
 import { useSettings } from '../state/settings'
 import { capabilityAgentId } from '@shared/agents/config'
 import { barFillPercent, contextFillColor, contextPillText, formatModelLabel, formatTimeAgo, formatTokensShort, percentText } from '../lib/usageFormat'
@@ -17,11 +17,7 @@ export function ContextMeter({ sessionId, nodeId, remote = false, agentId }: {
   const scoped = remote && !!agentId && capabilityAgentId(agentId) === 'codex'
   // A copied rollout has the same session id on two hosts. SSH Codex observations belong
   // to the node that requested them; never fall back to a local/session-only snapshot.
-  const usage = useContextWindow((s) => {
-    if (!sessionId) return undefined
-    const value = scoped ? (nodeId ? s.byNodeId[nodeId] : undefined) : s.bySessionId[sessionId]
-    return value?.sessionId === sessionId ? value : undefined
-  })
+  const usage = useContextUsage({ sessionId, nodeId, scoped })
   const percentMode = useSettings((s) => s.settings.usagePercentMode)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
