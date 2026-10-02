@@ -311,10 +311,25 @@ Actual AGP release built in 43 seconds and passed every R8 keep. Retained-signer
 non-debuggable metadata, signature, 16-KB alignment and source/hash provenance; signing preserves
 all 149 ZIP payloads and adds only three signature metadata entries. APK SHA-256:
 `4947133a6ccf9c2b1e775e76d7c24f564e087cf036e59eac4dca08162a076d3c`.
-The intended Pixel received a same-signer update preserving app data; notification permission is confirmed. It is
-locked; post-update SSH reopening, continuous drag/coast and new-touch/Esc/lifecycle checks await
-unlock. Actual user feel, mobile-beta-6 checks and the full 64-item pass remain open. Private proof
-is in `.nodeterm/android-beta-build-6/`, signed artifacts in `.nodeterm/android-beta-6/`.
+The intended Pixel received a same-signer update preserving app data; notification permission
+is confirmed. SSH reopened with the retained key/pin in the owned 56×48 pane. A
+1000-native-pixel/1200-ms swipe produced 23 observed history-position updates, from 0 to 110 over
+about 1103 ms; its ADB command completed at 1535 ms. A 1000-pixel/200-ms swipe reached position
+110 when its ADB command completed at 540.5 ms, then 250 at 1339 ms (about 799 ms later), with
+29 observed updates overall. This verifies continuous drag delivery and post-command coast.
+Esc during coast left copy mode (`mode=0`) and remained out for 1.4 seconds.
+
+New-touch stopping also passes with the keyboard already open and all sampled viewports at
+56×25. After a 500-native-pixel/100-ms swipe, the DOWN command completed 152 ms after the swipe
+command; the script then waited 1.2 seconds before issuing CANCEL. The last position change was at 503.6 ms, before DOWN completed at
+588.8 ms; final position 100 remained unchanged through CANCEL. Earlier tap/DOWN checks opened
+the IME and rebased positions; those results were inconclusive, not additional failures.
+After normal terminal use, the user confirmed “Both work now” for continuous dragging and coast.
+The primary `A86` drag/coast complaint is resolved; reversal/lifecycle, mobile-beta-6, FPS/custom
+bindings and the full 64-item pass remain open. After testing, Esc and Header Back returned to
+Sessions and detached the owned client; only the exact owned `nt-term-000android-scroll-20261002-c` session and owned phone UI
+XML were removed. Private proof, including `device-summary.json`, is in
+`.nodeterm/android-beta-build-6/`, signed artifacts in `.nodeterm/android-beta-6/`.
 
 **Historical kinetic beta (`A86`, 2026-10-02):** beta 4 moves more lines but the user reports missing
 momentum on finger lift. `1ad2e944` adds bounded velocity fling; `53462f96` adds `onScrollStop`
@@ -343,8 +358,8 @@ user input: reports preserve queued movement; keys, paste and IME input still ca
 batching, lossless ordered chunks, stream retirement and SSH TCP_NODELAY remain. Real bundled
 xterm interaction regressions pass; 22 JavaScript and nine actor/native-wiring mutations were
 caught. All 646 protocol tests in 62 suites passed with zero failures, errors or skips (50 seconds), and the
-offline app `compileKotlin` passed (8 seconds). `A86` remains open until intended-Pixel and user
-follow-up establish the correction's actual feel. At that checkpoint, kinetic fling was absent.
+offline app `compileKotlin` passed (8 seconds). At that checkpoint, `A86` still needed
+intended-Pixel/user follow-up and kinetic fling was absent; beta 6 now has drag/coast confirmation.
 
 **Historical beta-4 delivery:** `0.1.0-beta.4` / code `5` built locally from
 `3cffb49d8cf64932260e914b42b3883331d0352d` with the retained signer.
@@ -384,8 +399,11 @@ requires one pinned certificate and verified v2, and rejects duplicate/unknown/h
 Fixtures use the explicitly installed SDK 36/platform 35 unless a reproduction override is set;
 only disposable-fixture verifier output is included in failure diagnostics. All 39 Python tests
 pass against each real SDK 36/37, and ten new parser/fixture-selection mutants are caught.
-The next green workflow must confirm CI repair. Every requested push owes green Android workflow
-verification; `A68` remains deferred and no PR is requested.
+Follow-up [run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+observed CI repair. Each subsequent push still requires its own green workflow.
+Every requested push owes green Android workflow verification; `A68` remains deferred and no PR
+is requested.
 
 **Historical beta-3 scroll update (`A86`):** after checkpoint `cf0487a3`, the user reports poor responsiveness on
 both Wi-Fi and mobile-data VPN. Controlled SSH/tmux measurements found amplified wheel steps,
@@ -1118,8 +1136,11 @@ failure `A85` is fixed in code-3 beta, with a 52×45 viewport and pre-attach tmu
 swiping. The code-4 scroll mitigation update also preserved SSH registration/key/pin and notification
 permission and verified reduced drag gain, reversal and Esc cancellation. Beta 4 delivered more
 movement but lacked momentum; installed code-6 beta implements bounded fling/native stop but
-still loses continued swipe/release events (`A89`). Code 7 is now installed by a same-signer update preserving app data, with
-notification permission confirmed; post-update SSH reopening/coast/user-feel checks await unlock. No complete item below has passed. Run these
+still loses continued swipe/release events (`A89`). Code 7 received a same-signer update preserving
+app data and notification permission; SSH reopened with the retained key/pin at 56×48. Controlled
+continuous drag, coast and Esc stopping pass; a held touch stops coast at a stable 56×25 viewport.
+Earlier IME-resizing touch checks were inconclusive; the user confirms normal drag/coast both
+work now. Reversal/lifecycle/mobile and full checklist checks remain open. No complete item below has passed. Run these
 on a real phone against a real desktop and record, for each item, pass or
 fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
 the route (network or relay). Write the results into "What is verified, and how" above, and turn each
@@ -1659,7 +1680,10 @@ later fix left to a device.
   in the verification record above. The user reports more movement but no momentum on finger lift;
   the bounded-fling code-6 beta builds/signs/updates and passes 658 protocol tests, but actual
   continuous swiping still stops. `A89` fixes the detached target; code-7 build/sign/update and
-  658 protocol tests pass. The phone is locked; post-update SSH, momentum and actual feel remain open. Full device validation remains open.
+  658 protocol tests pass. Code 7 reopens SSH with its retained key/pin and verifies controlled
+  continuous drag/coast/Esc. A held touch stops coast at a stable 56×25 viewport; earlier
+  IME-resizing touch checks were inconclusive. The user confirms normal drag/coast both work.
+  Reversal/lifecycle/mobile, FPS/custom bindings and the full device pass remain open.
   The desktop's Android link continues to open the `android/` source folder and both
   phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
   `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.

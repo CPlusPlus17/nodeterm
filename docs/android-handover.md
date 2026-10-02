@@ -12,25 +12,31 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   API 37), with a retained private signer. Manual SSH lists 17 real projects; input, font/keyboard
   resizing and pre-attach tmux history work. The user confirms terminal access over mobile-data
   WireGuard with Wi-Fi off. The wrong-MI8 installation and its newly authorized SSH key were removed.
-- **Beta 5 still stops during a continuous swipe (`A86`, `A89`).** The user must lift to continue;
-  the controlled gesture stops updating and shows no post-command coast. Real bundled
-  xterm reproduces why: redraw removes the touched text span, so later touch events do not bubble
-  to the handlers. `c4b1f6cf` targets the stable screen with CSS; beta 6 / code 7 is installed.
-  The phone is locked, so reopening SSH and actual drag/coast/stop checks await unlock. Bounded
-  fling/native stopping remain implemented; actual feel stays open.
+- **Beta 6 verifies continuous dragging, coast, Esc and new-touch stopping on the Pixel (`A86`, `A89`).**
+  SSH reopened with its retained key/pin at 56×48. A slow controlled swipe produced 23 position
+  updates; a fast swipe kept moving for about 799 ms after the ADB command completed. Esc left
+  copy mode and remained out for 1.4 seconds. `c4b1f6cf` fixes beta 5's detached text-span touch
+  target by targeting the stable screen. A held touch stops coast in a stable 56×25 keyboard-open
+  viewport; earlier resizing tap checks were inconclusive. The user confirms normal dragging and
+  coasting both work now. Latest mobile/lifecycle checks, FPS and custom bindings remain open.
 - Current checks pass **658 protocol tests in 63 suites, zero failures/errors/skips** (67 seconds),
   plus offline app `compileKotlin` (8 seconds). Thirty-five JS, eleven new native and three CSS
   mutations were caught (49 total). The strengthened new-touch regression passes seven kinetic tests.
   `A88` (`f5fd3821`) now reproduces SDK 37's actual `V3.0 Signer:` format; 39 Python tests pass against each
   real SDK 36/37, and ten new parser/fixture-selection mutations are caught. CI run `37058184031`
-  passed its four main jobs but failed private packaging; the follow-up still needs green CI.
+  passed its four main jobs but failed private packaging. Follow-up [run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+  at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+  the observed packaging workflow repair. Each later push still requires its own green workflow.
 - Private `0.1.0-beta.6` / code `7` uses source `c4b1f6cf1009f293a658b6331d2ed1ab80aa36c6`.
   Its actual AGP release built in 43 seconds and passed every R8 keep. Retained-signer packaging
   verified non-debuggable metadata, signature, 16-KB alignment and source/hash provenance; all
   149 ZIP payloads stayed unchanged by signing. APK SHA-256:
   `4947133a6ccf9c2b1e775e76d7c24f564e087cf036e59eac4dca08162a076d3c`.
-  The intended Pixel received a same-signer update preserving app data; notification permission is confirmed. It is
-  locked; post-update SSH reopening, continuous drag/coast and input/lifecycle stops are unverified.
+  The intended Pixel received a same-signer update preserving app data; notification permission
+  is confirmed. SSH reopened with its retained key/pin, and controlled continuous drag/coast/Esc
+  checks pass. New-touch stopping passes at a stable 56×25 viewport; lifecycle stopping,
+  mobile-beta-6 checks, FPS and custom wheel bindings remain open; normal drag/coast now have
+  user confirmation.
   Private proof is in `.nodeterm/android-beta-build-6/`, artifacts in `.nodeterm/android-beta-6/`.
 - Historical beta `0.1.0-beta.4` / code `5` built locally from
   `3cffb49d8cf64932260e914b42b3883331d0352d`, using the retained signer.
@@ -45,8 +51,8 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   130 to 110, and the actual Esc chip leaves copy mode. Private inputs/proof are in
   `.nodeterm/android-beta-build-4/` and the APK/checksum/metadata in `.nodeterm/android-beta-4/`.
   These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel.
-  The user reports missing momentum; the active fling fix and custom wheel bindings remain open
-  under `A86` until corrected-beta checks and user follow-up complete.
+  At the beta-4 checkpoint the user reported missing momentum; beta 6 now has controlled and
+  user drag/coast confirmation. Custom wheel bindings and the remaining `A86` checks stay open.
 - Of the original 77 audit findings, 73 are fixed. `A25` still needs backend FCM, `A56` was deliberately
   not built, `A50` has signed delivery with full validation open, and `A68` waits for a requested PR.
   QR/code pairing, relay, reconnect/background/answer behavior and the full 64-item pass remain open.
@@ -92,12 +98,31 @@ The intended Pixel received a same-signer update preserving app data; notificati
 inputs/proof, full XML and mutation logs are in `.nodeterm/android-beta-build-6/`; signed artifacts
 are in `.nodeterm/android-beta-6/`.
 
-**Pending phone proof:** the Pixel is locked and unlock has been requested. Reopen SSH, then check
-continuous dragging, coast after release, new-touch stopping, reversal, Esc and lifecycle changes.
-No post-update SSH reopening or phone coast result is claimed. Actual user feel, mobile-beta-6
-checks, custom wheel bindings, FPS and the full 64-item pass remain open. `A88` (`f5fd3821`) passes
-39 tests per real SDK 36/37 and ten new tool mutations; CI4 failed private packaging and the next
-workflow must confirm repair.
+**Controlled Pixel proof:** SSH reopened with the retained key/pin in the owned 56×48 pane. A
+1000-native-pixel/1200-ms swipe produced 23 observed history-position updates, from 0 to 110 over
+about 1103 ms; its ADB command completed at 1535 ms. A 1000-pixel/200-ms swipe reached position
+110 when its ADB command completed at 540.5 ms, then 250 at 1339 ms (about 799 ms later), with
+29 observed updates overall. This verifies continued drag delivery and post-command coast.
+Esc during coast left copy mode (`mode=0`) and remained out for 1.4 seconds.
+
+New-touch stopping also passes with the keyboard already open and all sampled viewports at
+56×25. After a 500-native-pixel/100-ms swipe, the DOWN command completed 152 ms after the swipe
+command; the script then waited 1.2 seconds before issuing CANCEL. The last position change was at 503.6 ms, before DOWN completed at
+588.8 ms; final position 100 remained unchanged through CANCEL. Earlier tap/DOWN checks opened
+the IME and rebased tmux positions, so those results were inconclusive, not additional failures.
+Evidence includes `beta6-stable-viewport-touch-stop.json` and `stable-touch-check.log` in the
+private beta-6 proof. After these checks, Esc left copy mode, Header Back returned to Sessions
+and detached the owned client. Only the exact owned `nt-term-000android-scroll-20261002-c`
+session was killed; Sessions was refreshed and owned phone UI XML removed. The private
+`device-summary.json` records completion.
+
+**User confirmation:** after normal terminal use, the user answered “Both work now” for continuous
+dragging and coast. This resolves the primary drag/coast complaint under `A86`; reversal/lifecycle
+checks, mobile-beta-6 checks, custom wheel bindings, FPS and the full 64-item pass remain open.
+`A88` (`f5fd3821`) passes 39 tests per real SDK 36/37 and ten new tool mutations; CI4 failed
+private packaging. [Run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming the
+observed packaging workflow repair. Any subsequent push still needs its own green workflow.
 
 ### Historical bounded kinetic implementation; private beta 5 installed (2026-10-02)
 
@@ -141,7 +166,8 @@ Fixtures now use the explicitly installed SDK 36/platform 35 unless a reproducti
 set; signature-gate failures include only disposable-fixture verifier diagnostics. All 39 Python
 tests pass against each real SDK 36/37; six parser and four fixture-selection mutants are caught.
 A real SDK-37 acceptance mutation also fails if the new single-label support is removed. The
-next Android workflow must confirm CI repair; the original CI log did not capture raw tool output.
+follow-up run `37061593216` completed all five jobs green and confirms observed CI repair;
+the original failed CI log did not capture raw tool output.
 
 ### Beta-3 user failure; report routing and gesture gain corrected (2026-10-02)
 
@@ -184,9 +210,8 @@ positions 25, 45, 70, 100, 130 on the same five 1000-native-pixel/350-ms swipes,
 5, 10, 15, 20, 25. Each gesture produces 4–6 observed host-position changes, reversal moves
 130 to 110, and the actual Esc chip leaves copy mode. Private inputs/proof are in
 `.nodeterm/android-beta-build-4/` and the APK/checksum/metadata in `.nodeterm/android-beta-4/`.
-These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel;
-corrected-beta user follow-up remains open under `A86`.
-At the beta-4 checkpoint, actual user feel remained open under `A86` and kinetic fling was absent.
+These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel.
+At the beta-4 checkpoint, user follow-up remained open under `A86` and kinetic fling was absent.
 Push is authorized,
 with required pre-push checks and green Android workflow afterward; no PR is requested.
 
@@ -496,19 +521,25 @@ are listed with it.
 **Next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Finish beta-6 stable-touch/momentum validation (`A86`, `A89`).** Code 7 is built/signed and
-   installed; unlock the intended Pixel, reopen SSH, then check continued dragging, coast,
-   new-touch stopping, reversal, Esc/lifecycle and actual feel over Wi-Fi/mobile VPN. Beta 5
+1. **Finish remaining beta-6 scroll/device checks (`A86`, `A89`).** Code 7 is built/signed and
+   installed. SSH reopening with retained key/pin, continuous dragging, coast and Esc now pass
+   on the intended Pixel, and the user confirms normal drag/coast both work. Finish reversal,
+   lifecycle and latest mobile-VPN checks. The dimension-stable 56×25 held-touch check also passes;
+   earlier keyboard-resizing touch checks were inconclusive. Beta 5
    stopped mid-swipe; `c4b1f6cf` targets the stable screen and its bundle regression covers real
    span removal versus continued drag/release. All 658 protocol tests/type-check pass, with
    35 JS, eleven native and three CSS mutations caught; custom wheel bindings/FPS remain open.
    `A88` now reproduces and fixes
    SDK 37's actual scheme label, with 39 real-tool tests per SDK 36/37 and ten new mutations.
-   CI4 still failed private packaging; confirm this follow-up with the next green workflow.
+   CI4 still failed private packaging; follow-up [run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+   at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+   observed CI repair. Each subsequent push still needs its own green workflow.
    Push is authorized: run required checks before each push and confirm Android CI afterward.
 2. **Remaining device checks, starting with reconnect, background behavior and needed answers.** Code-7 beta is installed on the
    intended Pixel; earlier betas verify manual SSH authentication, project listing, input,
-   font/keyboard resizing and pre-attach tmux history. Reopen SSH and recheck configuration on code 7. The user confirms Wi-Fi-off mobile-data WireGuard terminal access.
+   font/keyboard resizing and pre-attach tmux history. Code 7 now reopens SSH with the retained
+   key/pin and verifies continuous drag/coast/Esc. The user confirms earlier Wi-Fi-off mobile-data
+   WireGuard terminal access; the latest beta still needs a mobile recheck.
    Before leaving the computer, check needed answers, reconnect after airplane mode and background
    behavior. Record results and run all 64 items in `android.md`; turn every failure into a finding.
    QR/code pairing, relay and every complete checklist item remain open. Future
@@ -666,20 +697,24 @@ Verified:
 - The current beta-6 correction passes 658 protocol tests in 63 suites, zero failures/errors/skips
   (67 seconds), and offline app type-check (8 seconds). Thirty-five JS, eleven native and three
   CSS mutations are caught. Code-7 AGP/R8/signing/same-signer update passes, preserving app data;
-  notification permission is confirmed. Post-update SSH reopening awaits phone unlock. Historical
-  beta-4 controlled movement/reversal/Esc passed; the user confirmed more movement but missing
+  notification permission is confirmed. SSH reopened with its retained key/pin at 56×48, and
+  controlled continuous drag/coast/Esc checks pass. A held touch stops coast at a stable 56×25
+  viewport. Historical beta-4 controlled movement/reversal/Esc passed; the user confirmed more movement but missing
   momentum. `A88` packaging passes 39 Python tests against each real SDK 36/37 and ten new
-  parser/fixture-selection mutations; the next green CI must confirm the observed workflow repair.
+  parser/fixture-selection mutations; [run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+  at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+  observed workflow repair. The user confirms normal continuous dragging and coast both work.
 
 **Not verified:**
 
-- **Remaining phone behavior.** The intended Pixel has the code-7 beta and is locked. Earlier basic manual SSH,
-  pre-attach history and Wi-Fi-off mobile-data WireGuard access are verified. QR/code pairing,
-  relay, reconnect/background/answer behavior and the full 64-item checklist remain unverified.
-  Beta 4 moved more lines but lacked momentum; beta 5 still stops mid-swipe and does not coast.
-  `A89` corrects the actual DOM touch-target lifetime; beta-6 build/sign/update passes, while
-  post-update SSH and continuous drag/coast/stop checks await unlock.
-  Actual user feel, custom wheel bindings, mobile-beta-6 checks and FPS remain open under `A86`.
+- **Remaining phone behavior.** The intended Pixel has code 7. SSH reopening with retained key/pin
+  and controlled continuous drag/coast/Esc are verified. Earlier pre-attach history and Wi-Fi-off
+  mobile-data WireGuard access are verified. QR/code pairing, relay, reconnect/background/answer
+  behavior and the full 64-item checklist remain unverified. Beta 4 lacked momentum; beta 5 lost
+  continuous touch events. `A89` corrects that target lifetime. New-touch stopping passes with a
+  held touch at a stable 56×25 viewport; earlier keyboard-resizing checks were inconclusive.
+  The user confirms normal drag/coast both work. Reversal/lifecycle checks, custom wheel
+  bindings, mobile-beta-6 checks and FPS remain open under `A86`.
 - The relay join request shape. The client sends `{deviceToken, hostId}` to `POST /v1/relay/join`
   and accepts `pairingToken | token | joinToken` in the reply, but it has not been checked against
   the live backend (the backend repo is not here).
@@ -846,19 +881,23 @@ updated to code 3 on the intended Pixel 10 Pro with basic manual direct-SSH brow
 the code-4 A86 scroll update built/signed/updated locally, but the user reported lag and too
 little movement. A87 restores responsive gain and preserves automatic reports; the user confirms
 beta 4 moved more lines but lacked momentum. Beta 5 / code 6 at source 1ad2e944 adds bounded
-kinetic coast and native stop, but actual continuous dragging still stops before release and does
-not coast. A89 in c4b1f6cf fixes xterm's detached touch-span target with stable-screen CSS;
-corrected beta-6/code-7 source c4b1f6cf built/signed/updated on the intended Pixel. It is locked,
-so post-update SSH and actual coast/stop checks await unlock. All 658 protocol tests in 63 suites
+kinetic coast and native stop, but actual continuous dragging loses continued movement and shows
+no post-command coast. A89 in c4b1f6cf fixes xterm's detached touch-span target with stable-screen CSS;
+corrected beta-6/code-7 source c4b1f6cf built/signed/updated on the intended Pixel. SSH reopened
+with the retained key/pin at 56×48; controlled continuous drag, post-command coast and Esc stopping
+pass. New-touch stopping also passes with a held touch at a stable 56×25 viewport; earlier
+keyboard-resizing touch checks were inconclusive. The user confirms normal drag/coast both work;
+reversal/lifecycle, latest mobile, custom bindings and FPS remain open. All 658 protocol tests in 63 suites
 and offline app type-check pass; 35 JS, eleven native and three CSS mutations are caught. A88 in f5fd3821 handles the actual SDK 37 V3.0 Signer
 label; 39 Python tests per SDK 36/37 and ten new mutations pass, but CI4 failed private packaging
-and the next workflow must be green.
+and follow-up run 37061593216 at c37798b6495b4b68df379d0ae80887c23104b66d completed all five
+jobs green, confirming observed packaging repair. Each later push still needs green CI.
 A85 fixes a one-row terminal caused by WRAP_CONTENT WebView layout parameters; the corrected beta
 fills 52×45 and shows pre-attach tmux history after swiping. The wrong-MI8 test installation/key
 were removed. The user confirms terminal access over mobile-data WireGuard with Wi-Fi off.
 QR/code pairing, relay, reconnect/background/answer behavior and the full device checklist remain open.
 
-1. Finish A89 stable-touch and A86 corrected-beta coast/user feel checks on Wi-Fi/mobile VPN, then reconnect, background behavior
+1. Finish A86 reversal/lifecycle/latest mobile-VPN checks, then reconnect, background behavior
    and needed answers and all 64 device items on the intended Pixel in
    docs/android.md (#device-checklist). Record results in "What is verified" and turn every failure
    into a finding. Code-3 build/sign/update, identity persistence, SSH browse/input, font/keyboard

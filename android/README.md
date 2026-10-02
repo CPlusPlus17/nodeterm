@@ -15,12 +15,12 @@ it is talking to.
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
 > [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
 
-**Scrolling remains open (`A86`, `A89`):** beta 5 still stops during continuous swiping; the user
-must lift before moving again. Real xterm reproduces the cause: redraw detaches the original
-text-span touch target, losing later move/end events. `c4b1f6cf` targets the stable screen behind
-changing text; beta 6 / code 7 is installed. It passes 658 protocol tests and release/R8/signing
-checks. The phone is locked, so post-update SSH and coast/stop checks await unlock; actual user
-feel remains open.
+**Beta 6 verifies continuous dragging, coast, Esc and new-touch stopping (`A86`, `A89`).** SSH
+reopened on the intended Pixel with its retained key/pin at 56×48. `c4b1f6cf` targets the stable
+screen behind changing text, fixing beta 5's detached touch target. Code 7 passes 658 protocol tests and
+release/R8/signing checks. A held touch stops coast at a stable 56×25 keyboard-open viewport;
+earlier resizing tap checks were inconclusive. The user confirms normal dragging and coasting
+both work now. Latest mobile/lifecycle checks, FPS and custom bindings remain open.
 
 ## What it does
 
@@ -64,7 +64,9 @@ scroll checks did not satisfy the user; verify the corrected beta on the intende
 calling responsiveness resolved. Beta 5 implements momentum/native stopping but actual drag
 still loses its touch target; beta 6 corrects that (`A89`). The SDK-37
 packaging follow-up `f5fd3821` passes 39 Python tests against each SDK 36/37 and ten new mutations;
-CI4 still failed private packaging, so the next workflow must verify the repair in Actions.
+CI4 still failed private packaging. [Run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+observed CI repair. Any later push still requires its own green workflow.
 
 1. Prepare and install the [private beta](#private-beta) below from a successful local build or CI
    run of the current branch. The desktop must also include the host-side fixes you want to test. Future private beta
@@ -179,9 +181,16 @@ and three CSS mutations were caught. Actual AGP release built in 43 seconds and 
 R8 keep. Retained-signer packaging verifies non-debuggable metadata, signature, 16-KB alignment
 and source/hash provenance; all 149 ZIP payloads remain unchanged by signing. APK SHA-256:
 `4947133a6ccf9c2b1e775e76d7c24f564e087cf036e59eac4dca08162a076d3c`.
-The intended Pixel received a same-signer update preserving app data; notification permission is confirmed. It is
-locked, so post-update SSH reopening and phone drag/coast/stop checks await unlock. Actual user
-feel, mobile-beta-6 checks and full device validation remain open in the [handover](../docs/android-handover.md#progress-log).
+The intended Pixel received a same-signer update preserving app data; notification permission
+is confirmed. SSH reopened with the retained key/pin at 56×48. A slow swipe produced 23 position
+updates; a fast swipe kept moving for about 799 ms after its ADB command completed, and Esc
+left copy mode for the following 1.4 seconds. A held touch stops coast at a stable 56×25 viewport,
+with position unchanged through CANCEL after 1.2 seconds. Earlier keyboard-resizing touch checks
+were inconclusive. The user confirms normal continuous dragging and coast both work now.
+Reversal/lifecycle, mobile-beta-6, FPS/custom-binding checks and full device validation remain open
+in the [handover](../docs/android-handover.md#progress-log).
+Testing returned the app to Sessions, detached the owned client and removed only its exact owned
+tmux session and phone UI XML; private `device-summary.json` records cleanup.
 
 **Historical kinetic beta (`A86`):** `0.1.0-beta.5` / code `6` uses source
 `1ad2e94455a7adfb85d41212b12d36df39695324`. A fast release starts bounded decaying movement;
@@ -194,13 +203,16 @@ alignment and source/hash provenance. APK SHA-256:
 `7cc68d384aeb21ab40800fa7c83f006dfbfefba16dd2e945967c8c5376f17655`.
 The intended Pixel updated in place with notification permission intact, but its continuous
 swipe still stops and shows no coast after the ADB swipe command completes. This actual failure led to `A89`; it is
-not momentum-success proof. Actual corrected-beta user feel remains open.
+not momentum-success proof. The newer beta-6 checks and user confirmation above establish
+drag/coast success.
 
 **Packaging CI (`A88`, `f5fd3821`):** CI run `37058184031` passed its four main jobs but failed private
 packaging. Real SDK 37 reproduces the new `V3.0 Signer:` format; the follow-up accepts exact
 scheme labels while retaining one pinned certificate and verified v2. All 39 Python tests pass
 against each SDK 36/37, and ten new parser/fixture-selection mutations are caught. The fixture
-now uses CI's installed SDK 36/platform 35 explicitly; the next workflow must confirm CI repair.
+now uses CI's installed SDK 36/platform 35 explicitly. [Run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+observed packaging repair.
 
 **Historical beta-4 correction:** source `3cffb49d8cf64932260e914b42b3883331d0352d`, version
 `0.1.0-beta.4` / code `5`, retains the same signer. All 646 protocol tests in 62 suites pass with
@@ -208,7 +220,8 @@ zero failures, errors or skips; offline app `compileKotlin` passes (8 seconds). 
 focus/mouse/query reports preserve gestures, while actual keyboard/paste/IME input cancels them;
 22 JavaScript and nine actor/native-wiring mutations were caught. `fed68fb3` verifies newer SDK
 signer labels without relaxing the expected-certificate/v2 policy; 32 Python tests and ten
-mutations pass locally. Successful CI confirmation remains required for that observed workflow failure.
+mutations pass locally. At that checkpoint, CI repair still required confirmation; the later
+`f5fd3821` follow-up and green run above provide it.
 The code-5 local AGP release built in 48 seconds and passed every R8 keep. Retained-signer
 packaging verified non-debuggable APK metadata (minSdk 26, targetSdk 35), signature, alignment
 and source/hash provenance. APK SHA-256:

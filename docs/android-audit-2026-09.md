@@ -105,10 +105,10 @@ the audit's proposal, the handover's progress log says how and why.
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
-| [A86](#a86) | medium | | medium | performance/gap | 🟡 beta 5 still stops mid-swipe/no coast; A89 stable-target code-7 update passes build/sign/install/protocol658, 35 JS+11 native+3 CSS mutants caught; latest phone/user checks await unlock · Scroll responsiveness is poor despite reachable tmux history |
-| [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; corrected-phone feel pending · Automatic xterm reports cancel a swipe and discard queued movement |
-| [A88](#a88) | medium | | small | tooling/bug | ✅ locally fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; next CI confirmation required · New SDK signer labels make private-beta verification reject the expected certificate |
-| [A89](#a89) | medium | | small | runtime/bug | ✅ locally fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass, protocol658/type-check/code-7 delivery pass; device checks await unlock · Repaint detaches the touched text span and loses continued drag/release events |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; reversal/lifecycle/mobile/FPS/custom bindings remain open · Scroll responsiveness is poor despite reachable tmux history |
+| [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
+| [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
+| [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
 
 ## A01
 
@@ -2614,7 +2614,8 @@ not establish satisfactory responsiveness. `A87` fixes report-triggered cancella
 one measured row per notch, keeping frame batching, lossless ordered chunks, lifecycle barriers and
 TCP_NODELAY. All 646 protocol tests in 62 suites pass with zero failures/errors/skips, and offline
 app `compileKotlin` passes (8 seconds); 22 JavaScript and nine actor/native-wiring mutations are caught.
-Code-5 beta built/signed and updated in place; actual user feel remains open in the current verification record.
+Code-5 beta built/signed and updated in place; user feel remained open at that checkpoint.
+The beta-6 verification below now resolves the primary drag/coast complaint.
 
 **Controlled beta-3 phone trace.** Twelve alternating gestures in an owned 56×48 dummy-history
 terminal produce one JavaBridge invocation per gesture, 24 RAF callback collections and 11 distinct
@@ -2650,12 +2651,15 @@ signature, 16-KB alignment and source/hash provenance. APK SHA-256:
 It updated the intended Pixel in place with code-6/non-debuggable metadata and notification
 permission confirmed. The user still reports continuous swiping stops and requires lifting; the
 controlled test shows no coast after command completion. `A89` records the detached target cause
-and stable-screen fix. Beta-6 build/sign/update passes; actual momentum and user feel await unlock.
+and stable-screen fix. Beta-6 build/sign/update and SSH reopening with retained key/pin pass.
+Controlled Pixel continuous dragging, post-command coast and Esc stopping now pass; a held
+touch also stops coast at a stable 56×25 viewport (see `A89`).
 
-**Still open.** Validate corrected-beta fast dragging, coast after finger lift, stopping on new
-touch/Esc/lifecycle changes, reversal and actual user feel on Wi-Fi and mobile VPN. Custom tmux
-wheel bindings remain open. Existing checklist item 20 covers these checks; the checklist remains
-64 items.
+The user confirms normal continuous dragging and coast “Both work now”, resolving the primary
+complaint. **Still open:** reversal/lifecycle and latest mobile-VPN checks.
+Earlier new-touch checks opened the IME and resized tmux, so those results were inconclusive.
+Custom tmux wheel bindings and FPS remain open. Existing checklist item 20 covers these checks;
+the checklist remains 64 items.
 
 ## A87
 
@@ -2687,7 +2691,8 @@ user-input barriers, shared bounds and non-retryable report errors; source pins 
 stream identity, snapshot ordering, JavascriptInterface and no Ctrl transformation. All 646 protocol
 tests in 62 suites pass with zero failures, errors or skips; offline app `compileKotlin` passes (8 seconds).
 Twenty-two JS and nine actor/native-wiring mutations were caught. This proves the routing/queue
-policy, not corrected phone feel; beta-4 delivery and controlled movement now pass below; actual user follow-up remains open.
+policy, not corrected phone feel; beta-4 delivery and controlled movement pass below. At that
+checkpoint user follow-up remained open; the later beta-6 drag/coast confirmation is under `A89`.
 
 The code-5 local AGP release built in 48 seconds and passed every R8 keep. Retained-signer
 packaging verified non-debuggable APK metadata (minSdk 26, targetSdk 35), signature, alignment
@@ -2700,7 +2705,8 @@ positions 25, 45, 70, 100, 130 on the same five 1000-native-pixel/350-ms swipes,
 130 to 110, and the actual Esc chip leaves copy mode. Private inputs/proof are in
 `.nodeterm/android-beta-build-4/` and the APK/checksum/metadata in `.nodeterm/android-beta-4/`.
 These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel;
-corrected-beta user follow-up remains open under `A86`.
+at that checkpoint corrected-beta user follow-up remained open under `A86`; beta 6 now has
+normal drag/coast confirmation.
 
 **Residual:** a direct xterm/browser unbracketed user paste whose entire content exactly matches
 an SGR mouse report can still take the automatic-report path. The native draft submission now
@@ -2737,8 +2743,10 @@ include safe verifier diagnostics from a disposable test key/APK only.
 All 39 Python tests pass against each real SDK 36/37; six new parser and four fixture-selection
 mutants are caught. Removing the single-label support also kills the actual SDK-37 acceptance
 fixture. Proof/logs are in `.nodeterm/android-beta-build-4/ci-verification/` (working evidence:
-`/tmp/nodeterm-beta4-ci-check/`). The next green Android workflow must confirm observed CI repair;
-local reproduction establishes the SDK-37 bug, not captured output from the original failed job.
+`/tmp/nodeterm-beta4-ci-check/`). Follow-up [run `37061593216`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37061593216)
+at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
+observed CI repair. Each subsequent push still needs its own green workflow. Local reproduction
+establishes the SDK-37 bug, not captured output from the original failed job.
 No private key, APK, app code or phone setting changed from this tooling correction.
 
 
@@ -2776,8 +2784,21 @@ mutations. Private `0.1.0-beta.6` / code `7` uses source `c4b1f6cf1009f293a658b6
 actual AGP release built in 43 seconds and passed every R8 keep. Retained-signer packaging verifies
 metadata/signature/16-KB alignment/source hashes and preserves all 149 payloads. APK SHA-256:
 `4947133a6ccf9c2b1e775e76d7c24f564e087cf036e59eac4dca08162a076d3c`.
-The intended Pixel received a same-signer update preserving app data; notification permission is confirmed. It is
-locked; post-update SSH reopening and physical drag/coast/new-touch/Esc/lifecycle checks await
-unlock. Private evidence is in `.nodeterm/android-beta-build-6/` and `.nodeterm/android-beta-6/`.
+The intended Pixel received a same-signer update preserving app data; notification permission
+is confirmed. SSH reopened with the retained key/pin at 56×48. A 1000-native-pixel/1200-ms swipe
+produced 23 observed positions from 0 to 110 over about 1103 ms (ADB command complete at
+1535 ms). A 1000-pixel/200-ms swipe reached 110 at command completion (540.5 ms), then 250 at
+1339 ms, about 799 ms later, with 29 observed updates overall. Continuous drag delivery and
+post-command coast pass. Esc during coast left copy mode and remained out for 1.4 seconds.
+New-touch stopping also passes with the keyboard already open and all sampled viewports at
+56×25. After a 500-native-pixel/100-ms swipe, the DOWN command completed 152 ms after the swipe
+command; the script then waited 1.2 seconds before issuing CANCEL. The last position change was at 503.6 ms, before DOWN completed at
+588.8 ms; final position 100 remained unchanged through CANCEL. Earlier IME-resizing tap/DOWN
+checks rebased tmux positions and were inconclusive, not additional failures. Evidence includes
+`beta6-stable-viewport-touch-stop.json` and `stable-touch-check.log` in the private beta-6 proof.
+Esc and Header Back then returned to Sessions and detached the owned client; only its exact
+owned tmux session and phone UI XML were removed. Private evidence, including
+`device-summary.json`, is in `.nodeterm/android-beta-build-6/` and `.nodeterm/android-beta-6/`.
 No host verb, payload, mirror or SSH-visible file contract changed; no iOS fixture change is owed.
-Actual user feel, mobile-beta-6 checks, custom wheel bindings, FPS and the full device pass remain open.
+The user confirms normal continuous dragging and coast both work now. Reversal/lifecycle,
+mobile-beta-6 checks, custom wheel bindings, FPS and the full device pass remain open.
