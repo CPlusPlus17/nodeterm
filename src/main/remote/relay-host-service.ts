@@ -21,8 +21,9 @@
 // cannot serve a peer early even by accident, because it holds none of the machinery that serves.
 //
 // REVOCATION reaches sessions started here for free: `connectRelayHost` adds every session to its own
-// module-level `live` set, and index.ts's revoker calls `killRelayHostsByPeerKey` (relay-host.ts)
-// against THAT set — independent of the bookkeeping below. `relay:host:revoke` here uses the same cut.
+// module-level `live` set, and the peer revoker (peer-revoker.ts) calls `killRelayHostsByPeerKey`
+// (relay-host.ts) against THAT set — independent of the bookkeeping below. `relay:host:revoke` here
+// uses the same cut.
 import { randomUUID } from 'crypto'
 import { ipcMain, type BrowserWindow } from 'electron'
 import { IPC } from '../../shared/ipc'
@@ -231,7 +232,7 @@ export function initRelayHost(
     if (!entry) return
     // A reserved-but-not-yet-open seat has no live socket to cut (`session` null, or a session with no
     // peer key yet) — freeing the reservation is all that's owed. A live peer is cut by IDENTITY, the
-    // same primitive index.ts's 4c revoker uses (killRelayHostsByPeerKey, relay-host.ts): it closes
+    // same primitive the peer revoker uses (killRelayHostsByPeerKey, relay-host.ts): it closes
     // every live session holding that key, the right "remove this device" semantic. Host-side revoke +
     // the seat cap are UX/host enforcement, NOT a server-guaranteed limit (v2 = server-side). On the
     // desktop relay path a pin never auto-admits (isPinned is phone-only), so cutting the socket

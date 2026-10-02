@@ -261,6 +261,12 @@ the hook. `persisted:false` ⇒ pin may survive, the UI must NOT show "Removed" 
 retry; `killed:false` ⇒ the cut is unconfirmed. `peerId` is the peer's stable box public
 key (base64).
 
+The shipped revoker is `createPeerRevoker` (`src/main/remote/peer-revoker.ts`): its hook
+cuts the key's sessions on BOTH relay hosts, a peer desktop's (`killRelayHostsByPeerKey`) and
+a phone's on the standing host (`killStandingHostSessionsByPeerKey`). Settings → Phone →
+Revoke reaches the same revoker through pairing-service's `revokeRelayKey`, so forgetting a
+phone also ends the relay session it has open (audit A07-revoke).
+
 **Key-file codec** (pure, `src/main/remote/key-file-codec.ts` — no electron; `safeStorage`
 injected as `SafeStorageLike`):
 

@@ -155,7 +155,8 @@ export interface DeviceEntry {
   relayDeviceId?: string
   /**
    * The phone's relay (NaCl box) public key, base64, when it sent one inside the SEALED `/pair`
-   * body. Pairing pins it on the standing host (audit A07), so revoking the device unpins it again.
+   * body. Pairing pins it on the standing host (audit A07), so revoking the device unpins it again
+   * and closes the relay sessions it has open (A07-revoke).
    * Absent for pairings made before this field existed and for phones that do not send it.
    */
   relayBoxKey?: string

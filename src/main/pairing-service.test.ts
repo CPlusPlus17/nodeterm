@@ -420,7 +420,10 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
   const hostKeys = genKeyPair()
   const phoneBox = publicKeyToB64(genKeyPair().publicKey)
   const pins: string[] = []
-  const unpins: string[] = []
+  // Every key handed to `revokeRelayKey` — in the app, the peer revoker that unpins it AND closes
+  // the relay sessions it has open (peer-revoker.ts; the cut itself is tested in standing-host.test).
+  const revokes: string[] = []
+  let revokeOutcome: () => Promise<{ persisted: boolean; killed: boolean }> = async () => ({ persisted: true, killed: true })
   const relayDeps = (withPin = true): PairingRelayDeps => ({
     getSettings: () => ({ phoneAccessEnabled: true }) as unknown as Settings,
     getEntitlement: () => null,
@@ -431,7 +434,7 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
     ...(withPin
       ? {
           pinRelayKey: async (pub: string) => void pins.push(pub),
-          unpinRelayKey: async (pub: string) => void unpins.push(pub)
+          revokeRelayKey: async (pub: string) => (revokes.push(pub), revokeOutcome())
         }
       : {})
   })
@@ -449,14 +452,15 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
 
   beforeEach(() => {
     pins.length = 0
-    unpins.length = 0
+    revokes.length = 0
+    revokeOutcome = async () => ({ persisted: true, killed: true })
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({ deviceToken: 'device-token', hostId: 'host-id', exp: 0 })
     } as unknown as Response)
   })
 
-  it('pins the sealed box key, says so, records it, and unpins it on revoke', async () => {
+  it('pins the sealed box key, says so, records it, and revokes it (pin and session) on revoke', async () => {
     const service = createPairingService(relayDeps())
     try {
       const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
@@ -466,7 +470,7 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
       const entry = ((agentJson().devices as DeviceEntry[]) ?? []).find((d) => d.id === resp.deviceId)!
       expect(entry.relayBoxKey).toBe(phoneBox)
       await service.revokeDevice(String(resp.deviceId))
-      expect(unpins).toEqual([phoneBox])
+      expect(revokes).toEqual([phoneBox])
     } finally {
       service.stop()
     }
@@ -479,10 +483,55 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
       const a = await postSealed(first.pairPort, { token: first.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
       const second = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
       await postSealed(second.pairPort, { token: second.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      // Neither unpinned nor cut: the remaining pairing still authorizes this phone's relay session.
       await service.revokeDevice(String(a.deviceId))
-      expect(unpins).toEqual([])
+      expect(revokes).toEqual([])
     } finally {
       service.stop()
+    }
+  })
+
+  it('revokes only the forgotten phone’s key; another phone keeps its pin and its session', async () => {
+    const otherBox = publicKeyToB64(genKeyPair().publicKey)
+    const service = createPairingService(relayDeps())
+    try {
+      const s1 = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const a = await postSealed(s1.pairPort, { token: s1.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      const s2 = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const b = await postSealed(s2.pairPort, { token: s2.token, publicKey: freshEd25519Line(), boxPublicKey: otherBox })
+      await service.revokeDevice(String(a.deviceId))
+      expect(revokes).toEqual([phoneBox])
+      await service.revokeDevice(String(b.deviceId))
+      expect(revokes).toEqual([phoneBox, otherBox])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('a relay revoke that could not persist, close, or run at all never fails the device removal', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const service = createPairingService(relayDeps())
+    try {
+      for (const outcome of [
+        async () => ({ persisted: false, killed: true }),
+        async () => ({ persisted: true, killed: false }),
+        async (): Promise<never> => {
+          throw new Error('fixture')
+        }
+      ]) {
+        revokeOutcome = outcome
+        const s = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+        const resp = await postSealed(s.pairPort, { token: s.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+        expect(await service.revokeDevice(String(resp.deviceId))).toMatchObject({ local: true })
+      }
+      expect(revokes).toEqual([phoneBox, phoneBox, phoneBox])
+      const logged = warn.mock.calls.map((c) => String(c[0]))
+      expect(logged).toContain('[pairing] could not unpin the phone relay key')
+      expect(logged).toContain('[pairing] could not close the phone relay session')
+      expect(logged).toContain('[pairing] could not revoke the phone relay key:')
+    } finally {
+      service.stop()
+      warn.mockRestore()
     }
   })
 

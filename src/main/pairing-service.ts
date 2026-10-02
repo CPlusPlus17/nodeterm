@@ -44,6 +44,7 @@ import type { DeviceRevokeResult, DeviceRevokeServerOutcome, Settings } from '..
 import { renameAtomic, tempNameFor } from '../core/fs-atomic'
 import { publicKeyToB64, deriveSharedKey, encrypt, decrypt, type KeyPair } from './remote/e2ee'
 import { hostIdFromPublicKeyB64 } from './remote/relay-id'
+import type { RevokeResult } from './remote/revocation'
 import { getDeviceId } from '../core/device-id'
 import { administratorsKeysPath, detectWindowsKeyFile, type WindowsKeyFile } from './windows-ssh-keys'
 
@@ -71,8 +72,13 @@ export interface PairingRelayDeps {
    * A07). Optional: absent ⇒ the phone approves on its first relay connect, as before.
    */
   pinRelayKey?(boxPublicKeyB64: string): Promise<void>
-  /** Undo [pinRelayKey] when the device is revoked. */
-  unpinRelayKey?(boxPublicKeyB64: string): Promise<void>
+  /**
+   * Undo [pinRelayKey] when the device is revoked AND cut every relay session that key has open at
+   * that moment: an unpin alone refuses only the NEXT handshake, so a phone connected while it is
+   * forgotten would keep its terminals (audit A07-revoke). index.ts wires the revoker
+   * `remote:revoke-peer` uses (peer-revoker.ts), which reports both steps rather than throwing.
+   */
+  revokeRelayKey?(boxPublicKeyB64: string): Promise<RevokeResult>
 }
 
 interface RelayDeviceResponse {
@@ -928,8 +934,9 @@ export function createPairingService(
         const obj = await readAgentJson()
         const devices = removeDevice(readDevices(obj), id)
         await writeAgentJson({ ...obj, devices })
-        // The relay pin made at pairing goes with the device — unless another pairing of the same
-        // phone (a re-pair keeps its box key) is still listed.
+        // The relay pin made at pairing goes with the device, and so do the relay sessions that
+        // key has open — unless another pairing of the same phone (a re-pair keeps its box key) is
+        // still listed: that pairing still authorizes the phone, its pin and its session.
         const unpin = boxKey && !devices.some((d) => d.relayBoxKey === boxKey) ? boxKey : undefined
         return { local: true, relayId, found, unpin }
       } catch (err) {
@@ -939,10 +946,16 @@ export function createPairingService(
         return { local: false, relayId, found, unpin: undefined }
       }
     })
-    if (unpin && relayDeps?.unpinRelayKey) {
-      // Refuses the NEXT relay handshake from that key; a relay session open right now is cut by
-      // the standing host's own revocation path, not here.
-      await relayDeps.unpinRelayKey(unpin).catch((err) => console.warn('[pairing] could not unpin the phone relay key:', err))
+    if (unpin && relayDeps?.revokeRelayKey) {
+      // Unpins the key (the NEXT relay handshake from it needs the SAS approval again) and closes
+      // the relay sessions it has open right now. Not part of `local`: the device is already gone
+      // from agent.json, so a "try again" would find nothing to retry; the log keeps the detail.
+      const outcome = await relayDeps.revokeRelayKey(unpin).catch((err) => {
+        console.warn('[pairing] could not revoke the phone relay key:', err)
+        return null
+      })
+      if (outcome && !outcome.persisted) console.warn('[pairing] could not unpin the phone relay key')
+      if (outcome && !outcome.killed) console.warn('[pairing] could not close the phone relay session')
     }
     // A device paired before `relayDeviceId` was recorded still falls back to OUR id — which is
     // not a guess. `id` is the per-pairing `randomUUID()` above, and when the phone sent no id of

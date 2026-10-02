@@ -65,6 +65,11 @@ export function createPhoneApprovals(deps: {
       return true
     },
     clear,
+    /** Withdraw every pending consent for `pub`: its device was revoked, and a dialog raised before
+     *  the revoke must not be able to pin the forgotten key again. */
+    forget(pub: string): void {
+      for (const [id, p] of pending) if (p.pub === pub) clear(id)
+    },
     stop(): void {
       for (const id of pending.keys()) clear(id)
     }

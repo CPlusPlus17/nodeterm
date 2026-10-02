@@ -45,7 +45,8 @@ the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the 
 dials only a computer that has approved this phone, and a refused or unanswered approval suspends
 automatic dials until the user asks again. A current desktop pins the phone's relay key at pairing
 (the phone sends `boxPublicKey` inside the sealed `/pair` body; the answer says `relayPinned`), so
-most phones never see the dialog. The pin is dropped when the device is revoked.
+most phones never see the dialog. Revoking the device drops the pin and closes any relay session
+the phone has open at that moment.
 
 **What direct SSH will not do.** It never creates a tmux session (the desktop injects the hook
 environment at creation, which the phone cannot reproduce) and never touches nodes of the desktop's
@@ -743,9 +744,10 @@ later fix left to a device.
    once with it open on another screen. Deny the camera permission: pasting still pairs. *(A65)*
 8. With remote access on, against a current desktop: the Pair screen says "Remote access is on", the
    pairing ends with "Paired, and approved for remote access.", and the first relay connect later
-   raises no SAS dialog on the desktop. Revoke the phone there (Settings → Phone → Revoke): SSH is
-   refused, and a relay connect needs the SAS approval again. Against an older desktop the toast says
-   an approval is still owed, and the first relay connect shows the code. *(A07)*
+   raises no SAS dialog on the desktop. Revoke the phone there (Settings → Phone → Revoke) while it
+   has a terminal open over the relay (route Only through the relay): that terminal ends at once, SSH
+   is refused, and a relay connect needs the SAS approval again. Against an older desktop the toast
+   says an approval is still owed, and the first relay connect shows the code. *(A07, A07-revoke)*
 9. A pairing code whose computer does not answer (the desktop quit after showing the QR, or the phone
    is on another network) ends within about 45 s with a sentence, not an exception name, and Back
    during the wait works without a hang. An expired or already-used code shows the desktop's one-line

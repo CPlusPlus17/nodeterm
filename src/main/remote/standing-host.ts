@@ -11,7 +11,9 @@
 //     reconnect before expiry, and reconnect with bounded backoff on socket close;
 //   - uses PIN-ONCE approval: the first connect from a given phone (its box public key) prompts
 //     the host human via the shared SAS dialog; on approval the pubkey is pinned, so later
-//     connects auto-approve silently.
+//     connects auto-approve silently;
+//   - is cut on REVOCATION: forgetting a phone unpins its key and then closes the sessions it has
+//     open (`killStandingHostSessionsByPeerKey`, called by peer-revoker.ts).
 //
 // The heavy lifting (relay wiring, RPC/frame handlers, fs jail, canvas mirror, approval gate) is
 // shared with the interactive host via `connectHostSession`. Pin/lookup logic is the pure,
@@ -122,6 +124,23 @@ export interface StandingHost {
   stop(): void
 }
 
+// The revoke hook of every RUNNING standing host (in production there is one). Module-level, like
+// relay-host.ts's `live` set, so the peer revoker (peer-revoker.ts) reaches it without depending on
+// the order index.ts constructs the two in.
+const runningHosts = new Set<(peerKeyB64: string) => number>()
+
+/**
+ * Close every standing-host relay session whose phone is `peerKeyB64`, and withdraw any approval
+ * dialog still pending for it. The kill half of revoking a phone: unpinning its key only refuses
+ * the NEXT handshake, while a session already open keeps serving terminals, files and the canvas
+ * (see revocation.ts). Sessions of every other key are untouched. Returns how many were closed.
+ */
+export function killStandingHostSessionsByPeerKey(peerKeyB64: string): number {
+  let closed = 0
+  for (const revokePeer of [...runningHosts]) closed += revokePeer(peerKeyB64)
+  return closed
+}
+
 /**
  * Wire the standing phone host. Idempotent to construct once; `setEnabled` / `syncFromSettings`
  * reconcile the live connection against (enabled && relay-allowed).
@@ -190,6 +209,30 @@ export function initStandingHost(
     }
     pool.delete(p)
     p.session.close()
+  }
+
+  // A paired phone was revoked on this desktop (audit A07-revoke). Every pooled session with its
+  // key ends through removeFromPool, the path the human's "Deny" takes: presence leaves, the pending
+  // dialog clears, the served PTYs are killed and the socket closes. A session that bridged before
+  // the unpin landed is still waiting on its disk read or serving the phone, and either way it must
+  // go. A consent record that outlived its browse socket (#819) is withdrawn too.
+  function revokePeer(peerKeyB64: string): number {
+    if (!peerKeyB64) return 0
+    approvals.forget(peerKeyB64)
+    let closed = 0
+    let failure: unknown = null
+    for (const p of [...pool]) {
+      if (p.session.peerPublicKeyB64() !== peerKeyB64 && p.approvalPub !== peerKeyB64) continue
+      closed++
+      try {
+        removeFromPool(p) // leaves the pool before the close, so a throwing close strands nothing
+      } catch (err) {
+        failure ??= err // keep cutting the phone's other sessions; report the failure after
+      }
+    }
+    if (closed) ensurePool()
+    if (failure) throw failure
+    return closed
   }
 
   /** Keep the pool topped up with TARGET_PENDING un-bridged listeners. */
@@ -354,12 +397,14 @@ export function initStandingHost(
   function start(): void {
     if (running) return
     running = true
+    runningHosts.add(revokePeer)
     reconnectAttempt = 0
     ensurePool()
   }
 
   function stop(): void {
     running = false
+    runningHosts.delete(revokePeer)
     approvals.stop()
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)

@@ -429,7 +429,7 @@ async function runPair(): Promise<void> {
       apiBase: `http://127.0.0.1:${apiPort}`,
       relayAllowed: () => withRelay,
       pinRelayKey: async (pub) => emit({ event: 'pin', pub }),
-      unpinRelayKey: async (pub) => emit({ event: 'unpin', pub })
+      revokeRelayKey: async (pub) => (emit({ event: 'revoke-relay-key', pub }), { persisted: true, killed: true })
     },
     // The direct-SSH path on every OS (audit A70): on win32 the service pairs relay-only (no key, the
     // QR says `ssh:false`), which pairing-service.windows.test.ts covers. `platform` only separates

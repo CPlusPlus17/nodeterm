@@ -303,11 +303,10 @@ import {
 } from './remote/host-service'
 import { initStandingHost } from './remote/standing-host'
 import { createHostNewSessions } from './remote/host-new-sessions'
-import { killRelayHostsByPeerKey } from './remote/relay-host'
 import { initRelayHost } from './remote/relay-host-service'
-import { createRevoker } from './remote/revocation'
-import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
-import { pinDevice, unpinDevice } from './remote/approved-devices-core'
+import { createPeerRevoker } from './remote/peer-revoker'
+import { loadApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
+import { pinDevice } from './remote/approved-devices-core'
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { decodeOffer } from './remote/pairing'
@@ -1634,6 +1633,13 @@ app.whenReady().then(async () => {
   // a remote tab derives the default worktree path from it, and the worktree lives on THIS host.
   corePlatform.handle(IPC.appUserDataDir, () => app.getPath('userData'))
 
+  // Revoking a bridged PEER must CUT THE LIVE SESSION, not just unpin it (revocation.ts): unpinning
+  // refuses only the NEXT handshake, while the open relay socket keeps full shell access — "the
+  // person I just removed is still sitting in my terminal, typing". The revoker closes every live
+  // session with that key — a peer desktop's (relay-host) and a phone's (the standing host) — and
+  // each close runs that host's peer teardown (presence leave → PtyManager.dropClient / killed
+  // PTYs). Shared by `remote:revoke-peer` and the phone pairing service's device revoke.
+  const peerRevoker = createPeerRevoker()
   // Phone pairing (nodeterm iOS "scan a QR" flow): a one-shot LAN listener that installs the
   // phone's Ed25519 key into ~/.ssh/authorized_keys. The completion result is forwarded to the
   // window over `pairing:done` so the settings section can show the paired/timeout state.
@@ -1646,9 +1652,10 @@ app.whenReady().then(async () => {
     relayAllowed,
     // A phone that sends its relay key in the sealed /pair body is approved by the scan itself
     // (audit A07): the same pin a SAS approval writes, so its first remote connect needs nobody at
-    // the desk. Revoking the device takes the pin away again.
+    // the desk. Revoking the device takes the pin away again AND cuts the relay session the phone
+    // has open, through the same revoker as `remote:revoke-peer` (A07-revoke).
     pinRelayKey: (pub) => updateApprovedDevices((store) => pinDevice(store, pub)),
-    unpinRelayKey: (pub) => updateApprovedDevices((store) => unpinDevice(store, pub))
+    revokeRelayKey: (pub) => peerRevoker.revoke(pub)
   })
   ipcMain.handle(IPC.pairingStart, () =>
     pairingService.start((result) => {
@@ -1671,18 +1678,8 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.pairingListDevices, () => pairingService.listDevices())
   ipcMain.handle(IPC.pairingRevokeDevice, (_e, id: string) => pairingService.revokeDevice(id))
 
-  // Revoking a bridged PEER must CUT THE LIVE SESSION, not just unpin it (revocation.ts): unpinning
-  // refuses only the NEXT handshake, while the open relay socket keeps full shell access — "the
-  // person I just removed is still sitting in my terminal, typing". `killByPeerKey` closes every
-  // live session with that key, and each close runs the peer teardown (presence leave →
-  // PtyManager.dropClient → sink prune). Host-security control plane, so it stays on raw ipcMain:
-  // a remote peer must never be able to revoke anyone.
-  const peerRevoker = createRevoker({
-    load: loadApprovedDevices,
-    save: saveApprovedDevices,
-    update: updateApprovedDevices,
-    onRevoke: (peerKeyB64) => killRelayHostsByPeerKey(peerKeyB64)
-  })
+  // Host-security control plane, so it stays on raw ipcMain: a remote peer must never be able to
+  // revoke anyone. `peerRevoker` is created above, beside the pairing service that shares it.
   ipcMain.handle(IPC.remoteRevokePeer, (_e, peerKeyB64: string) =>
     peerRevoker.revoke(String(peerKeyB64))
   )
@@ -4073,10 +4070,11 @@ app.whenReady().then(async () => {
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class
   // CorePlatform client of this desktop after mutual SAS approval. Runs BESIDE initRemoteHost (the
   // phone still uses the legacy flow). Inert until `relay:host:start` — a solo user pays nothing.
-  // Revocation reaches its sessions via `killRelayHostsByPeerKey` (peerRevoker, above).
+  // Revocation reaches its sessions via `killRelayHostsByPeerKey` (peerRevoker, remote/peer-revoker.ts).
   initRelayHost(win, corePlatform, {})
   // Standing (phone) relay host: keep a host connection registered so a paired phone can reach
-  // this Mac from anywhere. Honors settings.phoneAccessEnabled internally.
+  // this Mac from anywhere. Honors settings.phoneAccessEnabled internally. Revoking a phone reaches
+  // its open sessions via `killStandingHostSessionsByPeerKey` (peerRevoker, remote/peer-revoker.ts).
   const standingHost = initStandingHost(win, ptyManager, () => settingsStore.get(), listProjectsOutput, hostBridge)
   ipcMain.on(IPC.remoteStandingHostSet, (_e, enabled: boolean) => standingHost.setEnabled(!!enabled))
   // Reconcile from persisted settings on launch (starts hosting if enabled).
