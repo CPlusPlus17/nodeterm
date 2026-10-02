@@ -5,6 +5,8 @@ import dev.nodeterm.protocol.model.KanbanColumn
 import dev.nodeterm.protocol.model.KanbanLabel
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.relay.RelaySocket
+import dev.nodeterm.protocol.relay.RpcException
+import dev.nodeterm.protocol.relay.RpcUnansweredException
 import kotlinx.serialization.json.JsonElement
 import java.io.Closeable
 
@@ -124,19 +126,37 @@ interface HostConnection : Closeable {
 
 /**
  * The typed `git.*` verbs of the desktop's jailed git bridge (host-service.ts `handleGit`), and how
- * long the phone waits for each. Push and pull talk to the repository's remote from the computer and
- * can take minutes on a slow link; the desktop sets no limit of its own, so giving up after the usual
- * RPC wait would report a failure for a push that is still running there.
+ * long the phone waits for each. The desktop runs every one with no limit of its own, and each WRITE
+ * can legitimately take minutes there: push and pull talk to the repository's remote over the
+ * network; commit runs the repository's pre-commit and commit-msg hooks (a lint or a test run) and
+ * may wait on a signing passphrase; stage runs clean filters (Git LFS) over what it adds. Giving up
+ * after the usual RPC wait would report a failure for a command still running there, so the writes
+ * wait [GIT_WRITE_TIMEOUT_MS]. The reads keep the usual wait.
  */
 enum class GitVerb(val wire: String, val timeoutMs: Long = RelaySocket.RPC_TIMEOUT_MS) {
-    STATUS("git.status"), DIFF("git.diff"), STAGE("git.stage"), UNSTAGE("git.unstage"),
-    COMMIT("git.commit"), PUSH("git.push", GIT_NETWORK_TIMEOUT_MS), PULL("git.pull", GIT_NETWORK_TIMEOUT_MS), HISTORY("git.history")
+    STATUS("git.status"), DIFF("git.diff"),
+    STAGE("git.stage", GIT_WRITE_TIMEOUT_MS), UNSTAGE("git.unstage", GIT_WRITE_TIMEOUT_MS),
+    COMMIT("git.commit", GIT_WRITE_TIMEOUT_MS), PUSH("git.push", GIT_WRITE_TIMEOUT_MS), PULL("git.pull", GIT_WRITE_TIMEOUT_MS),
+    HISTORY("git.history")
 }
 
-/** How long a push or a pull may take on the computer before the phone stops waiting (see [GitVerb]). */
-const val GIT_NETWORK_TIMEOUT_MS = 180_000L
+/** How long a git write may take on the computer before the phone stops waiting (see [GitVerb]). */
+const val GIT_WRITE_TIMEOUT_MS = 180_000L
 
 open class HostException(message: String) : Exception(message)
+
+/**
+ * The request was sent and no answer came back (it timed out, or the connection dropped while it
+ * waited), so whatever it asked for may have happened on the computer, or may still be happening.
+ * A refusal or a failed command is an answer, never this.
+ */
+class HostUnansweredException(message: String) : HostException(message)
+
+/** The [HostException] a relay request's failure surfaces as; an unanswered one stays unanswered. */
+internal fun hostException(e: RpcException): HostException {
+    val message = e.message ?: "Request failed."
+    return if (e is RpcUnansweredException) HostUnansweredException(message) else HostException(message)
+}
 
 /**
  * The direct-SSH transport will not do this for [nodeId], and the relay should: the node's tmux

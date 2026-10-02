@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.conn.ConnState
+import dev.nodeterm.protocol.git.GitConflict
 import dev.nodeterm.protocol.git.GitDiff
 import dev.nodeterm.protocol.git.GitFileChange
 import dev.nodeterm.protocol.git.GitHistory
@@ -65,13 +66,25 @@ import dev.nodeterm.protocol.git.SourceControlGate
 import dev.nodeterm.protocol.host.Capability
 import kotlinx.coroutines.launch
 
-/** A file whose diff is open: which side ([staged]) of it. */
-private data class DiffTarget(val file: GitFileChange, val staged: Boolean)
+/** Whose diff is open. */
+private sealed interface DiffTarget {
+    val path: String
+
+    /** A changed file, on one side ([staged]) of it. */
+    data class File(val file: GitFileChange, val staged: Boolean) : DiffTarget {
+        override val path get() = file.path
+    }
+
+    /** An unmerged path: its working tree with the conflict markers, never the untracked form. */
+    data class Conflict(val conflict: GitConflict) : DiffTarget {
+        override val path get() = conflict.path
+    }
+}
 
 /**
  * A project's source control (audit A29), over the desktop's typed, jailed git bridge (`git.*`): the
- * status split into staged, changed and untracked files, a file's diff, stage and unstage, a commit
- * of what is staged, push and pull, and the recent commits. The folder is the project's own, as
+ * status split into conflicts, staged, changed and untracked files, a file's diff, stage and unstage,
+ * a commit of what is staged, push and pull, and the recent commits. The folder is the project's own, as
  * `projects.list` names it; there is no free-form git.
  *
  * Where the verbs go is the one routing decision the other app-only verbs use (audit A26): the open
@@ -142,8 +155,9 @@ fun SourceControlScreen(nav: Navigator, hostId: String, projectId: String) {
     }
 
     /**
-     * One operation at a time. [block] answers what the computer said; the status is read again
-     * afterwards either way (a failed push still tells the truth about ahead/behind).
+     * One operation at a time. [block] answers what the computer said, and the status is read again
+     * afterwards WHATEVER happened ([SourceControl.writeThenReload]): a failed push still tells the
+     * truth about ahead/behind, and a commit that got no answer may have landed all the same.
      */
     fun run(label: String, withHistory: Boolean, block: suspend (SourceControl) -> GitResult?) {
         val dir = cwd ?: return
@@ -152,13 +166,7 @@ fun SourceControlScreen(nav: Navigator, hostId: String, projectId: String) {
         notice = null
         scope.launch {
             try {
-                val result = block(git(dir))
-                notice = result?.let(SourceControl::outcome)
-                load(dir, withHistory)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                notice = SourceControl.Outcome(error = true, text = e.message ?: "$label failed.")
+                notice = SourceControl.writeThenReload(label, { block(git(dir)) }, { load(dir, withHistory) })
             } finally {
                 busy = null
             }
@@ -186,7 +194,10 @@ fun SourceControlScreen(nav: Navigator, hostId: String, projectId: String) {
         diff = null
         diffError = null
         try {
-            diff = git(dir).diff(target.file, target.staged)
+            diff = when (target) {
+                is DiffTarget.File -> git(dir).diff(target.file, target.staged)
+                is DiffTarget.Conflict -> git(dir).diff(target.conflict)
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -201,9 +212,9 @@ fun SourceControlScreen(nav: Navigator, hostId: String, projectId: String) {
             TopAppBar(
                 title = {
                     Column {
-                        Text(diffOf?.file?.path ?: "Source control", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(diffOf?.path ?: "Source control", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            diffOf?.let { if (it.staged) "Staged changes" else if (it.file.untracked) "New file" else "Changes" }
+                            diffOf?.let { diffSubtitle(it) }
                                 ?: listOfNotNull(project?.name, status?.takeIf { it.hasRepo }?.branch).joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -247,7 +258,8 @@ fun SourceControlScreen(nav: Navigator, hostId: String, projectId: String) {
                     message = message,
                     onMessage = { message = it },
                     busy = busy != null,
-                    onOpen = { file, staged -> diffOf = DiffTarget(file, staged) },
+                    onOpen = { file, staged -> diffOf = DiffTarget.File(file, staged) },
+                    onOpenConflict = { diffOf = DiffTarget.Conflict(it) },
                     onStage = { paths -> run("Stage", withHistory = false) { it.stage(paths) } },
                     onUnstage = { paths -> run("Unstage", withHistory = false) { it.unstage(paths) } },
                     onCommit = {
@@ -262,6 +274,11 @@ fun SourceControlScreen(nav: Navigator, hostId: String, projectId: String) {
             }
         }
     }
+}
+
+private fun diffSubtitle(target: DiffTarget): String = when (target) {
+    is DiffTarget.Conflict -> "Conflict · ${target.conflict.description}"
+    is DiffTarget.File -> if (target.staged) "Staged changes" else if (target.file.untracked) "New file" else "Changes"
 }
 
 @Composable
@@ -293,6 +310,7 @@ private fun StatusList(
     onMessage: (String) -> Unit,
     busy: Boolean,
     onOpen: (GitFileChange, Boolean) -> Unit,
+    onOpenConflict: (GitConflict) -> Unit,
     onStage: (List<String>) -> Unit,
     onUnstage: (List<String>) -> Unit,
     onCommit: () -> Unit,
@@ -338,9 +356,12 @@ private fun StatusList(
                     Text(if (status.staged.isEmpty()) "Commit" else "Commit ${status.staged.size} staged")
                 }
                 // Says why only once there is something to say it about.
-                if (commitBlocker != null && (message.isNotBlank() || status.staged.isNotEmpty())) Hint(commitBlocker)
+                if (commitBlocker != null && (message.isNotBlank() || status.staged.isNotEmpty() || status.conflicts.isNotEmpty())) {
+                    Hint(commitBlocker)
+                }
             }
         }
+        conflictSection(status.conflicts, onOpenConflict)
         fileSection(
             key = "staged", title = "Staged", files = status.staged, staged = true,
             action = "Unstage", allAction = "Unstage all", busy = busy,
@@ -356,7 +377,7 @@ private fun StatusList(
             action = "Stage", allAction = "Stage all", busy = busy,
             onOpen = onOpen, onAct = onStage
         )
-        if (status.staged.isEmpty() && status.changes.isEmpty()) {
+        if (status.clean) {
             item(key = "clean") { Hint("No changes.", Modifier.padding(16.dp)) }
         }
         item(key = "history-title") { SectionTitle("Recent commits", null) }
@@ -398,12 +419,15 @@ private fun androidx.compose.foundation.lazy.LazyListScope.fileSection(
     onAct: (List<String>) -> Unit
 ) {
     if (files.isEmpty()) return
-    item(key = "$key-title") {
+    // A row's key is its PATH, which can be any name ("header" included), so rows live under
+    // "<section>-file:" and the heading under "<section>-header": a repository-root file named like
+    // the heading must not share its key, or the list throws on a duplicate key.
+    item(key = "$key-header") {
         SectionTitle("$title (${files.size})") {
             TextButton(onClick = { onAct(files.map { it.path }) }, enabled = !busy) { Text(allAction) }
         }
     }
-    items(files, key = { "$key-${it.path}" }) { file ->
+    items(files, key = { "$key-file:${it.path}" }) { file ->
         Row(
             Modifier.fillMaxWidth().clickable { onOpen(file, staged) }.padding(start = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -421,6 +445,35 @@ private fun androidx.compose.foundation.lazy.LazyListScope.fileSection(
                 Text("+${file.added} −${file.deleted}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TextButton(onClick = { onAct(listOf(file.path)) }, enabled = !busy) { Text(action) }
+        }
+    }
+}
+
+/**
+ * Unmerged paths: opened as their combined diff, and offered no Stage. `git add` on one marks the
+ * conflict resolved with whatever the file holds, markers included, and the phone cannot edit it.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.conflictSection(
+    conflicts: List<GitConflict>,
+    onOpen: (GitConflict) -> Unit
+) {
+    if (conflicts.isEmpty()) return
+    item(key = "conflicts-header") { SectionTitle("Conflicts (${conflicts.size})", null) }
+    item(key = "conflicts-hint") {
+        Hint(
+            "Resolve these on the computer or in a terminal session, then stage them. The phone does not mark a conflict resolved.",
+            Modifier.padding(horizontal = 16.dp)
+        )
+    }
+    items(conflicts, key = { "conflicts-file:${it.path}" }) { c ->
+        Row(
+            Modifier.fillMaxWidth().clickable { onOpen(c) }.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(c.code, Modifier.widthIn(min = 26.dp), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = NtColors.attention)
+            Spacer(Modifier.width(8.dp))
+            Text(c.path, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(c.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -443,7 +496,10 @@ private fun Hint(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-/** The letters the desktop's Source Control colours (`gitStatusColors`): added/new, deleted, the rest. */
+/**
+ * The letters the desktop's Source Control colours (`gitStatusColors`): added/new, deleted, the rest.
+ * A `U` here is an untracked file: unmerged paths are in their own section ([conflictSection]).
+ */
 private fun statusColor(status: String): Color = when (status) {
     "A", "U" -> NtColors.success
     "D" -> NtColors.attention

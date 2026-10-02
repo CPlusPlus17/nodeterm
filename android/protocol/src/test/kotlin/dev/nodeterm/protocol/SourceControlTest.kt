@@ -1,5 +1,6 @@
 package dev.nodeterm.protocol
 
+import dev.nodeterm.protocol.git.GitConflict
 import dev.nodeterm.protocol.git.GitDiff
 import dev.nodeterm.protocol.git.GitDiff.Kind
 import dev.nodeterm.protocol.git.GitFileChange
@@ -11,11 +12,12 @@ import dev.nodeterm.protocol.git.SourceControlGate
 import dev.nodeterm.protocol.git.SourceControlGate.Availability
 import dev.nodeterm.protocol.host.ApprovalOutcome
 import dev.nodeterm.protocol.host.CardLabelEdit
-import dev.nodeterm.protocol.host.GIT_NETWORK_TIMEOUT_MS
+import dev.nodeterm.protocol.host.GIT_WRITE_TIMEOUT_MS
 import dev.nodeterm.protocol.host.GitVerb
 import dev.nodeterm.protocol.host.HostCapabilities
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.HostUnansweredException
 import dev.nodeterm.protocol.host.LabelEditResult
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NewNode
@@ -28,6 +30,9 @@ import dev.nodeterm.protocol.model.KanbanColumn
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.relay.RelaySocket
+import dev.nodeterm.protocol.relay.RpcException
+import dev.nodeterm.protocol.relay.RpcUnansweredException
+import dev.nodeterm.protocol.host.hostException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -106,6 +111,70 @@ class SourceControlTest {
         assertTrue(st.changes.isEmpty())
     }
 
+    /**
+     * Every unmerged state, as the desktop's `GitService.status` turns `git status --porcelain -uall`
+     * into its two lists (src/core/git-service.ts: `??` → a `U` in `changes` only; otherwise `X` → a
+     * `staged` entry and `Y` → a `changes` entry, each when not blank). The porcelain is what git 2.43
+     * printed for a merge that conflicted every way (renames give `AU`/`UA` and `DD`), plus an
+     * ordinary staged-and-changed file (`MM`) and an intent-to-add one (` A`), neither of them unmerged.
+     */
+    private val conflictedStatusJson = """
+        {"hasRepo":true,"repoName":"app","branch":"main","ahead":0,"behind":0,"hasRemote":false,"hasUpstream":false,
+         "staged":[{"path":"aa.txt","status":"A","added":0,"deleted":0},
+                   {"path":"both.txt","status":"M","added":1,"deleted":0},
+                   {"path":"dd-ours.txt","status":"A","added":0,"deleted":0},
+                   {"path":"dd-theirs.txt","status":"U","added":0,"deleted":0},
+                   {"path":"dd.txt","status":"D","added":0,"deleted":0},
+                   {"path":"du.txt","status":"D","added":0,"deleted":0},
+                   {"path":"ua.txt","status":"A","added":1,"deleted":0},
+                   {"path":"ud.txt","status":"U","added":0,"deleted":0},
+                   {"path":"uu.txt","status":"U","added":0,"deleted":0}],
+         "changes":[{"path":"aa.txt","status":"A","added":4,"deleted":0},
+                    {"path":"both.txt","status":"M","added":1,"deleted":0},
+                    {"path":"dd-ours.txt","status":"U","added":0,"deleted":0},
+                    {"path":"dd-theirs.txt","status":"A","added":0,"deleted":0},
+                    {"path":"dd.txt","status":"D","added":0,"deleted":0},
+                    {"path":"du.txt","status":"U","added":0,"deleted":0},
+                    {"path":"ita.txt","status":"A","added":0,"deleted":0},
+                    {"path":"ud.txt","status":"D","added":0,"deleted":0},
+                    {"path":"uu.txt","status":"U","added":4,"deleted":0},
+                    {"path":"fresh.txt","status":"U","added":0,"deleted":0}]}
+    """
+
+    @Test
+    fun `an unmerged path is a conflict, never an untracked file, a staged change or a working-tree one`() {
+        val st = GitReplies.status(Json.parseToJsonElement(conflictedStatusJson))!!
+        assertEquals(
+            listOf(
+                "aa.txt" to "AA", "dd-ours.txt" to "AU", "dd-theirs.txt" to "UA", "dd.txt" to "DD",
+                "du.txt" to "DU", "ud.txt" to "UD", "uu.txt" to "UU"
+            ),
+            st.conflicts.map { it.path to it.code }
+        )
+        assertEquals(
+            listOf("both added", "added by us", "added by them", "both deleted", "deleted by us", "deleted by them", "both modified"),
+            st.conflicts.map { it.description }
+        )
+        // What a commit would take, and what is left to stage: no unmerged path in either.
+        assertEquals(listOf("both.txt", "ua.txt"), st.staged.map { it.path })
+        assertEquals(listOf("both.txt", "ita.txt"), st.unstaged.map { it.path })
+        // `U` with the path in `changes` alone is the only untracked file.
+        assertEquals(listOf("fresh.txt"), st.untracked.map { it.path })
+        assertFalse(st.clean)
+        assertEquals("Resolve the conflicts on the computer first.", SourceControl.commitBlocker(st, "Merge"))
+
+        // A `U` the desktop could not have sent alone on the index side is still unmerged.
+        assertEquals(listOf(GitConflict("x", "U", "")), GitReplies.status(
+            Json.parseToJsonElement("""{"hasRepo":true,"staged":[{"path":"x","status":"U"}],"changes":[]}""")
+        )!!.conflicts)
+        for ((x, y) in listOf("M" to "M", "A" to "M", "A" to "D", "R" to "M", "D" to "", "M" to "D")) {
+            assertFalse(GitConflict.isUnmerged(x, y), "$x$y is not unmerged")
+        }
+        for (xy in listOf("DD", "AU", "UD", "UA", "DU", "AA", "UU")) {
+            assertTrue(GitConflict.isUnmerged(xy.take(1), xy.drop(1)), "$xy is unmerged")
+        }
+    }
+
     @Test
     fun `history reads the commits, the short hash falling back to the id`() {
         val h = GitReplies.history(
@@ -172,6 +241,37 @@ class SourceControlTest {
         assertEquals(listOf(Kind.META, Kind.META, Kind.META, Kind.META, Kind.HUNK, Kind.ADD), d.lines.map { it.kind })
         assertEquals("+new file", d.lines.last().text)
         assertTrue(GitDiff.parse("").isEmpty)
+    }
+
+    @Test
+    fun `a conflicted file's combined diff reads its marker columns`() {
+        // `git diff -- uu.txt` after a merge that conflicted (git 2.43): every line of the result is
+        // new against one side or both, which is how git colours it; ` +ours` is not context.
+        val conflict = """
+            diff --cc uu.txt
+            index b19a1e9,950b81b..0000000
+            --- a/uu.txt
+            +++ b/uu.txt
+            @@@ -1,1 -1,1 +1,5 @@@
+            ++<<<<<<< HEAD
+             +ours
+            ++=======
+            + theirs
+            ++>>>>>>> theirs
+        """.trimIndent() + "\n"
+        val d = GitDiff.parse(conflict)
+        assertEquals(listOf(Kind.META, Kind.META, Kind.META, Kind.META, Kind.HUNK) + List(5) { Kind.ADD }, d.lines.map { it.kind })
+
+        // Two columns: a `-` in either is a line the result dropped, two blanks are context. A plain
+        // diff after it is back to one column.
+        val mixed = "diff --cc f\n@@@ -1,3 -1,3 +1,2 @@@\n  same\n- ours-old\n -theirs-old\n+-x\n" +
+            "diff --git a/g b/g\n@@ -1 +1 @@\n -kept\n"
+        assertEquals(
+            listOf(Kind.META, Kind.HUNK, Kind.CONTEXT, Kind.DEL, Kind.DEL, Kind.DEL, Kind.META, Kind.HUNK, Kind.CONTEXT),
+            GitDiff.parse(mixed).lines.map { it.kind }
+        )
+        // What git prints for an unmerged path one side deleted is a note, not a hunk.
+        assertEquals(listOf(Kind.META), GitDiff.parse("* Unmerged path du.txt\n").lines.map { it.kind })
     }
 
     @Test
@@ -296,6 +396,7 @@ class SourceControlTest {
         git.diff(untracked, staged = false)
         git.diff(changed, staged = false)
         git.diff(changed, staged = true)
+        git.diff(GitConflict("both.ts", "U", "U"))
         git.stage(listOf("a.ts", "new.txt"))
         git.unstage(listOf("a.ts"))
         git.commit("msg")
@@ -308,6 +409,8 @@ class SourceControlTest {
                 GitVerb.DIFF to mapOf("path" to JsonPrimitive("new.txt"), "staged" to bool(false), "untracked" to bool(true)),
                 GitVerb.DIFF to mapOf("path" to JsonPrimitive("a.ts"), "staged" to bool(false), "untracked" to bool(false)),
                 GitVerb.DIFF to mapOf("path" to JsonPrimitive("a.ts"), "staged" to bool(true), "untracked" to bool(false)),
+                // An unmerged path's working tree, never the untracked (whole file as new) form.
+                GitVerb.DIFF to mapOf("path" to JsonPrimitive("both.ts"), "staged" to bool(false), "untracked" to bool(false)),
                 GitVerb.STAGE to mapOf("paths" to JsonArray(listOf(JsonPrimitive("a.ts"), JsonPrimitive("new.txt")))),
                 GitVerb.UNSTAGE to mapOf("paths" to JsonArray(listOf(JsonPrimitive("a.ts")))),
                 GitVerb.COMMIT to mapOf("message" to JsonPrimitive("msg")),
@@ -335,14 +438,66 @@ class SourceControlTest {
     }
 
     @Test
-    fun `push and pull wait for the remote longer than the usual request`() {
-        // The desktop sets no limit on `git push`; a slow remote must not read as a failed push.
-        assertEquals(GIT_NETWORK_TIMEOUT_MS, GitVerb.PUSH.timeoutMs)
-        assertEquals(GIT_NETWORK_TIMEOUT_MS, GitVerb.PULL.timeoutMs)
-        assertTrue(GIT_NETWORK_TIMEOUT_MS > RelaySocket.RPC_TIMEOUT_MS)
-        for (v in GitVerb.entries - setOf(GitVerb.PUSH, GitVerb.PULL)) assertEquals(RelaySocket.RPC_TIMEOUT_MS, v.timeoutMs, "$v")
+    fun `every write waits longer than the usual request, the reads do not`() {
+        // The desktop sets no limit on any git command: a push to a slow remote, a commit running
+        // the repository's hooks, a stage running LFS clean filters must not read as failures.
+        val writes = setOf(GitVerb.STAGE, GitVerb.UNSTAGE, GitVerb.COMMIT, GitVerb.PUSH, GitVerb.PULL)
+        for (v in writes) assertEquals(GIT_WRITE_TIMEOUT_MS, v.timeoutMs, "$v")
+        assertTrue(GIT_WRITE_TIMEOUT_MS > RelaySocket.RPC_TIMEOUT_MS)
+        for (v in GitVerb.entries - writes) assertEquals(RelaySocket.RPC_TIMEOUT_MS, v.timeoutMs, "$v")
         val relay = java.io.File(InteropHarness.repoRoot, "android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/RelayHostConnection.kt").readText()
         assertTrue(relay.contains("verb.timeoutMs"), "the relay connection must pass the verb's timeout on")
+        assertTrue(relay.contains("throw hostException(e)"), "the relay connection must keep an unanswered request unanswered")
+    }
+
+    @Test
+    fun `a write that got no answer says it may have run, a refusal stays the host's sentence`() = runBlocking<Unit> {
+        // The relay's own failures, as the connection surfaces them.
+        assertIs<HostUnansweredException>(hostException(RpcUnansweredException("RPC timed out: git.commit")))
+        assertIs<HostUnansweredException>(hostException(RpcUnansweredException("Relay connection closed.")))
+        val refused = hostException(RpcException("cwd is outside the shared project roots."))
+        assertFalse(refused is HostUnansweredException)
+        assertEquals("cwd is outside the shared project roots.", refused.message)
+
+        val timedOut = SourceControl(RecordingConn { throw HostUnansweredException("RPC timed out: git.commit") }, "/w")
+        val e = assertFailsWith<HostUnansweredException> { timedOut.commit("msg") }
+        assertEquals("The computer did not answer. The commit may still be running there, or may have finished.", e.message)
+        assertEquals(SourceControl.unanswered("The push"), assertFailsWith<HostUnansweredException> { timedOut.push() }.message)
+
+        val refusing = SourceControl(RecordingConn { throw HostException("git is not served on this host.") }, "/w")
+        val r = assertFailsWith<HostException> { refusing.commit("msg") }
+        assertFalse(r is HostUnansweredException)
+        assertEquals("git is not served on this host.", r.message)
+    }
+
+    @Test
+    fun `the status is read again after every write, whatever came of it`() = runBlocking<Unit> {
+        var reloads = 0
+        val reload: suspend () -> Unit = { reloads++ }
+
+        // No answer: the commit may have landed, so the screen must not keep the old status.
+        val unanswered = SourceControl.writeThenReload("Commit", { throw HostUnansweredException(SourceControl.unanswered("The commit")) }, reload)
+        assertEquals(1, reloads)
+        assertEquals(SourceControl.Outcome(error = true, text = SourceControl.unanswered("The commit")), unanswered)
+
+        // git refused it there: its own words, and the truth about ahead/behind.
+        val failed = SourceControl.writeThenReload("Push", { GitResult(false, "rejected") }, reload)
+        assertEquals(2, reloads)
+        assertEquals(SourceControl.Outcome(error = true, text = "rejected"), failed)
+
+        assertEquals(SourceControl.Outcome(false, "Pushed."), SourceControl.writeThenReload("Push", { GitResult(true, "Pushed.") }, reload))
+        assertNull(SourceControl.writeThenReload("Stage", { GitResult(true, "") }, reload))
+        assertEquals(4, reloads)
+
+        // A failed re-read is said only when the write itself had nothing to say.
+        val broken: suspend () -> Unit = { throw HostException("Relay socket is not connected.") }
+        assertEquals(SourceControl.Outcome(true, "Relay socket is not connected."), SourceControl.writeThenReload("Stage", { GitResult(true, "") }, broken))
+        assertEquals(SourceControl.Outcome(true, "rejected"), SourceControl.writeThenReload("Push", { GitResult(false, "rejected") }, broken))
+
+        // Leaving the screen cancels; that is not an outcome.
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            SourceControl.writeThenReload("Commit", { throw kotlinx.coroutines.CancellationException("left") }, reload)
+        }
     }
 
     // ---- the app ------------------------------------------------------------------------------------
@@ -361,9 +516,31 @@ class SourceControlTest {
         assertFalse(Regex("""connection\??\.git\(""").containsMatchIn(screen), "git must not go to whatever connection is open")
         // The cwd is the gate's (the project's folder from projects.list), never typed or derived.
         assertTrue(screen.contains("(gate as? SourceControlGate.Availability.Available)?.cwd"))
-        // A git failure on the computer, and a refused request, are shown in its own words.
-        assertTrue(screen.contains("result?.let(SourceControl::outcome)"))
+        // A git failure on the computer, and a refused request, are shown in its own words, and the
+        // status is read again after every write, failed or unanswered included.
+        assertTrue(screen.contains("notice = SourceControl.writeThenReload(label, { block(git(dir)) }, { load(dir, withHistory) })"))
         assertTrue(screen.contains("e.message ?:"))
+    }
+
+    @Test
+    fun `the screen lists conflicts on their own, and no row can share a key with a heading`() {
+        val screen = AppSourcePins.ui("SourceControlScreen.kt")
+        // A path is any name, `title` or `header` included, so rows and headings live in disjoint
+        // namespaces: a duplicate LazyColumn key throws, i.e. the screen would crash on open.
+        assertTrue(screen.contains("""item(key = "${'$'}key-header")"""))
+        assertTrue(screen.contains("""items(files, key = { "${'$'}key-file:${'$'}{it.path}" })"""))
+        assertTrue(screen.contains("""items(conflicts, key = { "conflicts-file:${'$'}{it.path}" })"""))
+        val keys = Regex("""key = \{? ?"([^"]*)"""").findAll(screen).map { it.groupValues[1] }.toList()
+        for (k in keys.filterNot { "{it." in it }) {
+            assertFalse(Regex("""-file:""").containsMatchIn(k), "a fixed key in the row namespace: $k")
+        }
+        assertFalse(screen.contains("""key-${'$'}{it.path}"""), "the old row key shared the heading's namespace")
+        // Conflicts are opened as conflicts (never the untracked diff) and offered no Stage.
+        assertTrue(screen.contains("conflictSection(status.conflicts, onOpenConflict)"))
+        assertTrue(screen.contains("is DiffTarget.Conflict -> git(dir).diff(target.conflict)"))
+        val section = screen.substringAfter("LazyListScope.conflictSection(").substringBefore("@Composable")
+        assertTrue(section.contains("onOpen(c)"))
+        assertFalse(section.contains("TextButton") || section.contains("onAct"), "a conflict row offers no action but opening it")
     }
 
     @Test

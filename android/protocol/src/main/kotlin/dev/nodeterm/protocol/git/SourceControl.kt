@@ -4,8 +4,10 @@ import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.GitVerb
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.HostUnansweredException
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.model.ProjectInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -32,44 +34,73 @@ class SourceControl(private val conn: HostConnection, val cwd: String) {
      * The diff of [file] on one side: [staged] = the index against HEAD (`--cached`), else the working
      * tree against the index, or the whole file for an untracked one.
      */
-    suspend fun diff(file: GitFileChange, staged: Boolean): GitDiff {
+    suspend fun diff(file: GitFileChange, staged: Boolean): GitDiff = diff(file.path, staged, untracked = !staged && file.untracked)
+
+    /**
+     * An unmerged path's working tree, as plain `git diff -- <path>` shows it: the combined diff with
+     * the conflict markers for a file both sides changed, git's "* Unmerged path" line otherwise.
+     * Never the untracked form, which would show the conflicted file as a new one.
+     */
+    suspend fun diff(conflict: GitConflict): GitDiff = diff(conflict.path, staged = false, untracked = false)
+
+    private suspend fun diff(path: String, staged: Boolean, untracked: Boolean): GitDiff {
         val body = conn.git(
             GitVerb.DIFF, cwd,
             mapOf(
-                "path" to JsonPrimitive(file.path),
+                "path" to JsonPrimitive(path),
                 "staged" to JsonPrimitive(staged),
-                "untracked" to JsonPrimitive(!staged && file.untracked)
+                "untracked" to JsonPrimitive(untracked)
             )
         )
         return GitDiff.parse(GitReplies.diff(body) ?: throw unreadable())
     }
 
-    suspend fun stage(paths: List<String>): GitResult = write(GitVerb.STAGE, mapOf("paths" to JsonArray(paths.map(::JsonPrimitive))))
+    suspend fun stage(paths: List<String>): GitResult =
+        write(GitVerb.STAGE, "Staging", mapOf("paths" to JsonArray(paths.map(::JsonPrimitive))))
 
-    suspend fun unstage(paths: List<String>): GitResult = write(GitVerb.UNSTAGE, mapOf("paths" to JsonArray(paths.map(::JsonPrimitive))))
+    suspend fun unstage(paths: List<String>): GitResult =
+        write(GitVerb.UNSTAGE, "Unstaging", mapOf("paths" to JsonArray(paths.map(::JsonPrimitive))))
 
     /** Commits what is STAGED (the desktop adds nothing on its own). */
-    suspend fun commit(message: String): GitResult = write(GitVerb.COMMIT, mapOf("message" to JsonPrimitive(message)))
+    suspend fun commit(message: String): GitResult = write(GitVerb.COMMIT, "The commit", mapOf("message" to JsonPrimitive(message)))
 
     /** `git push`; a branch with no upstream is pushed to `origin` with `-u` by the desktop. */
-    suspend fun push(): GitResult = write(GitVerb.PUSH)
+    suspend fun push(): GitResult = write(GitVerb.PUSH, "The push")
 
-    suspend fun pull(): GitResult = write(GitVerb.PULL)
+    suspend fun pull(): GitResult = write(GitVerb.PULL, "The pull")
 
     suspend fun history(): GitHistory = GitReplies.history(conn.git(GitVerb.HISTORY, cwd)) ?: throw unreadable()
 
-    private suspend fun write(verb: GitVerb, args: Map<String, JsonElement> = emptyMap()): GitResult =
-        GitReplies.result(conn.git(verb, cwd, args)) ?: throw unreadable()
+    /**
+     * A write whose request went out and got no answer (it timed out, or the connection dropped
+     * while it waited) did not necessarily fail: the desktop runs it with no limit, and a commit's
+     * hooks or a push to a slow remote may still be running, or may have finished, there. That is
+     * said instead of a bare "RPC timed out", and the screen reads the status again to show which.
+     */
+    private suspend fun write(verb: GitVerb, what: String, args: Map<String, JsonElement> = emptyMap()): GitResult {
+        val body = try {
+            conn.git(verb, cwd, args)
+        } catch (e: HostUnansweredException) {
+            throw HostUnansweredException(unanswered(what))
+        }
+        return GitReplies.result(body) ?: throw unreadable()
+    }
 
     private fun unreadable() = HostException("The computer's answer to a source-control request could not be read.")
 
     companion object {
+        /** What a write that got no answer says; [what] names it ("The commit"). */
+        fun unanswered(what: String): String =
+            "The computer did not answer. $what may still be running there, or may have finished."
+
         /**
-         * Why a commit cannot be made yet, or null when it can. The desktop commits only what is
-         * staged and refuses an empty message ("Commit message is empty."); the button says so first.
+         * Why a commit cannot be made yet, or null when it can. git refuses a commit while a path is
+         * unmerged; the desktop commits only what is staged and refuses an empty message ("Commit
+         * message is empty."). The button says so first.
          */
         fun commitBlocker(status: GitStatus?, message: String): String? = when {
             status == null || !status.hasRepo -> "There is no repository to commit to."
+            status.conflicts.isNotEmpty() -> "Resolve the conflicts on the computer first."
             status.staged.isEmpty() -> "Stage the changes to commit first."
             message.isBlank() -> "Write a commit message."
             else -> null
@@ -91,6 +122,33 @@ class SourceControl(private val conn: HostConnection, val cwd: String) {
             result.message.isBlank() -> null
             else -> Outcome(error = false, text = result.message)
         }
+
+        /**
+         * Runs one write, then [reload]s the status WHATEVER happened to it, and answers what the
+         * screen says. Reading again after a failure is the point: a push that git refused still
+         * moved nothing, but a commit that got no answer ([HostUnansweredException]: its hooks
+         * outlasted the wait, the connection dropped) may have landed on the computer all the same,
+         * and a screen still showing "N staged" would then say the opposite of what is there. The
+         * write's own outcome wins; a failed re-read is said only when the write had nothing to say.
+         */
+        suspend fun writeThenReload(label: String, write: suspend () -> GitResult?, reload: suspend () -> Unit): Outcome? {
+            val said = try {
+                write()?.let(::outcome)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Outcome(error = true, text = e.message ?: "$label failed.")
+            }
+            val reread = try {
+                reload()
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Outcome(error = true, text = e.message ?: "The status could not be read again.")
+            }
+            return said ?: reread
+        }
     }
 
     data class Outcome(val error: Boolean, val text: String)
@@ -110,9 +168,10 @@ object SourceControlGate {
     /**
      * [leg] is where `git.*` goes right now (`LegRouting.route(Capability.GIT, …)`).
      *
-     * An SSH project of the desktop is refused here rather than by the host: its folder is on another
-     * machine (the desktop's own Source Control reaches it over its ControlMaster), the listing does
-     * not carry that folder's path, and the bridge's jail is the computer's own project folders.
+     * An SSH project of the desktop is refused here rather than by the host. The listing does name
+     * its folder (`ssh.remoteCwd`), but that is a path on ANOTHER machine, which the desktop's own
+     * Source Control reaches over its ControlMaster; the bridge's jail is this computer's local
+     * project folders, which normally do not include it, so the request would only be refused.
      */
     fun of(project: ProjectInfo?, leg: LegRouting.Leg): Availability {
         if (project == null) return Availability.Unavailable("This project is no longer on the computer.")

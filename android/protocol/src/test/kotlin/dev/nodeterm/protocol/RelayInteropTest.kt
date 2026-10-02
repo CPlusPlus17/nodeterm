@@ -1,6 +1,7 @@
 package dev.nodeterm.protocol
 
 import dev.nodeterm.protocol.crypto.BoxKeyPair
+import dev.nodeterm.protocol.git.GitConflict
 import dev.nodeterm.protocol.git.GitDiff
 import dev.nodeterm.protocol.git.GitFileChange
 import dev.nodeterm.protocol.git.GitResult
@@ -493,6 +494,84 @@ class RelayInteropTest {
             val pulled = git.pull()
             assertTrue(pulled.ok, pulled.message)
             assertFalse(git.history().hasOutgoingChanges)
+        }
+    }
+
+    /**
+     * Review of A29: a merge that conflicted, read through the desktop's real `GitService`. Its status
+     * sends an unmerged path's `U` exactly like an untracked file's (porcelain `??`), in both lists.
+     * The phone lists such a path as a conflict, opens it as the combined diff with its markers (never
+     * `git diff --no-index /dev/null <path>`, which showed the conflicted file as a NEW one), and does
+     * not offer the commit git refuses. The merge is made here with git itself, as it would be on the
+     * computer (a Pull from the phone that merges ends in the same state).
+     */
+    @Test
+    fun `a merge that conflicted reaches the phone as conflicts, not as untracked files`() = runBlocking<Unit> {
+        val h = start()
+        val connected = connect(h)
+        connected.connection.use { conn ->
+            val cwd = connected.first.projects.single().cwd!!
+            val noConfig = Files.createTempFile("gitconfig", "").toFile().also { it.deleteOnExit() }
+            fun git(vararg args: String): Int {
+                val pb = ProcessBuilder(listOf("git") + args).directory(File(cwd)).redirectErrorStream(true)
+                // The repository's own config (seedGitRepo: identity, no hooks, no signing) and nothing of
+                // the machine's, so a user's merge settings cannot change the conflict.
+                pb.environment()["GIT_CONFIG_GLOBAL"] = noConfig.path
+                pb.environment()["GIT_CONFIG_NOSYSTEM"] = "1"
+                val proc = pb.start()
+                proc.inputStream.readBytes()
+                return proc.waitFor()
+            }
+            fun write(name: String, text: String) = File(cwd, name).writeText(text)
+
+            // The base: the seed's README, staged.txt and new.txt, committed.
+            assertEquals(0, git("add", "-A"))
+            assertEquals(0, git("commit", "-q", "-m", "base"))
+            // Theirs: README and staged.txt changed, new.txt deleted, both.txt added.
+            assertEquals(0, git("checkout", "-q", "-b", "theirs"))
+            write("README.md", "theirs\n")
+            write("staged.txt", "theirs\n")
+            write("both.txt", "theirs\n")
+            assertEquals(0, git("rm", "-q", "new.txt"))
+            assertEquals(0, git("add", "-A"))
+            assertEquals(0, git("commit", "-q", "-m", "theirs"))
+            // Ours: README and new.txt changed, staged.txt deleted, both.txt added differently.
+            assertEquals(0, git("checkout", "-q", "main"))
+            write("README.md", "ours\n")
+            write("new.txt", "ours\n")
+            write("both.txt", "ours\n")
+            assertEquals(0, git("rm", "-q", "staged.txt"))
+            assertEquals(0, git("add", "-A"))
+            assertEquals(0, git("commit", "-q", "-m", "ours"))
+            assertEquals(1, git("merge", "theirs"), "the merge conflicts")
+            write("fresh.txt", "fresh\n")
+
+            val git = SourceControl(conn, cwd)
+            val st = git.status()
+            assertEquals(
+                setOf(
+                    GitConflict("README.md", "U", "U"), GitConflict("both.txt", "A", "A"),
+                    GitConflict("new.txt", "U", "D"), GitConflict("staged.txt", "D", "U")
+                ),
+                st.conflicts.toSet()
+            )
+            assertEquals(listOf("fresh.txt"), st.untracked.map { it.path }, "only the file git does not track is untracked")
+            assertTrue(st.staged.isEmpty(), "${st.staged}")
+            assertTrue(st.unstaged.isEmpty(), "${st.unstaged}")
+            assertEquals("Resolve the conflicts on the computer first.", SourceControl.commitBlocker(st, "Merge theirs"))
+
+            val readme = git.diff(st.conflicts.single { it.path == "README.md" })
+            assertEquals(GitDiff.Line(GitDiff.Kind.META, "diff --cc README.md"), readme.lines.first(), "${readme.lines}")
+            assertTrue(readme.lines.none { "/dev/null" in it.text }, "not the untracked form: ${readme.lines}")
+            for (marker in listOf("<<<<<<<", "=======", ">>>>>>>")) {
+                assertTrue(readme.lines.any { it.kind == GitDiff.Kind.ADD && marker in it.text }, "$marker: ${readme.lines}")
+            }
+            assertTrue(GitDiff.Line(GitDiff.Kind.ADD, " +ours") in readme.lines, "${readme.lines}")
+
+            // git itself refuses the commit, which is what the button says first.
+            val commit = git.commit("Merge theirs")
+            assertFalse(commit.ok)
+            assertTrue(commit.message.contains("unmerged"), commit.message)
         }
     }
 

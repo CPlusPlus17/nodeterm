@@ -55,7 +55,14 @@ interface RelaySocketListener {
     fun onClosed(reason: String?) {}
 }
 
-class RpcException(message: String) : Exception(message)
+open class RpcException(message: String) : Exception(message)
+
+/**
+ * The request WENT OUT and no answer came: it timed out, or the socket closed while it waited. The
+ * host may have acted on it (or still be acting), unlike a request that was never sent or one the
+ * host answered with an error, which are plain [RpcException]s.
+ */
+class RpcUnansweredException(message: String) : RpcException(message)
 
 /**
  * The CLIENT (phone) role of `src/main/remote/relay-socket.ts`, rule for rule:
@@ -210,7 +217,7 @@ class RelaySocket(
         }
         for (w in waiters) {
             w.timeout?.cancel(false)
-            w.onResult(Result.failure(RpcException("Relay connection closed.")))
+            w.onResult(Result.failure(RpcUnansweredException("Relay connection closed.")))
         }
         if (notify) listener.onClosed(reason)
     }
@@ -259,7 +266,7 @@ class RelaySocket(
                 val id = "client-rpc-$requestCounter-${System.currentTimeMillis()}"
                 val timer = scheduler.schedule({
                     val w = synchronized(lock) { pending.remove(id) }
-                    w?.onResult?.invoke(Result.failure(RpcException("RPC timed out: $method")))
+                    w?.onResult?.invoke(Result.failure(RpcUnansweredException("RPC timed out: $method")))
                 }, timeoutMs, TimeUnit.MILLISECONDS)
                 pending[id] = Pending(onResult, timer)
                 val env = buildJsonObject {

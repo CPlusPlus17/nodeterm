@@ -8,15 +8,21 @@ import dev.nodeterm.protocol.relay.RelaySocketListener
 import dev.nodeterm.protocol.relay.RelayTransport
 import dev.nodeterm.protocol.relay.RelayTransportEvents
 import dev.nodeterm.protocol.relay.RelayTransportFactory
+import dev.nodeterm.protocol.relay.RpcException
+import dev.nodeterm.protocol.relay.RpcUnansweredException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -146,5 +152,46 @@ class RelaySocketSecurityTest {
         val forged = host.seal(1, 99, 0x01, """{"kind":"notify","method":"forged","params":{}}""".toByteArray(), key = ByteArray(32) { 1 })
         host.events.onBinary(forged)
         assertTrue(rec.notifies.isEmpty())
+    }
+
+    /**
+     * Review of A29: a request that went OUT and got no answer (it timed out, or the socket closed
+     * while it waited) is told apart from one the host answered with an error, and from one that was
+     * never sent. The host may have acted on the first (a git commit whose hooks outlasted the wait),
+     * so the phone must not report it as a failure; the second is the host's own sentence.
+     */
+    @Test
+    fun `an unanswered request is told apart from an error the host answered`() {
+        val (socket, host, _) = connect()
+        fun send(method: String, timeoutMs: Long = 60_000): CompletableFuture<Result<JsonElement?>> {
+            val f = CompletableFuture<Result<JsonElement?>>()
+            socket.request(method, null, timeoutMs) { f.complete(it) }
+            return f
+        }
+        fun lastRequestId(): String {
+            val plain = E2ee.decrypt(host.fromClient.last() as ByteArray, host.sessionKey!!)!!
+            return Json.parseToJsonElement(String(plain.copyOfRange(10, plain.size))).jsonObject["id"]!!.jsonPrimitive.content
+        }
+
+        val timedOut = send("git.commit", timeoutMs = 50).get(5, TimeUnit.SECONDS).exceptionOrNull()
+        assertIs<RpcUnansweredException>(timedOut)
+        assertEquals("RPC timed out: git.commit", timedOut.message)
+
+        val refused = send("git.status")
+        host.sendRpc("""{"kind":"res","id":"${lastRequestId()}","ok":false,"body":{"message":"cwd is outside the shared project roots."}}""")
+        val answered = refused.get(5, TimeUnit.SECONDS).exceptionOrNull()
+        assertIs<RpcException>(answered)
+        assertFalse(answered is RpcUnansweredException, "the host answered it")
+        assertEquals("cwd is outside the shared project roots.", answered.message)
+
+        val waiting = send("git.push")
+        host.events.onClosed("gone")
+        val dropped = waiting.get(5, TimeUnit.SECONDS).exceptionOrNull()
+        assertIs<RpcUnansweredException>(dropped)
+        assertEquals("Relay connection closed.", dropped.message)
+
+        val neverSent = send("git.pull").get(5, TimeUnit.SECONDS).exceptionOrNull()
+        assertIs<RpcException>(neverSent)
+        assertFalse(neverSent is RpcUnansweredException, "nothing went out")
     }
 }

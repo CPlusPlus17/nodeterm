@@ -141,7 +141,7 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
     private suspend fun call(method: String, params: JsonElement? = null, timeoutMs: Long = RelaySocket.RPC_TIMEOUT_MS): JsonElement? = try {
         socket.call(method, params, timeoutMs)
     } catch (e: RpcException) {
-        throw HostException(e.message ?: "Request failed.")
+        throw hostException(e)
     }
 
     override suspend fun listProjects(): ProjectsSnapshot {

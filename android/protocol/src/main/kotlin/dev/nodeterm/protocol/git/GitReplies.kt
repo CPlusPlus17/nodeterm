@@ -12,17 +12,59 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * One changed file, as the desktop's `GitService.status` reports it (`GitFileChange` in
- * src/shared/types.ts). [status] is git's one letter: `M`, `A`, `D`, `R`, `C`, … and `U` for an
- * UNTRACKED file (the desktop maps porcelain `??` to `U`; it is not git's "unmerged" here).
+ * src/shared/types.ts). [status] is git's one letter: `M`, `A`, `D`, `R`, `C`, … or `U`.
+ *
+ * The desktop sends `U` for two different things: an UNTRACKED file (porcelain `??`, in `changes`
+ * only) and a path git reports as UNMERGED (a `U` on either side of porcelain `XY`, sent in both
+ * lists). [GitReplies.status] takes the unmerged paths out into [GitStatus.conflicts], so in the
+ * [GitStatus] it builds a `U` left in [GitStatus.changes] is an untracked file and nothing else.
  */
 data class GitFileChange(val path: String, val status: String, val added: Int, val deleted: Int) {
     val untracked: Boolean get() = status == "U"
 }
 
 /**
+ * A path git reports as unmerged: a merge, rebase, cherry-pick or stash pop that conflicted on it,
+ * the phone's own Pull included. The desktop's status has no field for this; it sends the path in
+ * BOTH of its lists, porcelain `X` as the staged entry ([ours]) and `Y` as the working-tree one
+ * ([theirs]). Unresolved, the file may hold conflict markers, so it is never offered as an untracked
+ * file (whose diff is the whole file as additions) nor staged from the phone (`git add` marks it
+ * resolved, markers and all).
+ */
+data class GitConflict(val path: String, val ours: String, val theirs: String) {
+    /** Porcelain `XY`: `UU`, `AA`, `DD`, `AU`, `UA`, `DU` or `UD`. */
+    val code: String get() = ours + theirs
+
+    /** git's own wording for [code] (`git status`'s "both modified:" and so on). */
+    val description: String
+        get() = when (code) {
+            "UU" -> "both modified"
+            "AA" -> "both added"
+            "DD" -> "both deleted"
+            "AU" -> "added by us"
+            "UA" -> "added by them"
+            "DU" -> "deleted by us"
+            "UD" -> "deleted by them"
+            else -> "unmerged"
+        }
+
+    companion object {
+        /**
+         * Whether porcelain [x] (index side) and [y] (working-tree side) of one path mean "unmerged".
+         * From git-status(1): the unmerged states are exactly `DD AU UD UA DU AA UU`. A `U` on either
+         * side occurs only there, and so do `AA` and `DD` (an added file's working-tree letter is one
+         * of ` MTD`, and a file deleted from the index has none).
+         */
+        fun isUnmerged(x: String, y: String): Boolean = x == "U" || y == "U" || (x == y && (x == "A" || x == "D"))
+    }
+}
+
+/**
  * `git.status` (`GitStatus` in src/shared/types.ts). A folder that is not a repository answers
- * `hasRepo: false` with nothing else filled in. [changes] holds the working-tree changes AND the
- * untracked files, exactly as the desktop sends them; [unstaged] and [untracked] split them.
+ * `hasRepo: false` with nothing else filled in. [staged] is what a commit would take, and [changes]
+ * holds the working-tree changes AND the untracked files, as the desktop sends them but WITHOUT the
+ * unmerged paths, which are in [conflicts] instead (see [GitConflict]); [unstaged] and [untracked]
+ * split [changes].
  */
 data class GitStatus(
     val hasRepo: Boolean,
@@ -36,10 +78,13 @@ data class GitStatus(
     /** The current branch tracks an upstream (it has been pushed once). */
     val hasUpstream: Boolean,
     val staged: List<GitFileChange>,
-    val changes: List<GitFileChange>
+    val changes: List<GitFileChange>,
+    /** Unmerged paths, in the desktop's order. A commit is refused by git while there is one. */
+    val conflicts: List<GitConflict> = emptyList()
 ) {
     val unstaged: List<GitFileChange> get() = changes.filter { !it.untracked }
     val untracked: List<GitFileChange> get() = changes.filter { it.untracked }
+    val clean: Boolean get() = staged.isEmpty() && changes.isEmpty() && conflicts.isEmpty()
 }
 
 /**
@@ -88,6 +133,10 @@ object GitReplies {
     fun status(body: JsonElement?): GitStatus? {
         val o = J.obj(body) ?: return null
         val hasRepo = o.b("hasRepo") ?: return null
+        val staged = o.objects("staged").mapNotNull(::change)
+        val changes = o.objects("changes").mapNotNull(::change)
+        val conflicts = conflictsOf(staged, changes)
+        val conflicted = conflicts.mapTo(HashSet()) { it.path }
         return GitStatus(
             hasRepo = hasRepo,
             repoName = o.s("repoName") ?: "",
@@ -96,9 +145,23 @@ object GitReplies {
             behind = o.l("behind")?.toInt()?.coerceAtLeast(0) ?: 0,
             hasRemote = o.b("hasRemote") == true,
             hasUpstream = o.b("hasUpstream") == true,
-            staged = o.objects("staged").mapNotNull(::change),
-            changes = o.objects("changes").mapNotNull(::change)
+            staged = staged.filter { it.path !in conflicted },
+            changes = changes.filter { it.path !in conflicted },
+            conflicts = conflicts
         )
+    }
+
+    /**
+     * The unmerged paths among what the desktop sent. An unmerged path is in BOTH lists (`X` and `Y`
+     * are never blank for one), so a path only in `changes` is never one: that is where an untracked
+     * `U` lives. A `U` only in `staged` cannot come from the desktop's parsing; it is still unmerged.
+     */
+    private fun conflictsOf(staged: List<GitFileChange>, changes: List<GitFileChange>): List<GitConflict> {
+        val working = changes.associateBy { it.path }
+        return staged.distinctBy { it.path }.mapNotNull { s ->
+            val y = working[s.path]?.status ?: ""
+            if (GitConflict.isUnmerged(s.status, y)) GitConflict(s.path, s.status, y) else null
+        }
     }
 
     private fun change(c: JsonObject): GitFileChange? {

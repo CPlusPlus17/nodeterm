@@ -434,27 +434,38 @@ A phone that stores none follows the default of the build it runs, so storing th
 it to this build's for good. The address rule and the leave decision are unit-tested; the wiring is
 pinned in the source, and whether the back gesture reaches it is a device check.
 
-`SourceControlTest` and two relay interop tests cover the Source Control screen (`A29`). The app
+`SourceControlTest` and three relay interop tests cover the Source Control screen (`A29`). The app
 already had the client half of the desktop's git bridge (`HostConnection.git`) but no screen used
 it. A project's Source control (from its heading on the Sessions tab, or beside the Board's project
-picker) now shows the status split into staged, changed and untracked files, a file's diff on either
-side, stage and unstage (one file or a whole section), a commit of what is staged, push and pull, and
-the last 50 commits. The folder is the project's `cwd` from `projects.list`; there is no free-form
-git, only the bridge's typed verbs. The interop tests run them through the desktop's real
-`GitService` over a repository in the project's folder, from the status to a pushed commit, and check
-that the bridge's refusals ("cwd is outside the shared project roots." for a folder outside its jail,
-`..` included; "git is not served on this host." for a desktop without the bridge) reach the phone
-as those sentences. A git command that fails on the computer is an answer, not an error: `ok: false`
-with git's own message, which the screen shows as it is. The unit tests pin the reading of each
-reply (a reply of another shape says so instead of showing an empty repository), the diff colouring
-(a `+++` inside a hunk is an added line, not a file header; the view keeps the first 4,000 lines and
-says how many it left out), the parameters each verb sends, and that push and pull wait three
-minutes rather than the usual 30 s, since the desktop sets no limit on them. Whether it can open at
-all is decided before any request (`SourceControlGate`): a project with no folder, one of the
-desktop's SSH projects (its folder is on another machine, and the listing does not carry its path),
-and a computer the phone reaches only over SSH with no relay leg each get their reason on the
-screen. The screen is only type-checked; its wiring (the routing decision, the gate, every call
-through `connectionFor(Capability.GIT)`) is pinned in the source.
+picker) now shows the status split into conflicts, staged, changed and untracked files, a file's
+diff on either side, stage and unstage (one file or a whole section), a commit of what is staged,
+push and pull, and the last 50 commits. The folder is the project's `cwd` from `projects.list`;
+there is no free-form git, only the bridge's typed verbs. The interop tests run them through the
+desktop's real `GitService` over a repository in the project's folder, from the status to a pushed
+commit, and check that the bridge's refusals ("cwd is outside the shared project roots." for a
+folder outside its jail, `..` included; "git is not served on this host." for a desktop without the
+bridge) reach the phone as those sentences. A git command that fails on the computer is an answer,
+not an error: `ok: false` with git's own message, which the screen shows as it is. The desktop's
+status sends `U` both for an untracked file (porcelain `??`) and for a path git reports as unmerged,
+and has no field telling them apart; an unmerged path is the one it sends in BOTH lists. The phone
+takes those out into a Conflicts section (git's `UU`, `AA`, … with its wording), opens one as plain
+`git diff` (the combined diff with the conflict markers, never the untracked form, which shows it as
+a new file) and offers no Stage for it, since `git add` would mark it resolved, markers and all;
+Commit says to resolve them first, as git would. An interop test drives the real `GitService` over a
+merge that conflicted. The unit tests pin the reading of each reply (a reply of another shape says
+so instead of showing an empty repository), every unmerged state, the diff colouring (a `+++` inside
+a hunk is an added line, not a file header; a combined diff's two marker columns; the view keeps the
+first 4,000 lines and says how many it left out), the parameters each verb sends, and that every
+write (stage, unstage, commit, push, pull) waits three minutes rather than the usual 30 s: the
+desktop sets no limit on them, and a commit runs the repository's hooks, a stage its clean filters.
+A write that still gets no answer (that wait, or a connection that dropped) says it may still be
+running or have finished there, and the screen reads the status again after every write, failed or
+not. Whether it can open at all is decided before any request (`SourceControlGate`): a project with
+no folder, one of the desktop's SSH projects (the listing names its folder, but that is a path on
+the host the desktop reaches over SSH, which the bridge's jail of this computer's own project
+folders normally does not include), and a computer the phone reaches only over SSH with no relay leg
+each get their reason on the screen. The screen is only type-checked; its wiring (the routing
+decision, the gate, every call through `connectionFor(Capability.GIT)`) is pinned in the source.
 
 `InboxNotificationTextTest` pins what an Inbox notification says (`A52`). An approval's notification
 used to carry the desktop's tool summary (the command's first line, a file path, a fetched URL), and
@@ -848,7 +859,10 @@ later fix left to a device.
     a file's diff opens and Back closes it; stage, unstage, commit (the message box stays above the
     keyboard), push and pull act and the desktop shows the result; a push that fails there (no
     network, a rejected push) shows git's own message. An SSH project and a project with no folder
-    say why instead of opening. *(A29)*
+    say why instead of opening. With a merge that conflicted (on the computer, or a Pull from the
+    phone), the conflicted files are under Conflicts, not Untracked, their diff shows the conflict
+    markers, and Commit says to resolve them first. A commit whose pre-commit hook runs longer than
+    30 s still lands, and the phone shows it. *(A29)*
 
 ### Links and copy in the terminal
 
@@ -999,8 +1013,10 @@ later fix left to a device.
   second copy of the bridge's rules on the phone. The bridge serves no branch switch, discard, init,
   publish, per-commit file list or older history (the desktop's default 50 commits), so the phone
   offers none of them. The desktop's SSH projects are not reachable from the phone's Source Control:
-  their folder is on another host, the listing does not carry its path, and the bridge's jail is the
-  computer's own project folders.
+  the listing names their folder (`ssh.remoteCwd`), but that is a path on another host, which the
+  desktop's own Source Control reaches over its ControlMaster, and the bridge's jail is this
+  computer's local project folders, which normally do not include it. Merge conflicts are shown,
+  never resolved: the phone neither edits a file nor stages an unmerged one (a terminal session can).
 - **A desktop mounting a node can still detach a direct-SSH phone.** The desktop leaves `-D` off
   its own tmux client only while a relay-served client of that node is attached (it spawned that
   one itself, so it can see it). A phone attached over direct SSH is detached (exit 0), and so is a
