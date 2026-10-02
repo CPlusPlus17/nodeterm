@@ -24,6 +24,21 @@ VERSION_NAME = "0.1.0-beta.1"
 REVISION = "a" * 40
 
 
+def fixture_sdk(sdk, build_tools_version="36.0.0", platform_version="android-35"):
+    """Use the SDK explicitly installed by CI; additional runner SDKs must not change the fixture."""
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", build_tools_version):
+        raise RuntimeError("Fixture build-tools override must name one stable SDK version.")
+    if not re.fullmatch(r"android-[0-9]+(?:\.[0-9]+)?(?:-beta[1-9][0-9]*)?", platform_version):
+        raise RuntimeError("Fixture platform override must name one Android SDK platform.")
+    tools = Path(sdk) / "build-tools" / build_tools_version
+    android_jar = Path(sdk) / "platforms" / platform_version / "android.jar"
+    if not all((tools / name).is_file() for name in ("aapt", "apksigner", "zipalign", "d8")):
+        raise RuntimeError(f"Fixture requires Android build-tools {build_tools_version}: {tools}")
+    if not android_jar.is_file():
+        raise RuntimeError(f"Fixture requires Android SDK platform {platform_version}: {android_jar}")
+    return tools, android_jar
+
+
 class PackageBetaTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -31,12 +46,12 @@ class PackageBetaTest(unittest.TestCase):
         if not sdk:
             raise RuntimeError("An Android SDK is required for real APK/signature gate tests.")
         cls.sdk = Path(sdk)
-        tools = sorted((cls.sdk / "build-tools").glob("*"), reverse=True)
-        cls.tools = next((path for path in tools if all((path / name).is_file() for name in ("aapt", "apksigner", "zipalign", "d8"))), None)
-        platforms = sorted((cls.sdk / "platforms").glob("android-*/android.jar"), reverse=True)
-        if cls.tools is None or not platforms or not shutil.which("keytool") or not shutil.which("javac"):
+        cls.tools, cls.android_jar = fixture_sdk(
+            cls.sdk, os.environ.get("NODETERM_ANDROID_TEST_BUILD_TOOLS", "36.0.0"),
+            os.environ.get("NODETERM_ANDROID_TEST_PLATFORM", "android-35"))
+        print(f"Packaging fixture SDK: build-tools={cls.tools}, platform={cls.android_jar}", file=sys.stderr)
+        if not shutil.which("keytool") or not shutil.which("javac"):
             raise RuntimeError("SDK build tools/platform and JDK keytool/javac are required.")
-        cls.android_jar = platforms[0]
         cls.temp = tempfile.TemporaryDirectory(prefix="nt-beta-tests-")
         cls.root = Path(cls.temp.name)
         cls.password = cls.root / "password.txt"
@@ -62,6 +77,7 @@ class PackageBetaTest(unittest.TestCase):
         cls.good_apk = cls.fixture_apk("good")
         cls.good_r8 = cls.fixture_r8(cls.root / "r8")
         cls.good_inputs = cls.fixture_inputs("good-inputs")
+        cls.signature_diagnostics = None
 
     @classmethod
     def tearDownClass(cls):
@@ -154,7 +170,28 @@ class PackageBetaTest(unittest.TestCase):
         argv = [sys.executable, str(PACKAGER)]
         for key, value in values.items():
             argv += ["--" + key, str(value)]
-        return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        if result.returncode and b"APK must have one verified signer" in result.stderr:
+            # Production deliberately suppresses signing-tool output. Diagnose this test's
+            # selected SDK with a new disposable fixture, never a real app key or password.
+            result.stderr += self.fixture_signature_diagnostics()
+        return result
+
+    @classmethod
+    def fixture_signature_diagnostics(cls):
+        if cls.signature_diagnostics is None:
+            aligned, signed = cls.root / "diagnostic-aligned.apk", cls.root / "diagnostic-signed.apk"
+            cls.tool([str(cls.tools / "zipalign"), "-P", "16", "-f", "4", str(cls.good_apk), str(aligned)])
+            cls.tool([str(cls.tools / "apksigner"), "sign", "--ks", str(cls.keystore), "--ks-key-alias", "fixture",
+                      "--ks-pass", "file:" + str(cls.password), "--key-pass", "file:" + str(cls.key_password),
+                      "--v2-signing-enabled", "true", "--v4-signing-enabled", "false",
+                      "--out", str(signed), str(aligned)])
+            report = subprocess.run([str(cls.tools / "apksigner"), "verify", "--verbose", "--print-certs", str(signed)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            header = (f"\nDisposable test fixture signature diagnostics:\n"
+                      f"build-tools={cls.tools}\nplatform={cls.android_jar}\nverify exit={report.returncode}\n")
+            cls.signature_diagnostics = header.encode() + report.stdout + report.stderr
+        return cls.signature_diagnostics
 
     def refused(self, result, message):
         self.assertNotEqual(0, result.returncode, result.stdout.decode() + result.stderr.decode())

@@ -126,7 +126,8 @@ def parse_verified_signer(output):
     v2 = [line for line in lines if line.startswith("Verified using v2 scheme")]
     if (counts and counts != ["Number of signers: 1"]) or v2 != ["Verified using v2 scheme (APK Signature Scheme v2): true"]:
         raise PackagingError(failure)
-    certificates = [line for line in lines if line.startswith("Signer") and "certificate SHA-256" in line]
+    certificates = [line for line in lines if "Signer" in line and "certificate SHA-256" in line
+                    and not line.startswith("Source Stamp Signer")]
     signers, ranges = set(), []
     for line in certificates:
         indexed = re.fullmatch(r"Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
@@ -135,11 +136,19 @@ def parse_verified_signer(output):
                 raise PackagingError(failure)
             signers.add(indexed[1].lower())
             continue
+        # Build-tools 37 labels a single signer by its highest verified scheme. Its verbose
+        # count is mandatory here; numbered/multiple, unknown or repeated labels remain refused.
+        scheme = re.fullmatch(r"(?:V2|V3\.0) Signer: certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+        if scheme:
+            if counts != ["Number of signers: 1"] or len(certificates) != 1:
+                raise PackagingError(failure)
+            signers.add(scheme[1].lower())
+            continue
         # ApkSignerTool prints SDK ranges for v3.1 instead of numbered signer labels. Preserve
         # the single-certificate policy across ranges, rather than counting each range as a key.
-        ranged = re.fullmatch(r"Signer \(minSdkVersion=([1-9][0-9]{0,9})(?: \(dev release=true\))?, "
+        ranged = re.fullmatch(r"(?:Signer |V3\.[01] Signer: )\(minSdkVersion=([1-9][0-9]{0,9})(?: \(dev release=true\))?, "
                               r"maxSdkVersion=([1-9][0-9]{0,9})\) certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
-        if not ranged:
+        if not ranged or (line.startswith("V3.") and counts != ["Number of signers: 1"]):
             raise PackagingError(failure)
         minimum, maximum = int(ranged[1]), int(ranged[2])
         if not minimum <= maximum <= 2_147_483_647:
