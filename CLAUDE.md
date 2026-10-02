@@ -7725,7 +7725,16 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new
   terminal/agent nodes only, clamped in `terminalNodeSize()` in `state/workspace.ts`),
   pan-hover delay, double-click focus, accent, tmux on/scrollback, commit agent,
-  `seenShortcuts`.
+  `seenShortcuts`. **Every section is MOUNTED whenever Settings is open** — an inactive one
+  returns null from `SettingsSection`, but its hooks and the whole render body above that return
+  still run. So a throw in a section the user never navigated to blanks the entire page: #1090
+  (0.4.0) was `GitHubIssuesSection` calling `dispatchBindingFor` during render, a closure over a
+  `const repository` declared ~140 lines lower (below the early returns) — a TDZ ReferenceError on
+  every Settings open once dispatch was switched on for the active project. **tsc does not flag a
+  closure that reads a later `const`**, only a direct read, so declare anything a render-time
+  helper closes over ABOVE the helper. Each section is now wrapped in `SettingsSectionBoundary`,
+  which contains a throw to that section (fallback shown only while it is the viewed one) — keep
+  new sections inside one.
 - **Shortcuts** (`ShortcutsPanel.tsx`, ? / ⌘/): shown once on first launch (`seenShortcuts`).
   **Derived from the registry, never hand-listed** — see the Keybindings invariant below.
 - **Welcome** (`WelcomeScreen.tsx`): shown when no projects exist.

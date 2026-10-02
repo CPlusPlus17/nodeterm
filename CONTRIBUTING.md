@@ -1158,6 +1158,13 @@ Electron/Xvfb on Linux; macOS traffic lights and actual window movement still ne
 
 `npm test` must pass, and `npm run typecheck` is the fastest gate.
 
+**The typecheck does not catch a closure reading a later `const`.** If a helper defined in a
+component body reads a `const` declared further down and the helper is CALLED during render, it
+throws a TDZ `ReferenceError` at runtime while `tsc` stays green (#1090 blanked all of Settings
+this way). Declare what a render-time helper closes over above the helper, and give a new
+Settings section a render test with its real-world state populated — every section renders on
+each Settings open, visible or not, and each is wrapped in `SettingsSectionBoundary`.
+
 Beyond that, one habit is worth more than any other here:
 
 **Mutation-test your guards.** Delete or invert the check you just added and confirm a test *fails*.
