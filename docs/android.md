@@ -201,6 +201,32 @@ cap does not respect. `TerminalJsOsc52Test` runs the app's real `terminal.js` in
 xterm/bridge objects and checks that it applies that cap before a copy crosses the WebView bridge.
 The app also catches a failing `setPrimaryClip` and says so in a toast; that part is not tested.
 
+Links and copying in the terminal (`A32`) had no way in: tmux runs `mouse on`, so xterm's own
+selection never runs, its link handling stands aside, and tmux's copy-mode is out of easy reach on a
+touch screen. `TerminalJsLinksTest` runs the real `terminal.js` in node against a stub xterm buffer.
+A URL is matched across the rows it wraps over: xterm's soft wraps, and the full-width rows a tmux
+repaint or an agent's fullscreen TUI paints with no wrap flag (the desktop's `file-links.ts` URL
+matcher, ported; `@xterm/addon-web-links` joins only soft wraps, so a long OAuth URL opened its first
+row's fragment). A tap on a link, an OSC 8 link included (its label hides the URL), hands the bridge
+the URL as the URL parser writes it and cancels the touchend, so the click the tap makes never
+reaches tmux or the app in the pane; a tap anywhere else, a swipe or two fingers are left alone. OSC 8
+links go through `options.linkHandler`, never xterm's `confirm()` (the WebView has no WebChromeClient
+to show one), and only http(s) crosses from any way in. The app then names the host and shows the URL
+(`Open <host>?`), and opens it with a browsable `ACTION_VIEW` only on Open; `ExternalLink`
+(`TerminalCopyTest`) checks the URL again: http(s), a host, printable ASCII, and the host named is the
+one after any user info. The key row's Copy chip opens a sheet of what the buffer holds (its last 500
+rows, which under tmux is the visible screen; soft wraps joined) and the links in it. `TerminalCopyTest`
+covers how `TerminalCopy` reads that snapshot, the selection (a tap toggles a line, a long-press
+selects the range from the last line tapped), and the 100,000-character cap the OSC 52 copy keeps,
+for Copy and Share alike. `TerminalLinksWiringTest` pins the Android half in the source. The offer,
+the sheet, the intents, and whether a tap on a phone produces the events the page expects are a
+device check. The matching shares the desktop's limits: text that exactly fills a row can be joined
+with the next, a URL inside a box a TUI draws with `│` at both edges is not joined, and each CJK
+character before a URL on its row shifts where a tap lands by a column. One difference: below a run
+of more than 32 such full-width rows, the desktop's join could leave out the row asked about (a
+missed link there); the port's always includes it, which also keeps the Copy sheet's scan through
+such a run from standing still (a test runs one).
+
 An SSH test pins that a server which completes the key exchange and then refuses the phone's key
 (or user) leaves the host-key pin empty (`A49`). `SshFallbackTest` pins what follows a failed SSH
 leg (`A74`): a changed key goes on to the relay in Auto with a warning, stops on the SSH-only route,
@@ -430,7 +456,7 @@ later fix left to a device.
    one of the two phones on an entitled (Pro) desktop: the other keeps working. A cloud backup
    restored onto a fresh install brings back nothing of the app either. *(A51)*
 5. Once a release signing key exists: install the signed, minified release APK and run the pairing,
-   SSH, relay, OSC 52 copy and background-notification items on it, since that is where code R8 could
+   SSH, relay, OSC 52 copy, links and Copy sheet, and background-notification items on it, since that is where code R8 could
    have broken runs (BouncyCastle's provider tables on the first connect, the WebView bridge, the
    WorkManager worker). An error message names a real exception class, not an obfuscated one.
    `adb shell run-as dev.nodeterm.android` is refused on it, while on the debug APK it opens a shell
@@ -489,8 +515,9 @@ later fix left to a device.
     key chip (Esc, Tab, ⇧Tab, the arrows, ⏎, ⇧⏎, ^C, ^D, ^R, ^L, Home, End, PgUp, PgDn): the
     connection survives all of it. *(A01, A04)*
 19. Non-ASCII renders over SSH: Claude's rounded borders, accented letters, CJK, emoji. *(A03)*
-20. Swipe to scroll the tmux history. Select text in tmux: the copy reaches Android's clipboard (OSC 52)
-    with a "Copied N lines" toast. *(A65)*
+20. Swipe to scroll the tmux history. A copy the pane makes reaches Android's clipboard (OSC 52) with a
+    "Copied N lines" toast: in tmux's copy-mode (Ctrl, then b, then [ from the key row and the input
+    bar), or from an application such as vim (`"+y`). *(A65)*
 21. A large OSC 52 copy. In the pane, run
     `printf '\033]52;c;%s\a' "$(head -c 150000 /dev/zero | tr '\0' x | base64 | tr -d '\n')"`
     (the desktop's tmux passes an application's OSC 52 on): the phone says it is too large to copy and
@@ -618,6 +645,25 @@ later fix left to a device.
     keyboard), push and pull act and the desktop shows the result; a push that fails there (no
     network, a rejected push) shows git's own message. An SSH project and a project with no folder
     say why instead of opening. *(A29)*
+
+### Links and copy in the terminal
+
+54. Print a URL long enough to wrap over several rows, e.g.
+    `printf 'https://example.com/%s\n' "$(head -c 300 /dev/zero | tr '\0' a)"` in a shell, and ask a
+    Claude session to print one: tap the URL on its first, a middle and its last row. Each time a bar names the host
+    and shows the WHOLE URL, and nothing reached the pane (no click in Claude, no soft keyboard). Open
+    opens the browser on the whole URL; Copy puts it on the clipboard ("Copied the link"); × closes the
+    bar. A tap on plain text, and a swipe that starts on a URL, behave as before. *(A32)*
+55. An OSC 8 link: `printf '\033]8;;https://example.com/osc8\033\\label\033]8;;\033\\\n'` in the
+    pane, then tap "label": the bar offers example.com and opens `https://example.com/osc8`. The same
+    with `file:///etc/passwd` in place of the URL offers nothing. With a mouse connected, a click on a
+    link in a session that is not under tmux (a Windows computer's), where the pane does not report
+    the mouse, offers it too. *(A32)*
+56. The key row's Copy chip opens a sheet of the screen's lines (with a session that is not under tmux,
+    some scrollback too) and, above them, its links with Open and Copy. Tap lines to select them,
+    long-press one to select the range from the last line tapped; Copy puts them on the clipboard
+    ("Copied N lines"), Share opens the system share sheet, and Back or × closes the sheet. The sheet
+    opens on the line at the top of the screen. *(A32)*
 
 ## Known gaps
 

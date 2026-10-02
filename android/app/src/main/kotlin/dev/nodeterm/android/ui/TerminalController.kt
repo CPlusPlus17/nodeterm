@@ -4,6 +4,8 @@ import dev.nodeterm.android.conn.ConnState
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -44,11 +46,13 @@ import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.ViewerSlot
 import dev.nodeterm.protocol.model.AgentState
+import dev.nodeterm.protocol.model.ExternalLink
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.InputBar
 import dev.nodeterm.protocol.model.Keys
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.Osc52
+import dev.nodeterm.protocol.model.TerminalCopy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -137,6 +141,19 @@ class TerminalController(
 
     /** A one-line message over the terminal (dismissable), e.g. a session the desktop refused to add. */
     var notice by mutableStateOf<String?>(null)
+
+    /**
+     * A link the user tapped in the terminal (or clicked with a mouse), offered as "Open <host>?"
+     * (audit A32). Nothing opens on the tap itself: a tap meant for scrolling or for the pane can land on
+     * a link, and an OSC 8 link shows a label, not where it goes. Set only from [ExternalLink.parse], so
+     * only an http(s) URL is ever offered.
+     */
+    var linkOffer by mutableStateOf<ExternalLink?>(null)
+        private set
+
+    /** The Copy sheet's snapshot of the page's buffer (audit A32), or null while the sheet is closed. */
+    var copySheet by mutableStateOf<TerminalCopy.Snapshot?>(null)
+        private set
 
     /**
      * Changes each time the WebView is lost with its renderer (audit A45). The screen keys its
@@ -293,6 +310,28 @@ class TerminalController(
             main.post { toast(COPY_TOO_LARGE, Toast.LENGTH_LONG) }
         }
 
+        /**
+         * A link the page found under a tap or a click (audit A32). The page sends only http(s) URLs;
+         * [ExternalLink.parse] checks that again, and anything else is dropped without a word.
+         */
+        @JavascriptInterface
+        fun openUrl(url: String) {
+            if (!page.isCurrent(gen)) return
+            val link = ExternalLink.parse(url) ?: return
+            main.post { if (!disposed) linkOffer = link }
+        }
+
+        /** The buffer's lines and links for the Copy sheet, as `nt.copySheet` built them (audit A32). */
+        @JavascriptInterface
+        fun onCopySheet(json: String) {
+            if (!page.isCurrent(gen)) return
+            val snapshot = TerminalCopy.parse(json)
+            main.post {
+                if (disposed) return@post
+                if (snapshot == null) toast(COPY_SHEET_FAILED, Toast.LENGTH_SHORT) else copySheet = snapshot
+            }
+        }
+
         /** A whole OSC 52 sequence (`<selection>;<base64>`), parsed here on the bridge thread. */
         @JavascriptInterface
         fun onCopy(data: String) {
@@ -311,27 +350,99 @@ class TerminalController(
      * the shared transaction buffer, or refused) is rethrown here as a RuntimeException. Uncaught,
      * pane output could crash the app (A53); caught, the user is told the copy did not happen.
      */
-    private fun writeClipboard(text: String) {
-        val ctx = webView?.context ?: return
+    private fun writeClipboard(text: String, ctx: Context? = webView?.context, copied: String = linesCopied(text)) {
+        ctx ?: return
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         if (cm == null) {
-            toast(COPY_FAILED, Toast.LENGTH_LONG)
+            toast(COPY_FAILED, Toast.LENGTH_LONG, ctx)
             return
         }
         try {
             cm.setPrimaryClip(ClipData.newPlainText("nodeterm", text))
         } catch (e: Exception) {
-            val tooLarge = generateSequence<Throwable>(e) { it.cause }.take(8).any { it is TransactionTooLargeException }
-            toast(if (tooLarge) COPY_REJECTED_SIZE else COPY_FAILED, Toast.LENGTH_LONG)
+            toast(if (tooLarge(e)) COPY_REJECTED_SIZE else COPY_FAILED, Toast.LENGTH_LONG, ctx)
             return
         }
-        val lines = text.count { it == '\n' } + 1
-        toast("Copied $lines line${if (lines == 1) "" else "s"}", Toast.LENGTH_SHORT)
+        toast(copied, Toast.LENGTH_SHORT, ctx)
     }
 
-    private fun toast(message: String, length: Int) {
-        val ctx = webView?.context ?: return
+    private fun toast(message: String, length: Int, ctx: Context? = webView?.context) {
+        ctx ?: return
         Toast.makeText(ctx, message, length).show()
+    }
+
+    /**
+     * Open the Copy sheet (audit A32) with what the page's buffer holds now. Only a page that is loaded
+     * is asked: queued for one that is not, the sheet would pop up whenever that page came, unasked.
+     */
+    fun openCopySheet() {
+        val wv = webView
+        if (wv == null || !page.isReady) {
+            toast(COPY_SHEET_NOT_READY, Toast.LENGTH_SHORT)
+            return
+        }
+        wv.evaluateJavascript("nt.copySheet()", null)
+    }
+
+    fun closeCopySheet() {
+        copySheet = null
+    }
+
+    /** Copy the selected lines of the open sheet, within the OSC 52 copy's cap (audit A53). */
+    fun copyLines(ctx: Context, selection: TerminalCopy.Selection) {
+        val lines = copySheet?.lines ?: return
+        when (val t = TerminalCopy.text(lines, selection)) {
+            is TerminalCopy.Text.Copy -> writeClipboard(t.text, ctx)
+            TerminalCopy.Text.TooLarge -> toast(COPY_TOO_LARGE, Toast.LENGTH_LONG, ctx)
+            TerminalCopy.Text.Empty -> toast(NOTHING_SELECTED, Toast.LENGTH_SHORT, ctx)
+        }
+    }
+
+    /**
+     * Share the selected lines through the system's share sheet. The text rides the Intent, a binder
+     * transaction like the clipboard's, so it keeps to the same cap, and a refused one is caught.
+     */
+    fun shareLines(ctx: Context, selection: TerminalCopy.Selection) {
+        val lines = copySheet?.lines ?: return
+        when (val t = TerminalCopy.text(lines, selection)) {
+            is TerminalCopy.Text.Copy -> {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t.text)
+                start(ctx, Intent.createChooser(send, null), SHARE_FAILED)
+            }
+            TerminalCopy.Text.TooLarge -> toast(SHARE_TOO_LARGE, Toast.LENGTH_LONG, ctx)
+            TerminalCopy.Text.Empty -> toast(NOTHING_SELECTED, Toast.LENGTH_SHORT, ctx)
+        }
+    }
+
+    /**
+     * Open [link] in the browser: the user tapped Open on the offer or in the Copy sheet, where its host
+     * and URL are shown. ACTION_VIEW, browsable apps only, and only ever an http(s) URL ([ExternalLink]).
+     */
+    fun openLink(ctx: Context, link: ExternalLink) {
+        if (linkOffer == link) linkOffer = null
+        val view = Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addCategory(Intent.CATEGORY_BROWSABLE)
+        start(ctx, view, OPEN_FAILED)
+    }
+
+    fun copyLink(ctx: Context, link: ExternalLink) {
+        if (linkOffer == link) linkOffer = null
+        writeClipboard(link.url, ctx, copied = "Copied the link")
+    }
+
+    fun dismissLink() {
+        linkOffer = null
+    }
+
+    /** startActivity that cannot crash the app: no app to take it, or a refused (too large) Intent. */
+    private fun start(ctx: Context, intent: Intent, failed: String) {
+        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            ctx.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            toast(NO_APP, Toast.LENGTH_LONG, ctx)
+        } catch (e: Exception) {
+            toast(if (tooLarge(e)) INTENT_TOO_LARGE else failed, Toast.LENGTH_LONG, ctx)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -353,14 +464,9 @@ class TerminalController(
         setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
         addJavascriptInterface(Bridge(gen), "NodetermBridge")
         webViewClient = object : WebViewClient() {
-            // The page never navigates; a link the user taps opens in the browser, outside this bridge.
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val url = request.url
-                if (url.scheme == "http" || url.scheme == "https") {
-                    runCatching { view.context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.toString()))) }
-                }
-                return true
-            }
+            // The page never navigates, and nothing it does is opened from here: a link opens only
+            // through the bridge's openUrl, which asks first (audit A32). A navigation is refused.
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
 
             // The renderer was killed or crashed. The default (false) takes the whole app down with
             // it; true keeps the app, which must then stop using this WebView (A45).
@@ -819,6 +925,23 @@ class TerminalController(
             "Too large to copy: nodeterm copies up to %,d characters to the clipboard.".format(Osc52.MAX_TEXT_CHARS)
         private const val COPY_REJECTED_SIZE = "Could not copy: too large for the clipboard."
         private const val COPY_FAILED = "Could not copy to the clipboard."
+        private const val COPY_SHEET_NOT_READY = "The terminal is not ready yet."
+        private const val COPY_SHEET_FAILED = "Could not read the terminal's text."
+        private const val NOTHING_SELECTED = "Select the lines to copy first."
+        private val SHARE_TOO_LARGE =
+            "Too large to share: nodeterm shares up to %,d characters.".format(Osc52.MAX_TEXT_CHARS)
+        private const val SHARE_FAILED = "Could not share the text."
+        private const val INTENT_TOO_LARGE = "Too large to hand to another app."
+        private const val OPEN_FAILED = "Could not open the link."
+        private const val NO_APP = "No app on this phone can open that."
         private fun b64(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        private fun linesCopied(text: String): String {
+            val lines = text.count { it == '\n' } + 1
+            return "Copied $lines line${if (lines == 1) "" else "s"}"
+        }
+
+        /** A binder transaction refused for its size, rethrown by the framework somewhere in the chain. */
+        private fun tooLarge(e: Throwable): Boolean =
+            generateSequence(e) { it.cause }.take(8).any { it is TransactionTooLargeException }
     }
 }

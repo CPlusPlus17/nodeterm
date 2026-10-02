@@ -1,6 +1,9 @@
 package dev.nodeterm.android.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +12,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -16,6 +23,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,11 +52,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
+import dev.nodeterm.protocol.model.ExternalLink
 import dev.nodeterm.protocol.model.OnScreen
+import dev.nodeterm.protocol.model.TerminalCopy
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,119 +108,248 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
             )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().aboveKeyboard(padding)) {
-            Box(Modifier.weight(1f).fillMaxWidth().background(NtColors.canvas)) {
-                // A new key = a new WebView: the old one was destroyed with its renderer (audit A45).
-                // None at all after a loss until the next attach is asked for (the review of A45).
-                if (controller.hasWebView) {
-                    key(controller.webViewKey) {
-                        AndroidView(factory = { ctx -> controller.createWebView(ctx) }, modifier = Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().aboveKeyboard(padding)) {
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxWidth().background(NtColors.canvas)) {
+                    // A new key = a new WebView: the old one was destroyed with its renderer (audit A45).
+                    // None at all after a loss until the next attach is asked for (the review of A45).
+                    if (controller.hasWebView) {
+                        key(controller.webViewKey) {
+                            AndroidView(factory = { ctx -> controller.createWebView(ctx) }, modifier = Modifier.fillMaxSize())
+                        }
                     }
-                }
-                when (val st = controller.state) {
-                    TermState.Connecting -> Row(
-                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        CircularProgressIndicator(Modifier.padding(2.dp))
-                        Text("Opening terminal…")
+                    when (val st = controller.state) {
+                        TermState.Connecting -> Row(
+                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(Modifier.padding(2.dp))
+                            Text("Opening terminal…")
+                        }
+                        is TermState.Ended -> Column(
+                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(st.message)
+                            Button(onClick = { controller.reattach() }) { Text("Reattach") }
+                        }
+                        is TermState.RelayOffer -> Column(
+                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(st.message)
+                            Button(onClick = { controller.openThroughRelay() }) { Text("Open through the relay") }
+                        }
+                        is TermState.ViewLost -> Column(
+                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(st.message)
+                            Button(onClick = { controller.reopenTerminal() }) { Text("Reopen terminal") }
+                        }
+                        is TermState.AwaitingApproval -> Column(
+                            Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Approve this phone on your computer")
+                            Text(st.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.headlineMedium, color = NtColors.accent)
+                            Text(
+                                "Approve only if the code on the computer matches this one.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        TermState.Attached -> Unit
                     }
-                    is TermState.Ended -> Column(
-                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(st.message)
-                        Button(onClick = { controller.reattach() }) { Text("Reattach") }
+                    controller.resumeOffer?.let { offer ->
+                        Column(
+                            Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(offer.message)
+                            Text(offer.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { controller.acceptResume() }, enabled = controller.canResume) { Text(offer.button) }
+                                OutlinedButton(onClick = { controller.dismissResume() }) { Text("Not now") }
+                            }
+                        }
                     }
-                    is TermState.RelayOffer -> Column(
-                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(st.message)
-                        Button(onClick = { controller.openThroughRelay() }) { Text("Open through the relay") }
+                    controller.notice?.let { msg ->
+                        Row(
+                            Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { controller.notice = null }) { Text("OK") }
+                        }
                     }
-                    is TermState.ViewLost -> Column(
-                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(st.message)
-                        Button(onClick = { controller.reopenTerminal() }) { Text("Reopen terminal") }
-                    }
-                    is TermState.AwaitingApproval -> Column(
-                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("Approve this phone on your computer")
-                        Text(st.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.headlineMedium, color = NtColors.accent)
-                        Text(
-                            "Approve only if the code on the computer matches this one.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    TermState.Attached -> Unit
-                }
-                controller.resumeOffer?.let { offer ->
-                    Column(
-                        Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(offer.message)
-                        Text(offer.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { controller.acceptResume() }, enabled = controller.canResume) { Text(offer.button) }
-                            OutlinedButton(onClick = { controller.dismissResume() }) { Text("Not now") }
+                    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                        // A tapped link, offered before anything opens (audit A32).
+                        controller.linkOffer?.let { link -> LinkOffer(controller, link) }
+                        controller.sizedElsewhere?.let { (c, r) ->
+                            Row(
+                                Modifier.fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Sized to another screen (${c}×$r)", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = { controller.fitHere() }) { Text("Fit this screen") }
+                            }
                         }
                     }
                 }
-                controller.notice?.let { msg ->
-                    Row(
-                        Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { controller.notice = null }) { Text("OK") }
-                    }
-                }
-                controller.sizedElsewhere?.let { (c, r) ->
-                    Row(
-                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Sized to another screen (${c}×$r)", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { controller.fitHere() }) { Text("Fit this screen") }
-                    }
+                KeyRow(controller)
+                // The draft is cleared only once it was sent: while nothing is attached (connecting,
+                // disconnected, ended) Send is disabled and the keyboard's Send leaves the text in place,
+                // with the overlay above saying why (A41). Typing a draft meanwhile stays possible.
+                val send: () -> Unit = { if (controller.submit(draft, enter = true)) draft = "" }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Type a command or a prompt") },
+                        maxLines = 4,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { send() })
+                    )
+                    IconButton(onClick = send, enabled = controller.attached) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
                 }
             }
-            KeyRow(controller)
-            // The draft is cleared only once it was sent: while nothing is attached (connecting,
-            // disconnected, ended) Send is disabled and the keyboard's Send leaves the text in place,
-            // with the overlay above saying why (A41). Typing a draft meanwhile stays possible.
-            val send: () -> Unit = { if (controller.submit(draft, enter = true)) draft = "" }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a command or a prompt") },
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { send() })
-                )
-                IconButton(onClick = send, enabled = controller.attached) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
-            }
+            // Over the whole body, key row and input bar included: they have nothing to do while copying.
+            controller.copySheet?.let { snapshot -> CopySheet(controller, snapshot) }
         }
     }
+}
+
+/** "Open <host>?" for a link tapped in the terminal (audit A32): the host and the URL, then a choice. */
+@Composable
+private fun LinkOffer(controller: TerminalController, link: ExternalLink) {
+    val ctx = LocalContext.current
+    Row(
+        Modifier.fillMaxWidth().background(NtColors.panel2).padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Open ${link.host}?", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                link.url,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = NtColors.muted,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        TextButton(onClick = { controller.openLink(ctx, link) }) { Text("Open") }
+        TextButton(onClick = { controller.copyLink(ctx, link) }) { Text("Copy") }
+        IconButton(onClick = { controller.dismissLink() }) { Icon(Icons.Filled.Close, "Dismiss") }
+    }
+}
+
+/**
+ * The Copy sheet (audit A32): the lines the terminal's buffer held when it was opened, to select and
+ * copy or share, and the links in them. tmux's mouse keeps xterm's own selection from running, and
+ * tmux's copy-mode is out of reach of a touch screen, so this is the phone's copy path. A tap selects
+ * or deselects a line; a long-press selects every line from the last one tapped. The selection logic is
+ * [TerminalCopy] (tested); this drawing is only type-checked.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CopySheet(controller: TerminalController, snapshot: TerminalCopy.Snapshot) {
+    val ctx = LocalContext.current
+    var selection by remember(snapshot) { mutableStateOf(TerminalCopy.Selection()) }
+    BackHandler { controller.closeCopySheet() }
+    // The links come first in the list: the sheet opens on the screen's top line below them.
+    val linkRows = if (snapshot.links.isEmpty()) 0 else snapshot.links.size + 2
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = linkRows + snapshot.firstVisible)
+    Column(Modifier.fillMaxSize().background(NtColors.panel)) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Copy from the terminal", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            if (selection.selected.isEmpty()) {
+                TextButton(onClick = { selection = selection.all(snapshot.lines.size) }, enabled = snapshot.lines.isNotEmpty()) { Text("Select all") }
+            } else {
+                TextButton(onClick = { selection = selection.clear() }) { Text("Clear") }
+            }
+            IconButton(onClick = { controller.closeCopySheet() }) { Icon(Icons.Filled.Close, "Close") }
+        }
+        Text(
+            "Tap lines to select them. Long-press a line to select everything from the last line you tapped.",
+            Modifier.padding(horizontal = 12.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = NtColors.muted
+        )
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
+            if (snapshot.links.isNotEmpty()) {
+                item(key = "links") { SheetHeading("Links") }
+                items(snapshot.links, key = { "link:" + it.url }) { link ->
+                    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(link.host, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                link.url,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = NtColors.muted,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        TextButton(onClick = { controller.openLink(ctx, link) }) { Text("Open") }
+                        TextButton(onClick = { controller.copyLink(ctx, link) }) { Text("Copy") }
+                    }
+                }
+                item(key = "text") { SheetHeading("Text") }
+            }
+            if (snapshot.lines.isEmpty()) {
+                item(key = "empty") { SheetHeading("The terminal shows no text.") }
+            }
+            itemsIndexed(snapshot.lines) { i, line ->
+                val selected = i in selection.selected
+                Text(
+                    line.ifEmpty { " " },
+                    Modifier
+                        .fillMaxWidth()
+                        .background(if (selected) NtColors.accent.copy(alpha = 0.3f) else NtColors.canvas)
+                        .combinedClickable(onClick = { selection = selection.toggle(i) }, onLongClick = { selection = selection.extendTo(i) })
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NtColors.text
+                )
+            }
+        }
+        val count = selection.selected.count { it in snapshot.lines.indices }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (count == 0) "No lines selected" else "$count line${if (count == 1) "" else "s"} selected",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall
+            )
+            OutlinedButton(onClick = { controller.shareLines(ctx, selection) }, enabled = count > 0) { Text("Share") }
+            Button(onClick = { controller.copyLines(ctx, selection) }, enabled = count > 0, modifier = Modifier.padding(start = 8.dp)) { Text("Copy") }
+        }
+    }
+}
+
+@Composable
+private fun SheetHeading(text: String) {
+    Text(
+        text,
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = NtColors.muted
+    )
 }
 
 /**
  * The keys a phone keyboard does not have, one tap each. Arrows honour the pane's cursor mode. The
  * sending keys are disabled while nothing is attached (A41): they used to look sent and reach nothing.
- * Ctrl (a modifier for the next key) and ⌨ (opens the keyboard) send nothing themselves.
+ * Copy (the Copy sheet), Ctrl (a modifier for the next key) and ⌨ (opens the keyboard) send nothing
+ * themselves.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -220,6 +360,13 @@ private fun KeyRow(controller: TerminalController) {
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        // First, where the row is not scrolled out of sight (audit A32). Reads what the terminal shows,
+        // so it works attached or not. The input bar lets go of focus first: its keyboard would sit
+        // over the sheet.
+        KeyChip("Copy") {
+            focusManager.clearFocus()
+            controller.openCopySheet()
+        }
         FilterChip(selected = controller.ctrlArmed, onClick = { controller.ctrlArmed = !controller.ctrlArmed }, label = { Text("Ctrl") })
         KeyChip("Esc", on) { controller.key("esc") }
         KeyChip("Tab", on) { controller.key("tab") }
