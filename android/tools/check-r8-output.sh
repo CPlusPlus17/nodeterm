@@ -43,20 +43,25 @@ for m in $methods; do
     if grep -Eq "^$(lit "$bridge"): .*[ .]$m\(" "$seeds"; then ok "bridge method $m kept"; else bad "bridge method $m is not a seed"; fi
 done
 
-# 2. The worker keeps its name (WorkManager stored it) and its (Context, WorkerParameters) constructor.
+# 2. The workers keep their names (WorkManager stored them) and their (Context, WorkerParameters)
+#    constructors: the background check, and the answer sent from a notification (audit A25).
 worker=dev.nodeterm.android.notify.InboxWorker
-if grep -Eq "^$(lit "$worker"): .*\(android\.content\.Context, ?androidx\.work\.WorkerParameters\)" "$seeds"; then
-    ok "$worker constructor kept"
-else
-    bad "$worker (Context, WorkerParameters) constructor is not a seed"
-fi
+action_worker=dev.nodeterm.android.notify.InboxActionWorker
+for w in "$worker" "$action_worker"; do
+    if grep -Eq "^$(lit "$w"): .*\(android\.content\.Context, ?androidx\.work\.WorkerParameters\)" "$seeds"; then
+        ok "$w constructor kept"
+    else
+        bad "$w (Context, WorkerParameters) constructor is not a seed"
+    fi
+done
 
-# 3. Classes loaded by name keep their names: the worker, BouncyCastle's provider, one of the algorithm
+# 3. Classes loaded by name keep their names: the workers, BouncyCastle's provider, one of the algorithm
 #    tables it loads by string concatenation, the X25519 SPI sshj's curve25519 key exchange asks it
 #    for, and an exception whose name user-facing error text can fall back to. A class R8 did not
 #    rename may be absent from mapping.txt; a pinned one is then still a line of its own in seeds.txt.
 for c in \
     "$worker" \
+    "$action_worker" \
     org.bouncycastle.jce.provider.BouncyCastleProvider \
     'org.bouncycastle.jcajce.provider.symmetric.AES$Mappings' \
     'org.bouncycastle.jcajce.provider.asymmetric.edec.KeyAgreementSpi$X25519' \

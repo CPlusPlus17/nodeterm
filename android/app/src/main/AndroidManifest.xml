@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- An answer given from a notification runs as expedited work (audit A25), which Android 11 and
+         lower run as a foreground service. WorkManager's own manifest is expected to declare this
+         too (not checked here: its AAR is on Google Maven); it is stated so that path does not
+         depend on that. Android 12 and later run expedited work as a job and never use it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- QR pairing. Not required: pasting the pairing code works without a camera. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -44,6 +49,10 @@
                 <data android:scheme="nodeterm" android:host="pair" />
             </intent-filter>
         </activity>
+
+        <!-- An answer given from an Inbox notification's action (Approve, Deny, a question's option;
+             audit A25). Only this app's own explicit, immutable PendingIntents reach it. -->
+        <receiver android:name=".notify.InboxActionReceiver" android:exported="false" />
 
     </application>
 </manifest>

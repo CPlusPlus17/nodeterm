@@ -42,7 +42,10 @@ class RelayApprovalGate(
         USER,
         /** The app on its own, in the foreground (the poll, a reconnect after a drop). */
         AUTO,
-        /** Nobody is looking (the Inbox worker). */
+        /**
+         * Nobody is looking at the app: the Inbox worker, or an answer given from a notification (audit
+         * A25), where the user tapped but would not see an approval code either.
+         */
         BACKGROUND
     }
 

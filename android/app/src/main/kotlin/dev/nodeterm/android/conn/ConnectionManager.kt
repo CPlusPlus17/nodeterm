@@ -6,6 +6,7 @@ import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.InboxNotificationActions
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.host.RelayApprovalGate.Trigger
@@ -218,6 +219,20 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         return LegRouting.relayLeg(
             relayConfigured = relayConfigured(host),
             sshOnlyRoute = graph.hosts.route(hostId) == RoutePreference.SSH_ONLY
+        )
+    }
+
+    /**
+     * This computer can be reached without a FIRST relay handshake (audit A25): over its SSH leg, or
+     * through a relay that has already approved this phone. What a notification's answer may use: the
+     * user tapped, but is not looking at the app to compare the desktop's approval code (audit A05).
+     */
+    fun reachableQuietly(): Boolean {
+        val host = graph.hosts.get(hostId) ?: return false
+        return InboxNotificationActions.reachableQuietly(
+            sshLeg = host.sshAvailable && graph.hosts.route(hostId) != RoutePreference.RELAY_ONLY,
+            relayLeg = relayLeg() == LegRouting.RelayLeg.AVAILABLE,
+            relayApproved = graph.hosts.relayApproved(hostId)
         )
     }
 

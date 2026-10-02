@@ -388,6 +388,36 @@ seen-log only when something is new. The decision and the screen bookkeeping are
 wiring into the refresh, the worker and the two screens is pinned in the source, and whether a
 notification appears on a phone is a device check.
 
+`NotificationActionsTest` covers answering from a notification, and where its tap goes (`A25`, the
+in-app part). A notification had no actions, and its tap opened only the computer's Inbox. Now an
+approval carries Approve and Deny and a single-select question its options, and the tap opens that
+session's terminal, with the computer's Inbox one Back away. Which actions an event gets is the pure
+`InboxNotificationActions.plan`, on the Inbox card's own rules: Approve and Deny only where
+`QuickActions` can answer from outside the session (a held ticket, or a claude prompt), options only
+where `QuestionChoices` lists them as answers, and at most three, Android's limit. A question with more
+options, a multi-select one, another agent's approval without a ticket, and a computer the phone could
+reach only through a first relay handshake get Open instead. With "Show details in notifications" off
+the options are labelled "Option 1", "Option 2", … (`A52`). A tap reaches an unexported receiver
+through an explicit, immutable PendingIntent. The receiver takes the actions off the notification
+("Approving…", so a second tap cannot send a second answer) and hands the answer to expedited work, one
+per event. The work connects the way the background check does and never makes a first relay
+handshake, since the user tapped but is not looking at the app to compare the desktop's code (`A05`):
+it reuses a connection already open, or takes the SSH leg or a relay that has already approved this
+phone; otherwise the notification says to open the app. The answer is `QuickActions`', with its
+re-checks (still unresolved, the node-state rules, the ticketed path of `A38`), and it is never sent
+twice. The notification then says how it went. "Approved.", "Denied.", "Answered with option N." and
+"Already handled." go away after 10 s; a timed-out hold, a request only the session can answer, an
+answer not sent (and why) and one that could not be confirmed stay, and their tap opens the session.
+The app does not open the session by itself at that point: Android 12 forbids starting an activity
+from a notification's receiver or service (a "trampoline"), and Android 10 forbids starting one from
+the background, so the notification says "Tap to …" instead. An answering action needs an unlocked
+phone: Android 12 and later ask for the unlock before they send it (`setAuthenticationRequired`);
+Android 11 and lower send it from a locked screen, so there the receiver refuses and says to unlock.
+The plan, the answer run against `QuickActions` (every answer the plan offers is one `QuickActions`
+sends), the outcomes and the hand-off's encoding are unit-tested; the PendingIntents, the receiver, the
+work, its dial trigger and the tap's route are pinned in the source, and whether the actions show and
+answer on a phone is a device check.
+
 `PhoneIdentityTest` and `BackupRulesTest` cover what leaves the phone (`A51`). `allowBackup="false"`
 stops cloud backup, but an app that targets Android 12 or later is still copied by a
 device-to-device transfer unless its data extraction rules exclude it. The transfer carried
@@ -595,8 +625,9 @@ later fix left to a device.
     answer lands in the live session in one tap. A multi-select question lists its options read-only
     beside "Open session". *(A12, A57, A65)*
 42. Open a finished session on the phone: the desktop's unread dot clears. *(A65)*
-43. A background notification arrives within about 15 minutes; tapping it opens that computer's Inbox,
-    also when the app is already open on another computer. *(A11, A19)*
+43. A background notification arrives within about 15 minutes; tapping it opens that session's
+    terminal, with that computer's Inbox one Back away: at launch, with the app in the background, and
+    with the app open on another computer. *(A11, A19, A25)*
 44. Notification permission on Android 13 or later: deny it at first launch; Settings → Notifications
     then reads Off; switching it on asks again or opens the app's notification settings; nothing is
     posted while it is denied. *(A21)*
@@ -665,10 +696,35 @@ later fix left to a device.
     ("Copied N lines"), Share opens the system share sheet, and Back or × closes the sheet. The sheet
     opens on the line at the top of the screen. *(A32)*
 
+### Notification actions
+
+57. An approval notification (a held Claude permission, through the relay and again on the same
+    network) shows Approve and Deny. With the phone unlocked, Approve answers it within a few seconds:
+    the notification reads "Approving…", then "Approved." and goes away by itself, and the desktop's
+    prompt is answered. Deny the same way. With the phone locked: on Android 12 or later the tap asks
+    for the unlock first; on Android 8 to 11 the notification says to unlock and nothing is sent. On
+    Android 11 or lower a short "Sending your answer…" notification shows while an answer is sent.
+    *(A25)*
+58. A single-select question with up to three options shows "Option 1", "Option 2", … (the options'
+    text with "Show details in notifications" on, cut to fit); a tap answers it in the live session.
+    One with four or more options, and a multi-select one, shows Open, which opens the session.
+    *(A25, A57)*
+59. Answer from a notification something already answered on the desktop: "Already handled.". Answer a
+    held approval after its hold expired: the notification says it timed out, and its tap opens the
+    session. Away from the desktop's network, on a computer this phone has never connected to through
+    the relay, a new approval's notification offers Open rather than Approve, and nothing appears on
+    the desktop. Tapping Approve twice quickly sends one answer. *(A25, A05, A06)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
-  `/v1/push/*` fan-out is APNs-only.
+  `/v1/push/*` fan-out is APNs-only, so nothing wakes the app when an agent needs you, and there is no
+  equivalent of iOS's Live Activities (an ongoing notification would need FCM or a foreground
+  service). The desktop's phone-push switches (Needs you, Done, hold alerts while at the computer, the
+  per-computer mute) gate only its own APNs send and are not in the mirror's `settings`, so no phone
+  can read them; Android's per-kind control is its two notification channels. What the app does have
+  (`A25`): the notifications it posts itself carry Approve / Deny and a question's options, and their
+  tap opens the session.
 - **`/v1/relay/join`.** The request/response shape is not in this repo (the backend is separate).
   The client sends `{deviceToken, hostId}` and accepts `pairingToken`, `token` or `joinToken` —
   unverified against the live backend.

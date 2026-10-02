@@ -125,19 +125,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** A notification tap naming a computer (at launch or while running) that awaits the UI. */
-    private var incomingHost by mutableStateOf<String?>(null)
+    /** A notification tap (at launch or while running) that awaits the UI. */
+    private var incomingTap by mutableStateOf<NotificationTap?>(null)
+
+    /** The session a notification names: [EXTRA_HOST_ID], and the node it is about (audit A25). */
+    private fun tapOf(intent: Intent?): NotificationTap? {
+        val hostId = intent?.getStringExtra(EXTRA_HOST_ID) ?: return null
+        val nodeId = intent.getStringExtra(EXTRA_NODE_ID)?.takeIf { it.isNotBlank() }
+        return NotificationTap(hostId, nodeId, intent.getStringExtra(EXTRA_NODE_TITLE))
+    }
 
     /**
      * A live activity gets later intents HERE, not in onCreate (it is `singleTask`): a notification
      * tapped while the app sat in the background used to open whatever screen was last showing
-     * instead of that computer's Inbox (audit A11/A19).
+     * instead of that computer's Inbox (audit A11/A19), and now its session (audit A25).
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         takePairLink(intent)
-        intent.getStringExtra(EXTRA_HOST_ID)?.let { incomingHost = it }
+        tapOf(intent)?.let { incomingTap = it }
     }
 
     private val notificationPermission =
@@ -158,13 +165,13 @@ class MainActivity : ComponentActivity() {
         // recreation the saved back stack already reflects it, and re-applying it would push the
         // same screen again (audit A22).
         val fresh = savedInstanceState == null
-        val openHost = if (fresh) intent?.getStringExtra(EXTRA_HOST_ID) else null
+        val launchTap = if (fresh) tapOf(intent) else null
         if (fresh) takePairLink(intent)
         setContent {
             NodetermTheme {
                 val nav = rememberSaveable(saver = Navigator.Saver) {
                     Navigator(Route.Hosts).also { n ->
-                        if (openHost != null && graph.hosts.get(openHost) != null) n.push(Route.Host(openHost, tab = 2))
+                        if (launchTap != null && graph.hosts.get(launchTap.hostId) != null) n.openTap(launchTap)
                     }
                 }
                 // A restored stack may name a computer that was forgotten meanwhile.
@@ -178,13 +185,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                val hostTap = incomingHost
-                LaunchedEffect(hostTap) {
-                    if (hostTap != null) {
-                        incomingHost = null
-                        if (graph.hosts.get(hostTap) != null) {
+                val tap = incomingTap
+                LaunchedEffect(tap) {
+                    if (tap != null) {
+                        incomingTap = null
+                        if (graph.hosts.get(tap.hostId) != null) {
                             nav.replaceAll(Route.Hosts)
-                            nav.push(Route.Host(hostTap, tab = 2))
+                            nav.openTap(tap)
                         }
                     }
                 }
@@ -202,7 +209,24 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_HOST_ID = "hostId"
+        /** The session a notification is about; its tap opens that terminal (audit A25). */
+        const val EXTRA_NODE_ID = "nodeId"
+        /** That session's name, for the terminal's title until the listing names it. */
+        const val EXTRA_NODE_TITLE = "nodeTitle"
     }
+}
+
+/** What a notification's tap opens: [nodeId]'s terminal on [hostId], or that computer's Inbox without one. */
+private data class NotificationTap(val hostId: String, val nodeId: String?, val title: String?)
+
+/**
+ * Opens what a notification tap names: the session's terminal (audit A25), with that computer's Inbox
+ * under it, where the event is listed, so Back lands where the A11/A19 tap used to open.
+ */
+private fun Navigator.openTap(tap: NotificationTap) {
+    push(Route.Host(tap.hostId, tab = 2))
+    val node = tap.nodeId ?: return
+    push(Route.Terminal(tap.hostId, node, tap.title?.takeIf { it.isNotBlank() } ?: "Session"))
 }
 
 @Composable

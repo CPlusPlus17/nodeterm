@@ -21,7 +21,7 @@
 # The reflection facts below were read from the jars with javap/jdeps (sshj 0.39.0, eddsa 0.3.0,
 # bcprov/bcpkix/bcutil 1.78.1, OkHttp 4.12.0, slf4j-api 2.0.13, zxing-android-embedded 4.3.0, zxing
 # core 3.4.1). Classes of the APP loaded by name: BouncyCastle's (by BouncyCastle, the JCA and sshj's
-# SecurityUtils), and the two app classes below. OkHttp's reflection targets platform classes R8 never
+# SecurityUtils), and the app classes below. OkHttp's reflection targets platform classes R8 never
 # renames (com.android.org.conscrypt, dalvik.system.CloseGuard); slf4j's ServiceLoader finds no binding
 # on Android either way and falls back to its no-op logger; eddsa and zxing do not reflect. What rests
 # on a library's own consumer rules instead (androidx, Compose, WorkManager and androidx.startup) is
@@ -45,6 +45,13 @@
 # and notifications would stop with nothing on screen saying why. work-runtime ships a rule for every
 # ListenableWorker (inferred, see above); this one does not depend on it.
 -keep class dev.nodeterm.android.notify.InboxWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+# The same for the worker that sends an answer given from a notification (audit A25). Its work is
+# one-time, but it can still be pending in WorkManager's database across an update (an expedited job
+# out of quota runs as ordinary work, later). Its receiver is declared in the manifest, whose
+# components AGP keeps by itself.
+-keep class dev.nodeterm.android.notify.InboxActionWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 

@@ -128,6 +128,17 @@ prompt only once the hold ends. A terminal that shows an error, a relay offer or
 instead of the session hides nothing, and one still connecting leaves the session's events for the
 next check.
 
+Tapping a notification opens that session's terminal; Back from it lands on the computer's Inbox. An
+approval's notification carries **Approve** and **Deny**, and a question's carries its options when it
+has at most three ("Option 1", "Option 2", …, or their text with **Show details in notifications**
+on), wherever the Inbox card could answer it in one tap: a held Claude approval or a Claude prompt, a
+single-select question. Anything else carries **Open**. An answer needs an unlocked phone (Android 12
+and later ask for the unlock; on older versions the notification says to unlock first). It goes over
+your network or through a relay that has already approved this phone, never through a first relay
+connection, for the same reason as the background check, and otherwise the notification offers Open.
+The notification then says how it went ("Approved.", "Already handled.", or why nothing was sent, with
+a tap that opens the session), and an answer is never sent twice.
+
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
 and the phone remembers the ones it has announced, you have read or you had on screen for a day
 after it last saw them (longer when the computer's clock runs ahead), so nothing still eligible is

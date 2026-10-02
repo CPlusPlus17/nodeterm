@@ -50,9 +50,18 @@ object QuickActions {
         if (event.kind != InboxKind.APPROVAL) return Result.OPEN_SESSION
         if (event.pendingId != null) return answerTicket(conn, event, allow)
         if (!stillWaiting(conn, event, AgentState.BLOCKED)) return Result.ALREADY_HANDLED
-        if (event.agentId != "claude") return Result.OPEN_SESSION
+        if (!answersApproval(event)) return Result.OPEN_SESSION
         return typeOrOpen(conn, event, if (allow) "1" else "\u001b")
     }
+
+    /**
+     * Whether [answerApproval] can answer [event] from outside its session at all: a held hook-reply
+     * ticket, or a claude prompt (the only prompt layout known). Anything else goes to the session.
+     * The Inbox notification offers Approve / Deny by this rule (audit A25), so it never offers an
+     * answer this path would turn into "open the session".
+     */
+    fun answersApproval(event: InboxEvent): Boolean =
+        event.kind == InboxKind.APPROVAL && (event.pendingId != null || event.agentId == "claude")
 
     /**
      * AskUserQuestion: choices are digits on screen (a hook cannot inject an answer value). Only a
