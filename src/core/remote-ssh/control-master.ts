@@ -33,8 +33,10 @@ export const RMT_TMUX_SOCKET = 'nodeterm-rmt'
  * `command not found` on any host whose ssh exec-channel PATH misses the install dir — most
  * visibly macOS with Homebrew's tmux in `/opt/homebrew/bin`. The prologue is one assignment, so
  * the command's own exit code (what `probeSaysAbsent` and every caller reads) is unchanged.
+ * Exported for the live link's pane-input builders (`watch-link/pane-input.ts`), which build their
+ * remote commands beside their local twins rather than here.
  */
-function tmuxCmd(body: string): string {
+export function tmuxCmd(body: string): string {
   return `${remoteTmuxPathPrologue()}${body}`
 }
 
