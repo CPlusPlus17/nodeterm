@@ -154,7 +154,7 @@ import {
 import type { HostTokenResult } from './api'
 import { unavailableCapture, type VisibleCapture } from './capture-route'
 import { createInputSplitter, createTypingTracker, type InputSplitter } from './control-input'
-import { WATCHER_INPUT_ROUTES, type ControlInputChunk, type WatcherInputRoute } from './pane-input'
+import { PANE_INPUT_DEADLINE_MS, WATCHER_INPUT_ROUTES, type ControlInputChunk, type WatcherInputRoute } from './pane-input'
 import { isTerminalReport } from '../terminal-reports'
 import { createStreamFilter, type StreamFilter } from './stream-filter'
 import { createTokenBucket, type TokenBucket } from './token-bucket'
@@ -207,7 +207,7 @@ export const DROPPED_NOTICE_MIN_MS = 10_000
 export const INPUT_GRACE_MS = 5000
 /** A pane delivery that has not answered by now counts as failed: the batch stops (`dropped`) and the
  *  link's chain moves on. A late answer is ignored. */
-export const INPUT_DELIVERY_TIMEOUT_MS = 20_000
+export const INPUT_DELIVERY_TIMEOUT_MS = PANE_INPUT_DEADLINE_MS
 const RATE = 256 * 1024
 const BURST = 1024 * 1024
 
@@ -279,6 +279,7 @@ export interface LinkHostDeps {
 export type LinkRuntimeStatus = 'live' | 'reconnecting' | 'refused'
 export interface LinkViewer {
   viewerId: string
+  /** While controlling, the name it unlocked under; otherwise its chat name (null before it chats). */
   name: string | null
   joinedAt: number
   /** Connected, but its last join found no session to watch (R63): what the owner must be told,
@@ -1368,13 +1369,16 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const now = deps.now()
     for (const c of conns) {
       if (c.joinedAt === null || c.ended) continue
+      // The effective state: a flag the host has not yet been told to clear never reads as control.
+      const controlling = controlStateFor(c).state === 'controlling'
       out.push({
         viewerId: c.viewerId,
-        name: c.name,
+        // While it controls, the name it unlocked under — the one the typing set and the owner's
+        // "took control" notice use — never a later chat name beside them.
+        name: controlling ? (c.controlName ?? c.name) : c.name,
         joinedAt: c.joinedAt,
         waiting: c.joinRefused && c.sessionId === null,
-        // The effective state: a flag the host has not yet been told to clear never reads as control.
-        controlling: controlStateFor(c).state === 'controlling',
+        controlling,
         typing: tracker.typing(c.viewerId, now)
       })
     }

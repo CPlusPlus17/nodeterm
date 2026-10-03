@@ -1117,6 +1117,9 @@ export async function startServer(
     // No SSH-project manager here: a node of an SSH project is joinable only while this core holds
     // its session live (join-only never spawns), and never through the local tmux.
     pty: createWatchPty(ptyManager, (nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) ? { requireRemote: true } : {})),
+    // The same check as the desktop (links stay unsupported here, but the member answers): a node of an
+    // SSH project would run in its host's tmux, never this core's Zellij.
+    controlSupport: (nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
     emit: (channel, ...args) => sendToOwners(platform, channel, ...args),
     unsupported: true
   })

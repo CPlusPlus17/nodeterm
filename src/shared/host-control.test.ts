@@ -70,6 +70,13 @@ describe('isHostOnlyChannel', () => {
     )
     expect(owner).toHaveLength(14)
     for (const ch of owner) expect(isHostOnlyChannel(ch), ch).toBe(true)
+    // The Control link's owner verbs by name: typing on/off, a new password, allow-again and the
+    // terminal check. A relay peer (a hosted editor included) that could reach them would type into the
+    // host's terminal through any of its Control links, or set the password that opens one.
+    for (const ch of [IPC.watchLinkSetControl, IPC.watchLinkSetPassword, IPC.watchLinkAllowControl, IPC.watchLinkControlSupport]) {
+      expect(owner, ch).toContain(ch)
+      expect(isHostOnlyChannel(ch), ch).toBe(true)
+    }
     // A namespace, not a list: a verb added later is refused the day it is added.
     expect(isHostOnlyChannel('watchLink:something-new')).toBe(true)
     // The viewer's own tunnel messages are `watch:*` — never refused as host-only, or a Commenter

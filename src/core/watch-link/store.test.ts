@@ -601,6 +601,31 @@ describe('controller records and unlimited expiry', () => {
     expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([ctl()])
   })
 
+  // `control` IFF the role is 'controller' at WRITE time too: a record the next load would drop is
+  // never written. The whole save answers 'failed' and the file stays as it was (a bug, made loud).
+  it("refuses to write a record that breaks control-iff-controller: 'failed', the file untouched", async () => {
+    const f = file()
+    const s = new WatchLinkStore({ file: f, seal, unseal })
+    expect(await s.save([ctl()])).toBe('saved')
+    const before = readFileSync(f, 'utf8')
+    const broken: WatchLinkRecord[] = [
+      rec({ role: 'viewer', control }),
+      rec({ role: 'commenter', control }),
+      rec({ role: 'controller' }),
+      ctl({ control: { ...control, salt: b64(new Uint8Array(15).fill(1)) } }),
+      ctl({ control: { ...control, hash: 'not base64!' } }),
+      ctl({ control: { ...control, enabled: 'yes' } as unknown as WatchLinkRecord['control'] }),
+      ctl({ control: { ...control, locked: undefined } as unknown as WatchLinkRecord['control'] })
+    ]
+    for (const r of broken) {
+      expect(await s.save([rec({ linkId: 'OtherLinkIjKlMnOpQrStU' }), r]), JSON.stringify(r.control ?? r.role)).toBe('failed')
+      expect(readFileSync(f, 'utf8')).toBe(before)
+    }
+    // A store that refused a bad list still writes the next good one.
+    expect(await s.save([rec()])).toBe('saved')
+    expect(await s.load()).toEqual([rec()])
+  })
+
   it('never writes the plaintext password: the file holds only its salt and scrypt hash', async () => {
     const password = 'correct horse battery staple'
     const h = await hashControlPassword(password)

@@ -43,7 +43,8 @@
 // written as it is, not sealed: the hash is scrypt'd, and anyone who can read this 0600 file under
 // userData is already this user. `control` is present IFF the role is 'controller', and a load drops
 // any entry that breaks that rule: a hand-edited file cannot give a viewer link a password, and a
-// controller link with no password is not a link this build can host.
+// controller link with no password is not a link this build can host. A save refuses ('failed', the
+// file untouched) a list holding such a record: it would be written only for the next load to drop it.
 //
 // AN UNLIMITED LINK has `expiresAt: null`: it lives until it is stopped. An opaque one is carried
 // until it is discarded, never dropped for time.
@@ -305,6 +306,12 @@ export class WatchLinkStore {
   }
 
   async save(records: readonly WatchLinkRecord[]): Promise<SaveOutcome> {
+    // `control` IFF the role is 'controller', and then well-formed — at WRITE time as on load: a record
+    // the next load would drop is never written. The whole save fails and the file stays as it was:
+    // such a record is a bug, and a link the next run silently loses is the worst way to find it.
+    for (const r of records) {
+      if (r.role === 'controller' ? !readControl(r.control) : r.control !== undefined) return 'failed'
+    }
     const links: FileEntry[] = []
     let outcome: SaveOutcome = 'saved'
     // Only the records in THIS list keep a cached sealed form: a stopped link's goes with it.

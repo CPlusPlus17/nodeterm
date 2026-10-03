@@ -9,7 +9,9 @@ function fakeManager(over: Partial<Record<keyof WatchPtyManager, unknown>> = {})
     kill: vi.fn(),
     captureVisible: vi.fn(async () => ({ screen: 'x', cursor: { x: 1, y: 2 } })),
     syncWatcherClientSize: vi.fn(async () => true),
-    hasSession: vi.fn(() => true)
+    hasSession: vi.fn(() => true),
+    watcherInputRoute: vi.fn((_s: string): string => 'tmux'),
+    controlInput: vi.fn(async (_s: string, _c: unknown) => true)
   }
   return Object.assign(m, over) as typeof m
 }
@@ -18,7 +20,7 @@ describe('createWatchPty — the WatchPty seam both shells wire (R39)', () => {
   it('joins with the host ids only (never a size), and reports the JOINED session size and tmux-ness', async () => {
     const m = fakeManager()
     const pty = createWatchPty(m as unknown as WatchPtyManager)
-    expect(await pty.join(7, 'n1', 'v-1')).toEqual({ sessionId: 's1', cols: 120, rows: 40, altScreen: true, input: 'none' })
+    expect(await pty.join(7, 'n1', 'v-1')).toEqual({ sessionId: 's1', cols: 120, rows: 40, altScreen: true, input: 'tmux' })
     expect(m.joinAsWatcher).toHaveBeenCalledWith(7, { persistKey: 'n1', viewerId: 'v-1' })
     expect(m.sessionSize).toHaveBeenCalledWith('s1')
     expect(m.kill).not.toHaveBeenCalled()
@@ -73,5 +75,29 @@ describe('createWatchPty — the WatchPty seam both shells wire (R39)', () => {
     expect(pty.alive('s1')).toBe(true)
     m.hasSession.mockReturnValue(false)
     expect(pty.alive('s1')).toBe(false)
+  })
+
+  // Control: the join reports how a controller's input reaches the JOINED session's pane (the route
+  // PtyManager decides — Zellij and an unknown session answer `none`), and input goes to the pane.
+  it("a join carries the joined session's input route, read from PtyManager", async () => {
+    for (const route of ['tmux', 'ssh', 'write', 'none']) {
+      const m = fakeManager({ watcherInputRoute: vi.fn(() => route) })
+      expect(await createWatchPty(m as unknown as WatchPtyManager).join(7, 'n1', 'v-1')).toMatchObject({ input: route })
+      expect(m.watcherInputRoute).toHaveBeenCalledWith('s1')
+    }
+    // A refused join never asks.
+    const none = fakeManager({ sessionSize: vi.fn(() => null) })
+    await createWatchPty(none as unknown as WatchPtyManager).join(7, 'n1', 'v-1')
+    expect(none.watcherInputRoute).not.toHaveBeenCalled()
+  })
+
+  it("input goes to PtyManager.controlInput for that session, and its answer comes back as it is", async () => {
+    const m = fakeManager()
+    const pty = createWatchPty(m as unknown as WatchPtyManager)
+    expect(await pty.input('s1', { kind: 'keys', data: 'ls\r' })).toBe(true)
+    expect(m.controlInput).toHaveBeenCalledWith('s1', { kind: 'keys', data: 'ls\r' })
+    m.controlInput.mockResolvedValueOnce(false)
+    expect(await pty.input('s1', { kind: 'paste', text: 'x' })).toBe(false)
+    expect(m.controlInput).toHaveBeenLastCalledWith('s1', { kind: 'paste', text: 'x' })
   })
 })

@@ -3309,6 +3309,10 @@ app.whenReady().then(async () => {
         ...(ref ? { sshRemote: { conn: ref.conn, controlPath: ref.controlPath, remoteCwd: ref.remoteCwd ?? '~' } } : {})
       }
     }),
+    // Can a Control link type into this node? A node of an SSH project runs in its HOST's tmux (Zellij
+    // is a local-only backend), so this machine's backend choice says nothing about it: 'ok' (a host
+    // with no tmux at all answers every keystroke false, which the link host reports as dropped).
+    controlSupport: (nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
     emit: (channel, ...args) => sendToOwners(corePlatform, channel, ...args)
   })
   registerWatchLinkIpc(corePlatform, watchLinks)

@@ -68,11 +68,13 @@ import {
   type VisibleCapture
 } from './watch-link/capture-route'
 import {
+  PANE_INPUT_DEADLINE_MS,
   controlInputPlan,
   remoteControlInputPlan,
   type ControlInputChunk,
   type WatcherInputRoute
 } from './watch-link/pane-input'
+import type { ControlSupport } from '../shared/watch-link-types'
 import { sanitizePasteText } from './paste-injection'
 import {
   localWatcherAttachArgs,
@@ -308,6 +310,24 @@ function runWithStdin(file: string, args: readonly string[], input: string): Pro
     stdin.end(input)
   }
   return p as unknown as Promise<unknown>
+}
+
+/** `p`'s answer, or false once `ms` passed (the timer never holds the process). A rejection is false. */
+function settleWithin(p: Promise<boolean>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms)
+    timer.unref?.()
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(false)
+      }
+    )
+  })
 }
 
 // Minimal tmux config so the user's ~/.tmux.conf never interferes. The tmux server
@@ -4968,10 +4988,25 @@ export class PtyManager {
    * settled, so keys and pastes reach the pane in the order they were typed. The Session is re-read
    * inside each step (it can be gone by then → false), and the tmux name is resolved from it, never
    * from the caller. A false is never retried here (a timed-out delivery may well have run).
+   *
+   * BOUNDED on every route (PANE_INPUT_DEADLINE_MS, the link host's own deadline). The tmux and SSH
+   * routes are bounded already (`runWithStdin`: PROC_TIMEOUT_MS), the session host's request by its
+   * own timeout once connected — but its reconnect can wait on a host that is still starting, and a
+   * step that never settled would hold every later chunk behind it, to land long after the link host
+   * told its controller it was dropped. So a step answers false at the deadline (a late delivery may
+   * still land, as with any timed-out one), and a chunk that could not even START by its deadline is
+   * dropped undelivered: whoever handed it over has given up on it.
    */
   controlInput(sessionId: string, chunk: ControlInputChunk): Promise<boolean> {
+    const handedAt = Date.now()
     const prev = this.controlInputChains.get(sessionId) ?? Promise.resolve(true)
-    const step = prev.then(() => this.deliverControlInput(sessionId, chunk)).catch(() => false)
+    const step = prev
+      .then(() =>
+        Date.now() - handedAt >= PANE_INPUT_DEADLINE_MS
+          ? false
+          : settleWithin(this.deliverControlInput(sessionId, chunk), PANE_INPUT_DEADLINE_MS)
+      )
+      .catch(() => false)
     this.controlInputChains.set(sessionId, step)
     void step.then(() => {
       if (this.controlInputChains.get(sessionId) === step) this.controlInputChains.delete(sessionId)
@@ -5038,13 +5073,18 @@ export class PtyManager {
 
   /**
    * Can a live link offer Control on this node? `unsupported` for a Zellij node (session-wide key
-   * bindings); `ok` when a session for it is live or released (its pane can be reached), or when a
-   * new node would be tmux-backed here; `unknown` otherwise (nothing to tell from yet).
+   * bindings), or a node with no session on a machine whose new sessions are Zellij; `ok` when a
+   * session for it is live or released (its pane can be reached), or when a new node would be
+   * tmux-backed here; `unknown` otherwise (nothing to tell from yet).
    */
-  nodeControlSupport(persistKey: string): 'ok' | 'unsupported' | 'unknown' {
+  nodeControlSupport(persistKey: string): ControlSupport {
     const live = this.liveSessionForPersistKey(persistKey)
     if (this.zellijKeys.has(persistKey) || live?.zellij) return 'unsupported'
     if (live || this.released.has(persistKey)) return 'ok'
+    // No session here: a new one would be created in the SELECTED backend, and a Zellij one refuses
+    // control. (A node whose tmux session is warm but not held by this process reads the same way
+    // until it is mounted; the live branch above answers it then.)
+    if (this.zellijSelected()) return 'unsupported'
     if (this.tmuxPath && this.getSettings().tmuxEnabled) return 'ok'
     return 'unknown'
   }

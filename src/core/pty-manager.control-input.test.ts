@@ -10,7 +10,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform } from './platform-fake'
 import { TMUX_SOCKET, sessionName } from './tmux-naming'
-import { keysCommandText, remoteKeysArgs } from './watch-link/pane-input'
+import { PANE_INPUT_DEADLINE_MS, keysCommandText, remoteKeysArgs } from './watch-link/pane-input'
+import { INPUT_DELIVERY_TIMEOUT_MS } from './watch-link/link-host'
 import { DEFAULT_SETTINGS } from '../shared/types'
 
 type Call = { file: string; args: string[]; input: string | undefined }
@@ -111,7 +112,10 @@ beforeEach(() => {
   vi.resetModules()
   initPlatform(fakePlatform())
 })
-afterEach(() => resetPlatformForTests())
+afterEach(() => {
+  vi.useRealTimers()
+  resetPlatformForTests()
+})
 
 describe('watcherInputRoute', () => {
   it('routes each backend to the pane, or refuses', async () => {
@@ -361,10 +365,78 @@ describe('nodeControlSupport', () => {
     expect((await manager(null)).mgr.nodeControlSupport('node-new')).toBe('ok')
   })
 
+  // A node with no session anywhere would be CREATED in the selected backend, and a Zellij session
+  // refuses control. A live (or released) session still answers for itself: the backend follows the
+  // session that exists.
+  it('no session or record on a machine whose new sessions are Zellij: unsupported', async () => {
+    const zellij = { ...DEFAULT_SETTINGS, tmuxEnabled: true, sessionBackend: 'zellij' as const }
+    const fresh = await manager(null)
+    fresh.mgr.getSettings = () => zellij
+    expect(fresh.mgr.nodeControlSupport('node-new')).toBe('unsupported')
+    const noTmux = await manager(null, null)
+    noTmux.mgr.getSettings = () => zellij
+    expect(noTmux.mgr.nodeControlSupport('node-new')).toBe('unsupported')
+    const live = await manager({})
+    live.mgr.getSettings = () => zellij
+    expect(live.mgr.nodeControlSupport(NODE)).toBe('ok')
+    const released = await manager(null)
+    released.mgr.getSettings = () => zellij
+    released.mgr.released.set(NODE, { sessionId: 'old', remote: false })
+    expect(released.mgr.nodeControlSupport(NODE)).toBe('ok')
+  })
+
   it('no session, no record, no tmux to make one: unknown', async () => {
     expect((await manager(null, null)).mgr.nodeControlSupport('node-new')).toBe('unknown')
     const off = await manager(null)
     off.mgr.getSettings = () => ({ ...DEFAULT_SETTINGS, tmuxEnabled: false })
     expect(off.mgr.nodeControlSupport('node-new')).toBe('unknown')
+  })
+})
+
+// Every step of a session's input chain settles in bounded time, whatever the route: a delivery that
+// never answers would otherwise hold the chain — and every later chunk would wait behind it, to land
+// long after the link host (which gives up at INPUT_DELIVERY_TIMEOUT_MS) told its controller it was
+// dropped.
+describe('controlInput — bounded on every route', () => {
+  it('the deadline is the link host\'s own', () => {
+    expect(PANE_INPUT_DEADLINE_MS).toBe(INPUT_DELIVERY_TIMEOUT_MS)
+  })
+
+  for (const [route, session] of [
+    ['a direct Windows pane', 'pane'],
+    ['the session host', 'host']
+  ] as const) {
+    it(`${route}: a paste that never answers is false at the deadline, and the chain moves on`, async () => {
+      const sendText = vi.fn((): Promise<boolean> => new Promise(() => {}))
+      if (session === 'host') hostSendKeys.mockImplementation(() => new Promise(() => {}))
+      const { mgr } = await manager(
+        session === 'pane' ? { nativeWindowsPane: { sendText }, tmuxBacked: false, persistKey: undefined } : { sessionHost: true }
+      )
+      vi.useFakeTimers()
+      let answer: boolean | null = null
+      void mgr.controlInput('sess-1', { kind: 'paste', text: 'a' }).then((v) => (answer = v))
+      await vi.advanceTimersByTimeAsync(PANE_INPUT_DEADLINE_MS - 1)
+      expect(answer).toBeNull()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(answer).toBe(false)
+      sendText.mockImplementation(async () => true)
+      hostSendKeys.mockImplementation(async () => true)
+      expect(await mgr.controlInput('sess-1', { kind: 'paste', text: 'b' })).toBe(true)
+    })
+  }
+
+  it('a chunk that could not START before the deadline is dropped undelivered: its caller gave up on it', async () => {
+    const sendText = vi.fn((): Promise<boolean> => new Promise(() => {}))
+    const { mgr } = await manager({ nativeWindowsPane: { sendText }, tmuxBacked: false, persistKey: undefined })
+    vi.useFakeTimers()
+    const first = mgr.controlInput('sess-1', { kind: 'paste', text: 'a' })
+    const second = mgr.controlInput('sess-1', { kind: 'paste', text: 'b' }) // queued behind the hung one
+    await vi.advanceTimersByTimeAsync(PANE_INPUT_DEADLINE_MS)
+    expect(await first).toBe(false)
+    expect(await second).toBe(false)
+    expect(sendText).toHaveBeenCalledTimes(1) // 'b' never reached the pane
+    sendText.mockImplementation(async () => true)
+    expect(await mgr.controlInput('sess-1', { kind: 'paste', text: 'c' })).toBe(true)
+    expect(sendText).toHaveBeenLastCalledWith('c', false)
   })
 })

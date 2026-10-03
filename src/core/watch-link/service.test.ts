@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { testTmpDir } from '../test-tmp'
 import {
+  createFifoGate,
   createWatchLinkService,
   registerWatchLinkIpc,
   sendToOwners,
@@ -16,7 +17,8 @@ import { WatchLinkStore, WatchLinkStoreUnreadable, type WatchLinkRecord, type Sa
 import type { WatchLinkApi as ApiClient } from './api'
 import type { LinkHost, LinkHostDeps, LinkRuntimeStatus, LinkViewer, WatchPty } from './link-host'
 import type { WatchChatMessage } from '../../shared/watch-link/protocol'
-import type { WatchLinkNotice, WatchLinkView } from '../../shared/watch-link-types'
+import type { ControlSupport, WatchLinkNotice, WatchLinkView } from '../../shared/watch-link-types'
+import { hashControlPassword, verifyControlPassword, type ControlPasswordHash } from './password'
 import { IPC } from '../../shared/ipc'
 import { fakePlatform } from '../platform-fake'
 
@@ -30,12 +32,15 @@ const HOUR = 3600_000
 
 function fakeApi(over: Partial<ApiClient> = {}) {
   const calls: string[] = []
+  const ttls: number[] = []
   let n = 0
   const api: ApiClient = {
-    create: async () => {
+    create: async (_ent, _hash, ttl) => {
       calls.push('create')
+      ttls.push(ttl)
       n++
-      return { ok: true, linkId: `Link${String(n).padStart(18, '0')}`, expiresAt: Date.now() + HOUR }
+      // Like the server: Unlimited (0) answers no end time.
+      return { ok: true, linkId: `Link${String(n).padStart(18, '0')}`, expiresAt: ttl === 0 ? null : Date.now() + HOUR }
     },
     hostToken: async (id) => {
       calls.push(`hostToken ${id}`)
@@ -52,13 +57,15 @@ function fakeApi(over: Partial<ApiClient> = {}) {
     },
     ...over
   }
-  return { api, calls }
+  return { api, calls, ttls }
 }
 
 interface FakeHost {
   record: WatchLinkRecord
   deps: LinkHostDeps
   stopped: string[]
+  /** controlChanged / passwordChanged / allowControl, in call order. */
+  hooks: string[]
   starts: number
   status: LinkRuntimeStatus
   viewers: LinkViewer[]
@@ -67,7 +74,7 @@ interface FakeHost {
 function fakeHosts() {
   const made: FakeHost[] = []
   const createHost = (record: WatchLinkRecord, deps: LinkHostDeps): LinkHost => {
-    const h: FakeHost = { record, deps, stopped: [], starts: 0, status: 'live', viewers: [], chat: [] }
+    const h: FakeHost = { record, deps, stopped: [], hooks: [], starts: 0, status: 'live', viewers: [], chat: [] }
     made.push(h)
     return {
       start: () => {
@@ -81,9 +88,15 @@ function fakeHosts() {
       chatHistory: () => h.chat,
       status: () => h.status,
       viewers: () => h.viewers,
-      controlChanged: () => {},
-      passwordChanged: () => {},
-      allowControl: () => {}
+      controlChanged: () => {
+        h.hooks.push('controlChanged')
+      },
+      passwordChanged: () => {
+        h.hooks.push('passwordChanged')
+      },
+      allowControl: () => {
+        h.hooks.push('allowControl')
+      }
     }
   }
   return { made, createHost }
@@ -113,10 +126,15 @@ interface Opts {
   persistTimeoutMs?: number
   workspaceWaitMs?: number
   now?: () => number
+  controlSupport?: (nodeId: string) => ControlSupport
+  hashPassword?: (pw: string) => Promise<ControlPasswordHash>
+  verifyPassword?: (pw: string, h: ControlPasswordHash) => Promise<boolean>
+  /** The REAL link host (and a relay transport no test reaches) instead of the fake. */
+  realHost?: boolean
 }
 function service(o: Opts = {}) {
   const file = join(testTmpDir('wls-'), 'watch-links.json')
-  const { api, calls } = fakeApi(o.api)
+  const { api, calls, ttls } = fakeApi(o.api)
   const hosts = fakeHosts()
   const nodes = o.nodes ?? new Map<string, WatchLinkNodeState>([['n1', 'present'], ['n2', 'present']])
   const emitted: [string, unknown[]][] = []
@@ -133,7 +151,16 @@ function service(o: Opts = {}) {
     clients: { attach: () => 1, detach: () => {} },
     pty: o.pty ?? fakePty(),
     emit: (ch, ...a) => emitted.push([ch, a]),
-    createHost: hosts.createHost,
+    ...(o.realHost
+      ? {
+          transport: () => {
+            throw new Error('no relay in this test')
+          }
+        }
+      : { createHost: hosts.createHost }),
+    ...(o.controlSupport ? { controlSupport: o.controlSupport } : {}),
+    ...(o.hashPassword ? { hashPassword: o.hashPassword } : {}),
+    ...(o.verifyPassword ? { verifyPassword: o.verifyPassword } : {}),
     ...(o.unsupported ? { unsupported: true } : {}),
     ...(o.persistTimeoutMs ? { persistTimeoutMs: o.persistTimeoutMs } : {}),
     ...(o.workspaceWaitMs ? { workspaceWaitMs: o.workspaceWaitMs } : {}),
@@ -142,7 +169,7 @@ function service(o: Opts = {}) {
   services.push(s)
   const notices = () => emitted.filter(([ch]) => ch === IPC.watchLinkNotice).map(([, a]) => a[0] as WatchLinkNotice)
   const states = () => emitted.filter(([ch]) => ch === IPC.watchLinkState).map(([, a]) => a[0] as WatchLinkView[])
-  return { s, calls, api, hosts, nodes, emitted, notices, states, store, file, ent }
+  return { s, calls, ttls, api, hosts, nodes, emitted, notices, states, store, file, ent }
 }
 const req = (over: Record<string, unknown> = {}) => ({ nodeId: 'n1', role: 'viewer', ttlSeconds: 3600, label: 'Ada', title: 'build', ...over })
 const record = (over: Partial<WatchLinkRecord> = {}): WatchLinkRecord => ({
@@ -886,12 +913,44 @@ describe('registerWatchLinkIpc / sendToOwners', () => {
     expect(await p.handlers[IPC.watchLinkCreate](1, req())).toEqual({ ok: false, error: 'unsupported' })
   })
 
-  it('registers exactly the seven request channels', () => {
+  it('registers exactly the eleven request channels', () => {
     const p = fakePlatform({ isOwnerClient: () => true })
     registerWatchLinkIpc(p, service().s)
     expect(Object.keys(p.handlers).sort()).toEqual(
-      [IPC.watchLinkCreate, IPC.watchLinkList, IPC.watchLinkRevoke, IPC.watchLinkRevokeAll, IPC.watchLinkKick, IPC.watchLinkChatSend, IPC.watchLinkChatHistory].sort()
+      [
+        IPC.watchLinkCreate, IPC.watchLinkList, IPC.watchLinkRevoke, IPC.watchLinkRevokeAll, IPC.watchLinkKick,
+        IPC.watchLinkChatSend, IPC.watchLinkChatHistory, IPC.watchLinkSetControl, IPC.watchLinkSetPassword,
+        IPC.watchLinkAllowControl, IPC.watchLinkControlSupport
+      ].sort()
     )
+  })
+
+  it('the Control channels answer owners only, and refuse arguments of the wrong type', async () => {
+    const t = service({ controlSupport: () => 'ok', hashPassword: fastHash })
+    const p = fakePlatform({ isOwnerClient: (id) => id === 1 })
+    registerWatchLinkIpc(p, t.s)
+    const made = (await p.handlers[IPC.watchLinkCreate](1, ctlReq())) as { ok: true; link: WatchLinkView }
+    const id = made.link.linkId
+    const h = t.hosts.made[0]
+    // A client that is not the machine's owner reaches nothing.
+    expect(await p.handlers[IPC.watchLinkSetControl](2, id, false)).toBe(false)
+    expect(await p.handlers[IPC.watchLinkSetPassword](2, id, 'another password')).toBe(false)
+    expect(await p.handlers[IPC.watchLinkAllowControl](2, id)).toBe(false)
+    expect(await p.handlers[IPC.watchLinkControlSupport](2, 'n1')).toBe('unknown')
+    // Wrong types.
+    expect(await p.handlers[IPC.watchLinkSetControl](1, id, 'false')).toBe(false)
+    expect(await p.handlers[IPC.watchLinkSetControl](1, 7, false)).toBe(false)
+    expect(await p.handlers[IPC.watchLinkSetPassword](1, id, 12345678)).toBe(false)
+    expect(await p.handlers[IPC.watchLinkAllowControl](1, null)).toBe(false)
+    expect(await p.handlers[IPC.watchLinkControlSupport](1, 5)).toBe('unknown')
+    expect(h.hooks).toEqual([])
+    // The owner.
+    expect(await p.handlers[IPC.watchLinkControlSupport](1, 'n1')).toBe('ok')
+    expect(await p.handlers[IPC.watchLinkSetControl](1, id, false)).toBe(true)
+    expect(await p.handlers[IPC.watchLinkSetPassword](1, id, 'another password')).toBe(true)
+    h.deps.onControlLocked()
+    expect(await p.handlers[IPC.watchLinkAllowControl](1, id)).toBe(true)
+    expect(h.hooks).toEqual(['controlChanged', 'passwordChanged', 'allowControl'])
   })
 
   it('sendToOwners reaches owner clients only (the link URL carries its secret)', () => {
@@ -932,6 +991,398 @@ describe('createWatchLinkService — real store', () => {
     await t.s.revoke(r.link.linkId)
     await t.store.load() // queued behind the revoke's write
     expect(JSON.parse(readFileSync(t.file, 'utf8')).links).toEqual([])
+  })
+})
+
+// --- Control links and Unlimited links ------------------------------------------------------------------
+
+const PW = 'correct horse battery'
+const NEW_PW = 'staple gun ninety'
+const ctlReq = (over: Record<string, unknown> = {}) => req({ role: 'controller', password: PW, ...over })
+/** A hash shaped like scrypt's (16-byte salt, 32-byte key) without its ~80 ms: for the tests that
+ *  are about the plumbing, not the password. Different every call, like a fresh salt. */
+let fastN = 0
+const fastHash = async (): Promise<ControlPasswordHash> => {
+  fastN++
+  return {
+    salt: Buffer.alloc(16, fastN % 256).toString('base64'),
+    hash: Buffer.alloc(32, (fastN * 7) % 256).toString('base64')
+  }
+}
+const allLogged = (spies: ReturnType<typeof vi.spyOn>[]) => spies.flatMap((sp) => sp.mock.calls.flat().map(String)).join('\n')
+
+describe('createWatchLinkService — creating a Control link', () => {
+  it('hashes the password, keeps only {salt, hash} in the record, and the host checks against it', async () => {
+    const t = service()
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    expect(r.link).toMatchObject({ role: 'controller', control: { enabled: true, locked: false } })
+    const text = readFileSync(t.file, 'utf8')
+    expect(text).not.toContain(PW)
+    expect(text).not.toContain(Buffer.from(PW).toString('base64'))
+    expect(text).not.toContain(Buffer.from(PW).toString('hex'))
+    const [loaded] = await t.store.load()
+    expect(Object.keys(loaded.control ?? {}).sort()).toEqual(['enabled', 'hash', 'locked', 'salt'])
+    expect(loaded.control).toMatchObject({ enabled: true, locked: false })
+    expect(await verifyControlPassword(PW, loaded.control!)).toBe(true)
+    const h = t.hosts.made[0]
+    expect(await h.deps.verifyPassword(PW)).toBe(true)
+    expect(await h.deps.verifyPassword('not the password')).toBe(false)
+  })
+
+  it('a viewer or commenter link ignores a password field: no control, nothing of it on disk', async () => {
+    const t = service()
+    for (const role of ['viewer', 'commenter']) {
+      const r = await t.s.create(req({ role, password: PW }))
+      if (!r.ok) throw new Error(r.error)
+      expect(r.link.control).toBeNull()
+    }
+    expect(readFileSync(t.file, 'utf8')).not.toContain(PW)
+    expect((await t.store.load()).map((l) => l.control)).toEqual([undefined, undefined])
+    expect(await t.hosts.made[0].deps.verifyPassword(PW)).toBe(false)
+  })
+
+  it('a Control link without an acceptable password is bad-password, and nothing is asked of the server', async () => {
+    const t = service()
+    for (const password of [undefined, '', 'short', 12345678, 'abcdefg\n', 'x'.repeat(129), null, {}]) {
+      expect(await t.s.create(ctlReq({ password })), JSON.stringify(password)).toEqual({ ok: false, error: 'bad-password' })
+    }
+    // A request that is malformed otherwise is bad-request, whatever its password.
+    expect(await t.s.create(ctlReq({ password: 'short', ttlSeconds: 7 }))).toEqual({ ok: false, error: 'bad-request' })
+    expect(t.calls).toEqual([])
+    expect(t.hosts.made).toEqual([])
+  })
+
+  it('a Control link on a terminal that cannot take input (Zellij) is control-unsupported, before any request', async () => {
+    const answers = new Map<string, ControlSupport>([['n1', 'unsupported'], ['n2', 'unknown']])
+    const t = service({ controlSupport: (id) => answers.get(id) ?? 'ok' })
+    expect(await t.s.create(ctlReq())).toEqual({ ok: false, error: 'control-unsupported' })
+    expect(t.calls).toEqual([])
+    // Only a Control link is asked about; unknown leaves the create to decide.
+    expect((await t.s.create(req({ role: 'commenter' }))).ok).toBe(true)
+    expect((await t.s.create(ctlReq({ nodeId: 'n2' }))).ok).toBe(true)
+    // A check that throws reads as unknown.
+    const u = service({
+      controlSupport: () => {
+        throw new Error('boom')
+      }
+    })
+    expect((await u.s.create(ctlReq())).ok).toBe(true)
+    // A shell that wires no check: unknown.
+    expect((await service().s.create(ctlReq())).ok).toBe(true)
+  })
+
+  it('the password is hashed BEFORE the server create: a hash that fails creates no server row, and logs nothing of it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = service({
+      hashPassword: async (pw) => {
+        throw new Error(`scrypt said no about ${pw}`)
+      }
+    })
+    const r = await t.s.create(ctlReq())
+    expect(r.ok).toBe(false)
+    expect(t.calls).toEqual([])
+    expect(t.hosts.made).toEqual([])
+    expect(allLogged([warn])).not.toContain(PW)
+    warn.mockRestore()
+  })
+})
+
+describe('createWatchLinkService — creating an Unlimited link', () => {
+  it('asks for ttlSeconds 0 and records expiresAt: null, with no expiry timer: still live after any time', async () => {
+    vi.useFakeTimers()
+    const t = service()
+    const r = await t.s.create(req({ ttlSeconds: 0 }))
+    if (!r.ok) throw new Error(r.error)
+    expect(t.ttls).toEqual([0])
+    expect(r.link.expiresAt).toBeNull()
+    expect((await t.store.load())[0].expiresAt).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(400 * 24 * HOUR)
+    expect(t.s.list().map((l) => l.expiresAt)).toEqual([null])
+    expect(t.hosts.made[0].stopped).toEqual([])
+  })
+
+  it('an older server (ttl-unsupported) creates nothing here', async () => {
+    const t = service({ api: { create: async () => ({ ok: false, error: 'ttl-unsupported' }) } })
+    expect(await t.s.create(req({ ttlSeconds: 0 }))).toEqual({ ok: false, error: 'ttl-unsupported' })
+    expect(t.hosts.made).toEqual([])
+    expect(t.s.list()).toEqual([])
+    expect(await t.store.load()).toEqual([])
+  })
+
+  // The backend checks an Unlimited link's license daily at its host-token mint and answers 402 once
+  // the owner's Pro lapsed. That is the same refusal as any other: the REAL host stops minting (no
+  // retry loop) and the owner's view reads `status: 'refused'`.
+  it("a 402 at the mint (Pro lapsed) stops minting for good and the view reads status 'refused'", async () => {
+    const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => {}), vi.spyOn(console, 'error').mockImplementation(() => {})]
+    vi.useFakeTimers()
+    let mints = 0
+    const t = service({
+      realHost: true,
+      api: {
+        hostToken: async () => {
+          mints++
+          return { ok: false, kind: 'refused', status: 402 }
+        }
+      }
+    })
+    const r = await t.s.create(req({ ttlSeconds: 0 }))
+    if (!r.ok) throw new Error(r.error)
+    await vi.waitFor(() => expect(mints).toBe(1))
+    await vi.advanceTimersByTimeAsync(48 * HOUR)
+    expect(mints).toBe(1)
+    expect(t.s.list()[0]).toMatchObject({ status: 'refused', expiresAt: null })
+    expect(t.states().at(-1)?.[0].status).toBe('refused')
+    for (const q of quiet) q.mockRestore()
+  })
+})
+
+describe('createWatchLinkService — the Control host seams', () => {
+  it('a lock is set on the record SYNCHRONOUSLY, then written, and the owner is told', async () => {
+    const t = service()
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    h.deps.onControlLocked()
+    expect(h.record.control?.locked).toBe(true) // before any await: the host's lock rests on it
+    expect(t.notices().at(-1)).toEqual({ kind: 'control-locked', linkId: r.link.linkId, nodeId: 'n1', title: 'build' })
+    expect((await t.store.load())[0].control?.locked).toBe(true)
+    await flush()
+    expect(t.states().at(-1)?.[0].control).toEqual({ enabled: true, locked: true })
+  })
+
+  it('a lock whose write fails still holds in memory, and the failure is logged', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let outcome: SaveOutcome = 'saved'
+    const f = fakeStore({ save: async () => outcome })
+    const t = service({ store: f.store })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    outcome = 'failed'
+    t.hosts.made[0].deps.onControlLocked()
+    await vi.waitFor(() => expect(warn.mock.calls.some(([l]) => /lock/.test(String(l)))).toBe(true))
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: true })
+    const c = t.hosts.made[0].record.control!
+    expect(allLogged([warn])).not.toMatch(new RegExp([PW, c.salt, c.hash].map((x) => x.replace(/[+/=]/g, '\\$&')).join('|')))
+    warn.mockRestore()
+  })
+
+  it('a viewer taking control tells the owner, under the name it gave (bidi stripped)', async () => {
+    const t = service()
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    t.hosts.made[0].deps.onControlTaken('E\u202eve')
+    expect(t.notices().at(-1)).toEqual({ kind: 'control-taken', linkId: r.link.linkId, nodeId: 'n1', title: 'build', name: 'Eve' })
+    await flush()
+    expect(t.states().length).toBeGreaterThan(0)
+  })
+
+  it("the owner's view carries each viewer's controlling and typing from the host, and the link's control state", async () => {
+    const t = service()
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    t.hosts.made[0].viewers = [
+      { viewerId: 'v-1', name: 'Ada', joinedAt: 5, waiting: false, controlling: true, typing: true },
+      { viewerId: 'v-2', name: null, joinedAt: 6, waiting: false, controlling: false, typing: false }
+    ]
+    expect(t.s.list()[0].viewers.map((v) => [v.controlling, v.typing])).toEqual([[true, true], [false, false]])
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
+  })
+})
+
+describe('createWatchLinkService — the owner controls a Control link', () => {
+  it('setControl writes enabled, persists it and tells the host; refused for anything but a live Control link', async () => {
+    const t = service()
+    const r = await t.s.create(ctlReq())
+    const v = await t.s.create(req({ role: 'commenter', nodeId: 'n2' }))
+    if (!r.ok || !v.ok) throw new Error('create failed')
+    const h = t.hosts.made[0]
+    expect(await t.s.setControl(r.link.linkId, false)).toBe(true)
+    expect(h.hooks).toEqual(['controlChanged'])
+    expect((await t.store.load()).find((l) => l.linkId === r.link.linkId)?.control?.enabled).toBe(false)
+    await flush()
+    expect(t.states().at(-1)?.find((l) => l.linkId === r.link.linkId)?.control).toEqual({ enabled: false, locked: false })
+    expect(await t.s.setControl(r.link.linkId, true)).toBe(true)
+    expect(h.hooks).toEqual(['controlChanged', 'controlChanged'])
+    // Not a Control link, an unknown link, an ended one.
+    expect(await t.s.setControl(v.link.linkId, false)).toBe(false)
+    expect(await t.s.setControl('Nope000000000000000000', false)).toBe(false)
+    await t.s.revoke(r.link.linkId)
+    expect(await t.s.setControl(r.link.linkId, false)).toBe(false)
+    expect(t.hosts.made[1].hooks).toEqual([])
+  })
+
+  it('setPassword checks the new password, swaps the hash, persists, and demotes every controller; the old one stops working', async () => {
+    const t = service()
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    const before = { ...(await t.store.load())[0].control! }
+    for (const bad of ['short', 'abcdefg\n', 'x'.repeat(129), 12345678]) {
+      expect(await t.s.setPassword(r.link.linkId, bad as string)).toBe(false)
+    }
+    expect(h.hooks).toEqual([])
+    expect(await t.s.setPassword(r.link.linkId, NEW_PW)).toBe(true)
+    expect(h.hooks).toEqual(['passwordChanged'])
+    const after = (await t.store.load())[0].control!
+    expect(after.salt).not.toBe(before.salt)
+    expect(after.hash).not.toBe(before.hash)
+    expect(readFileSync(t.file, 'utf8')).not.toContain(NEW_PW)
+    // The host checks against the CURRENT hash.
+    expect(await h.deps.verifyPassword(NEW_PW)).toBe(true)
+    expect(await h.deps.verifyPassword(PW)).toBe(false)
+    const v = await t.s.create(req({ role: 'viewer', nodeId: 'n2' }))
+    if (!v.ok) throw new Error(v.error)
+    expect(await t.s.setPassword(v.link.linkId, NEW_PW)).toBe(false)
+  })
+
+  it('allowControl clears the lock, persists it and tells the host', async () => {
+    const t = service({ hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    h.deps.onControlLocked()
+    expect(await t.s.allowControl(r.link.linkId)).toBe(true)
+    expect(h.hooks).toEqual(['allowControl'])
+    expect((await t.store.load())[0].control?.locked).toBe(false)
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
+    expect(await t.s.allowControl('Nope000000000000000000')).toBe(false)
+  })
+
+  it('a change whose write fails is undone in memory and at the host, and answers false; a lock is never undone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let outcome: SaveOutcome = 'saved'
+    const f = fakeStore({ save: async () => outcome })
+    const t = service({ store: f.store })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const id = r.link.linkId
+    const h = t.hosts.made[0]
+    outcome = 'failed'
+    const saves = f.saves.length
+    expect(await t.s.setControl(id, false)).toBe(false)
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
+    expect(h.hooks).toEqual(['controlChanged', 'controlChanged']) // told, then told it is back
+    expect(f.saves.length).toBe(saves + 2) // the write that failed, and the corrected list behind it
+    expect(f.saves.at(-1)?.[0].control?.enabled).toBe(true)
+    h.hooks.length = 0
+    expect(await t.s.setPassword(id, NEW_PW)).toBe(false)
+    expect(h.hooks).toEqual(['passwordChanged', 'passwordChanged'])
+    expect(await h.deps.verifyPassword(PW)).toBe(true)
+    expect(await h.deps.verifyPassword(NEW_PW)).toBe(false)
+    h.hooks.length = 0
+    h.deps.onControlLocked() // its own write fails too: the lock holds
+    expect(await t.s.allowControl(id)).toBe(false)
+    expect(h.hooks).toEqual(['allowControl', 'controlChanged'])
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: true })
+    const c = h.record.control!
+    expect(allLogged([warn])).not.toMatch(
+      new RegExp([PW, NEW_PW, c.salt, c.hash].map((x) => x.replace(/[+/=]/g, '\\$&')).join('|'))
+    )
+    warn.mockRestore()
+  })
+
+  it('a change whose write does not answer is bounded: undone, false', async () => {
+    const held = deferred<SaveOutcome>()
+    let hang = false
+    const f = fakeStore({ save: () => (hang ? held.promise : Promise.resolve('saved')) })
+    const t = service({ store: f.store, persistTimeoutMs: 20, hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    hang = true
+    expect(await t.s.setControl(r.link.linkId, false)).toBe(false)
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
+    held.resolve('saved')
+  })
+})
+
+describe('createWatchLinkService — one bound on scrypt', () => {
+  it('a FIFO gate: a third task waits for a slot, slots go in arrival order, a failure frees its slot', async () => {
+    const gate = createFifoGate(2)
+    const started: string[] = []
+    const held = new Map<string, ReturnType<typeof deferred<string>>>()
+    const run = (k: string) =>
+      gate(() => {
+        started.push(k)
+        const d = deferred<string>()
+        held.set(k, d)
+        return d.promise
+      })
+    const out = ['a', 'b', 'c', 'd', 'e'].map((k) => run(k).catch((e: Error) => `x${e.message}`))
+    await flush()
+    expect(started).toEqual(['a', 'b'])
+    held.get('b')!.reject(new Error('b'))
+    await flush()
+    expect(started).toEqual(['a', 'b', 'c'])
+    held.get('a')!.resolve('a')
+    await flush()
+    expect(started).toEqual(['a', 'b', 'c', 'd'])
+    held.get('c')!.resolve('c')
+    held.get('d')!.resolve('d')
+    await flush()
+    held.get('e')!.resolve('e')
+    expect(await Promise.all(out)).toEqual(['a', 'xb', 'c', 'd', 'e'])
+    // A task that throws synchronously frees its slot too.
+    const t2 = createFifoGate(1)
+    await expect(
+      t2(() => {
+        throw new Error('sync')
+      })
+    ).rejects.toThrow('sync')
+    expect(await t2(async () => 'next')).toBe('next')
+  })
+
+  it("every link host's password check goes through ONE 2-slot gate, in order; a new password's hash waits its turn too", async () => {
+    const started: string[] = []
+    const held = new Map<string, ReturnType<typeof deferred<boolean>>>()
+    const t = service({
+      hashPassword: async (pw) => {
+        started.push(`hash:${pw}`)
+        return fastHash()
+      },
+      verifyPassword: (pw) => {
+        started.push(pw)
+        const d = deferred<boolean>()
+        held.set(pw, d)
+        return d.promise
+      }
+    })
+    for (const nodeId of ['n1', 'n2', 'n1']) expect((await t.s.create(ctlReq({ nodeId }))).ok).toBe(true)
+    started.length = 0
+    const [a, b, c] = t.hosts.made
+    const results = [a.deps.verifyPassword('pa'), b.deps.verifyPassword('pb'), c.deps.verifyPassword('pc')]
+    const changed = t.s.setPassword(a.record.linkId, NEW_PW)
+    await flush()
+    expect(started).toEqual(['pa', 'pb'])
+    held.get('pb')!.resolve(false)
+    await flush()
+    expect(started).toEqual(['pa', 'pb', 'pc'])
+    held.get('pa')!.resolve(true)
+    await flush()
+    expect(started).toEqual(['pa', 'pb', 'pc', `hash:${NEW_PW}`])
+    held.get('pc')!.resolve(true)
+    expect(await Promise.all(results)).toEqual([true, false, true])
+    expect(await changed).toBe(true)
+  })
+})
+
+describe('createWatchLinkService — controlSupport', () => {
+  it("answers the shell's check; anything else, a throw, an unsafe id or no check at all is unknown", () => {
+    const answers: Record<string, unknown> = { n1: 'ok', n2: 'unsupported', n3: 'maybe' }
+    const t = service({ controlSupport: (id) => answers[id] as ControlSupport })
+    expect(t.s.controlSupport('n1')).toBe('ok')
+    expect(t.s.controlSupport('n2')).toBe('unsupported')
+    expect(t.s.controlSupport('n3')).toBe('unknown')
+    expect(t.s.controlSupport('../x')).toBe('unknown')
+    expect(t.s.controlSupport(7 as unknown as string)).toBe('unknown')
+    const boom = service({
+      controlSupport: () => {
+        throw new Error('x')
+      }
+    })
+    expect(boom.s.controlSupport('n1')).toBe('unknown')
+    expect(service().s.controlSupport('n1')).toBe('unknown')
   })
 })
 

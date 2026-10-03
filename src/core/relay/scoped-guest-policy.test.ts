@@ -264,6 +264,11 @@ describe('relay host — host-only channels refused to every peer', () => {
         (v): v is string => typeof v === 'string' && v.startsWith('watchLink:')
       )
       expect(methods).toHaveLength(14)
+      // The Control link's owner verbs are among them, by name: a peer must never set a link's
+      // password, turn its typing on, clear its lock, or probe a terminal for it.
+      for (const ch of [IPC.watchLinkSetControl, IPC.watchLinkSetPassword, IPC.watchLinkAllowControl, IPC.watchLinkControlSupport]) {
+        expect(methods, ch).toContain(ch)
+      }
       methods.forEach((method, i) =>
         t.client.send(JSON.stringify({ t: 'req', id: 200 + i, method, args: [{ nodeId: 'a1', role: 'viewer', ttlSeconds: 3600, label: 'x' }] }))
       )

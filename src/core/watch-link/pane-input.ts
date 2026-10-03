@@ -101,6 +101,15 @@ export type WatcherInputRoute = 'tmux' | 'ssh' | 'write' | 'none'
 /** Every route, for a reader that must check one it did not produce (link-host.ts `normalizeJoin`). */
 export const WATCHER_INPUT_ROUTES = ['tmux', 'ssh', 'write', 'none'] as const satisfies readonly WatcherInputRoute[]
 
+/**
+ * How long one chunk of a controller's input may take, from the moment it is handed over: the link
+ * host gives up on it then (INPUT_DELIVERY_TIMEOUT_MS is this value) and tells its controller it was
+ * dropped, and `PtyManager.controlInput` answers false at the same deadline and moves the session's
+ * chain on — so a delivery that never answers cannot hold every later chunk behind it, and a chunk
+ * that could not even START by then is never delivered at all.
+ */
+export const PANE_INPUT_DEADLINE_MS = 20_000
+
 /** Bytes per `send-keys -H` line: 3 characters each on the line, so ~3 KiB a line. */
 export const KEYS_PER_COMMAND = 1024
 

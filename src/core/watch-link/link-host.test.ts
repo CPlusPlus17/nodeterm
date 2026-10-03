@@ -2312,6 +2312,18 @@ describe('createLinkHost — control', () => {
       await vi.waitFor(() => expect(typingOf(watcher)).toEqual([['Ada']]))
     })
 
+    // The owner must never read "Bob · typing" beside an "Ada took control" notice: while a viewer
+    // controls, the owner's list names it as the typing set does. Once it stops, its chat name again.
+    it("the owner's viewer list names a controller by its unlock name, and by its chat name once it stops", async () => {
+      const { t, clock, vs } = await controllers(['Ada'])
+      expect(vs[0].c.sendChat('Bob', 'hi')).toBe(true)
+      await vi.waitFor(() => expect(t.chats).toHaveLength(1))
+      await type(vs[0], 'a', clock)
+      expect(t.host.viewers()[0]).toMatchObject({ name: 'Ada', controlling: true, typing: true })
+      expect(await ask(vs[0], () => vs[0].c.release())).toEqual({ state: 'available' })
+      expect(t.host.viewers()[0]).toMatchObject({ name: 'Bob', controlling: false })
+    })
+
     it('stop() with a pending batch and a live typing set leaves no timer behind', async () => {
       const { t, clock, vs } = await controllers(['Ada', 'Bob'])
       await type(vs[0], 'a', clock)

@@ -8,14 +8,24 @@
 //    session whose size is unknown is REFUSED rather than given a guessed 80x24 (R37/R39);
 //  - a refusal that had already attached leaves what it attached (the link host only knows a session
 //    id this seam answered, so it could not leave it);
-//  - `alive` is PtyManager's explicit `hasSession` (R38), `syncSize` its per-session serialized sync (R24).
+//  - `alive` is PtyManager's explicit `hasSession` (R38), `syncSize` its per-session serialized sync (R24);
+//  - a join reports how a controller's input reaches the JOINED session's PANE
+//    (`watcherInputRoute`: `none` for Zellij or a session it no longer holds, which refuses control),
+//    and `input` is `controlInput` — the pane, never a tmux client's key table.
 import type { PtyCreateOptions } from '../../shared/types'
 import type { PtyManager } from '../pty-manager'
 import type { WatchPty } from './link-host'
 
 export type WatchPtyManager = Pick<
   PtyManager,
-  'joinAsWatcher' | 'sessionSize' | 'kill' | 'captureVisible' | 'syncWatcherClientSize' | 'hasSession'
+  | 'joinAsWatcher'
+  | 'sessionSize'
+  | 'kill'
+  | 'captureVisible'
+  | 'syncWatcherClientSize'
+  | 'hasSession'
+  | 'controlInput'
+  | 'watcherInputRoute'
 >
 
 /** Where a node's session lives, from the SHELL's own records. `requireRemote` for every node of an
@@ -41,14 +51,18 @@ export function createWatchPty(pty: WatchPtyManager, remoteFor: (nodeId: string)
         pty.kill(clientId, res.sessionId, viewerId)
         return null
       }
-      // Control is not wired to the pane yet: every join answers `none` (control refused) and no
-      // input is delivered (fail closed).
-      return { sessionId: res.sessionId, cols: size.cols, rows: size.rows, altScreen: res.tmuxClient === true, input: 'none' }
+      return {
+        sessionId: res.sessionId,
+        cols: size.cols,
+        rows: size.rows,
+        altScreen: res.tmuxClient === true,
+        input: pty.watcherInputRoute(res.sessionId)
+      }
     },
     leave: (clientId, sessionId, viewerId) => pty.kill(clientId, sessionId, viewerId),
     captureVisible: (sessionId) => pty.captureVisible(sessionId),
     syncSize: (sessionId) => pty.syncWatcherClientSize(sessionId),
     alive: (sessionId) => pty.hasSession(sessionId),
-    input: async () => false
+    input: (sessionId, chunk) => pty.controlInput(sessionId, chunk)
   }
 }
