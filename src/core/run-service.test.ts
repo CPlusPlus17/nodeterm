@@ -134,14 +134,19 @@ describe('run-service', () => {
   it.skipIf(!posix)('runs the preLaunchTask, then the program with env + envFile, and records the exit code', async () => {
     const w = path.join(root, 'w')
     const out = path.join(root, 'out.txt')
-    write('w/app.js', `require('fs').writeFileSync(${JSON.stringify(out)}, [process.env.FROM_CFG, process.env.FROM_FILE, process.env.SHARED, process.cwd(), process.argv.slice(2).join(',')].join('|')); process.exit(3)`)
+    // Fixture scripts are FIXED source: anything run-specific (paths) reaches them as env, never
+    // spliced into the code.
+    write(
+      'w/app.js',
+      "require('fs').writeFileSync(process.env.OUT, [process.env.FROM_CFG, process.env.FROM_FILE, process.env.SHARED, process.cwd(), process.argv.slice(2).join(',')].join('|')); process.exit(3)"
+    )
     write('w/.env', 'FROM_FILE=file-value\nSHARED=from-file\n')
     write('w/.vscode/tasks.json', `{ "tasks": [ { "label": "prep", "type": "shell", "command": "echo prepped > prep.txt" } ] }`)
     write('w/.vscode/launch.json', `{ "configurations": [ {
       "name": "API", "type": "node", "request": "launch",
       "runtimeExecutable": ${JSON.stringify(NODE)},
       "program": "\${workspaceFolder}/app.js", "args": ["a", "b c"],
-      "env": { "FROM_CFG": "cfg-value", "SHARED": "from-config" },
+      "env": { "FROM_CFG": "cfg-value", "SHARED": "from-config", "OUT": ${JSON.stringify(out)} },
       "envFile": "\${workspaceFolder}/.env",
       "preLaunchTask": "prep"
     } ] }`)
@@ -174,9 +179,15 @@ describe('run-service', () => {
     const w = path.join(root, 'w')
     const marker = path.join(root, 'got-int')
     const ready = path.join(root, 'ready')
-    write('w/serve.js', `const fs = require('fs'); process.on('SIGINT', () => { fs.writeFileSync(${JSON.stringify(marker)}, 'x'); process.exit(130) }); fs.writeFileSync(${JSON.stringify(ready)}, 'x'); setInterval(() => {}, 1000)`)
-    write('w/.vscode/launch.json', `{ "configurations": [ { "name": "S", "type": "node", "request": "launch",
-      "runtimeExecutable": ${JSON.stringify(NODE)}, "program": "serve.js" } ] }`)
+    write(
+      'w/serve.js',
+      "const fs = require('fs'); process.on('SIGINT', () => { fs.writeFileSync(process.env.MARKER, 'x'); process.exit(130) }); fs.writeFileSync(process.env.READY, 'x'); setInterval(() => {}, 1000)"
+    )
+    write('w/.vscode/launch.json', JSON.stringify({
+      configurations: [
+        { name: 'S', type: 'node', request: 'launch', runtimeExecutable: NODE, program: 'serve.js', env: { MARKER: marker, READY: ready } }
+      ]
+    }))
     await startRun('n4', { projectDir: w, launchConfig: 'S', reloadOnSave: true })
     runLauncher('n4')
     await until(async () => (await runStatus('n4')).running)
