@@ -357,13 +357,16 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   function armExpiry(r: WatchLinkRecord): void {
     const t = expiry.get(r.linkId)
     if (t !== undefined) clearT(t)
-    const delay = Math.min(MAX_DELAY_MS, Math.max(0, r.expiresAt - now()))
+    expiry.delete(r.linkId)
+    const at = r.expiresAt
+    if (at === null) return // an Unlimited link: no end time, no timer
+    const delay = Math.min(MAX_DELAY_MS, Math.max(0, at - now()))
     expiry.set(
       r.linkId,
       setT(() => {
         expiry.delete(r.linkId)
         if (records.get(r.linkId) !== r) return
-        if (now() < r.expiresAt) armExpiry(r) // a clamped delay: not yet
+        if (now() < at) armExpiry(r) // a clamped delay: not yet
         else end(r.linkId, 'expired', { serverRevoke: false, notify: true })
       }, delay)
     )
@@ -390,7 +393,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
 
   function onHostChange(linkId: string): void {
     const r = records.get(linkId)
-    if (r && now() >= r.expiresAt) {
+    if (r && r.expiresAt !== null && now() >= r.expiresAt) {
       // A reconnect after a lid-close: the expiry timer may not have fired yet (G24). Deferred: this
       // runs inside the link host's own status callback, and ending the link stops that host.
       queueMicrotask(() => end(linkId, 'expired', { serverRevoke: false, notify: true }))
@@ -507,7 +510,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     let pruned = false
     for (const r of loaded) {
       if (records.has(r.linkId)) continue
-      if (r.expiresAt <= t) {
+      if (r.expiresAt !== null && r.expiresAt <= t) {
         pruned = true
         continue
       }

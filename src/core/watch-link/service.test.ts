@@ -580,6 +580,55 @@ describe('createWatchLinkService — ending a link', () => {
   })
 })
 
+// An Unlimited link's record has `expiresAt: null`: no expiry timer, never swept or ended for time.
+// (Creating one is Task 6's; these resume it from the store, which is where a null first appears.)
+describe('createWatchLinkService — a link with no expiry (expiresAt: null)', () => {
+  const ended = (t: ReturnType<typeof service>) => t.notices().filter((n) => n.kind === 'ended')
+
+  it('is resumed at launch and never pruned for time, however late the clock reads', async () => {
+    const f = fakeStore({ load: async () => [record({ expiresAt: null })] })
+    const t = service({ store: f.store, now: () => Number.MAX_SAFE_INTEGER })
+    await t.s.init()
+    expect(t.s.list().map((l) => [l.linkId, l.expiresAt])).toEqual([['Good000000000000000000', null]])
+    expect(t.hosts.made.map((h) => h.record.linkId)).toEqual(['Good000000000000000000'])
+    expect(f.saves).toEqual([]) // nothing was pruned, so nothing is written
+  })
+
+  it('arms no expiry timer: still listed and hosted after any amount of time', async () => {
+    vi.useFakeTimers()
+    const f = fakeStore({ load: async () => [record({ expiresAt: null })] })
+    const t = service({ store: f.store })
+    await t.s.init()
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(400 * 24 * HOUR)
+    expect(t.s.list()).toHaveLength(1)
+    expect(t.hosts.made[0].stopped).toEqual([])
+    expect(ended(t)).toEqual([])
+  })
+
+  it('a host change never ends it as expired (the G24 check has no end time to compare)', async () => {
+    let clock = 1_000_000
+    const f = fakeStore({ load: async () => [record({ expiresAt: null })] })
+    const t = service({ store: f.store, now: () => clock })
+    await t.s.init()
+    clock = Number.MAX_SAFE_INTEGER
+    t.hosts.made[0].deps.onChange()
+    await flush()
+    expect(t.s.list()).toHaveLength(1)
+    expect(t.hosts.made[0].stopped).toEqual([])
+    expect(ended(t)).toEqual([])
+  })
+
+  it('still ends for every other reason (a revoke)', async () => {
+    const f = fakeStore({ load: async () => [record({ expiresAt: null })] })
+    const t = service({ store: f.store })
+    await t.s.init()
+    await t.s.revoke('Good000000000000000000')
+    expect(t.s.list()).toEqual([])
+    expect(t.hosts.made[0].stopped).toEqual(['revoked'])
+  })
+})
+
 describe('createWatchLinkService — init (resume at launch)', () => {
   it('resumes live and UNKNOWN records, drops expired ones, and revokes only an ABSENT one', async () => {
     const t = service({ nodes: new Map([['n1', 'present'], ['maybe', 'unknown']]) })

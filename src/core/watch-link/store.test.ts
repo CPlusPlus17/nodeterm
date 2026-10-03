@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { testTmpDir } from '../test-tmp'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { WatchLinkStore, WatchLinkStoreUnreadable, type WatchLinkRecord } from './store'
+import { hashControlPassword } from './password'
 
 // Pass-through spies, so a test can hold one write open (ordering), fail one (chain recovery,
 // set-aside failure) or count them (a latched store must not write at all).
@@ -518,5 +519,153 @@ describe('a keychain that stops sealing mid-run (R45)', () => {
     await s.save([a, b])
     await s.save([a, b])
     expect(seals).toBe(2)
+  })
+})
+
+// A Control link's record carries `control` (the password's scrypt hash and the lock), and an
+// Unlimited link's `expiresAt` is null. `control` is present IFF the role is 'controller': a
+// hand-edited file cannot give a viewer link a password, and a controller link without one is dropped.
+describe('controller records and unlimited expiry', () => {
+  const SALT = b64(new Uint8Array(16).fill(1))
+  const HASH = b64(new Uint8Array(32).fill(2))
+  const control = { enabled: true, salt: SALT, hash: HASH, locked: false }
+  const ctl = (over: Partial<WatchLinkRecord> = {}) => rec({ role: 'controller', control, expiresAt: null, ...over })
+
+  it('round-trips a controller record with no expiry through save and a fresh store', async () => {
+    for (const opts of [{ seal, unseal }, {}]) {
+      const f = file()
+      expect(await new WatchLinkStore({ file: f, ...opts }).save([ctl()])).toBe('saved')
+      expect(await new WatchLinkStore({ file: f, ...opts }).load()).toEqual([ctl()])
+    }
+    const f = file()
+    const locked = ctl({ control: { enabled: false, salt: SALT, hash: HASH, locked: true } })
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([locked])).toBe('saved')
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([locked])
+  })
+
+  it('drops a controller entry without control, and a viewer or commenter entry that carries one', async () => {
+    const f = file()
+    writeLinks(f, [
+      rawEntry({ linkId: 'NoControlIjKlMnOpQrStU', role: 'controller' }),
+      rawEntry({ linkId: 'NullControlKlMnOpQrStU', role: 'controller', control: null }),
+      rawEntry({ linkId: 'ViewerPwdhIjKlMnOpQrSt', role: 'viewer', control }),
+      rawEntry({ linkId: 'CommentPwdIjKlMnOpQrSt', role: 'commenter', control }),
+      rawEntry({ linkId: 'ViewerNullIjKlMnOpQrSt', role: 'viewer', control: null }),
+      rawEntry({ role: 'controller', control, expiresAt: null })
+    ])
+    expect(await new WatchLinkStore({ file: f }).load()).toEqual([ctl()])
+  })
+
+  it('drops a controller entry whose control is malformed', async () => {
+    const id = (i: number) => `Bad${String(i).padStart(19, '0')}`
+    const bad: unknown[] = [
+      'x',
+      [],
+      7,
+      { ...control, salt: b64(new Uint8Array(15).fill(1)) },
+      { ...control, salt: b64(new Uint8Array(17).fill(1)) },
+      { ...control, hash: b64(new Uint8Array(31).fill(2)) },
+      { ...control, hash: b64(new Uint8Array(33).fill(2)) },
+      // Node's base64 decoder skips characters it does not know: only canonical text is accepted.
+      { ...control, salt: `!${SALT}` },
+      { ...control, hash: `${HASH.slice(0, 20)}*${HASH.slice(20)}` },
+      { ...control, salt: SALT.replace(/=+$/, '') },
+      { ...control, salt: 7 },
+      { ...control, hash: null },
+      { enabled: true, salt: SALT, locked: false },
+      { ...control, enabled: 'true' },
+      { ...control, enabled: 1 },
+      { ...control, locked: 'false' },
+      { salt: SALT, hash: HASH, locked: false },
+      { enabled: true, salt: SALT, hash: HASH }
+    ]
+    const f = file()
+    writeLinks(f, [...bad.map((c, i) => rawEntry({ linkId: id(i), role: 'controller', control: c, expiresAt: null })), rawEntry()])
+    expect(await new WatchLinkStore({ file: f }).load()).toEqual([rec()])
+  })
+
+  it('keeps only the four control fields: an extra one is not loaded or carried', async () => {
+    const f = file()
+    writeLinks(f, [rawEntry({ role: 'controller', expiresAt: null, control: { ...control, password: 'hunter22' } })])
+    const s = new WatchLinkStore({ file: f })
+    expect(await s.load()).toEqual([ctl()])
+    expect(await s.save(await s.load())).toBe('saved')
+    expect(readFileSync(f, 'utf8')).not.toContain('hunter22')
+  })
+
+  it('writes only the four control fields of a record', async () => {
+    const f = file()
+    const withExtra = ctl({ control: { ...control, password: 'hunter22' } as WatchLinkRecord['control'] })
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([withExtra])).toBe('saved')
+    expect(readFileSync(f, 'utf8')).not.toContain('hunter22')
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([ctl()])
+  })
+
+  it('never writes the plaintext password: the file holds only its salt and scrypt hash', async () => {
+    const password = 'correct horse battery staple'
+    const h = await hashControlPassword(password)
+    const r = ctl({ control: { enabled: true, salt: h.salt, hash: h.hash, locked: false } })
+    for (const opts of [{ seal, unseal }, {}]) {
+      const f = file()
+      expect(await new WatchLinkStore({ file: f, ...opts }).save([r])).toBe('saved')
+      const text = readFileSync(f, 'utf8')
+      expect(text).not.toContain(password)
+      expect(text).not.toContain(Buffer.from(password).toString('base64'))
+      expect(text).not.toContain(Buffer.from(password).toString('hex'))
+      expect(text).toContain(h.hash)
+      expect(await new WatchLinkStore({ file: f, ...opts }).load()).toEqual([r])
+    }
+  })
+
+  it('loads expiresAt: null and drops an entry whose expiresAt is neither null nor a finite number', async () => {
+    const f = file()
+    writeLinks(f, [
+      rawEntry({ linkId: 'StrExpiryIjKlMnOpQrStU', expiresAt: 'x' }),
+      rawEntry({ linkId: 'NoExpiryhIjKlMnOpQrStU', expiresAt: undefined }),
+      rawEntry({ linkId: 'ObjExpiryIjKlMnOpQrStU', expiresAt: {} }),
+      rawEntry({ expiresAt: null })
+    ])
+    expect(await new WatchLinkStore({ file: f }).load()).toEqual([rec({ expiresAt: null })])
+  })
+
+  describe('an opaque entry (keychain refused) with no expiry', () => {
+    const locked = () => {
+      throw new Error('keychain locked')
+    }
+    const timed = rec({ linkId: 'TimedLinkjKlMnOpQrStUv', label: 'Bob' })
+
+    it('is carried on every write and counted, however late it gets; a timed one is still dropped past its expiry', async () => {
+      const f = file()
+      expect(await new WatchLinkStore({ file: f, seal, unseal }).save([ctl(), timed])).toBe('saved')
+      const onDisk = JSON.parse(readFileSync(f, 'utf8')).links as Record<string, unknown>[]
+      const unlimited = onDisk.find((e) => e.linkId === ctl().linkId)
+      expect(unlimited).toMatchObject({ expiresAt: null, role: 'controller', control })
+      let t = EXPIRES_AT - 1
+      const s = new WatchLinkStore({ file: f, seal, unseal: locked, now: () => t })
+      expect(await s.load()).toEqual([])
+      expect(s.opaqueCount()).toBe(2)
+      expect(await s.save([])).toBe('saved')
+      expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual(onDisk)
+      t = EXPIRES_AT + 10 * 365 * 24 * 3600_000 // years later: the timed one is gone, the unlimited one is not
+      expect(s.opaqueCount()).toBe(1)
+      expect(await s.save([])).toBe('saved')
+      expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([unlimited])
+      expect(await s.save([])).toBe('saved')
+      expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([unlimited])
+      // The keychain answers again: the link comes back whole, control included.
+      expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([ctl()])
+    })
+
+    it('is still dropped by discardOpaque() ("Stop all")', async () => {
+      const f = file()
+      expect(await new WatchLinkStore({ file: f, seal, unseal }).save([ctl()])).toBe('saved')
+      const s = new WatchLinkStore({ file: f, seal, unseal: locked })
+      expect(await s.load()).toEqual([])
+      expect(s.opaqueCount()).toBe(1)
+      s.discardOpaque()
+      expect(s.opaqueCount()).toBe(0)
+      expect(await s.save([])).toBe('saved')
+      expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([])
+    })
   })
 })
