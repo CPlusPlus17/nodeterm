@@ -48,8 +48,14 @@ are a commenter: they watch and may chat.
 
 ### 2.3 Unlocking
 
-- New request `watch:unlock` `{ name, password }` → `{ ok: true }` or `{ ok: false, reason }` with
-  `reason` one of `wrong | locked | off | too-soon`.
+- New cast `watch:unlock` `{ name, password }`. The host answers that viewer only (never a broadcast)
+  with the event `watch:control` `{ state, reason? }`:
+  - `state` is `controlling`, `available` (a Control link this viewer may unlock), `off` or `locked`;
+  - `reason` (after a refused unlock) is `wrong`, `locked`, `off`, `too-soon` or `unsupported`.
+
+  The viewer client has casts and events, no request/response, so this keeps it so. The same event
+  tells a viewer when control is turned off or locked under it, and its initial state rides `watch:meta`
+  (`control`). A cast `watch:release` drops the sender back to watching.
 - `name` passes `sanitizeChatName` (the chat name rule). `password` is a string ≤ 128 characters,
   compared in constant time against the stored hash. It is never logged, never echoed and never kept
   after the comparison.
@@ -143,8 +149,8 @@ Base-spec invariants that stay:
 - Node-gone is tri-state.
 - No canvas-control verb touches links.
 
-The watcher policy gains exactly two inbound entries: `watch:unlock` (req) for a Control link, and
-`watch:input` (cast) for a Control link. Whether a given viewer is *controlling* is the link host's
+The watcher policy gains exactly three inbound entries, all casts and all for a Control link only:
+`watch:unlock`, `watch:input` and `watch:release`. Whether a given viewer is *controlling* is the link host's
 per-connection state; the policy only knows the role.
 
 ## 3. Unlimited lifetime
