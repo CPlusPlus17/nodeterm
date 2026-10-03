@@ -159,10 +159,16 @@ per-connection state; the policy only knows the role.
   - `ttlSeconds: 0` is granted only when no `WATCH_LINK_MAX_TTL_SECONDS` cap is configured. With a cap
     it is clamped to the largest allowed length, like any over-cap request. The response carries
     `expiresAt: null`.
-- **Pro lapse.** An unlimited link must not outlive the owner's Pro. The host mints a fresh host token
-  through the backend for every listener, and the mint requires a valid entitlement token. When Pro
-  lapses the desktop can no longer get one, so the link stops being reachable. The plan verifies that
-  the mint rejects an expired entitlement token; if it does not, the plan adds the check.
+- **Pro lapse.** An unlimited link must not outlive the owner's Pro by more than a day. The host mints a
+  fresh host token through the backend for every listener, and the mint requires a valid entitlement
+  token. That alone is not enough: an entitlement token lives 7 days, so a lapsed owner could keep an
+  unlimited link reachable for up to a week. So the host-token mint for an **unlimited** link also asks
+  the license's liveness (the create route's `licenseLiveness`) at most once per 24 h per license,
+  cached in memory:
+  - `dead` answers 402 `not_entitled`, and the host stops listening.
+  - `unknown` (keygen unreachable) allows the mint: an outage must not take a paying user's link down.
+    The cost is that a lapse during an outage is noticed at the next check.
+  - Finite links keep the rule that a host-token mint never calls keygen.
 - **Desktop:**
   - `WatchLinkRecord.expiresAt: number | null`; the store sanitizer accepts null.
   - No expiry timer for null.
