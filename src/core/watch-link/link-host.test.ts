@@ -32,6 +32,7 @@ import {
   DROPPED_NOTICE_MIN_MS,
   INPUT_BATCH_MS,
   INPUT_BURST,
+  INPUT_DELIVERY_TIMEOUT_MS,
   INPUT_GRACE_MS,
   INPUT_RATE,
   TYPING_EVENT_MIN_MS,
@@ -1079,6 +1080,19 @@ function deferred<T>() {
   return { promise, resolve }
 }
 const settleReal = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms))
+/** A pane delivery whose FIRST call waits for `release()` (true); every later call answers true. */
+function holdFirst() {
+  const held = deferred<boolean>()
+  let first = true
+  return {
+    input: (): Promise<boolean> | boolean => {
+      if (!first) return true
+      first = false
+      return held.promise
+    },
+    release: () => held.resolve(true)
+  }
+}
 
 // A Control link: unlocking with the link's password, the host-side throttles and the lock. The
 // password check is the real scrypt one (`verifyControlPassword` against `record.control`, read at
@@ -1782,14 +1796,9 @@ describe('createLinkHost — control', () => {
     })
 
     it("two controllers' batches arrive whole and in flush order", async () => {
-      const held = deferred<boolean>()
-      let first = true
+      const held = holdFirst()
       const { t, clock, vs } = await controllers(['Ada', 'Bob'], {
-        input: () => {
-          if (!first) return true
-          first = false
-          return held.promise
-        }
+        input: held.input
       })
       await type(vs[0], `a${PASTE_START}P${PASTE_END}b`, clock)
       await clock.advance(INPUT_BATCH_MS)
@@ -1798,19 +1807,14 @@ describe('createLinkHost — control', () => {
       await clock.advance(INPUT_BATCH_MS)
       // Bob's batch waits behind Ada's, whose first chunk is still in the pane.
       expect(delivered(t)).toEqual(['s1:keys:a'])
-      held.resolve(true)
+      held.release()
       await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:paste:P', 's1:keys:b', 's1:keys:z']))
     })
 
     it('one controller types on while its previous batch is still in the pane: its input waits, then goes as one batch', async () => {
-      const held = deferred<boolean>()
-      let first = true
+      const held = holdFirst()
       const { t, clock, vs } = await controllers(['Ada'], {
-        input: () => {
-          if (!first) return true
-          first = false
-          return held.promise
-        }
+        input: held.input
       })
       await type(vs[0], 'a', clock)
       await clock.advance(INPUT_BATCH_MS)
@@ -1820,7 +1824,7 @@ describe('createLinkHost — control', () => {
         await clock.advance(INPUT_BATCH_MS)
       }
       expect(delivered(t)).toEqual(['s1:keys:a'])
-      held.resolve(true)
+      held.release()
       await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:bcd']))
     })
 
@@ -1839,14 +1843,9 @@ describe('createLinkHost — control', () => {
     })
 
     it('a batch already queued behind another is not delivered once its sender lost control', async () => {
-      const held = deferred<boolean>()
-      let first = true
+      const held = holdFirst()
       const { t, clock, vs } = await controllers(['Ada', 'Bob'], {
-        input: () => {
-          if (!first) return true
-          first = false
-          return held.promise
-        }
+        input: held.input
       })
       await type(vs[0], 'a', clock)
       await clock.advance(INPUT_BATCH_MS)
@@ -1854,21 +1853,16 @@ describe('createLinkHost — control', () => {
       await type(vs[1], 'z', clock)
       await clock.advance(INPUT_BATCH_MS)
       expect(await ask(vs[1], () => vs[1].c.release())).toEqual({ state: 'available' })
-      held.resolve(true)
+      held.release()
       await clock.flush()
       await settleReal()
       expect(delivered(t)).toEqual(['s1:keys:a'])
     })
 
     it('a batch queued from before a release is not delivered after the same viewer unlocks again', async () => {
-      const held = deferred<boolean>()
-      let first = true
+      const held = holdFirst()
       const { t, clock, vs } = await controllers(['Ada', 'Bob'], {
-        input: () => {
-          if (!first) return true
-          first = false
-          return held.promise
-        }
+        input: held.input
       })
       await type(vs[0], 'a', clock)
       await clock.advance(INPUT_BATCH_MS)
@@ -1878,7 +1872,7 @@ describe('createLinkHost — control', () => {
       expect(await ask(vs[1], () => vs[1].c.release())).toEqual({ state: 'available' })
       await clock.advance(UNLOCK_MIN_INTERVAL_MS)
       expect(await unlock(vs[1], 'Bob', PW)).toEqual({ state: 'controlling' })
-      held.resolve(true)
+      held.release()
       await type(vs[1], 'new', clock)
       await clock.advance(INPUT_BATCH_MS)
       await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:new']))
@@ -1887,16 +1881,11 @@ describe('createLinkHost — control', () => {
     })
 
     it('a batch already in the chain whose session ended is not typed into the next session', async () => {
-      const held = deferred<boolean>()
-      let first = true
+      const held = holdFirst()
       let n = 0
       const { t, clock, vs } = await controllers(['Ada'], {
         join: () => ({ sessionId: `s${++n}`, cols: 80, rows: 24, altScreen: true }),
-        input: () => {
-          if (!first) return true
-          first = false
-          return held.promise
-        }
+        input: held.input
       })
       await type(vs[0], `a${PASTE_START}P${PASTE_END}b`, clock)
       await clock.advance(INPUT_BATCH_MS)
@@ -1905,7 +1894,7 @@ describe('createLinkHost — control', () => {
       await clock.flush()
       await clock.advance(REJOIN_BACKOFF_MS[0])
       await vi.waitFor(() => expect(vs[0].named(WATCH_EVENT.meta)).toHaveLength(2))
-      held.resolve(true)
+      held.release()
       await vi.waitFor(() => expect(dropped(vs[0])).toHaveLength(1))
       expect(delivered(t)).toEqual(['s1:keys:a'])
     })
@@ -1921,6 +1910,8 @@ describe('createLinkHost — control', () => {
       await type(vs[0], `second half${PASTE_END}ok`, clock)
       await clock.advance(INPUT_BATCH_MS)
       await vi.waitFor(() => expect(delivered(t)).toEqual(['s2:keys:ok']))
+      // The pending batch was empty (the paste had not ended), and the paste was still lost: told.
+      expect(dropped(vs[0])).toHaveLength(1)
     })
 
     it('in-flight input after a release is dropped silently; 5.1 s later it is a breach', async () => {
@@ -2132,14 +2123,9 @@ describe('createLinkHost — control', () => {
     })
 
     it('while the panes have not taken its last batch, a controller collects at most INPUT_BURST more; past it, dropped', async () => {
-      const held = deferred<boolean>()
-      let first = true
+      const held = holdFirst()
       const { t, clock, vs } = await controllers(['Ada'], {
-        input: () => {
-          if (!first) return true
-          first = false
-          return held.promise
-        }
+        input: held.input
       })
       await type(vs[0], 'a', clock)
       await clock.advance(INPUT_BATCH_MS)
@@ -2152,13 +2138,178 @@ describe('createLinkHost — control', () => {
       await type(vs[0], 'c'.repeat(INPUT_MAX), clock) // fills the batch to INPUT_BURST exactly
       await type(vs[0], 'd'.repeat(INPUT_MAX), clock) // over: dropped
       await vi.waitFor(() => expect(dropped(vs[0])).toHaveLength(1))
-      held.resolve(true)
+      held.release()
       await clock.advance(INPUT_BATCH_MS) // the batch's own timer, armed by the last accepted cast
       const size = (): number => t.inputs.reduce((n, [, c]) => n + (c.kind === 'keys' ? c.data.length : 0), 0)
       await vi.waitFor(() => expect(size()).toBe(1 + INPUT_BURST))
       await settleReal()
       expect(size()).toBe(1 + INPUT_BURST)
       expect(delivered(t).some((d) => d.includes('d'))).toBe(false)
+    })
+
+    // --- losing control: a password change and the lock take the same path as every other --------------
+
+    it('a password change: the pending batch is not delivered, a keystroke in flight is dropped, the viewer stays and leaves the typing set; 5 s later input is a breach', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { t, clock, vs } = await controllers(['Ada'])
+      const watcher = await openViewer(t, 1)
+      await type(vs[0], 'a', clock)
+      await vi.waitFor(() => expect(typingOf(watcher)).toEqual([['Ada']]))
+      t.host.passwordChanged()
+      await vi.waitFor(() => expect(controlOf(vs[0]).at(-1)).toEqual({ state: 'available' }))
+      expect(t.host.viewers()[0]).toMatchObject({ controlling: false, typing: false })
+      await type(vs[0], 'b', clock) // in flight when the password changed
+      await clock.advance(INPUT_BATCH_MS)
+      expect(t.inputs).toEqual([])
+      expect(vs[0].log.closed).toBe(0)
+      await clock.advance(TYPING_EVENT_MIN_MS)
+      expect(typingOf(watcher).at(-1)).toEqual([])
+      await clock.advance(INPUT_GRACE_MS)
+      await type(vs[0], 'c', clock)
+      await vi.waitFor(() => expect(vs[0].log.closed).toBe(1))
+      expect(t.inputs).toEqual([])
+    })
+
+    it('a password change voids a batch queued in the chain, even after its sender unlocks with the new password', async () => {
+      const held = holdFirst()
+      let password = PW
+      const { t, clock, vs } = await controllers(['Ada', 'Bob'], { input: held.input, verifyPassword: async (pw) => pw === password })
+      await type(vs[0], 'a', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(1))
+      await type(vs[1], 'old', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      password = 'a-new-password'
+      t.host.passwordChanged()
+      await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+      expect(await unlock(vs[1], 'Bob', 'a-new-password')).toEqual({ state: 'controlling' })
+      held.release()
+      await type(vs[1], 'new', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:new']))
+      await settleReal()
+      expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:new'])
+    })
+
+    it('the lock: a keystroke in flight is dropped and the controller stays; 5 s later input is a breach', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { t, clock, vs } = await controllers(['Ada'])
+      await type(vs[0], 'a', clock)
+      let n = 1
+      for (let wrong = 0; wrong < WRONG_PER_LINK; ) {
+        const v = await openViewer(t, n++)
+        for (let i = 0; i < WRONG_PER_CONN && wrong < WRONG_PER_LINK; i++, wrong++) {
+          await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+          await unlock(v, 'Eve', WRONG)
+        }
+      }
+      expect(t.locks()).toBe(1)
+      await vi.waitFor(() => expect(controlOf(vs[0]).at(-1)).toEqual({ state: 'locked', reason: 'locked' }))
+      await type(vs[0], 'b', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      expect(vs[0].log.closed).toBe(0)
+      await clock.advance(INPUT_GRACE_MS + 100)
+      await type(vs[0], 'c', clock)
+      await vi.waitFor(() => expect(vs[0].log.closed).toBe(1))
+      // 'a' flushed (still controlling) during the first throttle wait; nothing after the lock did.
+      expect(delivered(t)).toEqual(['s1:keys:a'])
+    })
+
+    it('malformed input inside the grace window is a silent drop too, not a breach', async () => {
+      const clock = manualClock()
+      const t = typist({ clock })
+      t.host.start()
+      const p = await openRaw(t, 0)
+      p.cast(WATCH_UNLOCK_CAST, [{ name: 'Ada', password: PW }])
+      await vi.waitFor(() => expect(controlOf(p)).toEqual([{ state: 'controlling' }]))
+      p.cast(WATCH_RELEASE_CAST, [])
+      await vi.waitFor(() => expect(controlOf(p)).toHaveLength(2))
+      p.cast(WATCH_INPUT_CAST, [{ data: 5 }])
+      p.cast(WATCH_INPUT_CAST, [{ data: 'x'.repeat(INPUT_MAX + 1) }])
+      await clock.advance(INPUT_BATCH_MS)
+      await settleReal()
+      expect(p.closed()).toBe(0)
+      expect(t.inputs).toEqual([])
+    })
+
+    // --- the splitter across batches and drops ---------------------------------------------------------
+
+    it('a start marker split across two casts with a batch in between is still a paste', async () => {
+      const { t, clock, vs } = await controllers(['Ada'])
+      await type(vs[0], `a${ESC}[20`, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a']))
+      await type(vs[0], `0~line 1\nline 2${PASTE_END}`, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:paste:line 1\nline 2']))
+    })
+
+    it('a dropped cast that ends in a start-marker prefix: the paste it begins is discarded, never typed as keys', async () => {
+      const { t, clock, vs } = await controllers(['Ada'])
+      for (let i = 0; i < INPUT_BURST / INPUT_MAX; i++) await type(vs[0], 'a'.repeat(INPUT_MAX), clock)
+      await type(vs[0], `b${ESC}[20`, clock) // over budget: dropped
+      await vi.waitFor(() => expect(dropped(vs[0])).toHaveLength(1))
+      await clock.advance(INPUT_BATCH_MS)
+      await clock.advance(1000)
+      await type(vs[0], `0~rm -rf ~\n${PASTE_END}ok`, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(delivered(t).at(-1)).toBe('s1:keys:ok'))
+      expect(delivered(t).filter((d) => !d.startsWith('s1:keys:a'))).toEqual(['s1:keys:ok'])
+    })
+
+    // --- a pane that never answers --------------------------------------------------------------------
+
+    it('a pane delivery that never settles times out after INPUT_DELIVERY_TIMEOUT_MS: dropped notice, the chain moves on, a late answer is ignored', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const late = deferred<boolean>()
+      let calls = 0
+      const { t, clock, vs } = await controllers(['Ada', 'Bob'], { input: () => (++calls === 1 ? late.promise : true) })
+      await type(vs[0], `a${PASTE_START}P${PASTE_END}`, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(1))
+      await type(vs[1], 'z', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      // Ada's chunk went to the pane one batch interval ago: its deadline is that far closer.
+      await clock.advance(INPUT_DELIVERY_TIMEOUT_MS - INPUT_BATCH_MS - 1)
+      expect(delivered(t)).toEqual(['s1:keys:a'])
+      await clock.advance(1)
+      await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:z']))
+      expect(dropped(vs[0])).toHaveLength(1)
+      expect(dropped(vs[1])).toEqual([])
+      // The answer arrives after all: nothing more is delivered, nobody is told twice.
+      late.resolve(true)
+      await settleReal()
+      expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:z'])
+      expect(dropped(vs[0])).toHaveLength(1)
+    })
+
+    it('a connection that ends while its delivery hangs releases the chain at once; stop() leaves no delivery timer', async () => {
+      const { t, clock, vs } = await controllers(['Ada', 'Bob'], { input: (_s, c) => (c.kind === 'keys' && c.data === 'a' ? new Promise<boolean>(() => {}) : true) })
+      await type(vs[0], 'a', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(1))
+      await type(vs[1], 'z', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      expect(t.host.kick(t.host.viewers()[0].viewerId)).toBe(true)
+      await vi.waitFor(() => expect(delivered(t)).toEqual(['s1:keys:a', 's1:keys:z']))
+      // A hung delivery when the link stops: its timer goes with it.
+      await type(vs[1], 'a', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(3))
+      t.host.stop('revoked')
+      await clock.flush()
+      expect(clock.pending()).toBe(0)
+    })
+
+    // --- the typing name -------------------------------------------------------------------------------
+
+    it('the typing set names the name control was taken under, not a later chat name', async () => {
+      const { t, clock, vs } = await controllers(['Ada'])
+      const watcher = await openViewer(t, 1)
+      expect(vs[0].c.sendChat('Bob', 'hi')).toBe(true)
+      await vi.waitFor(() => expect(t.chats).toHaveLength(1))
+      await type(vs[0], 'a', clock)
+      await vi.waitFor(() => expect(typingOf(watcher)).toEqual([['Ada']]))
     })
 
     it('stop() with a pending batch and a live typing set leaves no timer behind', async () => {

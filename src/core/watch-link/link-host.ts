@@ -39,18 +39,24 @@
 // `discard` (a paste any part of which was dropped is discarded whole), and the viewer is told
 // `{controlling, dropped}` at most once per DROPPED_NOTICE_MIN_MS. Accepted data goes through the
 // connection's SPLITTER (control-input.ts: keys vs a bracketed paste) into its BATCH; the batch flushes
-// INPUT_BATCH_MS after its first input into ONE flush CHAIN per link host, so every controller's batch
-// reaches the pane whole and in flush order through `pty.input` (PtyManager's pane delivery, never a
-// tmux client's key table). A connection has at most one batch in the chain: while it waits there,
-// new input keeps collecting, so a slow pane coalesces input instead of piling up deliveries. Each
-// chunk is re-checked before it goes — same control period (`controlGen`, bumped by every loss of
-// control), still controlling, still the session it was typed at — and a false or a rejection stops
-// the batch with the `dropped` notice (an SSH host without tmux answers false on every chunk: never
-// silence). Input is never held for a later session: a session that ends drops the pending batch and
-// discards an open paste. Nothing typed is ever logged.
+// INPUT_BATCH_MS after its first input into ONE flush CHAIN per link host, through `pty.input`
+// (PtyManager's pane delivery, never a tmux client's key table). A connection has at most one batch in
+// the chain: while it waits there, new input keeps collecting, so a slow pane coalesces input instead
+// of piling up deliveries. ORDER: a connection's input reaches the pane in the order it was typed, and
+// every batch arrives whole (no other controller's chunk inside it); ACROSS controllers it is roughly
+// flush order — a connection whose previous batch is still in the chain re-enters only when that batch
+// finishes, behind whatever other controllers flushed meanwhile. Each chunk is re-checked before it
+// goes — same control period (`controlGen`, bumped by every loss of control), still controlling,
+// still the session it was typed at — and a false, a rejection, or no answer within
+// INPUT_DELIVERY_TIMEOUT_MS stops the batch with the `dropped` notice (an SSH host without tmux answers
+// false on every chunk: never silence) and the chain moves on. Input is never held for a later
+// session: a session that ends drops the pending batch and discards an open paste (told either way).
+// The typing set names a controller by the name it unlocked under, not a later chat name. Nothing
+// typed is ever logged.
 //
 // GRACE. Keystrokes are in flight when control ends (a release, the owner turning typing off, a new
-// password, the lock, a join whose terminal cannot take input): input from a connection that stopped
+// password, the lock, a join whose terminal cannot take input — every one of them goes through
+// `loseControl`): input from a connection that stopped
 // controlling within INPUT_GRACE_MS is dropped silently — not delivered, not counted, not a breach.
 // From a connection that never controlled, or later than that, it is a breach as before.
 //
@@ -148,7 +154,7 @@ import {
 import type { HostTokenResult } from './api'
 import { unavailableCapture, type VisibleCapture } from './capture-route'
 import { createInputSplitter, createTypingTracker, type InputSplitter } from './control-input'
-import type { ControlInputChunk, WatcherInputRoute } from './pane-input'
+import { WATCHER_INPUT_ROUTES, type ControlInputChunk, type WatcherInputRoute } from './pane-input'
 import { isTerminalReport } from '../terminal-reports'
 import { createStreamFilter, type StreamFilter } from './stream-filter'
 import { createTokenBucket, type TokenBucket } from './token-bucket'
@@ -199,6 +205,9 @@ export const DROPPED_NOTICE_MIN_MS = 10_000
 /** Input from a connection that stopped controlling this recently is dropped silently: keystrokes in
  *  flight when control ended are not a breach. Later than this, they are. */
 export const INPUT_GRACE_MS = 5000
+/** A pane delivery that has not answered by now counts as failed: the batch stops (`dropped`) and the
+ *  link's chain moves on. A late answer is ignored. */
+export const INPUT_DELIVERY_TIMEOUT_MS = 20_000
 const RATE = 256 * 1024
 const BURST = 1024 * 1024
 
@@ -335,7 +344,11 @@ interface Conn {
   batchTimer: unknown
   /** A batch of this connection is in the host-wide flush chain and has not finished. */
   inChain: boolean
+  /** The chunk being delivered now: its deadline timer, and how to settle it early (end, stop). */
+  delivery: { timer: unknown; settle(ok: boolean): void } | null
   lastDroppedAt: number
+  /** The name control was taken under (the unlock's); a later chat name does not change who typed. */
+  controlName: string | null
   // The watched session (null while waiting).
   sessionId: string | null
   altScreen: boolean
@@ -395,10 +408,9 @@ function normalizeJoin(r: unknown): WatchJoin | null {
   const dim = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0
   if (!dim(o.cols) || !dim(o.rows)) return null
   // A missing or unknown route refuses control: typing must never be guessed onto a backend.
-  const input = (INPUT_ROUTES as readonly unknown[]).includes(o.input) ? (o.input as WatcherInputRoute) : 'none'
+  const input = (WATCHER_INPUT_ROUTES as readonly unknown[]).includes(o.input) ? (o.input as WatcherInputRoute) : 'none'
   return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true, input }
 }
-const INPUT_ROUTES: readonly WatcherInputRoute[] = ['tmux', 'ssh', 'write', 'none']
 
 /** A well-formed unlock payload, or null. The password is bounded before anything else reads it: over
  *  PASSWORD_MAX code points is malformed, and the cheap UTF-16 test first means a huge string is never
@@ -529,6 +541,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.controlling = false
     clearInput(c)
     c.splitter.reset()
+    // A delivery still waiting for the pane must not hold every other controller's batch.
+    c.delivery?.settle(false)
     forgetTyping(c)
     if (sid !== null) leave(c.clientId, sid, c.viewerId, c)
     safe('the scheduler', () => c.ev.onClose())
@@ -932,6 +946,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.controlling = true
     c.wrong = 0
     c.name = attempt.name
+    c.controlName = attempt.name
     sendControl(c, { state: 'controlling' })
     // That send can end the connection (a backlog past VIEWER_BACKLOG_CLOSE): then nobody took control.
     if (c.ended) return
@@ -1007,7 +1022,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   /** The watched session ended: pending input is dropped (and the controller told), and an open paste
    *  is discarded whole when its end arrives. */
   function abandonInput(c: Conn): void {
-    const had = c.batch.length > 0
+    const had = c.batch.length > 0 || c.splitter.pasteOpen()
     clearInput(c)
     c.splitter.discard('')
     if (had) noteDropped(c)
@@ -1055,7 +1070,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.batchSession = sid
     c.batchBytes += bytes
     appendChunks(c, c.splitter.push(data))
-    if (c.name) tracker.note(c.viewerId, c.name, deps.now())
+    if (c.controlName) tracker.note(c.viewerId, c.controlName, deps.now())
     scheduleTyping()
     if (c.batchTimer === null) {
       c.batchTimer = deps.setTimeout(() => {
@@ -1078,7 +1093,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
    *  in the chain at most, so a slow pane cannot pile up deliveries. */
   function flushBatch(c: Conn): void {
     if (c.ended || stopped || c.inChain) return
-    // A marker prefix still held after a whole batch interval is keys (a lone Esc).
+    // A held Esc or Alt+[ is a key press by now; a longer marker prefix keeps waiting (control-input.ts).
     appendChunks(c, c.splitter.drain())
     const chunks = c.batch
     const session = c.batchSession
@@ -1105,13 +1120,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
           noteDropped(c)
           return
         }
-        let ok = false
-        try {
-          ok = (await deps.pty.input(b.session, chunk)) === true
-        } catch (err) {
-          // Never the error's text: what failed to type may be in it.
-          warn(c, 'delivering input failed', err instanceof Error ? err.name : 'not an Error')
-        }
+        const ok = await deliverChunk(c, b.session, chunk)
         if (!ok) {
           noteDropped(c)
           return
@@ -1122,6 +1131,42 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       // What it collected meanwhile, when its own timer has already fired.
       if (c.batchTimer === null) safe('an input flush', () => flushBatch(c))
     }
+  }
+
+  /** One chunk to the pane, answered within INPUT_DELIVERY_TIMEOUT_MS. A rejection, a throw, or no
+   *  answer in time is false; an answer after that is ignored. `ended` settles it at once (false), so a
+   *  pane that never answers cannot hold the link's chain beyond its deadline. */
+  function deliverChunk(c: Conn, session: string, chunk: ControlInputChunk): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const slot: { timer: unknown; settle(ok: boolean): void } = {
+        timer: null,
+        settle(ok) {
+          if (settled) return
+          settled = true
+          clearTimer(slot.timer)
+          slot.timer = null
+          if (c.delivery === slot) c.delivery = null
+          resolve(ok)
+        }
+      }
+      c.delivery = slot
+      slot.timer = deps.setTimeout(() => {
+        slot.timer = null
+        warn(c, 'a pane delivery timed out', `no answer in ${INPUT_DELIVERY_TIMEOUT_MS} ms`)
+        slot.settle(false)
+      }, INPUT_DELIVERY_TIMEOUT_MS)
+      const failed = (err: unknown): void => {
+        // Never the error's text: what failed to type may be in it.
+        warn(c, 'delivering input failed', err instanceof Error ? err.name : 'not an Error')
+        slot.settle(false)
+      }
+      try {
+        void Promise.resolve(deps.pty.input(session, chunk)).then((ok) => slot.settle(ok === true), failed)
+      } catch (err) {
+        failed(err)
+      }
+    })
   }
 
   // --- typing: who is typing --------------------------------------------------------------------------
@@ -1191,7 +1236,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       batchBytes: 0,
       batchTimer: null,
       inChain: false,
+      delivery: null,
       lastDroppedAt: -Infinity,
+      controlName: null,
       sessionId: null,
       altScreen: false,
       joining: false,
@@ -1447,7 +1494,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       controlEpoch++
       for (const c of joinedConns()) {
         if (!c.controlling) continue
-        c.controlling = false
+        loseControl(c)
         sendControl(c, controlStateFor(c))
       }
       safe('onChange', deps.onChange)

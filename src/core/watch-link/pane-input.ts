@@ -98,6 +98,8 @@ export type ControlInputChunk = { kind: 'keys'; data: string } | { kind: 'paste'
  *  - `none`  — refused (Zellij: its key bindings are session-wide; an unknown session).
  */
 export type WatcherInputRoute = 'tmux' | 'ssh' | 'write' | 'none'
+/** Every route, for a reader that must check one it did not produce (link-host.ts `normalizeJoin`). */
+export const WATCHER_INPUT_ROUTES = ['tmux', 'ssh', 'write', 'none'] as const satisfies readonly WatcherInputRoute[]
 
 /** Bytes per `send-keys -H` line: 3 characters each on the line, so ~3 KiB a line. */
 export const KEYS_PER_COMMAND = 1024

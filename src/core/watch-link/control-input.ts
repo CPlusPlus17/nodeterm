@@ -12,18 +12,24 @@
 //
 // Four rules beyond "find the markers":
 //  - A trailing PREFIX of the marker being looked for is held until the next push. A lone Esc is such
-//    a prefix, and so is Alt+[ (`ESC [`): `drain()` hands a held prefix over as keys, and the host
-//    calls it when it flushes a batch, so an Esc reaches the pane within one batch instead of waiting
-//    for the next key (an agent CLI's "Esc to interrupt" must not need a second key).
-//  - A trailing high surrogate outside a paste is held the same way, so an emoji split across two
-//    casts is not typed as two replacement characters.
+//    a prefix, and so is Alt+[ (`ESC [`) — the only two a single key press can end on — so `drain()`
+//    hands exactly those over as keys, and the host calls it when it flushes a batch: an Esc reaches
+//    the pane within one batch instead of waiting for the next key (an agent CLI's "Esc to interrupt"
+//    must not need a second key). A longer prefix (`ESC [ 2`, `ESC [ 2 0`, `ESC [ 2 0 0`) is no key: it
+//    stays held for the next input, so a start marker split across two casts with a batch flush in
+//    between is still a paste. Residual: one split right after `ESC` or `ESC [` that waits longer than
+//    a batch interval for its second cast is typed as keys (the same bytes, unframed by tmux).
+//  - A trailing high surrogate outside a paste is held the same way (and never drained: no key ends on
+//    half a character), so an emoji split across two casts is not typed as two replacement characters.
 //  - A paste is cut at PASTE_MAX units (never between the halves of a surrogate pair); the rest up to
 //    its end is discarded, and the splitter keeps looking for the end, so typing after it is keys.
 //  - Input the host DROPPED (over budget, no session to type into) is fed to `discard()`, which keeps
 //    the framing and delivers nothing: a paste that any dropped part belonged to is discarded WHOLE.
 //    Without it a paste whose end marker was dropped would stay open for good and swallow every key
 //    typed after it, and a paste whose start was dropped would have its text typed as KEYS — each
-//    newline a command run in the shell.
+//    newline a command run in the shell. A dropped input that ENDS in a start-marker prefix keeps that
+//    prefix, marked dropped: completed by the next input it opens a paste that is discarded whole;
+//    not completed, it is dropped (never typed, never drained).
 import type { ControlInputChunk } from './pane-input'
 
 export const PASTE_START = '\x1b[200~'
@@ -38,11 +44,17 @@ export interface InputSplitter {
   push(data: string): ControlInputChunk[]
   /** Input that was dropped: tracked for framing, never delivered (see the header). */
   discard(data: string): void
-  /** A held marker prefix or surrogate, as keys (an open paste keeps waiting for its end). */
+  /** A held Esc or Alt+[ (`ESC [`) as keys — what a key press can end on. A longer marker prefix, a
+   *  held surrogate, a prefix kept from dropped input and an open paste all keep waiting. */
   drain(): ControlInputChunk[]
+  /** A paste is open, waiting for its end. */
+  pasteOpen(): boolean
   /** Control lost or the connection ended: forget an open paste and anything held. */
   reset(): void
 }
+
+/** The held prefixes `drain()` hands over: a key press can end on these, never on a longer one. */
+const DRAINABLE = new Set(['\x1b', '\x1b['])
 
 const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff
 
@@ -58,6 +70,8 @@ export function createInputSplitter(): InputSplitter {
   let inPaste = false
   /** The tail of the last push that may combine with the next one. */
   let held = ''
+  /** `held` came from dropped input (a start-marker prefix `discard` kept): never keys. */
+  let heldDropped = false
   let parts: string[] = []
   let pasteLen = 0
   /** The open paste reached PASTE_MAX: nothing more is appended. */
@@ -98,7 +112,10 @@ export function createInputSplitter(): InputSplitter {
   /** One scan over `held + data`. `deliver` false: track the framing, deliver nothing. */
   function scan(data: string, deliver: boolean): ControlInputChunk[] {
     let s = held + data
+    // How many leading characters of `s` were dropped input (a prefix `discard` kept, outside a paste).
+    let droppedHead = heldDropped ? held.length : 0
     held = ''
+    heldDropped = false
     const out: ControlInputChunk[] = []
     let keys = ''
     const flushKeys = (): void => {
@@ -109,12 +126,33 @@ export function createInputSplitter(): InputSplitter {
     while (s.length > 0) {
       if (!inPaste) {
         const i = s.indexOf(PASTE_START)
+        if (droppedHead > 0) {
+          const head = droppedHead
+          droppedHead = 0
+          if (i >= 0 && i < head) {
+            // A start marker that began in dropped input: the paste it opens is discarded whole.
+            openPaste()
+            poisoned = true
+            s = s.slice(i + PASTE_START.length)
+            continue
+          }
+          const h = heldMarkerPrefix(s, PASTE_START)
+          if (i < 0 && s.length - h < head) {
+            // The dropped prefix grew and is still only a prefix: held, still dropped.
+            held = s.slice(s.length - h)
+            heldDropped = true
+            break
+          }
+          s = s.slice(head) // dropped bytes are never keys
+          continue
+        }
         if (i < 0) {
           let h = heldMarkerPrefix(s, PASTE_START)
-          if (h === 0 && isHighSurrogate(s.charCodeAt(s.length - 1))) h = 1
+          // A surrogate is held for accepted input only: dropped input keeps only a marker prefix.
+          if (deliver && h === 0 && isHighSurrogate(s.charCodeAt(s.length - 1))) h = 1
           keys += s.slice(0, s.length - h)
-          // Dropped input holds nothing back: what it held is dropped with it.
-          if (deliver) held = s.slice(s.length - h)
+          held = s.slice(s.length - h)
+          heldDropped = !deliver && h > 0
           break
         }
         keys += s.slice(0, i)
@@ -147,14 +185,16 @@ export function createInputSplitter(): InputSplitter {
       scan(data, false)
     },
     drain() {
-      if (inPaste || held.length === 0) return []
+      if (inPaste || heldDropped || !DRAINABLE.has(held)) return []
       const data = held
       held = ''
       return [{ kind: 'keys', data }]
     },
+    pasteOpen: () => inPaste,
     reset() {
       inPaste = false
       held = ''
+      heldDropped = false
       parts = []
       pasteLen = 0
       full = false

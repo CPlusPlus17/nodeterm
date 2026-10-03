@@ -92,6 +92,41 @@ describe('createInputSplitter', () => {
     expect(s.push('[A')).toEqual([keys('[A')])
   })
 
+  it('drain() hands over only what a key press can end on (Esc, Alt+[); a longer marker prefix waits for the next input', () => {
+    const s = createInputSplitter()
+    expect(s.push(`${ESC}[`)).toEqual([])
+    expect(s.drain()).toEqual([keys(`${ESC}[`)])
+    for (const prefix of [`${ESC}[2`, `${ESC}[20`, `${ESC}[200`]) {
+      expect(s.push(`a${prefix}`)).toEqual([keys('a')])
+      expect(s.drain()).toEqual([])
+      // The rest of the marker, a whole batch later: still a paste.
+      expect(s.push(`${PASTE_START.slice(prefix.length)}hi${PASTE_END}`)).toEqual([paste('hi')])
+    }
+    // A held prefix that the next input does not complete comes out then, as keys.
+    expect(s.push(`${ESC}[20`)).toEqual([])
+    expect(s.drain()).toEqual([])
+    expect(s.push('x')).toEqual([keys(`${ESC}[20x`)])
+  })
+
+  it('drain() never hands over a held high surrogate (no key press ends on half a character)', () => {
+    const s = createInputSplitter()
+    expect(s.push('a\ud83d')).toEqual([keys('a')])
+    expect(s.drain()).toEqual([])
+    expect(s.push('\ude42')).toEqual([keys('\ud83d\ude42')])
+  })
+
+  it('pasteOpen() tells whether a paste is waiting for its end', () => {
+    const s = createInputSplitter()
+    expect(s.pasteOpen()).toBe(false)
+    s.push(`${PASTE_START}x`)
+    expect(s.pasteOpen()).toBe(true)
+    s.push(PASTE_END)
+    expect(s.pasteOpen()).toBe(false)
+    s.push(`${PASTE_START}x`)
+    s.reset()
+    expect(s.pasteOpen()).toBe(false)
+  })
+
   it('drain() inside a paste hands over nothing: an open paste waits for its end', () => {
     const s = createInputSplitter()
     expect(s.push(`${PASTE_START}abc${ESC}[20`)).toEqual([])
@@ -163,6 +198,24 @@ describe('createInputSplitter', () => {
     // A paste whose START was dropped: the rest is not typed as keys either.
     s.discard(`${PASTE_START}evil\n`)
     expect(s.push(`rm -rf /\n${PASTE_END}y`)).toEqual([keys('y')])
+  })
+
+  it('discard() keeps a start-marker prefix it ends on: completed by the next input, that paste is discarded whole', () => {
+    const s = createInputSplitter()
+    for (const prefix of [ESC, `${ESC}[`, `${ESC}[2`, `${ESC}[20`, `${ESC}[200`]) {
+      s.discard(`dropped${prefix}`)
+      expect(s.drain()).toEqual([]) // a dropped byte is never handed over
+      expect(s.push(`${PASTE_START.slice(prefix.length)}rm -rf ~\n${PASTE_END}ok`)).toEqual([keys('ok')])
+    }
+    // Not completed: the dropped prefix is dropped, the rest is keys.
+    s.discard(`dropped${ESC}[2`)
+    expect(s.push('x')).toEqual([keys('x')])
+    // Extended a character at a time by tiny casts: still the dropped paste's start.
+    s.discard(`dropped${ESC}`)
+    expect(s.push('[')).toEqual([])
+    expect(s.drain()).toEqual([])
+    expect(s.push('2')).toEqual([])
+    expect(s.push(`00~evil${PASTE_END}ok`)).toEqual([keys('ok')])
   })
 
   it('discard() drops keys, and a held prefix with them', () => {
