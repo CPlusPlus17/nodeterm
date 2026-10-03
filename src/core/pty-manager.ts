@@ -2606,8 +2606,10 @@ export class PtyManager {
     // CREATES when the host's session died (that is exactly what `sessionExists` is asked ahead of,
     // and what `fresh` reports). What makes them override-less is narrower and true either way: the
     // relay host passes only `{cols, rows}` (host-service.ts), so those spawns carry no
-    // `ownerProjectId` — and no cwd, agent, account or hook env either. A mirrored client that
-    // lands on a re-created session gets the same bare login shell it got before this feature.
+    // `ownerProjectId` — and no cwd, agent or account either. (They DO get the base hook env:
+    // `persistKey` is set and `sshRemote` is not, so `buildPtyEnv(persistKey)` below runs — node id
+    // and endpoint, but none of the agent-gated vars.) A mirrored client that lands on a re-created
+    // session gets the same bare login shell it got before this feature.
     const projectOverrides = await this.projectSpawnOverrides(options)
     // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides — and the
     // relay host's detached callers pass no `sshRemote` at all, so this is the one path that needs

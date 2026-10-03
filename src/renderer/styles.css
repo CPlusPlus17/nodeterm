@@ -3248,6 +3248,16 @@ body,
 .term-chat__hint {
   opacity: 0.6;
 }
+/* The view is reading the node's persisted launch id, not a hook-confirmed one (ChatPanel
+   `sessionFallback`): one quiet line, never an alarm — it is usually the right conversation. */
+.term-chat__fallback-note {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
+}
 .term-chat__msgs {
   flex: 1 1 auto;
   overflow-y: auto;

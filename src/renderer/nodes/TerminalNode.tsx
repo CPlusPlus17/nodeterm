@@ -228,6 +228,7 @@ import { IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEy
 import { NodeLabels } from '../components/kanban/NodeLabels'
 import { MdViewHintButton } from '../components/MdViewHintButton'
 import { mdViewHint } from '../lib/mdViewHint'
+import { transcriptSessionFor } from '../lib/transcriptSession'
 import { Tooltip } from '../components/Tooltip'
 import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
@@ -2219,13 +2220,21 @@ export function TerminalNode({
         .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
         .join(', ')
     : ''
+  // Which session this node's transcript READERS look at: the hook-confirmed id, else the id the
+  // node was launched with (`data.agentSessionId`) — ONE rule shared with the kanban card modal
+  // (lib/transcriptSession.ts). A fallback reads strictly by id and says so in the chat panel.
+  const transcript = transcriptSessionFor({
+    live: status?.sessionId,
+    persisted: data.agentSessionId,
+    cwd: (data.cwd as string) || undefined
+  })
   // Use the chat panel only for a chat-capable agent with a known session; otherwise the
   // markdown-of-output view (computed in the capture effect below) is shown as a fallback.
   // `chatAvailable` is split out because the label-row ⌘M hint names the face BEFORE it is open:
   // one value feeds both, so the hint cannot say "Chat view" while the chord opens markdown.
-  const chatAvailable = showChat && !!status?.sessionId
+  const chatAvailable = showChat && !!transcript.sessionId
   const useChat = mdMode && chatAvailable
-  useContextEnsure(session.api.context, id, agentId, status?.sessionId, (data.cwd as string) || undefined, accountForReads)
+  useContextEnsure(session.api.context, id, agentId, transcript.sessionId, transcript.cwd, accountForReads)
   const updateNodeInternals = useUpdateNodeInternals()
 
   const [searchOpen, setSearchOpen] = useState(false)
@@ -6178,7 +6187,7 @@ export function TerminalNode({
             SSH {(data.ssh as SshConnection).user}@{(data.ssh as SshConnection).host}
           </span>
         ) : null}
-        {showUsage && <ContextMeter sessionId={status?.sessionId ?? null} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
+        {showUsage && <ContextMeter sessionId={transcript.sessionId ?? null} fromLaunchId={transcript.fallback} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
         {/* Who else is in this node. Subscribes to presence itself — see PresenceChips. */}
         <PresenceChips nodeId={id} />
         {/* This terminal is broadcast by a live link — never hideable (live-link.guard.test.ts).
@@ -6803,7 +6812,8 @@ export function TerminalNode({
             <Suspense fallback={<ChatPanelFallback />}>
               <ChatPanel
                 nodeId={id}
-                sessionId={status?.sessionId}
+                sessionId={transcript.sessionId}
+                sessionFallback={transcript.fallback}
                 cwd={data.cwd as string | undefined}
                 // A READER (the ⌘M transcript view) takes the account the session actually RUNS
                 // as, never the creation-time one, so a plain terminal launched under
