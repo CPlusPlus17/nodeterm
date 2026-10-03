@@ -1143,6 +1143,13 @@ not the ssh binary. If you add an ssh call site, route it through `useNativeSsh(
 others, and if you add an ssh option to `control-master.ts`, teach `ssh-argv.ts` about it (the
 parser refuses unknown options on purpose). Test from macOS/Linux with `NODETERM_NATIVE_SSH=1`.
 
+**A dependency with a native addon that the Server Edition reaches is `--external:` in
+`server:build`.** Hosts build the bundle after `npm ci --ignore-scripts`, so no addon is compiled
+there, and esbuild fails on a `.node` require it cannot resolve (or, where the addon IS compiled,
+on a file it has no loader for). No CI job builds the server bundle, but
+`src/server/server-build.test.ts` builds it in both views and goes red. The server runs from a
+`node_modules` tree, so an external is resolved at runtime.
+
 ## Testing
 
 **Screenshot paste has one route per gesture.** On macOS, Cmd+V saves/uploads a file and
