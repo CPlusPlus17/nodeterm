@@ -5442,8 +5442,9 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      `node-terminal` / `nodeterm-rmt` sockets; clear stale inherited `NODETERM_*` in the new pane.
      Cold-agent SSH refusal (`A08`) and relay canvas New session remain. This feature changes
      no current RPC/blob/pairing/mirror/file contract; mention **@eneskirca** for iOS adoption
-     of the isolated socket and marker/metadata. Host regressions/build are verified in prepared
-     beta 8 / code 9; physical checks remain pending, so do not infer device readiness from them.
+     of the isolated socket and marker/metadata. Host regressions/build are verified in
+     beta 8 / code 9, now installed on the intended Pixel; physical feature checks remain pending,
+     so do not infer device readiness from the build or installation.
      The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
      types, so it sits in `tsconfig.node.json` and `npm run typecheck` checks it on every CI run;

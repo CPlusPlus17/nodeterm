@@ -130,7 +130,8 @@ applicable here":
    `nodeterm-rmt`; strip inherited `NODETERM_*` in a new phone pane. Cold-agent SSH refusal and
    relay canvas creation remain. No existing RPC/blob/pairing/mirror/file contract changes;
    flag isolated socket/creation-marker/metadata adoption for **@eneskirca** in iOS. Host regression
-   and build checks pass in prepared beta 8 / code 9; physical verification remains pending.
+   and build checks pass in beta 8 / code 9, now installed on the intended Pixel; physical feature
+   verification remains pending.
    The Android interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
