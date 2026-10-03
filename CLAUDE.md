@@ -3330,6 +3330,26 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `E_UNSUPPORTED`; ChatPanel catches it and says so instead of leaving the initial `[]` on screen
   as an empty conversation. Same `nodeId` rides `claude.readTranscript`, so the find-bar searches
   a remote node's transcript too.
+  **Which session id is read is ONE rule, `transcriptSessionFor`** (`renderer/lib/transcriptSession.ts`,
+  2026-10): the hook-confirmed `agentStatus.sessionId`, else the id the node was LAUNCHED with
+  (`data.agentSessionId` — minted with `--session-id`, or the id "Open recent" resumed). The canvas
+  node, the ⌘M hint, the kanban card, the card modal and its viewer all ask it. Before, Chat (and
+  the meter) were gated on the hook id alone, so a node whose hook events never reached this app —
+  an SSH session pinned for life to a dead hook endpoint, the 107-of-128 case in "A reused
+  ControlMaster…" — opened "Markdown view" and showed no meter while its transcript sat on disk
+  under an id the node itself had on record; others in the same project opened Chat. The fallback
+  is HONEST, because the persisted id can be stale (`/clear` / `/resume` in the CLI moves to
+  another session; nothing rewrites `agentSessionId` from hooks): (1) ChatPanel's
+  `sessionFallback` prints one quiet line saying so, and the meter's popover says "From the session
+  this node was started with"; (2) the read carries **no cwd** (`transcriptReadCwd`), because
+  claude's resolver answers a missing id with the newest transcript in the folder — under a
+  fallback id that would be a stranger's conversation; the remote locator globs by id without a
+  cwd, so SSH nodes are still read on their host; (3) plan/question answer controls are never
+  offered on a fallback thread (an answer is a WRITE bound to the live `held` ticket). The composer
+  still sends (it types into the pane, which is right whatever the transcript). The persisted id is
+  the CREATED agent's, which is exactly the agent both mount sites pick the reader by, and it is
+  re-validated against `SAFE_SESSION_ID` (hand-editable project.json). The find bar's transcript
+  index still uses the hook id only (it has claude's cwd fallback and no `remoteOnly` here).
   **Both channels live in `core/transcript-ipc.ts` (`registerTranscriptIpc`), so the Server
   Edition serves them too** — it used to have no handler at all, which is why ⌘M in the browser
   read as an empty conversation on EVERY session. The remote leg is an injected dep

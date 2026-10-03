@@ -43,6 +43,7 @@ import type { PermissionAnswer } from '@shared/agents/permission-answer'
 import { ChatComposer } from './ChatComposer'
 import { ChatTurnActions } from './ChatTurnActions'
 import { assistantTurnEnds } from '../lib/chatThread'
+import { FALLBACK_SESSION_NOTE, transcriptReadCwd } from '../lib/transcriptSession'
 
 // Memoized bubble: marked+DOMPurify re-ran for EVERY message on each ChatPanel render (each
 // turn-finish reload, each keystroke re-render). Text is stable per message, so cache per text.
@@ -98,6 +99,13 @@ interface ChatPanelProps {
    * index (this machine, or a relay peer's core).
    */
   sshProjectId?: string
+  /**
+   * `sessionId` is the node's PERSISTED launch id, not one a hook confirmed (lib/transcriptSession.ts).
+   * It can be stale after a `/clear` or `/resume` inside the CLI, so the panel says so in one quiet
+   * line, reads strictly by id (no cwd — claude's cwd-newest fallback would show another session),
+   * and never offers plan/question answer controls. Absent = a hook-confirmed id, as before.
+   */
+  sessionFallback?: boolean
 }
 
 /**
@@ -186,14 +194,17 @@ export function ChatPanel({
   hint,
   pathsForFiles,
   onShowTerminal,
-  sshProjectId
+  sshProjectId,
+  sessionFallback
 }: ChatPanelProps) {
   // This node's core api (stable for the session — the chat transcript and the tmux session
   // both live on the core this panel's project belongs to).
   const { api, source } = useSession()
   // Which transcript this panel reads. Keys are byte offsets into ONE file, so a thread is only
   // ever merged with a read of the same identity (see lib/chatPaging.ts).
-  const identity = JSON.stringify([nodeId, sessionId ?? null, cwd ?? null, accountId ?? null, agentId])
+  // The cwd a transcript read carries: none while reading the fallback id (the composer keeps `cwd`).
+  const readCwd = transcriptReadCwd(cwd, sessionFallback === true)
+  const identity = JSON.stringify([nodeId, sessionId ?? null, readCwd ?? null, accountId ?? null, agentId])
   const [thread, setThread] = useState<ChatThread>(() => emptyThread(identity))
   const messages = thread.messages
   // Read by the async handlers, which must decide against the thread as it is NOW, not as it was
@@ -270,8 +281,13 @@ export function ChatPanel({
   const [boundCard, setBoundCard] = useState<(BoundAnswerCard & { identity: string }) | null>(null)
   const previousBound = boundCard && boundCard.identity === identity ? boundCard : null
   const cardState = useMemo(
-    () => (!readOnly && refusal === 'dialog' ? answerCardState(messages, held, threadHeldFor, previousBound) : null),
-    [readOnly, refusal, messages, held, threadHeldFor, previousBound]
+    // Never on a fallback id: an answer is a WRITE bound to the live `held` ticket, and a thread read
+    // from the node's launch id may not be the conversation that ticket belongs to.
+    () =>
+      !readOnly && !sessionFallback && refusal === 'dialog'
+        ? answerCardState(messages, held, threadHeldFor, previousBound)
+        : null,
+    [readOnly, sessionFallback, refusal, messages, held, threadHeldFor, previousBound]
   )
   const answerCard = cardState?.kind === 'active' ? cardState : null
   const updatingCard = cardState?.kind === 'updating' ? cardState.card : null
@@ -381,7 +397,7 @@ export function ChatPanel({
     // keeps a surface that cannot read transcripts (Server Edition, relay tab) from silently
     // presenting itself as an empty conversation. Only the newest TAIL window is read — older
     // history pages in on scroll-up, and a reload merges by key instead of discarding it.
-    void api.chat.readTranscript(sessionId, cwd, accountId, nodeId, agentId, {
+    void api.chat.readTranscript(sessionId, readCwd, accountId, nodeId, agentId, {
       maxBytes: CHAT_TAIL_PAGE_BYTES,
       // A hook-driven refresh the user did not ask for: an expensive reader (opencode's export) may
       // space these out. An open, ↻, Retry or a held-request rebind is never marked.
@@ -449,7 +465,7 @@ export function ChatPanel({
         settleHeldReload(threadHeldForRef.current)
       }
     )
-  }, [api, sessionId, cwd, accountId, nodeId, agentId, identity])
+  }, [api, sessionId, readCwd, accountId, nodeId, agentId, identity])
   loadRef.current = load
 
   // Fetch the next OLDER page and prepend it. One in flight at a time; a result that arrives
@@ -477,7 +493,7 @@ export function ChatPanel({
         })
       }
     }
-    void api.chat.readTranscript(sessionId, cwd, accountId, nodeId, agentId, {
+    void api.chat.readTranscript(sessionId, readCwd, accountId, nodeId, agentId, {
       before,
       maxBytes: CHAT_OLDER_PAGE_BYTES
     }).then(
@@ -499,7 +515,7 @@ export function ChatPanel({
         setOlderState('error')
       }
     )
-  }, [api, sessionId, cwd, accountId, nodeId, agentId, identity, thread.olderCursor, thread.identity])
+  }, [api, sessionId, readCwd, accountId, nodeId, agentId, identity, thread.olderCursor, thread.identity])
 
   // Initial load.
   useEffect(() => {
@@ -892,6 +908,11 @@ export function ChatPanel({
           <span className="term-chat__hint">{hint ?? (mdChip ? `${mdChip} to exit` : 'Exit')}</span>
         </span>
       </div>
+      {sessionFallback && (
+        <div className="term-chat__fallback-note" role="note">
+          {FALLBACK_SESSION_NOTE}
+        </div>
+      )}
       <div className="term-chat__msgs" ref={msgsRef} onScroll={onScroll}>
         {initialLoading && (
           <ChatLoadingStatus text={EMPTY_TEXT.loading.title} />
