@@ -21,8 +21,8 @@ describe('control password hash', () => {
     expect(await verifyControlPassword('x'.repeat(8), { salt: 7, hash: [] } as never)).toBe(false)
   })
   it('compares the NFC form: a composed and a decomposed spelling of one password are the same password', async () => {
-    const composed = 'café-päss' // é and ä as single code points (a Mac keyboard)
-    const decomposed = 'café-päss' // the same letters as base + combining mark
+    const composed = 'caf\u00e9-p\u00e4ss' // é and ä as single code points
+    const decomposed = 'cafe\u0301-pa\u0308ss' // the same letters as base + combining mark
     expect(composed).not.toBe(decomposed)
     expect(await verifyControlPassword(decomposed, await hashControlPassword(composed))).toBe(true)
   })

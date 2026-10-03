@@ -2,8 +2,8 @@
 // stored as {salt, hash} only. The plaintext is never kept, logged or echoed: it lives only for the
 // call that hashes or checks it, which is why there is no "show again" (Change password sets a new one).
 //
-// The password is compared in its NFC form, so the same password typed on a Mac (whose keyboards can
-// produce decomposed letters) and in a browser compares equal.
+// The password is compared in its NFC form: two input paths can produce different Unicode forms of
+// the same letters (composed é, or e plus a combining accent), and both must unlock.
 //
 // `verifyControlPassword` answers false, never throws: a malformed stored hash (a hand-edited file) or
 // a non-string password (a viewer's cast is untrusted input) is a refused unlock, not an error. The
