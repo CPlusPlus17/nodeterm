@@ -12,7 +12,7 @@ describe('control protocol readers', () => {
   it('sanitizes and bounds typing names', () => {
     const many = Array.from({ length: 30 }, (_, i) => `n${i}`)
     expect(readTypingNames({ names: many })).toHaveLength(TYPING_NAMES_MAX)
-    expect(readTypingNames({ names: ['a‮b', 'a‮b', 7, '  '] })).toEqual(['ab'])
+    expect(readTypingNames({ names: ['a\u202eb', 'a\u202eb', 7, '  '] })).toEqual(['ab'])
     expect(readTypingNames('x')).toEqual([])
   })
   it('knows the new end reason', () => {
