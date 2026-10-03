@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { IPC } from './ipc'
 import { HOST_ONLY_REFUSAL, isHostOnlyChannel } from './host-control'
+import { WATCH_CHAT_CAST, WATCH_EVENT, WATCH_INPUT_CAST, WATCH_RELEASE_CAST, WATCH_UNLOCK_CAST } from './watch-link/protocol'
 
 /**
  * The ONE list both shells consult. It exists so the desktop's relay admission and any future
@@ -67,7 +68,7 @@ describe('isHostOnlyChannel', () => {
     const owner = (Object.values(IPC) as unknown[]).filter(
       (v): v is string => typeof v === 'string' && v.startsWith('watchLink:')
     )
-    expect(owner).toHaveLength(10)
+    expect(owner).toHaveLength(14)
     for (const ch of owner) expect(isHostOnlyChannel(ch), ch).toBe(true)
     // A namespace, not a list: a verb added later is refused the day it is added.
     expect(isHostOnlyChannel('watchLink:something-new')).toBe(true)
@@ -75,6 +76,13 @@ describe('isHostOnlyChannel', () => {
     // could not chat (relay-host refuses host-only methods before any policy runs).
     expect(isHostOnlyChannel('watch:chat')).toBe(false)
     expect(isHostOnlyChannel('watch:meta')).toBe(false)
+    // Every viewer message, Control's included (unlock, input, release, the per-viewer control state
+    // and the typing set).
+    const viewer = [...Object.values(WATCH_EVENT), WATCH_CHAT_CAST, WATCH_UNLOCK_CAST, WATCH_INPUT_CAST, WATCH_RELEASE_CAST]
+    for (const ch of viewer) {
+      expect(ch.startsWith('watch:'), ch).toBe(true)
+      expect(isHostOnlyChannel(ch), ch).toBe(false)
+    }
   })
 
   it('carries the refusal wording the peer sees, so both shells answer identically', () => {

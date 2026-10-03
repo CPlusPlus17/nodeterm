@@ -35,6 +35,7 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   url: 'https://nodeterm.dev/s/L#1.secret',
   status: 'live',
   viewers: [],
+  control: null,
   ...over
 })
 const msg = (id: string, over: Partial<WatchChatMessage> = {}): WatchChatMessage => ({
@@ -128,7 +129,7 @@ describe('LiveLinkChip', () => {
   // state (empty), so `renderToStaticMarkup` can never show a link.
   it('shows LIVE with the viewer count, as a no-drag button', () => {
     render(<LiveLinkChip nodeId="n1" source="local" className="extra" />)
-    setLinks([link({ viewers: [{ viewerId: 'v', name: null, joinedAt: 0, waiting: false }] })])
+    setLinks([link({ viewers: [{ viewerId: 'v', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }] })])
     const c = chip()!
     expect(c.tagName).toBe('BUTTON')
     expect(c.textContent).toBe('LIVE · 1')
@@ -162,7 +163,7 @@ describe('LiveLinkChip', () => {
 describe('LiveLinkPopover', () => {
   it('opens on click with role, time, the controls and the kick note', () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
-    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0, waiting: false }, { viewerId: 'v2', name: 'Cy', joinedAt: 0, waiting: false }] })])
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }, { viewerId: 'v2', name: 'Cy', joinedAt: 0, waiting: false, controlling: false, typing: false }] })])
     click(chip()!)
     const p = pop()!
     expect(p.textContent).toContain('Can watch')
@@ -202,8 +203,8 @@ describe('LiveLinkPopover', () => {
     setLinks([
       link({
         viewers: [
-          { viewerId: 'v1', name: null, joinedAt: 0, waiting: true },
-          { viewerId: 'v2', name: null, joinedAt: 0, waiting: false }
+          { viewerId: 'v1', name: null, joinedAt: 0, waiting: true, controlling: false, typing: false },
+          { viewerId: 'v2', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }
         ]
       })
     ])
@@ -328,7 +329,7 @@ describe('LiveLinkPopover', () => {
 
   it('a failed Kick says so: not reached, or nobody to kick (M3)', async () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
-    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0, waiting: false }] })])
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }] })])
     click(chip()!)
     api.kick.mockImplementationOnce(async () => {
       throw new Error('socket down')
@@ -369,7 +370,7 @@ describe('LiveLinkPopover', () => {
 describe('LiveLinkPopover — Commenter chat', () => {
   it('renders every viewer string as text, never as markup', () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
-    setLinks([link({ role: 'commenter', label: '<b>Ada</b>', viewers: [{ viewerId: 'v', name: '<i>Eve</i>', joinedAt: 0, waiting: false }] })])
+    setLinks([link({ role: 'commenter', label: '<b>Ada</b>', viewers: [{ viewerId: 'v', name: '<i>Eve</i>', joinedAt: 0, waiting: false, controlling: false, typing: false }] })])
     act(() => useWatchLinks.getState().addChat('L', msg('1', { name: '<u>Eve</u>', text: '<img src=x onerror=alert(1)>' })))
     click(chip()!)
     const p = pop()!

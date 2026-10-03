@@ -32,7 +32,7 @@ import {
   viewerName
 } from './liveLink'
 import type { CreateWatchLinkError, WatchLinkView } from '@shared/watch-link-types'
-import { DEFAULT_WATCH_LINK_TTL, WATCH_LINK_TTLS } from '@shared/watch-link-types'
+import { DEFAULT_WATCH_LINK_TTL, UNLIMITED_TTL, WATCH_LINK_TTLS } from '@shared/watch-link-types'
 import { commentSegments } from '@shared/board-comment'
 import { pinNeutralMachineNoun } from './testMachineNoun'
 
@@ -49,9 +49,10 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   url: 'u',
   status: 'live',
   viewers: [],
+  control: null,
   ...over
 })
-const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0, waiting: false })
+const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0, waiting: false, controlling: false, typing: false })
 
 const RELAY_SENTENCE = 'Live links are created on the machine that runs this terminal.'
 const R43 = 'Live links need a Pro license on this server — not available in the Server Edition yet'
@@ -67,7 +68,10 @@ const ALL_ERRORS: CreateWatchLinkError[] = [
   'node-missing',
   'bad-request',
   'persist-failed',
-  'unsupported'
+  'unsupported',
+  'ttl-unsupported',
+  'control-unsupported',
+  'bad-password'
 ]
 
 describe('chipView', () => {
@@ -150,6 +154,10 @@ describe('time', () => {
     expect(formatRemaining(24 * 60 * MIN - 1, 0)).toBe('ends in 23 h 59 min')
     expect(formatRemaining(24 * 60 * MIN, 0)).toBe('ends in 24 h')
   })
+  it('an Unlimited link has no end time', () => {
+    expect(formatRemaining(null, 5)).toBe('No end time')
+    expect(formatUntil(null, 5)).toBe('you stop it')
+  })
   it('a clock time is hours and minutes, never seconds (H25)', () => {
     const at = new Date(2026, 9, 1, 15, 42, 37).getTime()
     expect(formatClock(at)).toBe(new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
@@ -195,6 +203,14 @@ describe('createErrorMessage', () => {
     expect(createErrorMessage('not-entitled', 'desktop')).toBe('Live links need an active Pro plan.')
     expect(createErrorMessage('limit-machine', 'desktop')).toBe('Stop a live link first — 5 can be active at once.')
     expect(createErrorMessage('relay-unavailable', 'desktop')).toBe('Live links need the installed app.')
+  })
+
+  it('the Unlimited and Control refusals', () => {
+    expect(createErrorMessage('ttl-unsupported', 'desktop')).toBe('Unlimited links need a newer server. Pick an end time.')
+    expect(createErrorMessage('control-unsupported', 'desktop')).toBe(
+      "Control isn't available for this terminal: its Zellij session's key bindings would reach every session."
+    )
+    expect(createErrorMessage('bad-password', 'desktop')).toBe('The password must be 8 to 128 characters, with no line breaks.')
   })
 })
 
@@ -248,11 +264,12 @@ describe('noticeText', () => {
 
 describe('fixed lists (H19)', () => {
   it('TTL options come from the shared list, in order, with the labels the spec names', () => {
-    expect(TTL_OPTIONS.map((o) => o.value)).toEqual([...WATCH_LINK_TTLS])
+    // Unlimited is in the shared list but not offered yet: the dialog does not explain it.
+    expect(TTL_OPTIONS.map((o) => o.value)).toEqual(WATCH_LINK_TTLS.filter((v) => v !== UNLIMITED_TTL))
     expect(TTL_OPTIONS.map((o) => o.value)).toEqual([900, 3600, 28800, 86400])
     expect(TTL_OPTIONS.map((o) => o.label)).toEqual(['15 min', '1 hour', '8 hours', '24 hours'])
     expect(DEFAULT_TTL).toBe(DEFAULT_WATCH_LINK_TTL)
-    expect(ROLE_LABEL).toEqual({ viewer: 'Can watch', commenter: 'Can watch and chat' })
+    expect(ROLE_LABEL).toEqual({ viewer: 'Can watch', commenter: 'Can watch and chat', controller: 'Can watch, chat and type' })
   })
 })
 
@@ -276,9 +293,9 @@ describe('copy Task 17 reads (R47, R48, R52, H11, H23, H26)', () => {
 
 describe('viewerName', () => {
   it('a viewer who has not chatted is numbered; a name loses its bidi controls', () => {
-    expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0, waiting: false }, 0)).toBe('Viewer 1')
-    expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0, waiting: false }, 2)).toBe('Viewer 3')
-    expect(viewerName({ viewerId: 'a', name: 'Bob\u2066', joinedAt: 0, waiting: false }, 0)).toBe('Bob')
+    expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }, 0)).toBe('Viewer 1')
+    expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0, waiting: false, controlling: false, typing: false }, 2)).toBe('Viewer 3')
+    expect(viewerName({ viewerId: 'a', name: 'Bob\u2066', joinedAt: 0, waiting: false, controlling: false, typing: false }, 0)).toBe('Bob')
   })
 })
 

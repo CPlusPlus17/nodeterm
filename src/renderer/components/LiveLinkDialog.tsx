@@ -44,7 +44,8 @@ export type DialogState =
       phase: 'done'
       url: string
       linkId: string
-      expiresAt: number
+      /** null: an Unlimited link. */
+      expiresAt: number | null
       copied?: boolean
       stopping?: boolean
       error?: string | null

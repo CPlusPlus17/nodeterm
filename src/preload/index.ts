@@ -963,6 +963,10 @@ const api: NodeTerminalApi = {
     kick: (linkId, viewerId) => ipcRenderer.invoke(IPC.watchLinkKick, linkId, viewerId),
     sendChat: (linkId, text) => ipcRenderer.invoke(IPC.watchLinkChatSend, linkId, text),
     chatHistory: (linkId) => ipcRenderer.invoke(IPC.watchLinkChatHistory, linkId),
+    setControl: (linkId, enabled) => ipcRenderer.invoke(IPC.watchLinkSetControl, linkId, enabled),
+    setPassword: (linkId, password) => ipcRenderer.invoke(IPC.watchLinkSetPassword, linkId, password),
+    allowControl: (linkId) => ipcRenderer.invoke(IPC.watchLinkAllowControl, linkId),
+    controlSupport: (nodeId) => ipcRenderer.invoke(IPC.watchLinkControlSupport, nodeId),
     onState: subscribeWatchLinkState,
     onChat: subscribeWatchLinkChat,
     onNotice: subscribeWatchLinkNotice

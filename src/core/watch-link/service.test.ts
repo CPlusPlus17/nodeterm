@@ -742,7 +742,7 @@ describe('createWatchLinkService — the host seams', () => {
     h.chat = [{ id: 'y', name: '\u200fMal', text: 'a\u202ab', at: 2, from: 'viewer' }]
     expect(t.s.chatHistory(r.link.linkId)).toEqual([{ id: 'y', name: 'Mal', text: 'ab', at: 2, from: 'viewer' }])
     h.viewers = [{ viewerId: 'v-1', name: 'E\u202eve', joinedAt: 5, waiting: false }]
-    expect(t.s.list()[0].viewers).toEqual([{ viewerId: 'v-1', name: 'Eve', joinedAt: 5, waiting: false }])
+    expect(t.s.list()[0].viewers).toEqual([{ viewerId: 'v-1', name: 'Eve', joinedAt: 5, waiting: false, controlling: false, typing: false }])
   })
 
   // R63: a viewer the host could not join to a session reaches the owner's view as `waiting`.

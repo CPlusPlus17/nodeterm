@@ -9,13 +9,28 @@ export const WATCH_EVENT = {
   keyframe: 'watch:keyframe',
   waiting: 'watch:waiting',
   chat: 'watch:chat',
-  end: 'watch:end'
+  end: 'watch:end',
+  /** To ONE viewer, never a broadcast: its control state, after an unlock or when control changes
+   *  under it (turned off, locked). The initial state rides `watch:meta`. */
+  control: 'watch:control',
+  /** To every joined viewer: who typed in the last few seconds (`WatchTypingEvent`). */
+  typing: 'watch:typing'
 } as const
-/** The one message a viewer may send (Commenter links only). */
+/** A viewer's chat line (Commenter and Control links). */
 export const WATCH_CHAT_CAST = 'watch:chat'
+/** Control links only: `{ name, password }`. Answered to that viewer alone with `watch:control`. */
+export const WATCH_UNLOCK_CAST = 'watch:unlock'
+/** Control links only, from a controlling viewer: `{ data }`, at most `INPUT_MAX` UTF-16 units. */
+export const WATCH_INPUT_CAST = 'watch:input'
+/** Control links only: drop the sender back to watching. No arguments. */
+export const WATCH_RELEASE_CAST = 'watch:release'
 
-export type WatchLinkRole = 'viewer' | 'commenter'
-export const WATCH_END_REASONS = ['revoked', 'expired', 'node-gone', 'session-ended', 'host-stopping', 'kicked'] as const
+/** A Control link (`controller`) is a Commenter link plus typing for whoever unlocks it with the
+ *  link's password. Every addition to this protocol is additive, so `WATCH_PROTOCOL_VERSION` stays 1:
+ *  an older viewer page ignores the new events and simply cannot take control. */
+export type WatchLinkRole = 'viewer' | 'commenter' | 'controller'
+/** `attempts`: too many wrong passwords on this connection (it may reconnect through the link). */
+export const WATCH_END_REASONS = ['revoked', 'expired', 'node-gone', 'session-ended', 'host-stopping', 'kicked', 'attempts'] as const
 export type WatchLinkEndReason = (typeof WATCH_END_REASONS)[number]
 export function isWatchEndReason(x: unknown): x is WatchLinkEndReason {
   return typeof x === 'string' && (WATCH_END_REASONS as readonly string[]).includes(x)
@@ -27,10 +42,62 @@ export interface WatchMeta {
   /** Sharer-supplied; render as text, marked as set by the sharer. */
   label: string
   title: string
-  /** Epoch ms on the host's clock, corrected to the server's. */
-  expiresAt: number
+  /** Epoch ms on the host's clock, corrected to the server's; `null` for a link with no end time. */
+  expiresAt: number | null
   cols: number
   rows: number
+  /** A Control link's state for THIS viewer at join; absent on every other role. */
+  control?: WatchControlEvent
+}
+
+/** `controlling`: this viewer may type. `available`: a Control link this viewer may unlock.
+ *  `off`: the owner turned typing off. `locked`: too many wrong passwords across the link. */
+export type WatchControlState = 'controlling' | 'available' | 'off' | 'locked'
+/** Why an unlock was refused or control was taken away: `wrong` password, the link is `locked`,
+ *  typing is `off`, an attempt `too-soon` after the last, the terminal is `unsupported`, or input was
+ *  `dropped` (typing too fast, or no session to type into). */
+export type WatchControlReason = 'wrong' | 'locked' | 'off' | 'too-soon' | 'unsupported' | 'dropped'
+const CONTROL_STATES: readonly WatchControlState[] = ['controlling', 'available', 'off', 'locked']
+const CONTROL_REASONS: readonly WatchControlReason[] = ['wrong', 'locked', 'off', 'too-soon', 'unsupported', 'dropped']
+export interface WatchControlEvent {
+  state: WatchControlState
+  reason?: WatchControlReason
+}
+export interface WatchTypingEvent {
+  /** Self-chosen names: claims, shown as such. */
+  names: string[]
+}
+
+/** The largest `watch:input` cast, in UTF-16 units. */
+export const INPUT_MAX = 16384
+/** The longest password the unlock cast carries, in code points. */
+export const PASSWORD_MAX = 128
+/** The most names one `watch:typing` event carries. */
+export const TYPING_NAMES_MAX = 10
+
+/** A `watch:control` payload (or `WatchMeta.control`), or null when it is not one. An unknown reason
+ *  is dropped, never the state with it. */
+export function readControlEvent(x: unknown): WatchControlEvent | null {
+  if (!x || typeof x !== 'object') return null
+  const { state, reason } = x as Record<string, unknown>
+  if (!(CONTROL_STATES as readonly unknown[]).includes(state)) return null
+  const out: WatchControlEvent = { state: state as WatchControlState }
+  if ((CONTROL_REASONS as readonly unknown[]).includes(reason)) out.reason = reason as WatchControlReason
+  return out
+}
+/** A `watch:typing` payload's names: each one a clean chat name, deduplicated in order, at most
+ *  `TYPING_NAMES_MAX`. Anything else reads as nobody typing. */
+export function readTypingNames(x: unknown): string[] {
+  if (!x || typeof x !== 'object') return []
+  const names = (x as Record<string, unknown>).names
+  if (!Array.isArray(names)) return []
+  const out: string[] = []
+  for (const raw of names) {
+    if (out.length >= TYPING_NAMES_MAX) break
+    const name = sanitizeChatName(raw)
+    if (name !== null && !out.includes(name)) out.push(name)
+  }
+  return out
 }
 export interface WatchKeyframe {
   sessionId: string

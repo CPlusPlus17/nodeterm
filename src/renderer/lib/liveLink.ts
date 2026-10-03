@@ -20,21 +20,30 @@ import {
   DEFAULT_WATCH_LINK_TTL,
   MAX_LINKS_PER_MACHINE,
   stripBidiControls,
+  UNLIMITED_TTL,
   WATCH_LINK_TTLS
 } from '@shared/watch-link-types'
 import { otherMachines, thisMachine } from './machineName'
 
-export const ROLE_LABEL: Record<WatchLinkRole, string> = { viewer: 'Can watch', commenter: 'Can watch and chat' }
+export const ROLE_LABEL: Record<WatchLinkRole, string> = {
+  viewer: 'Can watch',
+  commenter: 'Can watch and chat',
+  controller: 'Can watch, chat and type'
+}
 
 /** A `Record` over the shared TTL list, so a TTL added there fails to compile here until it is named. */
 const TTL_LABEL: Record<WatchLinkTtl, string> = {
   900: '15 min',
   3600: '1 hour',
   28800: '8 hours',
-  86400: '24 hours'
+  86400: '24 hours',
+  0: 'Unlimited'
 }
-/** The create dialog's expiry choices — derived from the list core validates against (H19). */
-export const TTL_OPTIONS: { value: WatchLinkTtl; label: string }[] = WATCH_LINK_TTLS.map((value) => ({
+/** The create dialog's expiry choices — derived from the list core validates against (H19). Unlimited
+ *  is not offered yet: the dialog does not say what a link with no end time means. */
+export const TTL_OPTIONS: { value: WatchLinkTtl; label: string }[] = WATCH_LINK_TTLS.filter(
+  (value) => value !== UNLIMITED_TTL
+).map((value) => ({
   value,
   label: TTL_LABEL[value]
 }))
@@ -176,8 +185,10 @@ export function statusLine(link: Pick<WatchLinkView, 'status' | 'viewers'>): str
 }
 
 /** How long a link still runs. Hours AND minutes past the hour: a floored "1 h" for 1 h 59 min
- *  understated by up to an hour the one figure that says how long a broadcast goes on. */
-export function formatRemaining(expiresAt: number, now: number): string {
+ *  understated by up to an hour the one figure that says how long a broadcast goes on. `null` is an
+ *  Unlimited link. */
+export function formatRemaining(expiresAt: number | null, now: number): string {
+  if (expiresAt === null) return 'No end time'
   const ms = expiresAt - now
   if (ms <= 0) return 'ended'
   if (ms < 60_000) return 'ends in under a minute'
@@ -197,9 +208,10 @@ export function formatClock(ms: number): string {
  * When a link ends, for "Anyone with this link can watch until …" (R64/M1). The time alone is the
  * time TODAY: a 24 h link made at 15:43 read "until 15:43", which looks like it ends now, and an 8 h
  * link past midnight read like today. So a different day is named — "tomorrow 15:43", or the weekday
- * and date further out.
+ * and date further out. An Unlimited link (`null`) runs "until you stop it".
  */
-export function formatUntil(expiresAt: number, now: number): string {
+export function formatUntil(expiresAt: number | null, now: number): string {
+  if (expiresAt === null) return 'you stop it'
   const end = new Date(expiresAt)
   const today = new Date(now)
   const dayStart = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
@@ -278,6 +290,12 @@ export function createErrorMessage(e: CreateWatchLinkError, surface: LiveLinkSur
       if (surface === 'server') return SERVER_EDITION_UNSUPPORTED
       if (surface === 'relay') return RELAY_TAB_UNSUPPORTED
       return "Live links can't be created here right now."
+    case 'ttl-unsupported':
+      return 'Unlimited links need a newer server. Pick an end time.'
+    case 'control-unsupported':
+      return "Control isn't available for this terminal: its Zellij session's key bindings would reach every session."
+    case 'bad-password':
+      return 'The password must be 8 to 128 characters, with no line breaks.'
   }
 }
 

@@ -87,7 +87,8 @@ const created = (url = 'https://nodeterm.dev/s/abc#1.k'): CreateWatchLinkResult 
     expiresAt: Date.now() + 3_600_000,
     url,
     status: 'live',
-    viewers: []
+    viewers: [],
+    control: null
   }
 })
 

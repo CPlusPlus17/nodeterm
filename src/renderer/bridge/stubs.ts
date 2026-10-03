@@ -665,6 +665,10 @@ export function buildStubApi(): Omit<
       kick: async () => false,
       sendChat: async () => null,
       chatHistory: async () => [],
+      setControl: async () => false,
+      setPassword: async () => false,
+      allowControl: async () => false,
+      controlSupport: async () => 'unknown' as const,
       onState: noopUnsub,
       onChat: noopUnsub,
       onNotice: noopUnsub

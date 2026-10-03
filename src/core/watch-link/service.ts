@@ -281,7 +281,9 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           viewerId: v.viewerId,
           name: v.name === null ? null : stripBidiControls(v.name),
           joinedAt: v.joinedAt,
-          waiting: v.waiting === true
+          waiting: v.waiting === true,
+          controlling: false,
+          typing: false
         }))
       } catch (err) {
         warn(`reading a link's state failed: ${errorText(err)}`)
@@ -297,7 +299,8 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       expiresAt: r.expiresAt,
       url: formatWatchLink(r.linkId, r.secret),
       status,
-      viewers
+      viewers,
+      control: null
     }
   }
   const list = (): WatchLinkView[] => (unsupported ? [] : [...records.values()].map(viewOf))
