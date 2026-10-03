@@ -15,8 +15,8 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
    nodeterm running on the computer, and the `-L nodeterm-rmt` socket of a desktop that drives the
    computer over SSH (audit `A27`, below), each session reached on the socket it was listed on;
    `attach-session` **without `-d`** (the desktop's own client must stay attached), never
-   `new-session` (`A08`). PATH is *appended* with the Homebrew dirs, exactly like
-   `remoteTmuxPathPrologue`, and the macOS app's bundled `Contents/Resources/bin/tmux` is the last
+   `new-session` for an existing canvas or agent node (`A08`). PATH is *appended* with the Homebrew
+   dirs, exactly like `remoteTmuxPathPrologue`, and the macOS app's bundled `Contents/Resources/bin/tmux` is the last
    resort, as it is for the desktop's `findTmux`. Not available on Windows hosts (the QR says
    `"ssh":false`). A computer with no pairing code can be added by its SSH address instead, and is
    then reached this way only (audit `A27`, below).
@@ -24,6 +24,26 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
    host (`src/main/remote/standing-host.ts`). The phone trades its device token for a single-use
    relay token (`POST /v1/relay/join`), runs the handshake, and — the first time only — waits while
    the desktop shows the SAS approval dialog (pin-once).
+
+**Explicit plain SSH terminals (`A90`).** The user needs a new shell on their manual
+SSH/WireGuard host, which another desktop drives and which has no local nodeterm workspace. The
+new flow creates a phone-owned plain shell on a separate `nodeterm-phone` socket in a chosen
+discovered host folder or Home. Session metadata lists it under **Phone terminals**; it survives
+disconnect and can be reopened or ended by its exact owned session. It does not write
+`project.json`, register a desktop canvas node or borrow a managed agent identity. Desktop and
+Server Edition behavior is unchanged; their socket scans/reapers remain limited to their own
+`node-terminal` / `nodeterm-rmt` sessions. This explicit creation path keeps the `A08` refusal to
+create a missing canvas/agent session and the relay New-session flow. Implementation and host
+regressions are verified; private beta 8 / code 9 is prepared, not installed. Installed beta 6 /
+code 7 and historical prepared beta 7 / code 8 do not contain this feature. Pixel verification
+remains pending. No current RPC/blob/pairing/mirror/SSH-visible file contract changes;
+@eneskirca can adopt the isolated socket and its creation marker/session metadata for iOS.
+
+On a Linux SSH host, use **Sessions → New terminal**, choose **Home folder**, a discovered project
+folder or a custom absolute folder, then **Create**. The shell appears under **Phone terminals**.
+Close the viewer or app to leave it running; reopen its row to return. Use that row's
+**End session…** to stop only its owned session. These shells are independent of the desktop
+canvas and managed agents.
 
 `Auto` tries SSH with a 4 s budget and falls back to the relay. Per-computer overrides live in
 Settings ("How to reach each computer").
@@ -123,13 +143,14 @@ after a desktop restart a dial from it shows the dialog again, as for any unpinn
 desktop cannot write the unpin, the device stays listed and Settings → Phone says to try again,
 because the surviving pin would let the phone back in without a dialog.
 
-**What direct SSH will not do.** It never creates a tmux session (the desktop injects the hook
-environment at creation, which the phone cannot reproduce) and never touches nodes of the desktop's
+**What opening an existing node over direct SSH will not do.** It never creates a missing canvas
+or agent tmux session (the desktop injects the hook environment at creation, which the phone
+cannot reproduce) and never touches nodes of the desktop's
 SSH projects (they live on another host). Both surface as `NeedsRelayException`, and the app opens
 the session through a relay connection held next to the SSH one (`HostSession.viaRelay`).
 
 **The relay leg next to SSH (audit `A26`).** What needs nodeterm *the app* rather than the machine
-— a new session (`projects.registerNode`, and the attach that creates it), board writes
+— a canvas-registered new session (`projects.registerNode`, and the attach that creates it), board writes
 (`projects.ensureBoard|setCardColumn|editCardLabels`), node actions (`node.wake|refresh|rename`) and
 `git.*` — is the relay's. `Auto` still keeps the SSH leg as the primary connection when it works;
 when one of those verbs is needed, `HostSession.connectionFor` opens the computer's relay leg next to
@@ -147,7 +168,7 @@ advertisement with no token yet is picked up by late adoption on the user's refr
 8 s refresh as soon as it appears (`LegRouting.adoptAfterListing`), and says so meanwhile instead
 of "turn on remote access". The token is asked by presence (`SecureStore.hasRelayToken`, no Keystore
 decrypt), because the screens ask the routing while composing (`A47`). The screens ask the same
-function, so an unavailable control is shown **disabled with that reason** (New session, whose
+function, so an unavailable control is shown **disabled with that reason** (canvas New session, whose
 reason is the Sessions list's first row; the board's card actions; the session menu's
 wake/refresh/rename), never hidden; the Source control screen (`A29`) says it in place of the
 repository. The relay dial still goes through `RelayApprovalGate` with the caller's trigger: these
@@ -193,7 +214,7 @@ their own socket: attach (attach-only: a session the driving desktop creates the
 tmux.conf and hook env, which the phone cannot give it), keys, the wake line, held approvals (a file
 on this computer, where that desktop's SSH answer path looks), read-acks (written where that
 desktop's ack sweep looks; on a computer that also runs its own nodeterm, see Known gaps), and ending
-the tmux session. What needs nodeterm *the app* (a new session, board writes, node actions, git)
+the tmux session. What needs nodeterm *the app* (a canvas-registered new session, board writes, node actions, git)
 belongs to the desktop elsewhere, which neither leg of this computer reaches, so
 `LegRouting.forProject` makes it unavailable with that reason, and a driven session that is not
 running says it starts from that desktop instead of offering this computer's relay. The relay is
@@ -237,7 +258,7 @@ list, its empty state and the Pair screen) adds one by host, port (22) and user;
   block, no host box key, `sshAvailable` true, and a `fromJson` that drops a relay a record might
   carry. Its route is fixed to SSH (`HostStore.route`), Settings shows no choice for it, the late
   relay adoption never runs for it, and `LegRouting.RelayLeg.ADDED_OVER_SSH` makes every relay verb
-  (a new session, board writes, node actions, git) unavailable with "remote access isn't set up for
+  (a canvas-registered new session, board writes, node actions, git) unavailable with "remote access isn't set up for
   this computer: it was added by its SSH address". A session that is not running, or a node of an SSH
   project, is refused without the relay offer. Which refusal is said follows the relay leg the
   phone has for the computer (`NeedsRelayException.refusal`): "remote access isn't set up" for one
@@ -266,14 +287,15 @@ describes as the future. The Android client implements what the host actually se
 | Phone action | Relay (host-service.ts) | Direct SSH |
 |---|---|---|
 | List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob, and beside it **`lan`** (new, `A74-refresh`): the computer's current LAN address and SSH host keys, which refresh the paired record | same blob (and never a `lan`), from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
-| Open a terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
+| Open an existing terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`; a reserved phone UUID uses only validated `nodeterm-phone`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
 | Wake on open | the attach itself: host-service reports the viewer (`remoteViewer.attached` → `agent:wake`) and the desktop wakes a Sleeping node it has mounted; the phone offers nothing, so it never types a second `--resume` | nothing reaches the desktop, so opening a Sleeping node offers the desktop's wake line (the agent's `--resume <id>`, plus the permission mode for Claude only, no `cd` or account: the pane's shell already has both), only while a shell owns the pane (`#{pane_current_command}`, read on open and again at the tap), typed only on a tap, after a kill-line |
 | Wake, refresh, rename | `node.wake|refresh|rename` | through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
 | Board | `projects.ensureBoard|setCardColumn|editCardLabels` | reads over SSH; writes through the relay leg opened next to it (`A26`), disabled with the reason when the phone has none |
-| New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
+| New session on the canvas | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
+| Explicit plain terminal on the SSH host (`A90`) | separate from canvas registration | Sessions → New terminal → Home/project/custom absolute folder → Create; phone-owned `nodeterm-phone` session, rediscovered under Phone terminals; persists disconnect/app closure, exact owned End; host tests/build pass in prepared beta 8/code 9, physical verification pending |
 | Source control (`A29`) | `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd, …}`, `cwd` = the project's folder from `projects.list`; the desktop jails it to its project folders and hands each verb to its `GitService` | through the relay leg opened next to SSH (`A26`); the screen says why when the phone has none. There is no SSH git of its own (see Known gaps) |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
@@ -295,6 +317,19 @@ phone treats as "open the session" — never a guessed keystroke. The iOS app ca
 unchanged.
 
 ## What is verified, and how
+
+**`A90` implemented and host-verified; prepared beta 8 / code 9 is not installed.** Protocol commit
+`bcc92367` and UI/model commit `b88d141528c1051964da07faf22cc7fa923c4846` implement dedicated-socket
+creation, atomic metadata for interrupted-request rediscovery, frozen UUID/folder retry, live
+fingerprint ownership checks and exact End. Real SSH/tmux regressions cover Home and driven folders,
+hostile path quoting, renamed-folder retry, partial creation before option finalization,
+reconnect/history, warm-server identity/locale cleanup, stale/foreign ownership and socket isolation;
+relay interop refuses reserved phone IDs before any creating RPC. The complete protocol suite
+passes **684 tests in 66 suites, zero failures/errors/skips** (48 seconds), and the offline app
+`compileKotlin` passes (1 second). Eleven actual Gradle/Kotlin 2.2 protocol behavioral mutations,
+twelve helper behavior mutations and nine native wiring mutations are caught (**32 total**).
+Private proof is in `.nodeterm/android-beta-build-8/`. These are host checks, not Pixel proof:
+item 32 and the 7 Pass / 20 Partial / 37 Pending ledger remain unchanged.
 
 **Latest real Pixel checklist follow-up, requirement-audited 2026-10-03:** seven complete items pass:
 **18, 19, 21, 22, 24, 38 and 39**. Twenty items have partial evidence and 37 remain pending; conditional SKIP variants
@@ -361,7 +396,7 @@ Pixel Inbox Approve returns its actual allow JSON in 17.596 seconds; Deny return
 "The request timed out on computer. Answer it in session." and opens the owned terminal,
 without false success. This passes the held-hook lifecycle with an explicit producer limit:
 no live Claude CLI/account or requested Bash execution was involved. Private desktop proof
-is in `hook-qa-*.jsonl`. Latest required checks pass all 658 protocol tests in 63 suites with
+is in `hook-qa-*.jsonl`. At that stage required checks passed all 658 protocol tests in 63 suites with
 zero failures/errors/skips (54 seconds), plus offline app `compileKotlin` (5 seconds).
 
 **Relay question follow-up (item 41, partial):** on the desktop-mounted owned terminal, one tap
@@ -401,28 +436,42 @@ higher-code update; JSON or QR pairing is acceptable. The user defers remaining 
 checks until after the hike. No new phone work, runtime change or finding produced this tally
 correction; full release readiness, hosted cellular relay and live-Claude checks remain unverified.
 
-**Prepared update candidate, not installed:** private `0.1.0-beta.7` / code `8` uses source
+**Historical prepared update, unused:** private `0.1.0-beta.7` / code `8` uses source
 `b53610deb3843b59fa6a1bed5bdc5f36da0f5146` and the retained signer. The local AGP release built
 in 47 seconds; R8 and packaging passed. APK SHA-256:
 `5141c6484b422b236a98213731076be621c4d14a55f47c79bfd989fb23609e6a`.
 Proof/artifacts are in ignored `.nodeterm/android-beta-build-7/` and `.nodeterm/android-beta-7/`.
-After the hike, pair on installed beta 6 / code 7 using actual desktop-issued JSON or QR, then
-update in place to code 8 and verify pairing/relay credential survival for item 1. Debug migration
-stays conditional SKIP on this working Pixel. Installed beta 6 at `c4b1f6cf`, its physical proof and
-the seven Pass / 20 Partial / 37 Pending tally remain unchanged; preparation adds no runtime fix,
-finding, phone work or device pass.
+It was not installed and is superseded as the after-hike update candidate by beta 8 below;
+preparing it added no runtime fix or device pass.
+
+**Current prepared update, not installed:** private `0.1.0-beta.8` / code `9` contains `A90`, built
+from clean source `b88d141528c1051964da07faf22cc7fa923c4846` with the retained signer. The actual
+offline AGP release built in 49 seconds; R8 keeps and local packaging passed, including the same
+certificate, 16-KB alignment and source/hash provenance. Independent SDK 36/37 tools verify v2/v3
+signatures, one retained signer and 16-KB alignment. All 149 unsigned payloads are preserved, with
+three signing entries added; all four ELF PT_LOAD alignments pass. Terminal assets/native libraries
+are byte-identical to beta 6; the changed DEX and remapped service entry agree with the feature
+source and R8 mapping. Independent proof includes `artifact-review.json`. APK SHA-256:
+`d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce`.
+The private artifact is `.nodeterm/android-beta-8/nodeterm-android-0.1.0-beta.8.apk`, with proof in
+`.nodeterm/android-beta-build-8/`. After the hike, pair on installed beta 6 / code 7 using actual
+desktop-issued JSON or QR, then update in place to beta 8 / code 9 and verify pairing/relay
+credential survival for item 1. Debug migration stays conditional SKIP on this working Pixel.
+Installed beta 6 at `c4b1f6cf`, its physical proof and the seven Pass / 20 Partial / 37 Pending
+tally remain unchanged.
 
 Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`, including
 `physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
 `link-checks.json`, `recovery-results.json` and `activity-results.json`. The 64 rows below reconcile
 that physical evidence with the earlier draft ledger. Recorded CI baseline
-`b53610deb3843b59fa6a1bed5bdc5f36da0f5146` has all five jobs green in
-[run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994); this does
-not change the installed APK source or imply full device validation.
+`4aa98f78` has all five jobs green in
+[run `37074473589`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37074473589). That run
+predates `A90`; its later commits still need their own green workflow. CI does not change the
+installed APK source or imply full device validation.
 
 | Item | Result | Evidence or remaining scope |
 |---|---|---|
-| 1 | Partial | Same-signer updates retain manual SSH identity; after the hike pair on beta 6/code 7, then update to prepared code 8 and check desktop-issued pairing/relay credential survival. Debug migration variant SKIP*. |
+| 1 | Partial | Same-signer updates retain manual SSH identity; after the hike pair on beta 6/code 7, then update to prepared beta 8/code 9 and check desktop-issued pairing/relay credential survival. Debug migration variant SKIP*. |
 | 2 | Partial | Force-stop retains manual SSH registration/authentication; phone reboot, paired SSH/relay pending. |
 | 3 | Pending | Uninstall/Clear storage variants SKIP* on working installation; disposable setup required. |
 | 4 | Pending | Second-phone transfer/revoke and cloud restore SKIP*; no authorized setup. |
@@ -453,7 +502,7 @@ not change the installed APK source or imply full device validation.
 | 29 | Pending | Sleeping-session wake paths pending. |
 | 30 | Pending | Desktop reboot/resume/account/permission paths pending. |
 | 31 | Pending | Desktop SSH-project relay routing pending. |
-| 32 | Pending | Linux new-session/managed-account paths pending; Windows variant SKIP*. |
+| 32 | Pending | A90 host tests/build pass in prepared beta 8/code 9; physical plain SSH creation/reopen/end and Linux relay new-session/managed-account paths pending; Windows variant SKIP*. |
 | 33 | Pending | Back/background during new-session launch pending. |
 | 34 | Pending | Project/account removal while new-session dialog open pending. |
 | 35 | Pending | Wake/refresh/rename/end from phone pending. |
@@ -1362,7 +1411,8 @@ later fix left to a device.
 
 1. For beta readiness, install two consecutive private betas using the same private signer and
    increasing version codes; pair on the first and update to the second without uninstalling, keeping
-   the pairing. Also check the committed-debug-key path separately with two CI debug APKs (artifact
+   the pairing. After the hike, pair on installed beta 6 / code 7 with desktop-issued JSON or QR,
+   then update to prepared beta 8 / code 9. Also check the committed-debug-key path separately with two CI debug APKs (artifact
    `nodeterm-android-debug`). Migrating from debug to private beta needs one deliberate uninstall
    because the signing certificates differ; revoke the stale phone entries and pair again.
    *(A10)*
@@ -1526,7 +1576,13 @@ later fix left to a device.
     Claude permission prompt reaches the phone's Inbox as an approval. Managed Claude accounts are
     named by their label or email in the picker, the session row and the Usage card, never by an id.
     Repeat against a Windows desktop: the session starts in the project's folder under the chosen
-    account there too. *(A72, A33, A14, A39, A75)*
+    account there too. Separately, after the beta-8/code-9 update, on the intended Pixel
+    over manual SSH/WireGuard use Sessions → New terminal → project folder → Create, then create
+    another in Home; also check a custom absolute folder. Confirm real shell cwd, input and history; disconnect/reopen and
+    restart the app so both remain in Phone terminals; end only the owned session and confirm
+    the other survives. Existing desktop sessions/project files/canvas stay unchanged. This
+    does not verify relay registration, managed-agent launch or account selection.
+    *(A72, A33, A14, A39, A75, A90)*
 33. New session, then Back within a second of Start (before the launch line is typed), and once more
     by sending the app to the background right after Start: both times the node still appears on the
     canvas with its agent running, not a bare shell. *(A40)*
@@ -1726,7 +1782,7 @@ later fix left to a device.
     and `~/.ssh` `700`), and tap Connect: the computer is added and the screen shows a `SHA256:`
     fingerprint that matches one line of the screen's `ssh-keygen` command on the computer. Open it:
     the Sessions tab lists the Server Edition's projects, the host screen shows its version, and a
-    session opens and takes keys. New session, board writes and Wake / Refresh / Rename say remote
+    session opens and takes keys. Canvas New session, board writes and Wake / Refresh / Rename say remote
     access isn't set up for this computer, and so does a session that is not running; Settings → How
     to reach each computer offers no choice for it. *(A27)*
 64. Add a Linux dev host that another computer's nodeterm drives over SSH (no nodeterm of its own) by
@@ -1762,7 +1818,7 @@ the wider relay action matrix remain device checks.
 - **A computer added by its SSH address is SSH only, and has no push** (audit `A27`, part b). "Add
   SSH server" reaches a headless Server Edition or a dev host the phone reaches only over SSH, but
   only where the phone can open an SSH connection to it (the same network, or a VPN): there is no
-  relay leg for it, ever, so nothing that goes through nodeterm the app (a new session, board writes,
+  relay leg for it, ever, so nothing that goes through nodeterm the app (a canvas-registered new session, board writes,
   node actions, git) and no "from anywhere". It gets no push either: the grant an iOS phone drops in
   such a host's `~/.nodeterm/push-grants` and the backend's `/v1/push` fan-out are APNs-only (see
   Push), and Android drops none, so the phone polls it like any other computer; docs/SERVER.md's
@@ -1785,7 +1841,12 @@ the wider relay action matrix remain device checks.
   Retained local files are retried when ownership changes, including restored unresolved Done
   cards. Android's actual producer/consumer interop is covered; the multi-desktop device case and
   iOS verification remain pending. Held approvals continue to use each hook's own `.answer` file.
-- **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and new sessions
+- **Explicit plain SSH creation is implemented; physical validation is pending (`A90`).** It uses `nodeterm-phone` and a
+  separate Phone terminals group; it does not change canvas registration or managed-agent
+  creation. Host regressions/mutations and the beta-8/code-9 build pass; that APK is prepared,
+  not installed. After the hike verify item 32 on the intended Pixel. Installed beta 6 / code 7
+  and the device ledger remain unchanged.
+- **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and canvas-registered new sessions
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over
   SSH for some of these; Android deliberately does not (the host verbs exist because that write

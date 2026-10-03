@@ -5435,6 +5435,15 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      ownership before reading/deleting files; remote ownership aggregates all projects on a host.
      The ack-only fixture shares its implementation with `host-fixture.ts` and needs no relay
      sockets/crypto dependencies. Keep the format and consumer behavior compatible with iOS.
+     **Phone-owned plain SSH shells (`A90`)** use the separate `nodeterm-phone`
+     socket and creation marker/session metadata, listed under Phone terminals. They do not
+     write shared `project.json`, register canvas nodes or carry managed-agent hook identity.
+     Keep desktop/Server Edition socket scans, reapers and kill fanout on their own
+     `node-terminal` / `nodeterm-rmt` sockets; clear stale inherited `NODETERM_*` in the new pane.
+     Cold-agent SSH refusal (`A08`) and relay canvas New session remain. This feature changes
+     no current RPC/blob/pairing/mirror/file contract; mention **@eneskirca** for iOS adoption
+     of the isolated socket and marker/metadata. Host regressions/build are verified in prepared
+     beta 8 / code 9; physical checks remain pending, so do not infer device readiness from them.
      The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
      types, so it sits in `tsconfig.node.json` and `npm run typecheck` checks it on every CI run;

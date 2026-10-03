@@ -123,7 +123,15 @@ applicable here":
    needs the matching hand edit in the Android tests. `AckSweepInteropTest` additionally runs
    the actual Android `.seen` producer against the desktop's local/remote consumers: each consumer
    requires positive ownership before reading/deleting a file, and remote ownership is the union
-   of all projects on that host. Keep this behavior compatible with iOS. Its interop fixture
+   of all projects on that host. Keep this behavior compatible with iOS.
+   Android phone-owned plain SSH shells (`A90`) use dedicated `nodeterm-phone`
+   session metadata, without shared project-file writes, canvas registration or managed hook
+   identity. Keep desktop/server socket scans/reapers/kill fanout on `node-terminal` and
+   `nodeterm-rmt`; strip inherited `NODETERM_*` in a new phone pane. Cold-agent SSH refusal and
+   relay canvas creation remain. No existing RPC/blob/pairing/mirror/file contract changes;
+   flag isolated socket/creation-marker/metadata adoption for **@eneskirca** in iOS. Host regression
+   and build checks pass in prepared beta 8 / code 9; physical verification remains pending.
+   The Android interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
    The Android workflow runs on every file that fixture bundles (`src/core`, `src/shared`,

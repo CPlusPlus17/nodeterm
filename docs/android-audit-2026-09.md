@@ -45,7 +45,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A23](#a23) | medium |  | small | security/risk | ✅ fixed in `3d36d60` · Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
 | [A24](#a24) | medium |  | small | security/bug | ✅ fixed in `8e304db` · SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
 | [A25](#a25) | medium |  | medium | parity/gap | 🟡 in-app part fixed in `4ffb8b7`, `0d310cc` (notification actions, the tap opens the session); FCM push is still a backend gap · No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
-| [A26](#a26) | medium |  | medium | parity/gap | ✅ fixed in `9cdc4cf`, `1eeb5b8` · New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH |
+| [A26](#a26) | medium |  | medium | parity/gap | ✅ fixed in `9cdc4cf`, `1eeb5b8` · New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH. A90 adds a separate plain SSH-shell path; canvas registration remains relay-routed |
 | [A27](#a27) | medium |  | large | parity/gap | ✅ fixed in `8691e6d`, `9b5c342`, `1d8201f`, `c450e16` · Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup) |
 | [A28](#a28) | medium |  | small | parity/gap | ✅ fixed in `726271a,1cdd2f0` · SSH-project sessions over direct SSH are attached, approved and resumed on the wrong machine |
 | [A29](#a29) | medium |  | medium | parity/gap | ✅ fixed in `0c5a1e1`, `a5f38f5` · No source-control screen, although the protocol layer already implements the git verbs iOS uses |
@@ -69,7 +69,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 🟡 code-7 Pixel retains SSH identity; code-8 same-signer update prepared, not installed; requirement-audited items 18/19/21/22/24/38/39 pass, paste pairing/live relay browse-input and synthetic shipped-hook approval lifecycle verified, full validation deferred until after hike · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 🟡 code-7 Pixel retains SSH identity; beta-8/code-9 same-signer update prepared, not installed (beta-7/code-8 historical unused); requirement-audited items 18/19/21/22/24/38/39 pass, paste pairing/live relay browse-input and synthetic shipped-hook approval lifecycle verified, full validation deferred until after hike · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -109,6 +109,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
+| [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66, app compile and 32 mutants pass; beta-8/code-9 release/R8/signing/artifact review pass, prepared not installed; physical item 32 pending · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
 
 ## A01
 
@@ -967,6 +968,13 @@ When connected over SSH, lazily open the relay leg (if the computer has one) for
 > 
 > 4. **Better fix.** In HostSession, when a relay-only verb is needed while `conn` is SSH and `host.relay` plus a stored relay token exist (often already minted by `adoptRelayIfAdvertised`), open a secondary relay connection lazily for `registerNode`, `ensureBoard`, `setCardColumn`, `editCardLabels` and `node.*`. Also show the FAB and board controls disabled with the reason, not hidden. The fallback is an SSH write that streams over stdin to a temp file, then does an atomic mv. That would also work with remote access off, but it must re-implement the kanban and node-append transforms, and it cannot reach SSH-project refs.
 
+**Continuation scope (`A90`, 2026-10-03):** the original `A26` relay-routing fix remains.
+The user now needs an explicit plain shell on a manual SSH/WireGuard host with no local
+workspace/relay. `A90` adds a phone-owned `nodeterm-phone` session and independent listing,
+without registering on the desktop canvas or writing its shared project file. This exception
+does not restore cold managed-agent sessions or make board/node/git verbs available over SSH.
+Implementation/tests/build/device verification are pending.
+
 ## A27
 
 **Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup)**
@@ -1675,18 +1683,19 @@ reach the actual synthetic application and its shipped PostToolUse hook/mirror. 
 case, the exact owned pane is in mode before PreToolUse; option 3 arrives, mode becomes false,
 and the mirror becomes working with its question resolved. Item 41 remains Partial: offscreen/
 released/direct-SSH/target-guard device variants and notification questions remain open.
-No live Claude CLI/account was used. Latest required checks pass all 658 protocol
+No live Claude CLI/account was used. At that stage required checks passed all 658 protocol
 tests in 63 suites (54 seconds) plus offline app `compileKotlin` (5 seconds).
 Only disposable fixture resources were cleaned up and the phone returned to regular Sessions;
 scoped cleanup is not a full device/backend revoke check. On 2026-10-03 the user confirms the
 final beta-6/code-7 usual manual-SSH terminal "Connects and scrolls smoothly", confirming connection
 and smooth scrolling with WireGuard enabled and Wi-Fi off over cellular. Cellular hosted relay remains
 untested. Item 20 remains Partial; no runtime change, phone command or new product finding resulted.
-Latest required protocol/offline app tasks pass in 50/1 seconds; earlier 54/5-second results are historical.
+Protocol/offline app tasks at that stage passed in 50/1 seconds; current A90 checks are recorded below.
 The [64-row record](android.md#what-is-verified-and-how) has seven Pass, twenty Partial and
 37 Pending items with named conditional SKIP variants; `A50` remains partial. Private synthetic
-proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Recorded CI baseline `b53610de` has all
-five jobs green in [run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994).
+proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Previous CI baseline `4aa98f78` has all
+five jobs green in [run `37074473589`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37074473589),
+before A90; its later commits require their own green workflow after push.
 The requirement review promotes item 18 using existing all-key/software-input/font/rotation SSH
 survival proof, without new phone work. Viewport/Fit belongs to item 23 and stays Partial; item 1
 needs desktop-issued pairing/relay credential survival across a higher-code update, using JSON or QR.
@@ -1695,16 +1704,24 @@ relay and live-Claude verification remain open. No new product finding is added.
 QA-driver coordinates/side-Back and Compose class assumptions are not product findings. No
 production/host contract changed and no new audit finding is added.
 
-**Prepared beta-7 update (2026-10-03), not installed:** private `0.1.0-beta.7` / code `8` uses
+**Historical prepared beta-7 update (2026-10-03), unused:** private `0.1.0-beta.7` / code `8` uses
 source `b53610deb3843b59fa6a1bed5bdc5f36da0f5146` and the retained signer. The local AGP build
 took 47 seconds; R8 and packaging passed. APK SHA-256:
 `5141c6484b422b236a98213731076be621c4d14a55f47c79bfd989fb23609e6a`.
 Ignored proof/artifacts are in `.nodeterm/android-beta-build-7/` and `.nodeterm/android-beta-7/`.
-After the hike, pair on installed beta 6 / code 7 using desktop-issued JSON or QR, then update
-in place to code 8 and check pairing/relay credential survival for item 1. Debug migration stays
+It was never installed and is superseded by prepared beta 8 / code 9 below for item 1. Debug migration stays
 conditional SKIP on this working Pixel. Installed beta 6 at `c4b1f6cf`, its physical proof and the
 seven Pass / 20 Partial / 37 Pending tally remain unchanged. Preparation adds no runtime fix,
 finding, phone work or device pass; `A50` stays partial.
+
+**Current prepared beta-8 update (2026-10-03), not installed:** A90's code-9 APK at clean
+`b88d141528c1051964da07faf22cc7fa923c4846` passes the offline 49-second AGP release, R8 keeps,
+retained-signer packaging/provenance and independent SDK 36/37 artifact checks. SHA-256:
+`d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce`.
+After the hike, pair on installed beta 6 / code 7 using actual desktop-issued JSON or QR, then
+update in place to beta 8 / code 9 and verify pairing/relay credentials survive without
+uninstalling (item 1). Beta 6's physical proof and the seven Pass / 20 Partial / 37 Pending ledger
+remain unchanged; beta-8 physical proof is pending, and `A50` stays partial.
 
 ## A51
 
@@ -2863,3 +2880,66 @@ The user confirms normal continuous dragging and coast both work now. Reversal/l
 custom wheel bindings, FPS and the full device pass remain open. The user confirms final beta-6
 connection and smooth scrolling on cellular WireGuard with Wi-Fi off over regular manual SSH;
 cellular hosted relay remains untested.
+
+
+## A90
+
+**Manual SSH/WireGuard host cannot create a new plain terminal without a local desktop/relay (2026-10-03).**
+
+- Severity: **medium**; effort: medium; area: parity; kind: gap
+- Status: **implemented and host-verified** in `bcc92367` / `b88d1415`; beta 8 / code 9 prepared,
+  not installed; physical item 32 checks pending after the hike
+- Locations: Android Host screen/new-terminal choice, SSH scripts/connection and host listing
+
+The user can browse and open existing sessions on their Linux host over manual SSH/WireGuard,
+but cannot create a new shell. Another desktop drives that host's `nodeterm-rmt` sessions and
+project files; the host has no own workspace or relay. `A26`'s canvas New-session flow still
+requires `projects.registerNode` on the owning desktop, so it cannot serve this request.
+
+**Implemented design:** explicitly create a plain shell on the separate `nodeterm-phone` socket
+in a discovered host folder or Home. Creation marker/session metadata rediscover it under a
+synthetic **Phone terminals** group; the shell survives disconnect and End addresses only its
+exact owned session. Clear inherited nodeterm identities before starting the shell, and configure
+only this socket for the terminal's mouse/history/UTF-8 behavior. Do not modify shared project
+files, borrow an existing node's hook token or claim desktop-canvas registration. Desktop and
+Server Edition keep scanning/reaping their own `node-terminal` / `nodeterm-rmt` sockets.
+
+The `A08` refusal to create a missing managed/canvas session and existing relay New session stay
+intact. No current host RPC, projects blob, pairing payload, mirror or SSH-visible file contract
+changes. **iOS follow-up for @eneskirca:** consider the isolated phone socket, explicit creation
+marker and session metadata rather than a canvas append for this independent-shell feature.
+
+Atomic ID/resolved-cwd/request/fingerprint session environment allows rediscovery even if creation
+stops before option finalization. The parser verifies the request's SHA-256, and actions pin the
+validated fingerprint before checking live ownership. Reserved phone UUIDs never attach to either
+desktop socket or send a creating relay RPC. Same-ID/folder retries retain a shell after directory
+rename. New panes clear inherited managed identities and warm non-UTF-8 overrides; partial attach
+restores phone-only settings. Host-owned creation survives dismissal/background, and Main
+navigation checks the visible screen/ticket before opening.
+
+**Verification:** the full real protocol suite passes **684 tests / 66 suites**, zero
+failures/errors/skips, in 48 seconds; final offline app `compileKotlin` passes in 1 second.
+Nine new real SSH/tmux methods, four pure phone-metadata tests and a relay interop refusal cover
+creation/folders, quoting/idempotency, interrupted discovery, reconnect/history/End, stale/foreign
+ownership, warm environment and reserved socket IDs; helper/wiring regressions cover UI lifecycle.
+All **32 new mutants are caught**: eleven actual Gradle/Kotlin 2.2 protocol behavioral variants,
+twelve helper behavior variants and nine native wiring variants. These are host/fixture results,
+not physical phone results.
+
+Private `0.1.0-beta.8` / code `9`, clean source `b88d141528c1051964da07faf22cc7fa923c4846`, is
+prepared, **not installed**. The actual offline AGP release builds in 49 seconds; R8 keeps,
+retained-signer packaging, 16-KB alignment and source/hash provenance pass. Independent SDK 36/37
+tools verify v2/v3 signatures and one retained signer, all 149 unsigned payloads are byte-preserved
+with three signing entries added, all four ELF PT_LOAD alignments pass, and R8/service mapping
+agrees with the source/version/hash/build inputs. Terminal assets/native libraries are unchanged
+from beta 6. APK SHA-256:
+`d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce`.
+Private artifact/proof are in `.nodeterm/android-beta-8/` and `.nodeterm/android-beta-build-8/`.
+
+Installed beta 6 / code 7 and historical prepared unused beta 7 / code 8 are unchanged and do not
+contain the feature; the ledger remains seven Pass / 20 Partial / 37 Pending. After the hike,
+pair on installed beta 6 then update to beta 8 / code 9 for item 1. For item 32 use Linux host →
+Sessions → New terminal → Home/project/custom absolute folder → Create; verify real cwd/input/history,
+disconnect/app-restart rediscovery and exact owned End on the intended Pixel over SSH/WireGuard.
+Existing desktop sessions, project files and canvas must remain unchanged. Full relay/managed-agent
+creation and the rest of the 64-item matrix remain separate pending requirements.

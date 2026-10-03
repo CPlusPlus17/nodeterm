@@ -6,7 +6,7 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-> **Status (2026-10-02): private beta updated on the intended Pixel; basic SSH and pre-attach tmux history work.** CI builds the debug APK, and the release blockers
+> **Status (2026-10-03): beta 6 is installed on the Pixel; beta 8 adds plain SSH terminals and is prepared, not installed.** CI builds the debug APK, and the release blockers
 > and medium bugs an audit found are fixed on this branch and tested where the code allows. The
 > private minified beta is installed on the Pixel 10 Pro (Android 17 / API 37); manual SSH lists real
 > projects and basic terminal input works. The code-3 update fixes the one-row viewport and exposes
@@ -39,7 +39,7 @@ the current `/v1/relay/join` shape is verified beyond interop tests. Remote acce
 enabled, so this pairing approves the phone without a first SAS prompt. The desktop uses an
 isolated home and real SecretService encrypted credential storage; no user credentials were copied.
 The phone also attaches and sends echo input through the relay to an owned real PTY, created by
-production preload/Canvas events rather than phone New session. Latest checks pass all 658
+production preload/Canvas events rather than phone New session. At that stage checks passed all 658
 protocol tests in 63 suites (54 seconds) and offline app `compileKotlin` (5 seconds).
 Mounted relay single-select answers and multi-select Open-session/input reach the synthetic
 application and its actual PostToolUse/mirror. A one-tap answer from copy mode also reaches the
@@ -47,29 +47,53 @@ application, leaves copy mode and resolves the question. Item 41 stays Partial: 
 direct-SSH and target-guard variants lack device proof. No live Claude CLI/account was used.
 QR/scanner, cellular relay, SAS denial/revoke, remaining node actions, remaining question routes,
 notifications
-remain open. Recorded CI baseline `b53610de` has all five jobs green in [run `37073041994`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37073041994).
+remain open. Previous CI baseline `4aa98f78` has all five jobs green in [run `37074473589`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37074473589), before the A90 commits; their next push still requires its own green workflow.
 Only disposable fixture resources were removed and the phone returned to regular Sessions;
 cleanup does not establish the full revoke matrix. **Final beta-6/code-7 cellular check:** with
 WireGuard enabled and Wi-Fi off, the user confirms "Connects and scrolls smoothly" in their usual
 manual-SSH terminal, confirming connection and smooth scrolling. Cellular hosted relay remains untested;
 item 20 stays Partial and the full 64-item pass remains open. No runtime change or phone command
-was needed. Latest required protocol/offline app tasks pass in 50/1 seconds; the next documentation
-push still requires green CI.
+was needed. The 50/1-second protocol/offline app tasks at that stage are historical; current A90
+checks are recorded below. Each subsequent push still requires green CI.
 
 The user defers remaining Pixel release checks until after the hike. The requirement review adds
 item 18's Pass without new phone work; viewport/Fit remains item 23's open scope. Item 1 requires
 desktop-issued pairing/relay credentials through a higher-code update, using JSON or QR. Full
 release readiness, hosted cellular relay and live-Claude checks remain unverified.
 
-Private `0.1.0-beta.7` / code `8` is **prepared, not installed**, from
+Historical private `0.1.0-beta.7` / code `8` was **prepared, never installed**, from
 `b53610deb3843b59fa6a1bed5bdc5f36da0f5146`, using the retained signer. Local AGP built in
 47 seconds; R8 and packaging passed. APK SHA-256:
 `5141c6484b422b236a98213731076be621c4d14a55f47c79bfd989fb23609e6a`.
 Ignored proof/artifacts are in `.nodeterm/android-beta-build-7/` and `.nodeterm/android-beta-7/`.
-After the hike, pair on installed beta 6 / code 7 using desktop-issued JSON or QR, then update in
-place to code 8 and check pairing/relay credential survival for item 1. Debug migration stays
-conditional SKIP on the working Pixel. Installed beta 6 and the seven Pass / 20 Partial /
-37 Pending tally are unchanged; preparation adds no runtime fix or device pass.
+Beta 8 below replaces it as the after-hike update candidate; beta-7 preparation added no runtime
+fix or device pass.
+
+**Plain SSH terminals (`A90`) are implemented and host-verified.** On the Linux SSH host, use
+**Sessions → New terminal → Home folder / project folder / custom absolute folder → Create**.
+The shell appears under **Phone terminals**, persists when the viewer/app closes, and can be
+reopened or stopped with that row's **End session…**. These are independent shells, with no
+automatic desktop-canvas registration or managed-agent identity. Protocol `bcc92367` and UI/model
+`b88d1415` preserve existing cold-agent SSH refusal and relay canvas creation. All **684 protocol
+tests in 66 suites pass with zero failures/errors/skips** (48 seconds), offline app `compileKotlin`
+passes (1 second), and **32** protocol/helper/native-wiring mutations are caught (11/12/9).
+Desktop and Server Edition retain their own sockets and canvas behavior; existing RPC, projects
+blob, pairing, mirror and SSH-visible file contracts are unchanged. **iOS follow-up for @eneskirca:**
+adopt the isolated phone socket and atomic creation marker/session metadata for independent shells.
+
+Private **`0.1.0-beta.8` / code `9` is prepared, not installed**, from clean source
+`b88d141528c1051964da07faf22cc7fa923c4846`, using the retained signer. Offline AGP built in
+49 seconds; R8 keeps, signature, 16-KB alignment and source/hash provenance checks pass.
+Independent SDK 36/37 signature/alignment, unsigned-payload preservation and R8 service-mapping
+checks also pass. APK SHA-256:
+`d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce`.
+Private APK: `.nodeterm/android-beta-8/nodeterm-android-0.1.0-beta.8.apk`; proof is in
+`.nodeterm/android-beta-build-8/`. After the hike, pair on installed beta 6 / code 7 using
+desktop-issued JSON or QR, then update in place to beta 8 / code 9 and check pairing/relay credential
+survival for item 1. Verify real SSH creation/cwd/input/history, disconnect/app-restart rediscovery
+and ending only the owned terminal ([item 32](../docs/android.md#device-checklist)). Installed beta 6
+and the **7 Pass / 20 Partial / 37 Pending** tally remain unchanged; beta 8 has no physical device
+proof yet. Debug migration stays conditional SKIP on the working Pixel.
 
 ## What it does
 
@@ -81,7 +105,7 @@ tested where the layer allows, and the numbered
 | | Android | Notes |
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
-| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: no relay (so no new session, board writes, node actions or source control from the phone, and nothing "from anywhere" beyond what reaches its SSH, a VPN say) and no push. No password login, no Windows |
+| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: no relay (so no canvas-registered new session, board writes, node actions or source control from the phone, and nothing "from anywhere" beyond what reaches its SSH, a VPN say) and no push. No password login, no Windows |
 | Direct connection on your network (SSH + tmux) | ✓ | Host key checked against the keys the computer names at pairing, then pinned (trust on first use with a desktop that names none); the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body), also when remote access is turned on only after pairing; an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
@@ -92,6 +116,7 @@ tested where the layer allows, and the numbered
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay when it is the computer's own; a session another computer's nodeterm runs there, or one no listing names, is not offered the relay |
 | Sessions of the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Over direct SSH the phone offers the relay instead |
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches. On your network the phone opens the relay leg next to SSH for it; with no relay leg (remote access off) the button is disabled and says why |
+| New plain terminal on an SSH host | ✓ (`A90`, prepared beta 8/code 9) | Home/project/custom absolute folder, independent Phone terminals group; persists disconnect, exact owned End, no desktop canvas/agent registration. Host tests/build pass; unavailable in installed beta 6 and awaiting Pixel checks |
 | Wake / refresh / rename / end session | relay (end: both) | `node.*` verbs, through the relay leg next to SSH when on your network; over SSH "end" stops the tmux session only |
 | Kanban board, move cards, labels | relay (reads: both) | `projects.ensureBoard/setCardColumn/editCardLabels`; on your network the writes go through the relay leg next to SSH, and are disabled with the reason when there is none |
 | Source control: status, diffs, stage/unstage, commit, push/pull, recent commits | relay | The desktop's typed `git.*` bridge on the project's folder (no free-form git). On your network it goes through the relay leg next to SSH; not for the computer's SSH projects or a project with no folder, which say why. Merge conflicts are listed and their diff shown; resolve them on the computer or in a terminal |
