@@ -5,12 +5,28 @@
 // every argument built from the host's own records — nothing comes from the viewer), sends meta and a
 // visible-screen keyframe, then streams through the watcher sink (watcher-policy.ts).
 //
-// READ-ONLY IS ENFORCED HERE, on the host. The relay-host `access` hook refuses every request and
-// every cast but a Commenter's chat (watcherAccess), and this module's own `PeerAttach` is the second
-// layer: it forwards nothing to any platform, and a request or a non-chat cast that reaches it anyway
-// means the access policy failed, so the session is CLOSED (fail closed, as relay-host does for a
-// throwing wrapSink). No viewer byte, size or resize reaches a pty: the join, the size sync and the
-// capture take only ids the host chose. No `interceptReq` is ever supplied (it would bypass `access`).
+// THE VIEWER'S INBOUND SURFACE IS ENFORCED HERE, on the host. The relay-host `access` hook
+// (watcherAccess) refuses every request and every cast but chat (Commenter and Control links) and
+// unlock / input / release (Control links), and this module's own `PeerAttach` is the second layer:
+// it forwards nothing to any platform, and a request, or a cast the link's role does not admit, that
+// reaches it anyway means the access policy failed, so the session is CLOSED (fail closed, as
+// relay-host does for a throwing wrapSink). Input from a viewer that is not controlling is the same
+// breach. No viewer size or resize reaches a pty, and no viewer byte does yet (accepted input is not
+// delivered): the join, the size sync and the capture take only ids the host chose. No `interceptReq`
+// is ever supplied (it would bypass `access`).
+//
+// CONTROL (a Control link, role 'controller') is per CONNECTION: a viewer that unlocks with the link's
+// password (`watch:unlock`) is `controlling` until it releases, disconnects or is kicked, or until the
+// owner turns control off or changes the password, or the link locks; a reconnect unlocks again. The
+// record is the service's: the host READS `record.control` live and never writes it (the service sets
+// `locked` inside `onControlLocked`, before it returns). An unlock is answered to that viewer alone
+// (`watch:control`), and every throttle is here: one attempt per UNLOCK_MIN_INTERVAL_MS per viewer and
+// one verification in flight per link (both `too-soon`, not counted); a malformed attempt counts as
+// wrong and is never verified, so an over-long password never reaches scrypt; WRONG_PER_CONN wrong
+// attempts end that connection (`attempts`), WRONG_PER_LINK across the link lock it. The link count
+// lives in memory and only `allowControl` resets it. A verification is re-checked after its await: an
+// ended viewer, a stopped host, or any change to control meanwhile (off, locked, a new password — the
+// control epoch) voids it, uncounted.
 //
 // relay-host never tells us about ends it caused itself (`deny`, `close`): every such path goes
 // through `ended()`, which reports to the scheduler exactly once (the hosted-service pattern).
@@ -79,12 +95,17 @@ import type { RpcErr } from '../../shared/rpc'
 import { bytesToB64, bytesToHex } from '../../shared/watch-link/bytes'
 import { deriveWatchLinkKeys } from '../../shared/watch-link/keys'
 import {
+  PASSWORD_MAX,
   WATCH_CHAT_CAST,
   WATCH_EVENT,
+  WATCH_INPUT_CAST,
   WATCH_PROTOCOL_VERSION,
+  WATCH_RELEASE_CAST,
+  WATCH_UNLOCK_CAST,
   sanitizeChatName,
   sanitizeChatText,
   type WatchChatMessage,
+  type WatchControlEvent,
   type WatchKeyframe,
   type WatchLinkEndReason,
   type WatchMeta
@@ -123,6 +144,11 @@ export const WATCHER_SIZE_SYNC_MS = 10_000
 export const CONFIRM_DEADLINE_MS = 30_000
 /** A viewer whose socket backlog passes this is closed (viewer gone, not a revoke) — R28. */
 export const VIEWER_BACKLOG_CLOSE = 8 * 1024 * 1024
+/** A Control link's unlock throttles: one attempt per viewer per 2 s; 3 wrong end that connection;
+ *  10 wrong across the link lock control until the owner allows it again. */
+export const UNLOCK_MIN_INTERVAL_MS = 2_000
+export const WRONG_PER_CONN = 3
+export const WRONG_PER_LINK = 10
 const RATE = 256 * 1024
 const BURST = 1024 * 1024
 
@@ -176,6 +202,14 @@ export interface LinkHostDeps {
   onChat(msg: WatchChatMessage): void
   onViewerJoined(count: number): void
   onGone(reason: 'revoked' | 'expired'): void
+  /** A Control link's password check, against `record.control` as it is when called. Never asked
+   *  about a malformed or over-long password, and at most one check is in flight per link. */
+  verifyPassword(pw: string): Promise<boolean>
+  /** A viewer unlocked control, under this sanitized, self-chosen name. */
+  onControlTaken(name: string): void
+  /** WRONG_PER_LINK wrong attempts across the link. The service sets `record.control.locked = true`
+   *  before it returns (the host reads the record live and never writes it). */
+  onControlLocked(): void
 }
 export type LinkRuntimeStatus = 'live' | 'reconnecting' | 'refused'
 export interface LinkViewer {
@@ -187,6 +221,10 @@ export interface LinkViewer {
    *  no local tmux, Zellij) a viewer can co-attach only to a terminal this app has OPEN. Set by a
    *  REFUSED join, never by a session merely ending: that rejoins in seconds, usually successfully. */
   waiting: boolean
+  /** Unlocked this Control link with its password and has not lost control since. */
+  controlling: boolean
+  /** Typed in the last few seconds. False until input is delivered. */
+  typing: boolean
 }
 export interface LinkHost {
   start(): void
@@ -196,6 +234,13 @@ export interface LinkHost {
   chatHistory(): WatchChatMessage[]
   status(): LinkRuntimeStatus
   viewers(): LinkViewer[]
+  /** The service changed `record.control.enabled` (or cleared `locked`): off or locked demotes every
+   *  controller, and every joined viewer is told its state. */
+  controlChanged(): void
+  /** The password was replaced: every controller is demoted and must unlock with the new one. */
+  passwordChanged(): void
+  /** The owner cleared the lock: the link-wide wrong count starts over, then as `controlChanged`. */
+  allowControl(): void
 }
 
 interface Conn {
@@ -213,6 +258,12 @@ interface Conn {
   joinedAt: number | null
   name: string | null
   lastChatAt: number
+  /** Unlocked this Control link (per connection: a reconnect unlocks again). */
+  controlling: boolean
+  /** Wrong unlock attempts on this connection since its last success. */
+  wrong: number
+  /** When this viewer's last unlock attempt was taken (a too-soon one is not). */
+  lastUnlockAt: number
   // The watched session (null while waiting).
   sessionId: string | null
   altScreen: boolean
@@ -268,6 +319,18 @@ function normalizeJoin(r: unknown): WatchJoin | null {
   return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true }
 }
 
+/** A well-formed unlock payload, or null. The password is bounded before anything else reads it: over
+ *  PASSWORD_MAX code points is malformed, and the cheap UTF-16 test first means a huge string is never
+ *  split into an array. An empty one cannot match any stored password and is not worth a scrypt. */
+function readUnlock(p: unknown): { name: string; password: string } | null {
+  if (!p || typeof p !== 'object') return null
+  const name = sanitizeChatName((p as { name?: unknown }).name)
+  const password = (p as { password?: unknown }).password
+  if (!name || typeof password !== 'string' || password.length === 0) return null
+  if (password.length > PASSWORD_MAX * 2 || Array.from(password).length > PASSWORD_MAX) return null
+  return { name, password }
+}
+
 function normalizeCapture(c: unknown): VisibleCapture {
   if (!c || typeof c !== 'object' || typeof (c as VisibleCapture).screen !== 'string') return unavailableCapture()
   if ((c as VisibleCapture).unavailable === true) return unavailableCapture()
@@ -289,6 +352,13 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   let syncTimer: unknown = null
   let stopped = false
   const warnedHost = new Set<string>()
+  /** Wrong unlock attempts across the link (in memory: only the lock is persisted, by the service). */
+  let linkWrong = 0
+  /** A password check is in flight: one per link. */
+  let verifying = false
+  /** Bumped by every change to control (off/on, a new password, the lock, allowControl): a check that
+   *  started under an older epoch is void when it returns. */
+  let controlEpoch = 0
 
   const clearTimer = (h: unknown): void => {
     if (h !== null) deps.clearTimeout(h)
@@ -366,6 +436,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const sid = c.sessionId
     c.sessionId = null
     c.streaming = false
+    c.controlling = false
     if (sid !== null) leave(c.clientId, sid, c.viewerId, c)
     safe('the scheduler', () => c.ev.onClose())
     updateSyncTimer()
@@ -591,6 +662,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       cols: res.cols,
       rows: res.rows
     }
+    // A Control link's state for THIS viewer rides every (re)join; absent on every other role.
+    if (record.role === 'controller') meta.control = controlStateFor(c)
     if (!send(c, WATCH_EVENT.meta, meta)) return
     clearTimer(c.settleTimer)
     c.settleTimer = deps.setTimeout(() => {
@@ -656,11 +729,29 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     safe('onChange', deps.onChange)
   }
   function onViewerCast(c: Conn, method: string, args: unknown[]): void {
-    // relay-host's access hook admits a Commenter's chat cast and nothing else.
-    if (method !== WATCH_CHAT_CAST || record.role !== 'commenter') {
-      policyBreach(c, `cast ${method}`)
+    // relay-host's access hook admits exactly these (watcherAccess); anything else got past it.
+    if (method === WATCH_CHAT_CAST && (record.role === 'commenter' || record.role === 'controller')) {
+      onChat(c, args)
       return
     }
+    if (record.role === 'controller') {
+      if (method === WATCH_UNLOCK_CAST) {
+        // Never the error's text: nothing that might carry the password is logged.
+        onUnlock(c, args).catch((err) => warn(c, 'an unlock failed', err instanceof Error ? err.name : 'not an Error'))
+        return
+      }
+      if (method === WATCH_INPUT_CAST) {
+        onInput(c)
+        return
+      }
+      if (method === WATCH_RELEASE_CAST) {
+        onRelease(c)
+        return
+      }
+    }
+    policyBreach(c, `cast ${method}`)
+  }
+  function onChat(c: Conn, args: unknown[]): void {
     if (c.ended || c.joinedAt === null) return
     const now = deps.now()
     if (now - c.lastChatAt < CHAT_MIN_INTERVAL_MS) return
@@ -672,6 +763,122 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.lastChatAt = now
     c.name = name
     publish({ id: bytesToHex(nacl.randomBytes(8)), name, text, at: now, from: 'viewer' })
+  }
+
+  // --- control (a Control link) -----------------------------------------------------------------------
+
+  /** This viewer's control state, as meta and every unprompted `watch:control` carry it. */
+  function controlStateFor(c: Conn): WatchControlEvent {
+    const ctl = record.control
+    if (c.controlling && ctl && ctl.enabled && !ctl.locked) return { state: 'controlling' }
+    if (ctl?.locked) return { state: 'locked' }
+    if (!ctl || !ctl.enabled) return { state: 'off' }
+    return { state: 'available' }
+  }
+  function sendControl(c: Conn, ev: WatchControlEvent): void {
+    send(c, WATCH_EVENT.control, ev)
+  }
+  const joinedConns = (): Conn[] => [...conns].filter((c) => c.joinedAt !== null && !c.ended)
+
+  async function onUnlock(c: Conn, args: unknown[]): Promise<void> {
+    if (c.ended || c.joinedAt === null || stopped) return
+    const state = controlStateFor(c)
+    // Already controlling, locked or off: answered as it stands, never counted, never throttled.
+    if (state.state === 'controlling') {
+      sendControl(c, state)
+      return
+    }
+    if (state.state === 'locked' || state.state === 'off') {
+      sendControl(c, { state: state.state, reason: state.state })
+      return
+    }
+    const now = deps.now()
+    if (verifying || now - c.lastUnlockAt < UNLOCK_MIN_INTERVAL_MS) {
+      sendControl(c, { state: state.state, reason: 'too-soon' })
+      return
+    }
+    c.lastUnlockAt = now
+    const attempt = readUnlock(args[0])
+    // A malformed attempt is still an attempt.
+    if (!attempt) {
+      wrongAttempt(c)
+      return
+    }
+    verifying = true
+    const epoch = controlEpoch
+    let right: boolean | null = null
+    try {
+      right = (await deps.verifyPassword(attempt.password)) === true
+    } catch (err) {
+      warn(c, 'a control password check failed', err instanceof Error ? err.name : 'not an Error')
+    } finally {
+      verifying = false
+    }
+    if (c.ended || stopped) return
+    if (right === null || epoch !== controlEpoch || controlStateFor(c).state !== 'available') {
+      refuseVoid(c)
+      return
+    }
+    if (!right) {
+      wrongAttempt(c)
+      return
+    }
+    c.controlling = true
+    c.wrong = 0
+    c.name = attempt.name
+    sendControl(c, { state: 'controlling' })
+    safe('onControlTaken', () => deps.onControlTaken(attempt.name))
+    safe('onChange', deps.onChange)
+  }
+  /** A check whose answer no longer applies (control changed under it, or it failed): void, not
+   *  wrong. Nothing is counted, and the viewer may try again. */
+  function refuseVoid(c: Conn): void {
+    const state = controlStateFor(c).state
+    if (state === 'locked' || state === 'off') sendControl(c, { state, reason: state })
+    else sendControl(c, { state, reason: 'too-soon' })
+  }
+  function wrongAttempt(c: Conn): void {
+    c.wrong++
+    linkWrong++
+    sendControl(c, { state: controlStateFor(c).state, reason: 'wrong' })
+    if (linkWrong >= WRONG_PER_LINK) lockLink()
+    if (c.wrong >= WRONG_PER_CONN) endConn(c, 'attempts')
+  }
+  /** Locked: the service records it (synchronously, in `onControlLocked`), every viewer is told, and
+   *  every controller drops back to watching. */
+  function lockLink(): void {
+    controlEpoch++
+    safe('onControlLocked', () => deps.onControlLocked())
+    for (const c of joinedConns()) {
+      c.controlling = false
+      sendControl(c, { state: 'locked', reason: 'locked' })
+    }
+    safe('onChange', deps.onChange)
+  }
+  /** Control changed under every viewer: off or locked demotes the controllers; each is told. */
+  function broadcastControl(): void {
+    controlEpoch++
+    const ctl = record.control
+    const usable = !!ctl && ctl.enabled && !ctl.locked
+    for (const c of joinedConns()) {
+      if (!usable) c.controlling = false
+      sendControl(c, controlStateFor(c))
+    }
+    safe('onChange', deps.onChange)
+  }
+  function onRelease(c: Conn): void {
+    if (c.ended || c.joinedAt === null || !c.controlling) return
+    c.controlling = false
+    sendControl(c, controlStateFor(c))
+    safe('onChange', deps.onChange)
+  }
+  function onInput(c: Conn): void {
+    if (c.ended) return
+    if (controlStateFor(c).state !== 'controlling') {
+      policyBreach(c, `cast ${WATCH_INPUT_CAST}`)
+      return
+    }
+    // Accepted from a controller, and not delivered yet: no viewer byte reaches the pane.
   }
 
   // --- listeners and viewer sessions ----------------------------------------------------------------
@@ -696,6 +903,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       joinedAt: null,
       name: null,
       lastChatAt: -Infinity,
+      controlling: false,
+      wrong: 0,
+      lastUnlockAt: -Infinity,
       sessionId: null,
       altScreen: false,
       joining: false,
@@ -824,7 +1034,14 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const out: LinkViewer[] = []
     for (const c of conns) {
       if (c.joinedAt === null || c.ended) continue
-      out.push({ viewerId: c.viewerId, name: c.name, joinedAt: c.joinedAt, waiting: c.joinRefused && c.sessionId === null })
+      out.push({
+        viewerId: c.viewerId,
+        name: c.name,
+        joinedAt: c.joinedAt,
+        waiting: c.joinRefused && c.sessionId === null,
+        controlling: c.controlling,
+        typing: false
+      })
     }
     return out
   }
@@ -916,7 +1133,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     },
     postSharerChat(text) {
       const clean = sanitizeChatText(text)
-      if (!clean || record.role !== 'commenter' || stopped) return null
+      if (!clean || (record.role !== 'commenter' && record.role !== 'controller') || stopped) return null
       const msg: WatchChatMessage = { id: bytesToHex(nacl.randomBytes(8)), name: record.label, text: clean, at: deps.now(), from: 'sharer' }
       publish(msg)
       return msg
@@ -928,6 +1145,25 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       if (sched.idle > 0 || sched.bridged >= MAX_VIEWERS_PER_LINK) return 'live'
       return sched.lastError ? 'reconnecting' : 'live'
     },
-    viewers
+    viewers,
+    controlChanged() {
+      if (stopped || record.role !== 'controller') return
+      broadcastControl()
+    },
+    passwordChanged() {
+      if (stopped || record.role !== 'controller') return
+      controlEpoch++
+      for (const c of joinedConns()) {
+        if (!c.controlling) continue
+        c.controlling = false
+        sendControl(c, controlStateFor(c))
+      }
+      safe('onChange', deps.onChange)
+    },
+    allowControl() {
+      if (stopped || record.role !== 'controller') return
+      linkWrong = 0
+      broadcastControl()
+    }
   }
 }

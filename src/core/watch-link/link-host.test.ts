@@ -4,7 +4,7 @@
 //
 // Timing-sensitive cases run on a MANUAL clock injected as the link host's (and so the scheduler's)
 // setTimeout/now; the handshake itself is real async crypto, awaited with vi.waitFor on real time.
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import nacl from 'tweetnacl'
 import { transportPair } from '../relay/transport-pair'
 import { connectRelay, type RelayTransport } from '../relay/relay-socket'
@@ -14,7 +14,15 @@ import { IPC } from '../../shared/ipc'
 import { isHostOnlyChannel } from '../../shared/host-control'
 import { connectWatchClient } from '../../shared/watch-link/client'
 import { deriveWatchLinkKeys } from '../../shared/watch-link/keys'
-import { WATCH_EVENT, type WatchKeyframe } from '../../shared/watch-link/protocol'
+import {
+  WATCH_EVENT,
+  WATCH_INPUT_CAST,
+  WATCH_UNLOCK_CAST,
+  type WatchControlEvent,
+  type WatchKeyframe,
+  type WatchLinkRole,
+  type WatchMeta
+} from '../../shared/watch-link/protocol'
 import {
   createLinkHost,
   CONFIRM_DEADLINE_MS,
@@ -23,14 +31,18 @@ import {
   REJOIN_BACKOFF_MS,
   REJOIN_STABLE_MS,
   SETTLE_BOUND_MS,
+  UNLOCK_MIN_INTERVAL_MS,
   WATCHER_SIZE_SYNC_MS,
+  WRONG_PER_CONN,
+  WRONG_PER_LINK,
   type LinkHost,
   type WatchJoin,
   type WatchPty
 } from './link-host'
 import type { HostTokenResult } from './api'
 import { unavailableCapture, type VisibleCapture } from './capture-route'
-import type { WatchLinkRecord } from './store'
+import { hashControlPassword, verifyControlPassword, type ControlPasswordHash } from './password'
+import type { WatchLinkControlRecord, WatchLinkRecord } from './store'
 import type { UiSink } from '../ui-sink-registry'
 
 const ESC = '\x1b'
@@ -81,7 +93,12 @@ function manualClock() {
 type ManualClock = ReturnType<typeof manualClock>
 
 interface SetupOpts {
-  role?: 'viewer' | 'commenter'
+  role?: WatchLinkRole
+  /** A Control link's record state (the test mutates it the way the service does). */
+  control?: WatchLinkControlRecord
+  /** Default: the real `verifyControlPassword` against `record.control`, read at call time (as the
+   *  service does). */
+  verifyPassword?: (pw: string) => Promise<boolean>
   join?: (clientId: number, nodeId: string, viewerId: string) => Promise<WatchJoin | null> | WatchJoin | null
   capture?: (sid: string) => Promise<VisibleCapture> | VisibleCapture
   alive?: (sid: string) => boolean
@@ -96,7 +113,7 @@ function setup(o: SetupOpts = {}) {
   const secret = nacl.randomBytes(32)
   const record: WatchLinkRecord = {
     linkId: 'AbCdEfGhIjKlMnOpQrStUv', nodeId: 'node-1', role: o.role ?? 'viewer', label: 'Ada', title: 'build',
-    createdAt: 0, expiresAt: Date.now() + 3600_000, secret
+    createdAt: 0, expiresAt: Date.now() + 3600_000, secret, ...(o.control ? { control: o.control } : {})
   }
   const peers: RelayTransport[] = []
   const sinks = new Map<number, UiSink>()
@@ -108,6 +125,9 @@ function setup(o: SetupOpts = {}) {
   const joinTimes: number[] = []
   let mints = 0
   let changes = 0
+  let verifies = 0
+  let locks = 0
+  const taken: string[] = []
   const clock = o.clock
   const now = clock ? clock.now : () => Date.now()
   const pty: WatchPty = {
@@ -165,7 +185,20 @@ function setup(o: SetupOpts = {}) {
     },
     onChat: (m) => chats.push(m),
     onViewerJoined: (n) => joined.push(n),
-    onGone: (r) => gone.push(r)
+    onGone: (r) => gone.push(r),
+    verifyPassword: (pw) => {
+      verifies++
+      if (o.verifyPassword) return o.verifyPassword(pw)
+      return record.control ? verifyControlPassword(pw, record.control) : Promise.resolve(false)
+    },
+    onControlTaken: (name) => {
+      taken.push(name)
+    },
+    // What the service does, synchronously, before returning (the host reads the record live).
+    onControlLocked: () => {
+      locks++
+      if (record.control) record.control.locked = true
+    }
   })
   hosts.push(host)
   return {
@@ -174,6 +207,10 @@ function setup(o: SetupOpts = {}) {
     mints: () => mints,
     /** How many times the host reported a change to the registry (`onChange`). */
     changes: () => changes,
+    /** How many times the host asked to verify a password, and the names that took control. */
+    verifies: () => verifies,
+    taken,
+    locks: () => locks,
     /** The n-th attached viewer's sink (attach order). */
     sink: (n = 0) => [...sinks.values()][n]
   }
@@ -963,5 +1000,527 @@ describe('createLinkHost — ending', () => {
     })
     expect(t.sinks.size).toBe(0)
     expect(t.left).toHaveLength(MAX_VIEWERS_PER_LINK)
+  })
+})
+
+/** A raw relay client with the link's viewer key: it sends whatever casts the test chooses (the real
+ *  client cannot send a malformed one), and records every event the host sends it. */
+function rawPeer(t: Setup, n = 0) {
+  const events: [string, unknown[]][] = []
+  let hostConfirmed = false
+  let closed = 0
+  const raw = connectRelay({
+    url: 'x', token: 'x', role: 'client', theirPubB64: publicKeyToB64(t.keys.host.publicKey),
+    ourKeys: { publicKey: t.keys.viewer.publicKey, secretKey: t.keys.viewer.secretKey },
+    transport: t.peers[n], onReady: () => {}, onRpc: () => {}, onFrame: () => {},
+    onClose: () => { closed++ },
+    onTunnel: (kind, p) => {
+      if (kind !== 'text') return
+      const m = parseRpcMessage(new TextDecoder().decode(p))
+      if (m?.t === 'cast' && m.method === 'trust:confirm') hostConfirmed = true
+      if (m?.t === 'ev') events.push([m.channel, m.args])
+    }
+  })
+  return {
+    hostConfirmed: () => hostConfirmed,
+    closed: () => closed,
+    confirm: () => raw.sendTunnelText(TRUST_CONFIRM),
+    cast: (method: string, args: unknown[]) => raw.sendTunnelText(JSON.stringify({ t: 'cast', method, args })),
+    named: (ch: string) => events.filter((e) => e[0] === ch).map((e) => e[1][0])
+  }
+}
+type RawPeer = ReturnType<typeof rawPeer>
+/** Open the n-th listener with a raw peer, confirm, and wait for its first keyframe. */
+async function openRaw(t: Setup, n = 0): Promise<RawPeer> {
+  await vi.waitFor(() => expect(t.peers.length).toBeGreaterThan(n))
+  const p = rawPeer(t, n)
+  await vi.waitFor(() => expect(p.hostConfirmed()).toBe(true))
+  p.confirm()
+  await vi.waitFor(() => expect(p.named(WATCH_EVENT.keyframe).length).toBeGreaterThanOrEqual(1))
+  return p
+}
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => (resolve = r))
+  return { promise, resolve }
+}
+const settleReal = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+// A Control link: unlocking with the link's password, the host-side throttles and the lock. The
+// password check is the real scrypt one (`verifyControlPassword` against `record.control`, read at
+// call time, as the service does), so a wait for an answer is a wait on real time.
+const PW = 'hunter2hunter2'
+const WRONG = 'not-the-password'
+
+describe('createLinkHost — control', () => {
+  let HASH: ControlPasswordHash
+  beforeAll(async () => {
+    HASH = await hashControlPassword(PW)
+  })
+  const ctl = (over: Partial<WatchLinkControlRecord> = {}): WatchLinkControlRecord => ({ enabled: true, locked: false, ...HASH, ...over })
+  const controlOf = (v: Viewer | RawPeer): WatchControlEvent[] => v.named(WATCH_EVENT.control) as WatchControlEvent[]
+  const metaOf = (v: Viewer, n = 0): WatchMeta => v.named(WATCH_EVENT.meta)[n] as WatchMeta
+  /** Send one cast and wait for the `watch:control` that answers it. */
+  async function ask(v: Viewer | RawPeer, send: () => unknown): Promise<WatchControlEvent> {
+    const before = controlOf(v).length
+    const sent = send()
+    if (typeof sent === 'boolean') expect(sent).toBe(true)
+    await vi.waitFor(() => expect(controlOf(v).length).toBeGreaterThan(before), { timeout: 5_000 })
+    return controlOf(v)[before]
+  }
+  const unlock = (v: Viewer, name: string, pw: unknown): Promise<WatchControlEvent> =>
+    ask(v, () => v.c.unlock(name, pw as string))
+  const rawUnlock = (p: RawPeer, args: unknown[]): Promise<WatchControlEvent> => ask(p, () => p.cast(WATCH_UNLOCK_CAST, args))
+  const controller = (o: SetupOpts = {}): Setup => setup({ role: 'controller', control: ctl(), ...o })
+
+  // --- meta -------------------------------------------------------------------------------------------
+
+  it('meta.control is available on a Control link with typing on, and absent on viewer and commenter links', async () => {
+    const t = controller()
+    t.host.start()
+    const v = await openViewer(t)
+    expect(metaOf(v)).toMatchObject({ role: 'controller' })
+    expect(metaOf(v).control).toEqual({ state: 'available' })
+    for (const role of ['viewer', 'commenter'] as const) {
+      const o = setup({ role })
+      o.host.start()
+      const w = await openViewer(o)
+      expect(metaOf(w)).toMatchObject({ role })
+      expect('control' in metaOf(w)).toBe(false)
+    }
+  })
+
+  it('meta.control is off when typing is off and locked when the link is locked; locked wins over off', async () => {
+    const cases: { control: WatchLinkControlRecord; want: WatchControlEvent }[] = [
+      { control: ctl({ enabled: false }), want: { state: 'off' } },
+      { control: ctl({ locked: true }), want: { state: 'locked' } },
+      { control: ctl({ enabled: false, locked: true }), want: { state: 'locked' } }
+    ]
+    for (const c of cases) {
+      const t = controller({ control: c.control })
+      t.host.start()
+      const v = await openViewer(t)
+      expect(metaOf(v).control).toEqual(c.want)
+    }
+  })
+
+  it('meta.control says controlling on a rejoin while this viewer controls: control is per connection, not per session', async () => {
+    const clock = manualClock()
+    let n = 0
+    const t = controller({ clock, join: () => ({ sessionId: `s${++n}`, cols: 80, rows: 24, altScreen: true }) })
+    t.host.start()
+    const v = await openViewer(t)
+    expect(await unlock(v, 'Ada', PW)).toEqual({ state: 'controlling' })
+    ptyEvent(t.sink(), IPC.ptyExit('s1'), 0)
+    await clock.flush()
+    await clock.advance(REJOIN_BACKOFF_MS[0])
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.meta)).toHaveLength(2))
+    expect(metaOf(v, 1).control).toEqual({ state: 'controlling' })
+    // A viewer that never unlocked joins the same link as `available`.
+    const w = await openViewer(t, 1)
+    expect(metaOf(w).control).toEqual({ state: 'available' })
+  })
+
+  // --- watch:unlock -----------------------------------------------------------------------------------
+
+  it('an unlock sent before the viewer joined is ignored, even with the right password: no answer, no verification', async () => {
+    const t = controller()
+    t.host.start()
+    await vi.waitFor(() => expect(t.peers).toHaveLength(1))
+    const p = rawPeer(t, 0)
+    await vi.waitFor(() => expect(p.hostConfirmed()).toBe(true))
+    p.cast(WATCH_UNLOCK_CAST, [{ name: 'Ada', password: PW }]) // before our own confirm: not joined
+    p.confirm()
+    await vi.waitFor(() => expect(p.named(WATCH_EVENT.keyframe)).toHaveLength(1))
+    await settleReal()
+    expect(controlOf(p)).toEqual([])
+    expect(t.verifies()).toBe(0)
+    expect(t.host.viewers().map((x) => x.controlling)).toEqual([false])
+  })
+
+  it('a malformed unlock is answered wrong and COUNTED, with no verification — a 129-code-point password included', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    // Through the real client: a name that does not survive sanitizing, a password that is not a
+    // string, a password one code point too long. Three of them end the connection.
+    const v = await openViewer(t, 0)
+    expect(await unlock(v, '‮', PW)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Ada', 12345678)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Ada', 'a'.repeat(129))).toEqual({ state: 'available', reason: 'wrong' })
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.end)).toEqual([{ reason: 'attempts' }]))
+    expect(t.verifies()).toBe(0)
+    // Through a raw peer: no payload object at all, and 129 code points spelled as surrogate pairs.
+    const p = await openRaw(t, 1)
+    expect(await rawUnlock(p, [5])).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await rawUnlock(p, [{ name: 'Ada', password: '\u{1F600}'.repeat(129) }])).toEqual({ state: 'available', reason: 'wrong' })
+    expect(t.verifies()).toBe(0)
+    // 128 code points is a password (256 UTF-16 units): it is verified, and is wrong.
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await rawUnlock(p, [{ name: 'Ada', password: '\u{1F600}'.repeat(128) }])).toEqual({ state: 'available', reason: 'wrong' })
+    expect(t.verifies()).toBe(1)
+    await vi.waitFor(() => expect(p.named(WATCH_EVENT.end)).toEqual([{ reason: 'attempts' }]))
+    expect(t.taken).toEqual([])
+  })
+
+  it("an attempt within 2 s of this viewer's previous one is too-soon and NOT counted", async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const v = await openViewer(t)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS - 1)
+    expect(await unlock(v, 'Ada', PW)).toEqual({ state: 'available', reason: 'too-soon' })
+    expect(t.verifies()).toBe(1)
+    await clock.advance(1)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    // Two counted wrong attempts: still connected (the too-soon one did not count).
+    await settleReal()
+    expect(t.host.viewers()).toHaveLength(1)
+    expect(v.named(WATCH_EVENT.end)).toEqual([])
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.end)).toEqual([{ reason: 'attempts' }]))
+  })
+
+  it("an attempt while another verification for this link is in flight is too-soon, and not verified", async () => {
+    const held = deferred<boolean>()
+    let calls = 0
+    const t = controller({
+      verifyPassword: (pw) => (++calls === 1 ? held.promise : verifyControlPassword(pw, HASH))
+    })
+    t.host.start()
+    const a = await openViewer(t, 0)
+    const b = await openViewer(t, 1)
+    expect(a.c.unlock('Ada', PW)).toBe(true)
+    await vi.waitFor(() => expect(t.verifies()).toBe(1))
+    expect(await unlock(b, 'Bob', PW)).toEqual({ state: 'available', reason: 'too-soon' })
+    expect(t.verifies()).toBe(1)
+    held.resolve(false)
+    await vi.waitFor(() => expect(controlOf(a)).toEqual([{ state: 'available', reason: 'wrong' }]))
+    // The flight is over: Bob's next attempt (his previous was not stamped) is verified.
+    expect(await unlock(b, 'Bob', PW)).toEqual({ state: 'controlling' })
+    expect(t.verifies()).toBe(2)
+  })
+
+  it('a locked link answers locked and an off link answers off, without verifying or counting', async () => {
+    const clock = manualClock()
+    for (const c of [{ control: ctl({ locked: true }), want: { state: 'locked', reason: 'locked' } }, { control: ctl({ enabled: false }), want: { state: 'off', reason: 'off' } }]) {
+      const t = controller({ clock, control: c.control })
+      t.host.start()
+      const v = await openViewer(t)
+      for (let i = 0; i < WRONG_PER_CONN + 1; i++) {
+        expect(await unlock(v, 'Ada', i % 2 ? PW : WRONG)).toEqual(c.want)
+        await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+      }
+      expect(t.verifies()).toBe(0)
+      expect(v.named(WATCH_EVENT.end)).toEqual([])
+      expect(t.host.viewers()).toHaveLength(1)
+      t.host.stop('revoked')
+    }
+  })
+
+  it('an unlock from a viewer already controlling answers controlling and does nothing else', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const v = await openViewer(t)
+    expect(await unlock(v, 'Ada', PW)).toEqual({ state: 'controlling' })
+    const changes = t.changes()
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Eve', WRONG)).toEqual({ state: 'controlling' })
+    expect(t.verifies()).toBe(1)
+    expect(t.taken).toEqual(['Ada'])
+    expect(t.changes()).toBe(changes)
+    expect(t.host.viewers()[0]).toMatchObject({ name: 'Ada', controlling: true })
+  })
+
+  it('a wrong password answers available/wrong; the third on one connection ends it with `attempts`', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const v = await openViewer(t)
+    for (let i = 0; i < WRONG_PER_CONN; i++) {
+      if (i > 0) await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+      expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    }
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.end)).toEqual([{ reason: 'attempts' }]))
+    await vi.waitFor(() => expect(v.log.closed).toBe(1))
+    expect(t.host.viewers()).toEqual([])
+    expect(t.verifies()).toBe(WRONG_PER_CONN)
+    expect(t.taken).toEqual([])
+    expect(t.locks()).toBe(0)
+  })
+
+  it('the right password makes this viewer controlling under its sanitized name, tells the owner, and resets its own wrong count', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const v = await openViewer(t)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    const changes = t.changes()
+    expect(await unlock(v, '  Ada‮  Lovelace\t', PW)).toEqual({ state: 'controlling' })
+    expect(t.taken).toEqual(['Ada Lovelace'])
+    expect(t.changes()).toBeGreaterThan(changes)
+    expect(t.host.viewers()).toEqual([
+      expect.objectContaining({ name: 'Ada Lovelace', controlling: true, typing: false })
+    ])
+    // Two wrong before the success; after it (and a release) two more do not end the connection.
+    expect(await ask(v, () => v.c.release())).toEqual({ state: 'available' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Ada', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    await settleReal()
+    expect(v.named(WATCH_EVENT.end)).toEqual([])
+    expect(t.host.viewers()).toHaveLength(1)
+  })
+
+  it('a verification is re-checked after its await: control turned off meanwhile is no success', async () => {
+    const held = deferred<boolean>()
+    const t = controller({ verifyPassword: () => held.promise })
+    t.host.start()
+    const v = await openViewer(t)
+    expect(v.c.unlock('Ada', PW)).toBe(true)
+    await vi.waitFor(() => expect(t.verifies()).toBe(1))
+    t.record.control!.enabled = false
+    t.host.controlChanged()
+    await vi.waitFor(() => expect(controlOf(v)).toEqual([{ state: 'off' }]))
+    held.resolve(true)
+    await vi.waitFor(() => expect(controlOf(v)).toEqual([{ state: 'off' }, { state: 'off', reason: 'off' }]))
+    expect(t.taken).toEqual([])
+    expect(t.host.viewers()[0].controlling).toBe(false)
+  })
+
+  it('a verification is re-checked after its await: a password change, a kicked viewer or a stopped host meanwhile is no success', async () => {
+    // The password changed while the old one was being checked: the old one must not open it.
+    {
+      const held = deferred<boolean>()
+      const t = controller({ verifyPassword: () => held.promise })
+      t.host.start()
+      const v = await openViewer(t)
+      expect(v.c.unlock('Ada', PW)).toBe(true)
+      await vi.waitFor(() => expect(t.verifies()).toBe(1))
+      t.host.passwordChanged()
+      held.resolve(true)
+      // A verification that raced a change is void, not wrong: not counted, and the viewer may retry.
+      await vi.waitFor(() => expect(controlOf(v)).toEqual([{ state: 'available', reason: 'too-soon' }]))
+      expect(t.taken).toEqual([])
+      expect(t.host.viewers()[0].controlling).toBe(false)
+    }
+    for (const end of ['kick', 'stop'] as const) {
+      const held = deferred<boolean>()
+      const t = controller({ verifyPassword: () => held.promise })
+      t.host.start()
+      const v = await openViewer(t)
+      expect(v.c.unlock('Ada', PW)).toBe(true)
+      await vi.waitFor(() => expect(t.verifies()).toBe(1))
+      if (end === 'kick') t.host.kick(t.host.viewers()[0].viewerId)
+      else t.host.stop('revoked')
+      held.resolve(true)
+      await settleReal()
+      expect(t.taken).toEqual([])
+      expect(controlOf(v)).toEqual([])
+    }
+  })
+
+  // --- the link-wide lock -----------------------------------------------------------------------------
+
+  it('the 10th wrong attempt across the link locks it once: every viewer is told, controllers are demoted, the 11th is not verified', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const ada = await openViewer(t, 0)
+    let n = 1
+    /** A fresh viewer for each three wrong attempts (three end a connection). */
+    const attacker = async (attempts: number): Promise<Viewer> => {
+      const v = await openViewer(t, n++)
+      for (let i = 0; i < attempts; i++) {
+        await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+        expect(await unlock(v, 'Eve', `${WRONG}-${i}`)).toEqual({ state: 'available', reason: 'wrong' })
+      }
+      return v
+    }
+    await attacker(3)
+    // Ada unlocks after three wrong attempts: a success does not reset the LINK's count.
+    expect(await unlock(ada, 'Ada', PW)).toEqual({ state: 'controlling' })
+    await attacker(3)
+    await attacker(3)
+    expect(t.locks()).toBe(0)
+    const eve = await openViewer(t, n++)
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    const before = controlOf(eve).length
+    expect(eve.c.unlock('Eve', WRONG)).toBe(true)
+    await vi.waitFor(() => expect(controlOf(eve).slice(before)).toEqual([
+      { state: 'available', reason: 'wrong' },
+      { state: 'locked', reason: 'locked' }
+    ]))
+    expect(t.locks()).toBe(1)
+    expect(t.record.control!.locked).toBe(true)
+    await vi.waitFor(() => expect(controlOf(ada).at(-1)).toEqual({ state: 'locked', reason: 'locked' }))
+    expect(t.host.viewers().find((x) => x.name === 'Ada')!.controlling).toBe(false)
+    // The 11th attempt — the right password, even — is answered locked and never verified.
+    const verified = t.verifies()
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(eve, 'Eve', PW)).toEqual({ state: 'locked', reason: 'locked' })
+    expect(t.verifies()).toBe(verified)
+    expect(t.locks()).toBe(1)
+    expect(t.taken).toEqual(['Ada'])
+  })
+
+  it('allowControl resets the link count and tells every viewer it is available again', async () => {
+    const clock = manualClock()
+    const t = controller({ clock, verifyPassword: async (pw) => pw === PW })
+    t.host.start()
+    const watcher = await openViewer(t, 0)
+    let n = 1
+    for (let wrong = 0; wrong < WRONG_PER_LINK; ) {
+      const v = await openViewer(t, n++)
+      for (let i = 0; i < WRONG_PER_CONN && wrong < WRONG_PER_LINK; i++, wrong++) {
+        await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+        await unlock(v, 'Eve', WRONG)
+      }
+    }
+    expect(t.locks()).toBe(1)
+    await vi.waitFor(() => expect(controlOf(watcher).at(-1)).toEqual({ state: 'locked', reason: 'locked' }))
+    // The service clears the lock, then tells the host.
+    t.record.control!.locked = false
+    const changes = t.changes()
+    t.host.allowControl()
+    await vi.waitFor(() => expect(controlOf(watcher).at(-1)).toEqual({ state: 'available' }))
+    expect(t.changes()).toBeGreaterThan(changes)
+    // The count was reset: one more wrong attempt does not lock again.
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(watcher, 'Eve', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    expect(t.locks()).toBe(1)
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(watcher, 'Ada', PW)).toEqual({ state: 'controlling' })
+  })
+
+  // --- release and the owner's changes ----------------------------------------------------------------
+
+  it('release drops a controller back to available; from anyone else it is ignored', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const a = await openViewer(t, 0)
+    const b = await openViewer(t, 1)
+    expect(await unlock(a, 'Ada', PW)).toEqual({ state: 'controlling' })
+    const changes = t.changes()
+    expect(await ask(a, () => a.c.release())).toEqual({ state: 'available' })
+    expect(t.changes()).toBeGreaterThan(changes)
+    expect(t.host.viewers().map((x) => x.controlling)).toEqual([false, false])
+    const after = t.changes()
+    expect(b.c.release()).toBe(true)
+    expect(a.c.release()).toBe(true) // released already
+    await settleReal()
+    expect(controlOf(b)).toEqual([])
+    expect(controlOf(a)).toHaveLength(2)
+    expect(t.changes()).toBe(after)
+    expect(t.host.viewers()).toHaveLength(2)
+  })
+
+  it('controlChanged: turned off demotes every controller and tells every viewer off; turned on, available', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const a = await openViewer(t, 0)
+    const b = await openViewer(t, 1)
+    expect(await unlock(a, 'Ada', PW)).toEqual({ state: 'controlling' })
+    let changes = t.changes()
+    t.record.control!.enabled = false
+    t.host.controlChanged()
+    await vi.waitFor(() => expect(controlOf(b)).toEqual([{ state: 'off' }]))
+    expect(controlOf(a).at(-1)).toEqual({ state: 'off' })
+    expect(t.host.viewers().map((x) => x.controlling)).toEqual([false, false])
+    expect(t.changes()).toBeGreaterThan(changes)
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(a, 'Ada', PW)).toEqual({ state: 'off', reason: 'off' })
+    changes = t.changes()
+    t.record.control!.enabled = true
+    t.host.controlChanged()
+    await vi.waitFor(() => expect(controlOf(b)).toEqual([{ state: 'off' }, { state: 'available' }]))
+    expect(controlOf(a).at(-1)).toEqual({ state: 'available' })
+    expect(t.changes()).toBeGreaterThan(changes)
+  })
+
+  it('passwordChanged demotes every controller and tells each one available; the old password no longer opens it', async () => {
+    const clock = manualClock()
+    const t = controller({ clock })
+    t.host.start()
+    const a = await openViewer(t, 0)
+    const b = await openViewer(t, 1)
+    expect(await unlock(a, 'Ada', PW)).toEqual({ state: 'controlling' })
+    // What the service does: swap the hash, then tell the host.
+    Object.assign(t.record.control!, await hashControlPassword('a-new-password'))
+    const changes = t.changes()
+    t.host.passwordChanged()
+    await vi.waitFor(() => expect(controlOf(a).at(-1)).toEqual({ state: 'available' }))
+    expect(t.host.viewers().map((x) => x.controlling)).toEqual([false, false])
+    expect(t.changes()).toBeGreaterThan(changes)
+    await settleReal()
+    expect(controlOf(b)).toEqual([]) // never controlling: nothing to tell it
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(a, 'Ada', PW)).toEqual({ state: 'available', reason: 'wrong' })
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(a, 'Ada', 'a-new-password')).toEqual({ state: 'controlling' })
+  })
+
+  // --- chat and input ----------------------------------------------------------------------------------
+
+  it('chat works on a Control link as on a Commenter link, both ways', async () => {
+    const t = controller()
+    t.host.start()
+    const v = await openViewer(t)
+    expect(v.c.sendChat('Ada', 'hello')).toBe(true)
+    await vi.waitFor(() => expect(t.chats).toHaveLength(1))
+    expect(t.chats[0]).toMatchObject({ name: 'Ada', text: 'hello', from: 'viewer' })
+    expect(t.host.postSharerChat('hi back')).toMatchObject({ from: 'sharer', text: 'hi back' })
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.chat)).toHaveLength(2))
+    expect(t.host.viewers()).toHaveLength(1)
+  })
+
+  it('input from a viewer that is not controlling closes it; from a controller it is accepted, and reaches no pty yet', async () => {
+    const clock = manualClock()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = controller({ clock })
+    t.host.start()
+    const a = await openViewer(t, 0)
+    const b = await openViewer(t, 1)
+    expect(b.c.sendInput('ls\r')).toBe(true)
+    await vi.waitFor(() => expect(b.log.closed).toBe(1))
+    expect(t.host.viewers()).toHaveLength(1)
+    expect(await unlock(a, 'Ada', PW)).toEqual({ state: 'controlling' })
+    const calls = t.calls.length
+    expect(a.c.sendInput('ls\r')).toBe(true)
+    await settleReal()
+    expect(a.log.closed).toBe(0)
+    expect(t.host.viewers()).toHaveLength(1)
+    expect(t.calls.slice(calls)).toEqual([])
+    // Released: the same input is now a breach.
+    expect(await ask(a, () => a.c.release())).toEqual({ state: 'available' })
+    expect(a.c.sendInput('ls\r')).toBe(true)
+    await vi.waitFor(() => expect(a.log.closed).toBe(1))
+    expect(t.host.viewers()).toEqual([])
+  })
+
+  it('on a Commenter link, unlock and input casts from a raw peer are refused before the host: nothing comes back, nothing is verified', async () => {
+    const t = setup({ role: 'commenter' })
+    t.host.start()
+    const p = await openRaw(t, 0)
+    p.cast(WATCH_UNLOCK_CAST, [{ name: 'Ada', password: PW }])
+    p.cast(WATCH_INPUT_CAST, [{ data: 'ls\r' }])
+    await settleReal(60)
+    expect(controlOf(p)).toEqual([])
+    expect(t.verifies()).toBe(0)
+    // An input that reached the link host would have closed this viewer (a policy breach).
+    expect(p.closed()).toBe(0)
+    expect(t.host.viewers()).toHaveLength(1)
   })
 })

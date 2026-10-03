@@ -431,7 +431,14 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
         onChat: (msg) => safeEmit(IPC.watchLinkChat, r.linkId, ownerChat(msg)),
         onViewerJoined: (count) =>
           notice({ kind: 'joined', linkId: r.linkId, nodeId: r.nodeId, title: stripBidiControls(r.title), viewers: count }),
-        onGone: (reason) => end(r.linkId, reason, { serverRevoke: false, notify: true })
+        onGone: (reason) => end(r.linkId, reason, { serverRevoke: false, notify: true }),
+        // A Control link is not wired to the owner's controls yet: no password opens it, and a lock
+        // holds in memory only (the host reads `record.control` and never writes it).
+        verifyPassword: async () => false,
+        onControlTaken: () => {},
+        onControlLocked: () => {
+          if (r.control) r.control.locked = true
+        }
       })
     } catch (err) {
       warn(`a link could not be hosted: ${errorText(err)}`)

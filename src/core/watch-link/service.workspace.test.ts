@@ -70,7 +70,8 @@ function linksOver(store: WorkspaceStore) {
     emit: () => {},
     createHost: (): LinkHost => ({
       start: () => {}, stop: (r) => { stopped.push(r) }, kick: () => false, postSharerChat: () => null,
-      chatHistory: () => [], status: () => 'live', viewers: () => []
+      chatHistory: () => [], status: () => 'live', viewers: () => [],
+      controlChanged: () => {}, passwordChanged: () => {}, allowControl: () => {}
     })
   })
   services.push(s)
