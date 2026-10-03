@@ -123,8 +123,7 @@ are a commenter: they watch and may chat.
 ### 2.7 The dialog
 
 - Role radio: Viewer / Commenter / **Control**.
-- For Control, the password field and Generate appear, and the warning reads (final wording in the
-  plan):
+- For Control, the password field and Generate appear, and the warning reads:
 
   > Anyone with this link **and** the password can type in this terminal as you. In a shell that means
   > running any command on this machine; in an agent session, giving the agent any instruction. Send
