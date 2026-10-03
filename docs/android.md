@@ -34,10 +34,11 @@ disconnect and can be reopened or ended by its exact owned session. It does not 
 Server Edition behavior is unchanged; their socket scans/reapers remain limited to their own
 `node-terminal` / `nodeterm-rmt` sessions. This explicit creation path keeps the `A08` refusal to
 create a missing canvas/agent session and the relay New-session flow. Implementation and host
-regressions are verified; private beta 8 / code 9 is now installed on the intended Pixel. Earlier
+regressions are verified; private beta 9 / code 10 is now installed on the intended Pixel. Earlier
 beta-6/code-7 device evidence remains historical, and beta 7 / code 8 was prepared but unused.
 The existing SSH host reconnects and lists its driven projects; New terminal is visible and
-enabled. Actual terminal creation/reopen/End verification remains pending. No current
+enabled. Focused Home/project/custom creation/history/reconnect/exact End now pass on the
+Pixel; item 32 is Partial, with relay/managed, cellular and A91 empty-host variants pending. No current
 RPC/blob/pairing/mirror/SSH-visible file contract changes;
 @eneskirca can adopt the isolated socket and its creation marker/session metadata for iOS.
 
@@ -297,7 +298,7 @@ describes as the future. The Android client implements what the host actually se
 | Wake, refresh, rename | `node.wake|refresh|rename` | through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
 | Board | `projects.ensureBoard|setCardColumn|editCardLabels` | reads over SSH; writes through the relay leg opened next to it (`A26`), disabled with the reason when the phone has none |
 | New session on the canvas | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
-| Explicit plain terminal on the SSH host (`A90`) | separate from canvas registration | Sessions → New terminal → Home/project/custom absolute folder → Create; phone-owned `nodeterm-phone` session, rediscovered under Phone terminals; persists disconnect/app closure, exact owned End; host tests/build pass, beta 8/code 9 installed, physical flow verification pending |
+| Explicit plain terminal on the SSH host (`A90`) | separate from canvas registration | Sessions → New terminal → Home/project/custom absolute folder → Create; phone-owned `nodeterm-phone` session, rediscovered under Phone terminals; focused Pixel creation/history/restart/update/reconnect/exact End pass, beta 9/code 10 installed. Item 32 Partial; relay/managed/cellular and A91 empty-host variants pending |
 | Source control (`A29`) | `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd, …}`, `cwd` = the project's folder from `projects.list`; the desktop jails it to its project folders and hands each verb to its `GitService` | through the relay leg opened next to SSH (`A26`); the screen says why when the phone has none. There is no SSH git of its own (see Known gaps) |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
@@ -320,7 +321,49 @@ unchanged.
 
 ## What is verified, and how
 
-**`A91` empty-host stale rows are host-fixed (2026-10-03).** Ending the last phone-owned shell
+**Focused plain-SSH Pixel proof (`A90`, 2026-10-03):** beta 8/code 9 (`b88d1415`) creates
+Home, discovered host-project and custom-folder shells, including spaces/apostrophe/dollar in
+the custom path. Real cwd/input, 180 numbered history lines, same-pane reopen/pre-attach history,
+14 drag-position changes, coast from 65 to 137 and Esc exit pass. Rapid double Create adds only
+one shell; a missing folder shows an error, creates no orphan and can be corrected/retried.
+Phone shells have no managed-agent environment and a 50000-line history limit. Force-stop/restart
+retains all three PIDs/history and SSH rediscovery. Updating to beta 9/code 10 (`4d33a5b5`) also
+retains them; reconnect and native input to the same owned pane pass. Native UI End is verified
+for custom → project → Home: only Open/End actions, phone-shell confirmation, exact selected
+UUID removal, sibling immutable fingerprints/PIDs unchanged, counts 3→2→1→0 and the Phone terminals
+group disappearing. All eleven pre-existing desktop session IDs/pane PIDs and nine protected
+project/workspace hashes are unchanged. Owned disposable shells, empty fixture folders and remote
+UI dumps are removed; the Pixel is left on regular host Sessions. Proof:
+`.nodeterm/android-beta-build-8/a90-pixel-check-20261003/final-focused-results.json` and
+`beta9-exact-ui-end.json` in that directory. Only **item 32 becomes Partial**: relay canvas/managed
+creation, cellular creation and the `A91` otherwise-empty-host variant remain unverified; the
+Windows variant stays conditional SKIP. The current tally is **7 Pass / 21 Partial / 36 Pending**.
+Broader device work remains deferred.
+
+**Beta-9 delivery (2026-10-03):** private `0.1.0-beta.9` / code `10`, clean source
+`4d33a5b5366c99479b648086649205350c7752b1`, built in 43 seconds and updated the exact intended
+Pixel with the retained signer in 6.46 seconds. Its pulled installed APK matches SHA-256
+`719cfeea1dcf27900dd35692a59004ca07e8261b3f14bd43922f0706b6b4ab54`.
+Three owned phone shells created on beta 8 survived the update and were rediscovered on beta 9,
+then ended through the verified exact-session cleanup above; none remain.
+Independent SDK 36/37 artifact review verifies signatures/16-KB alignment, all 149 unsigned
+payloads preserved after signing, four ELF alignments, expected R8/service metadata and source/hash
+provenance. Installation preserves `firstInstallTime`, notification grant and app data; the
+package is non-debuggable. This does not prove paired relay credentials survive. Private proof:
+`.nodeterm/android-beta-build-9/artifact-review.json` and
+`.nodeterm/android-beta-build-9/device-install-20261003/receipt.json`; private APK:
+`.nodeterm/android-beta-9/nodeterm-android-0.1.0-beta.9.apk`.
+The historical source CI [run `37144282865`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37144282865)
+failed `DeviceChecklistDocsTest` because the new finding's pending device check lacked a checklist
+mapping and unrelated Known gaps bullets shared one paragraph. Debug APK, release APK and CodeQL
+jobs passed; private-beta packaging was skipped. This is not a green workflow receipt. The recorded
+prior all-green branch was `19da35a2` / run `37140762345`; the next push must pass all its checks.
+This revision maps A91 into item 32 and isolates its Known gaps paragraph. Fresh full protocol
+and offline app gates must follow the frozen final documentation; the recorded 688/67 local
+source baseline predates these final documentation changes. Final exact-head CI proof is retained
+separately after the next push.
+
+**`A91` empty-host stale rows are fixed in `4d33a5b5` and delivered in beta 9 (2026-10-03).** Ending the last phone-owned shell
 on an otherwise empty SSH host makes browse return `NothingFoundException`. The native refresh
 previously kept the ended shell's cached row. `ListingFailure.snapshot` now replaces the cached
 listing with `ProjectsSnapshot.EMPTY` only for that authoritative empty answer; ordinary host or
@@ -330,11 +373,10 @@ route-specific error and connected SSH state, so New terminal remains available.
 wiring. The complete real Gradle protocol suite passes **688 tests / 67 suites**, zero
 failures/errors/skips, in 52 seconds; offline app `compileKotlin` passes in 6 seconds. Six isolated
 Kotlin 2.2/JDK 21 mutants are caught; proof is in `.nodeterm/android-beta-build-9/`.
-This fix is not in the installed beta 8 / code 9 (`b88d1415`). Beta 9 is planned, not yet prepared
-or installed. No RPC/blob/pairing/mirror/SSH-visible file contract changes, new physical QA claims
-or device-ledger changes are included here.
+The fix is in installed beta 9 / code 10; its physical otherwise-empty-host variant remains
+pending. No RPC/blob/pairing/mirror/SSH-visible file contract changes are made.
 
-**Beta-8 installation receipt (2026-10-03):** the exact intended Pixel 10 Pro / Android 17 was
+**Historical beta-8 installation receipt (2026-10-03):** the exact intended Pixel 10 Pro / Android 17 was
 confirmed before a 28.05-second same-signer `adb install -r` of `0.1.0-beta.8` / code `9`.
 The pulled pre-update APK matches the known beta-6/code-7 hash; SDK 37 confirms the retained public
 signer before replacement. The pulled post-update APK matches beta 8's
@@ -350,7 +392,7 @@ pairing/relay credential survival or item 32's creation/persistence/End flow. Pr
 checks, `sessions.png` and `ui-sessions-ready.xml`. This makes no TalkBack claim. The
 7 Pass / 20 Partial / 37 Pending ledger remains unchanged.
 
-**`A90` implemented and host-verified; beta 8 / code 9 is installed.** Protocol commit
+**`A90` implementation and beta-8 host baseline.** Protocol commit
 `bcc92367` and UI/model commit `b88d141528c1051964da07faf22cc7fa923c4846` implement dedicated-socket
 creation, atomic metadata for interrupted-request rediscovery, frozen UUID/folder retry, live
 fingerprint ownership checks and exact End. Real SSH/tmux regressions cover Home and driven folders,
@@ -361,7 +403,8 @@ passes **684 tests in 66 suites, zero failures/errors/skips** (48 seconds), and 
 `compileKotlin` passes (1 second). Eleven actual Gradle/Kotlin 2.2 protocol behavioral mutations,
 twelve helper behavior mutations and nine native wiring mutations are caught (**32 total**).
 Private proof is in `.nodeterm/android-beta-build-8/`. These are host checks, not Pixel proof:
-item 32 and the 7 Pass / 20 Partial / 37 Pending ledger remain unchanged.
+at that host-baseline checkpoint, item 32 remained Pending and the tally was 7 Pass / 20 Partial /
+37 Pending. The focused physical proof above now makes item 32 Partial.
 
 **Historical beta-6 Pixel checklist follow-up, requirement-audited 2026-10-03:** seven complete items pass:
 **18, 19, 21, 22, 24, 38 and 39**. Twenty items have partial evidence and 37 remain pending; conditional SKIP variants
@@ -476,7 +519,7 @@ Proof/artifacts are in ignored `.nodeterm/android-beta-build-7/` and `.nodeterm/
 It was not installed and was superseded by beta 8 below;
 preparing it added no runtime fix or device pass.
 
-**Current installed beta:** private `0.1.0-beta.8` / code `9` contains `A90`, built
+**Historical beta-8 artifact, now superseded by installed beta 9:** private `0.1.0-beta.8` / code `9` contains `A90`, built
 from clean source `b88d141528c1051964da07faf22cc7fa923c4846` with the retained signer. The actual
 offline AGP release built in 49 seconds; R8 keeps and local packaging passed, including the same
 certificate, 16-KB alignment and source/hash provenance. Independent SDK 36/37 tools verify v2/v3
@@ -487,10 +530,11 @@ source and R8 mapping. Independent proof includes `artifact-review.json`. APK SH
 `d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce`.
 The private artifact is `.nodeterm/android-beta-8/nodeterm-android-0.1.0-beta.8.apk`, with proof in
 `.nodeterm/android-beta-build-8/`. Its installation receipt is above. After the hike, pair on
-current beta 8 / code 9 using actual desktop-issued JSON or QR, then verify pairing/relay
+current beta 9 / code 10 using actual desktop-issued JSON or QR, then verify pairing/relay
 credential survival across a later same-signer higher-code update for item 1. Do not downgrade
 or uninstall the working app for this check. Debug migration stays conditional SKIP.
-Historical beta-6 proof and the seven Pass / 20 Partial / 37 Pending tally remain unchanged.
+Historical beta-6 proof and its seven Pass / 20 Partial / 37 Pending checkpoint are preserved;
+the focused A90 result above changes only item 32, giving 7 Pass / 21 Partial / 36 Pending.
 
 Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`, including
 `physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
@@ -498,13 +542,14 @@ Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261
 that physical evidence with the earlier draft ledger. Recorded CI baseline
 `19da35a2` has all five jobs green in
 [run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345), including
-the A90 branch work. The installed APK remains bound to source `b88d1415`; the CI revision also
-includes documentation. The next documentation push needs its own checks/green workflow.
+the A90 branch work. Installed beta 9 is bound to source `4d33a5b5`, whose CI run
+`37144282865` failed the documentation checklist mapping. The next documentation push needs
+its own checks/green workflow.
 CI does not imply full device validation.
 
 | Item | Result | Evidence or remaining scope |
 |---|---|---|
-| 1 | Partial | Beta 6→8 same-signer update preserves install identity, notification grant and manual SSH host configuration/reconnect/browse. Desktop-issued pairing/relay survival still needs pairing on current beta 8/code 9 then a later higher-code update. Debug migration SKIP*. |
+| 1 | Partial | Beta 6→8 same-signer update preserves install identity, notification grant and manual SSH host configuration/reconnect/browse. Desktop-issued pairing/relay survival still needs pairing on current beta 9/code 10 then a later higher-code update. Debug migration SKIP*. |
 | 2 | Partial | Force-stop retains manual SSH registration/authentication; phone reboot, paired SSH/relay pending. |
 | 3 | Pending | Uninstall/Clear storage variants SKIP* on working installation; disposable setup required. |
 | 4 | Pending | Second-phone transfer/revoke and cloud restore SKIP*; no authorized setup. |
@@ -535,7 +580,7 @@ CI does not imply full device validation.
 | 29 | Pending | Sleeping-session wake paths pending. |
 | 30 | Pending | Desktop reboot/resume/account/permission paths pending. |
 | 31 | Pending | Desktop SSH-project relay routing pending. |
-| 32 | Pending | Beta 8/code 9 installed; SSH browse and New terminal visible/enabled verified. Actual plain SSH Create/cwd/history/reconnect/End and Linux relay new-session/managed-account paths pending; Windows variant SKIP*. |
+| 32 | Partial | Real Pixel beta 8 Home/project/custom plain-SSH creation, cwd/input/history, double-Create/error retry and force-stop/reconnect pass; beta 9 update retains three shells and exact native UI End removes only each selected UUID, preserving siblings, 11 checked desktop sessions/PIDs and 9 protected file hashes. Relay canvas/managed-account and cellular creation, plus A91 otherwise-empty-host last-End variant pending; Windows variant SKIP*. |
 | 33 | Pending | Back/background during new-session launch pending. |
 | 34 | Pending | Project/account removal while new-session dialog open pending. |
 | 35 | Pending | Wake/refresh/rename/end from phone pending. |
@@ -1413,10 +1458,12 @@ on a phone is a device check.
 
 ## Device checklist
 
-Partial results are recorded in "What is verified, and how": beta 8 / code 9 is now installed
-on the intended Pixel 10 Pro; its matching APK/signer, non-debuggable metadata, install identity,
-notification grant and manual-host configuration/reconnect/browse are verified. New terminal is
-visible/enabled; creation/persistence/End remain pending. The following historical beta-6 evidence uses Android 17 /
+Partial results are recorded in "What is verified, and how": beta 9 / code 10 is installed on
+the intended Pixel 10 Pro, with its exact APK hash/retained signer, non-debuggable metadata,
+install identity, notification grant and three owned shells preserved. Focused A90 Home/project/
+custom creation, cwd/input/history, restart/reconnect and exact End pass on beta 8/9; item 32 is
+Partial and the tally is 7 Pass / 21 Partial / 36 Pending. Relay/managed and cellular creation
+and A91's otherwise-empty-host variant remain open. The following historical beta-6 evidence uses Android 17 /
 API 37 and Vanadium WebView `154.0.8037.92.0`, with manual SSH key/pin authentication, 17 real
 projects listed and basic terminal input executed. The wrong
 MI8 installation and its newly authorized SSH key were removed. The terminal-sizing/history
@@ -1447,7 +1494,7 @@ later fix left to a device.
 
 1. For beta readiness, install two consecutive private betas using the same private signer and
    increasing version codes; pair on the first and update to the second without uninstalling, keeping
-   the pairing. After the hike, pair on current beta 8 / code 9 with desktop-issued JSON or QR,
+   the pairing. After the hike, pair on current beta 9 / code 10 with desktop-issued JSON or QR,
    then use a later same-signer higher-code update. Do not downgrade or uninstall the working app.
    Also check the committed-debug-key path separately with two CI debug APKs (artifact
    `nodeterm-android-debug`). Migrating from debug to private beta needs one deliberate uninstall
@@ -1613,13 +1660,15 @@ later fix left to a device.
     Claude permission prompt reaches the phone's Inbox as an approval. Managed Claude accounts are
     named by their label or email in the picker, the session row and the Usage card, never by an id.
     Repeat against a Windows desktop: the session starts in the project's folder under the chosen
-    account there too. Separately, on the intended Pixel's installed beta 8 / code 9
+    account there too. Separately, on the intended Pixel's installed beta 9 / code 10
     over manual SSH/WireGuard use Sessions → New terminal → project folder → Create, then create
     another in Home; also check a custom absolute folder. Confirm real shell cwd, input and history; disconnect/reopen and
     restart the app so both remain in Phone terminals; end only the owned session and confirm
     the other survives. Existing desktop sessions/project files/canvas stay unchanged. This
     does not verify relay registration, managed-agent launch or account selection.
-    *(A72, A33, A14, A39, A75, A90)*
+    On an otherwise empty SSH host, end the last owned phone shell: its row disappears after
+    refresh, while the host stays connected over SSH and New terminal remains available.
+    *(A72, A33, A14, A39, A75, A90, A91)*
 33. New session, then Back within a second of Start (before the launch line is typed), and once more
     by sending the app to the background right after Start: both times the node still appears on the
     canvas with its agent running, not a bare shell. *(A40)*
@@ -1878,16 +1927,18 @@ the wider relay action matrix remain device checks.
   Retained local files are retried when ownership changes, including restored unresolved Done
   cards. Android's actual producer/consumer interop is covered; the multi-desktop device case and
   iOS verification remain pending. Held approvals continue to use each hook's own `.answer` file.
-- **Explicit plain SSH creation is implemented; physical validation is pending (`A90`).** It uses `nodeterm-phone` and a
+- **Explicit plain SSH creation has focused Pixel proof (`A90`).** It uses `nodeterm-phone` and a
   separate Phone terminals group; it does not change canvas registration or managed-agent
-  creation. Host regressions/mutations and the beta-8/code-9 build pass; that APK is installed.
-  Actual creation/reopen/End under item 32 remains pending. Historical beta-6 proof and the
-  device ledger remain unchanged.
-- **An empty SSH host retains ended rows in installed beta 8 (`A91`).** The branch clears them
+  creation. Home/project/custom creation, cwd/input/history, restart/reconnect/update survival
+  and exact owned End pass on beta 8/9 without changing desktop sessions/files. Item 32 is Partial;
+  relay canvas/managed and cellular creation plus A91's empty-host variant remain pending.
+
+- **Empty-host stale rows are fixed in installed beta 9 (`A91`).** The branch clears them
   only on authoritative `NothingFoundException`, retaining cached rows on uncertain failures and
-  keeping the SSH route/error intact. Host regressions/mutations pass; beta 9 delivery and physical
+  keeping the SSH route/error intact. Host regressions/mutations and beta-9 delivery pass; physical
   last-shell End/empty-list/New-terminal verification remain pending. Broader device checks stay
-  deferred except the explicitly authorized A90 scope; no new physical tally is recorded yet.
+  deferred; the focused A90 proof promotes only item 32 to Partial, not this empty-host variant.
+
 - **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and canvas-registered new sessions
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over

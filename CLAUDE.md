@@ -5443,8 +5443,9 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      Cold-agent SSH refusal (`A08`) and relay canvas New session remain. This feature changes
      no current RPC/blob/pairing/mirror/file contract; mention **@eneskirca** for iOS adoption
      of the isolated socket and marker/metadata. Host regressions/build are verified in
-     beta 8 / code 9, now installed on the intended Pixel; physical feature checks remain pending,
-     so do not infer device readiness from the build or installation.
+     the beta-8 baseline; beta 9/code 10 is installed. Focused Pixel plain-SSH creation/history/
+     restart/update/reconnect/exact End pass (item 32 Partial); relay/managed, cellular creation,
+     A91 empty-host and the full device matrix remain pending. Do not infer full readiness.
      **Listing failures (`A91`)** clear the cached phone listing only for authoritative SSH
      `NothingFoundException`; other failures retain it and cancellation propagates. Preserve
      the route-specific error and connected SSH state on an empty host. This is client policy,

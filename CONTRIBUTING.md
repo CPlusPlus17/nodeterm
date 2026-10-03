@@ -130,8 +130,9 @@ applicable here":
    `nodeterm-rmt`; strip inherited `NODETERM_*` in a new phone pane. Cold-agent SSH refusal and
    relay canvas creation remain. No existing RPC/blob/pairing/mirror/file contract changes;
    flag isolated socket/creation-marker/metadata adoption for **@eneskirca** in iOS. Host regression
-   and build checks pass in beta 8 / code 9, now installed on the intended Pixel; physical feature
-   verification remains pending.
+   and build checks pass in the beta-8 baseline; beta 9 / code 10 is now installed on the intended
+   Pixel. Focused plain-SSH creation/history/restart/update/reconnect/exact End pass (item 32 Partial);
+   relay/managed, cellular creation, A91 empty-host and the full device matrix remain pending.
    Listing failures (`A91`) clear cached rows only for authoritative SSH `NothingFoundException`;
    other failures retain them and cancellation propagates. Preserve the route-specific error and
    connected SSH state on an empty host; this client policy changes no shared host contract.
