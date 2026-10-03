@@ -314,9 +314,12 @@ object TmuxNames {
      */
     const val REMOTE_SOCKET = "nodeterm-rmt"
 
+    /** Plain shells explicitly created by a phone; no desktop reaper or managed hook environment. */
+    const val PHONE_SOCKET = "nodeterm-phone"
+
     /** Every socket a session may be on, in the order a name on both is attributed (first wins, as
      *  the desktop's session-memory sweep does). Nothing else is ever spliced into `tmux -L`. */
-    val SOCKETS = listOf(SOCKET, REMOTE_SOCKET)
+    val SOCKETS = listOf(SOCKET, REMOTE_SOCKET, PHONE_SOCKET)
 
     fun sessionName(persistKey: String): String = "nt-" + persistKey.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 

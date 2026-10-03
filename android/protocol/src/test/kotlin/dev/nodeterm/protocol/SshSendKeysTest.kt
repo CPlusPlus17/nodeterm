@@ -72,7 +72,7 @@ class SshSendKeysTest {
     fun `literal answers Enter and Escape leave copy mode and use the resolved pane on either socket`() {
         assumeTrue(File("/bin/sh").canExecute())
         val keys = listOf("-R; quote's ${'$'}literal\nnext" to "-R; quote's ${'$'}literal\nnext", "\r" to "Enter", "\u001b" to "Escape")
-        for (socket in TmuxNames.SOCKETS) for (mode in listOf(0, 1)) for ((input, expected) in keys) {
+        for (socket in listOf(TmuxNames.SOCKET, TmuxNames.REMOTE_SOCKET)) for (mode in listOf(0, 1)) for ((input, expected) in keys) {
             val home = Files.createTempDirectory("nt-send-").toFile()
             try {
                 val env = fakeTmux(home, socket, mode)
@@ -133,7 +133,7 @@ class SshSendKeysTest {
         fun tmux(socket: String, vararg args: String) = run(listOf("tmux", "-L", socket) + args, home, env)
         val reader = "while IFS= read -r line; do printf '%s\\n' \"${'$'}line\" >> \"${'$'}HOME/received\"; done"
         try {
-            for (socket in TmuxNames.SOCKETS) {
+            for (socket in listOf(TmuxNames.SOCKET, TmuxNames.REMOTE_SOCKET)) {
                 for (name in listOf("nt-answer", "nt-answer-longer")) {
                     val (code, out) = tmux(socket, "-f", "/dev/null", "new-session", "-d", "-s", name, "/bin/sh -c " + SshScripts.q(reader))
                     assertEquals(0, code, out)

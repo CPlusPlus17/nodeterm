@@ -266,6 +266,20 @@ class RelayInteropTest {
     }
 
     @Test
+    fun `phone terminal route fallback refuses before creating any desktop session`() = runBlocking<Unit> {
+        val h = start()
+        connect(h).connection.use { conn ->
+            val e = assertFailsWith<HostException> {
+                conn.attach("phone-12345678-1234-1234-1234-123456789abc", 80, 24, RecordingSink())
+            }
+            assertTrue(e.message!!.contains("SSH"))
+            // Flush the fixture via a real later RPC, then inspect its application event stream.
+            conn.listProjects()
+            assertFailsWith<AssertionError> { h.awaitEvent("attach", 250) }
+        }
+    }
+
+    @Test
     fun `attach paints the snapshot, streams output and carries input`() = runBlocking<Unit> {
         val h = start()
         val conn = connect(h).connection
@@ -831,4 +845,3 @@ class RelayInteropTest {
         }
     }
 }
-

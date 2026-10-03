@@ -73,7 +73,9 @@ object HostBrowse {
          * only while the desktop's phone host is registered at the relay; audit A26), or null when
          * the meta block did not say.
          */
-        val relayAdvertised: Boolean? = null
+        val relayAdvertised: Boolean? = null,
+        /** Plain shells with validated atomic ownership metadata on the independent phone socket. */
+        val phoneTerminals: List<PhoneTerminals.Entry> = emptyList()
     ) {
         /**
          * Nothing of nodeterm's was found as of [now]: no data dir, no session a desktop runs here, and
@@ -86,7 +88,7 @@ object HostBrowse {
          * (the review of A27a).
          */
         fun nothingFound(now: Long): Boolean =
-            metaSeen && userData == null && rmtSessions.isEmpty() && freshSlices(this, now).isEmpty()
+            metaSeen && userData == null && rmtSessions.isEmpty() && phoneTerminals.isEmpty() && freshSlices(this, now).isEmpty()
     }
 
     /** Split [SshScripts.browse]'s output into its sections. Every section is best-effort. */
@@ -105,6 +107,7 @@ object HostBrowse {
         val rmt = ArrayList<String>()
         val slices = ArrayList<Pair<String, String>>()
         val files = ArrayList<Pair<String, String>>()
+        val phone = ArrayList<PhoneTerminals.Entry>()
         var section: String? = null // null = the blob; "rmt"; "slice"; "file"; "end"
         var key = ""
         val body = StringBuilder()
@@ -118,16 +121,18 @@ object HostBrowse {
         for (line in rest.split('\n')) {
             when {
                 line == SshScripts.RMT_MARK -> { close(); section = "rmt" }
+                line == SshScripts.PHONE_MARK -> { close(); section = "phone" }
                 line.startsWith(SshScripts.SLICE_MARK) -> { close(); section = "slice"; key = line.removePrefix(SshScripts.SLICE_MARK) }
                 line.startsWith(SshScripts.PROJECT_FILE_MARK) -> { close(); section = "file"; key = line.removePrefix(SshScripts.PROJECT_FILE_MARK) }
                 line == SshScripts.END_MARK -> { close(); section = "end" }
                 section == null -> blob.append(line).append('\n')
                 section == "rmt" -> line.trim().takeIf(TmuxNames::isSessionName)?.let(rmt::add)
+                section == "phone" -> PhoneTerminals.parse(line)?.let(phone::add)
                 section == "slice" || section == "file" -> body.append(line).append('\n')
             }
         }
         close()
-        return Output(metaEnd >= 0, ud, blob.toString(), rmt.distinct(), slices, files, relay)
+        return Output(metaEnd >= 0, ud, blob.toString(), rmt.distinct(), slices, files, relay, phone.distinctBy { it.id })
     }
 
     /**
@@ -207,9 +212,19 @@ object HostBrowse {
             )
         }
 
+        // These plain shells belong to the phone, not either desktop's canvas. Their cwd is shown
+        // on the node; grouping never edits a shared project.json or invents managed agent status.
+        val phone = out.phoneTerminals.filter { it.id !in claimed && TmuxNames.sessionName(it.id) !in sockets }
+        for (entry in phone) sockets[TmuxNames.sessionName(entry.id)] = TmuxNames.PHONE_SOCKET
+        val phoneProjects = if (phone.isEmpty()) emptyList() else listOf(ProjectInfo(
+            id = PhoneTerminals.PROJECT_ID, name = PhoneTerminals.PROJECT_NAME, color = null,
+            cwd = null, sshTarget = null, closed = false, board = null,
+            nodes = phone.map { bareNode(it.id, null).copy(title = "Terminal", cwd = it.cwd) }
+        ))
+
         return base.copy(
-            projects = base.projects + driven,
-            liveSessions = base.liveSessions + rmtOnly,
+            projects = base.projects + driven + phoneProjects,
+            liveSessions = base.liveSessions + rmtOnly + phone.map { TmuxNames.sessionName(it.id) },
             status = mergeStatus(base.status, fresh.values.sortedByDescending { it.updatedAt }),
             sockets = sockets
         )

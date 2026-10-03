@@ -19,6 +19,7 @@ import dev.nodeterm.protocol.relay.RelaySocketListener
 import dev.nodeterm.protocol.relay.RpcException
 import dev.nodeterm.protocol.relay.SnapshotReassembler
 import dev.nodeterm.protocol.ssh.LanReport
+import dev.nodeterm.protocol.ssh.PhoneTerminals
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
@@ -152,8 +153,11 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         return ProjectsParser.parseBlob(body.s("output") ?: "").copy(lan = LanReport.parse(body["lan"]))
     }
 
-    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream =
-        suspendCancellableCoroutine { cont ->
+    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream {
+        // The relay creates an unknown id on the desktop socket. Phone-owned shells never live
+        // there: even reconnect/route fallback must fail before sending a creating RPC.
+        if (PhoneTerminals.validId(nodeId)) throw HostException("This phone terminal opens over SSH. Choose your network route to reopen it.")
+        return suspendCancellableCoroutine { cont ->
             val params = buildJsonObject {
                 put("nodeId", nodeId)
                 put("cols", cols)
@@ -188,6 +192,7 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
                 )
             }
         }
+    }
 
     override suspend fun wake(nodeId: String) {
         call("node.wake", buildJsonObject { put("nodeId", nodeId) })

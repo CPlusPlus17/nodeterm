@@ -39,6 +39,7 @@ object SshScripts {
     const val RMT_MARK = "##NT-RMT"
     const val SLICE_MARK = "##NT-SLICE "
     const val PROJECT_FILE_MARK = "##NT-PROJFILE "
+    const val PHONE_MARK = "##NT-PHONE"
     const val END_MARK = "##NT-END"
 
     /** Bounds on what [browse] walks for project files: directories per session path, and files. */
@@ -49,6 +50,7 @@ object SshScripts {
     fun q(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
     private val PRELUDE = """
+        unset TMUX TMUX_PANE
         PATH="${'$'}PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:${'$'}HOME/.local/bin"; export PATH
         NT_TMUX=${'$'}(command -v tmux 2>/dev/null)
         if [ -z "${'$'}NT_TMUX" ]; then
@@ -66,6 +68,35 @@ object SshScripts {
             if [ -f "${'$'}d/workspace.json" ] || [ -f "${'$'}d/agent-status.json" ] || [ -f "${'$'}d/install-meta.json" ]; then NT_UD="${'$'}d"; break; fi
           done
         fi
+    """.trimIndent()
+
+    /** Validate atomic ownership metadata, including sessions with interrupted option setup. */
+    private val PHONE_GUARD = """
+        nt_phone_owned() {
+          nt_name=${'$'}1
+          nt_id_env=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} show-environment -t "=${'$'}nt_name" ${PhoneTerminals.ID_ENV} 2>/dev/null) || return 1
+          nt_id=${'$'}{nt_id_env#${PhoneTerminals.ID_ENV}=}
+          [ "${'$'}nt_name" = "nt-${'$'}nt_id" ] || return 1
+          case "${'$'}nt_id" in phone-????????-????-????-????-????????????) ;; *) return 1 ;; esac
+          case "${'$'}{nt_id#phone-}" in *[!0-9a-f-]*) return 1 ;; esac
+          nt_marker=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} show-environment -t "=${'$'}nt_name" ${PhoneTerminals.CREATION_ENV} 2>/dev/null) || return 1
+          nt_creation=${'$'}{nt_marker#${PhoneTerminals.CREATION_ENV}=}
+          [ ${'$'}{#nt_creation} -eq 64 ] || return 1
+          case "${'$'}nt_creation" in *[!0-9a-f]*) return 1 ;; esac
+          nt_cwd_env=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} show-environment -t "=${'$'}nt_name" ${PhoneTerminals.CWD_ENV} 2>/dev/null) || return 1
+          nt_cwd=${'$'}{nt_cwd_env#${PhoneTerminals.CWD_ENV}=}
+          case "${'$'}nt_cwd" in /*) ;; *) return 1 ;; esac
+          nt_request_env=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} show-environment -t "=${'$'}nt_name" ${PhoneTerminals.REQUEST_ENV} 2>/dev/null) || return 1
+          nt_request=${'$'}{nt_request_env#${PhoneTerminals.REQUEST_ENV}=}
+          [ "${'$'}nt_request" = HOME ] || [ "${'$'}nt_request" = "${'$'}nt_cwd" ] || return 1
+          nt_options=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} display-message -p -t "=${'$'}nt_name:" '#{${PhoneTerminals.ID_OPTION}}|#{${PhoneTerminals.CREATION_OPTION}}|#{${PhoneTerminals.CWD_OPTION}}' 2>/dev/null) || return 1
+          nt_opt_id=${'$'}{nt_options%%|*}; nt_options=${'$'}{nt_options#*|}
+          nt_opt_creation=${'$'}{nt_options%%|*}; nt_opt_cwd=${'$'}{nt_options#*|}
+          [ -z "${'$'}nt_opt_id" ] || [ "${'$'}nt_opt_id" = "${'$'}nt_id" ] || return 1
+          [ -z "${'$'}nt_opt_creation" ] || [ "${'$'}nt_opt_creation" = "${'$'}nt_creation" ] || return 1
+          [ -z "${'$'}nt_opt_cwd" ] || [ "${'$'}nt_opt_cwd" = "${'$'}nt_cwd" ] || return 1
+          return 0
+        }
     """.trimIndent()
 
     /**
@@ -164,6 +195,17 @@ object SshScripts {
           cat "${'$'}d/.nodeterm/project.json" 2>/dev/null
         done
         unset IFS; set +f
+        printf '\n%s\n' '$PHONE_MARK'
+        if [ -n "${'$'}NT_TMUX" ]; then
+          $PHONE_GUARD
+          NT_PHONE=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} list-sessions -F '#{session_name}' 2>/dev/null)
+          set -f; IFS=${'$'}NT_NL
+          for n in ${'$'}NT_PHONE; do
+            nt_phone_owned "${'$'}n" || continue
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${'$'}n" "${'$'}nt_id" "${'$'}nt_creation" "${'$'}nt_cwd" "${'$'}nt_creation" "${'$'}nt_request"
+          done
+          unset IFS; set +f
+        fi
         printf '\n%s\n' '$END_MARK'
         exit 0
     """.trimIndent()
@@ -182,13 +224,20 @@ object SshScripts {
      * has it, in [TmuxNames.SOCKETS] order — the attribution [browse]'s listing makes), or nothing
      * when neither does or there is no tmux.
      */
-    fun whichSocket(nodeId: String): String {
+    fun whichSocket(nodeId: String, phoneCreation: String? = null): String {
         val target = q("=" + target(nodeId))
         return """
             $PRELUDE
+            $PHONE_GUARD
             [ -n "${'$'}NT_TMUX" ] || exit 0
-            for s in ${TmuxNames.SOCKETS.joinToString(" ")}; do
-              if "${'$'}NT_TMUX" -L "${'$'}s" has-session -t $target 2>/dev/null; then printf '%s\n' "${'$'}s"; exit 0; fi
+            for s in ${if (PhoneTerminals.validId(nodeId)) TmuxNames.PHONE_SOCKET else TmuxNames.SOCKETS.joinToString(" ")}; do
+              if "${'$'}NT_TMUX" -L "${'$'}s" has-session -t $target 2>/dev/null; then
+                if [ "${'$'}s" = ${TmuxNames.PHONE_SOCKET} ]; then
+                  nt_phone_owned ${q(target(nodeId))} || continue
+                  [ "${'$'}nt_creation" = ${q(phoneCreation ?: "")} ] || continue
+                fi
+                printf '%s\n' "${'$'}s"; exit 0
+              fi
             done
             exit 0
         """.trimIndent()
@@ -207,13 +256,17 @@ object SshScripts {
      * there also gets its remote tmux.conf (`-f`) and the hook/account `-e` env, none of which the
      * phone has.
      */
-    fun attach(nodeId: String, socket: String): String {
+    fun attach(nodeId: String, socket: String, phoneCreation: String? = null): String {
         val target = target(nodeId)
         val s = socket(socket)
         return """
             $PRELUDE
+            $PHONE_GUARD
             if [ -z "${'$'}NT_TMUX" ]; then echo 'nodeterm: tmux was not found on this computer.' >&2; exit 127; fi
             "${'$'}NT_TMUX" -L $s has-session -t ${q("=$target")} 2>/dev/null || exit $NO_SESSION_EXIT
+            ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(target)} || exit $NO_SESSION_EXIT" else ""}
+            ${phonePin(socket, phoneCreation)}
+            ${if (socket == TmuxNames.PHONE_SOCKET) "\"${'$'}NT_TMUX\" -L $s set-option -t ${q("=$target:")} mouse on \\; set-option -t ${q("=$target:")} status off \\; set-option -t ${q("=$target:")} destroy-unattached off || exit 1" else ""}
             TERM=xterm-256color; export TERM
             $LOCALE
             exec "${'$'}NT_TMUX" -u -L $s attach-session -t ${q("=$target")}
@@ -223,11 +276,78 @@ object SshScripts {
     /** [attach]'s exit status when the node's session is not running. */
     const val NO_SESSION_EXIT = 3
 
-    fun killSession(nodeId: String, socket: String): String {
+    /** Explicit creation of a plain phone shell; attach never creates or resumes an agent. */
+    fun createTerminal(nodeId: String, cwd: String?): String {
+        val fingerprint = PhoneTerminals.fingerprint(nodeId, cwd)
+        val target = q("=" + target(nodeId))
+        val paneTarget = q("=" + target(nodeId) + ":")
+        val bootstrap = """
+            for nt_var in ${'$'}(env | sed -n 's/^\(NODETERM_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "${'$'}nt_var"; done
+            unset CLAUDE_CONFIG_DIR CODEX_HOME
+            TERM=xterm-256color; export TERM
+            # Normalize stale non-UTF-8 overrides from a warm phone server, preserving UTF-8 ones.
+            case "${'$'}{LC_ALL:-}" in ''|*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;; *) unset LC_ALL ;; esac
+            case "${'$'}{LC_CTYPE:-}" in ''|*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;; *) unset LC_CTYPE ;; esac
+            $LOCALE
+            nt_shell=${'$'}{SHELL:-/bin/sh}
+            case "${'$'}nt_shell" in /*) ;; *) nt_shell=/bin/sh ;; esac
+            [ -x "${'$'}nt_shell" ] || nt_shell=/bin/sh
+            exec "${'$'}nt_shell"
+        """.trimIndent()
+        return """
+            $PRELUDE
+            [ -n "${'$'}NT_TMUX" ] || { echo 'nodeterm: tmux was not found on this computer.'; exit 127; }
+            nt_cwd=${cwd?.let(::q) ?: "\"${'$'}HOME\""}
+            case "${'$'}nt_cwd" in /*) ;; *) echo 'nodeterm: Choose an absolute folder.'; exit 2 ;; esac
+            for s in ${TmuxNames.SOCKET} ${TmuxNames.REMOTE_SOCKET}; do
+              if "${'$'}NT_TMUX" -L "${'$'}s" has-session -t $target 2>/dev/null; then echo 'nodeterm: This terminal id is already in use.'; exit 2; fi
+            done
+            if ! "${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} has-session -t $target 2>/dev/null; then
+              [ -d "${'$'}nt_cwd" ] && [ -x "${'$'}nt_cwd" ] || { echo 'nodeterm: That folder no longer exists or cannot be opened.'; exit 2; }
+              # Marker creation is atomic with the session, including after a lost SSH reply.
+              TERM=xterm-256color; export TERM
+              $LOCALE
+              "${'$'}NT_TMUX" -u -L ${TmuxNames.PHONE_SOCKET} -f /dev/null start-server \
+                \; set-option -g history-limit 50000 \
+                \; new-session -d -s ${q(target(nodeId))} -c "${'$'}nt_cwd" \
+                -e ${q(PhoneTerminals.CREATION_ENV + "=" + fingerprint)} \
+                -e ${q(PhoneTerminals.ID_ENV + "=" + nodeId)} \
+                -e "${PhoneTerminals.CWD_ENV}=${'$'}nt_cwd" \
+                -e ${q(PhoneTerminals.REQUEST_ENV + "=" + (cwd ?: "HOME"))} ${q("/bin/sh -c " + q(bootstrap))} >/dev/null 2>&1 || {
+                  "${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} has-session -t $target 2>/dev/null || { echo 'nodeterm: Could not create the terminal.'; exit 1; }
+                }
+            fi
+            nt_marker=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} show-environment -t $target ${PhoneTerminals.CREATION_ENV} 2>/dev/null) || { echo 'nodeterm: This terminal id belongs to another session.'; exit 2; }
+            [ "${'$'}nt_marker" = ${q(PhoneTerminals.CREATION_ENV + "=" + fingerprint)} ] || { echo 'nodeterm: This terminal id belongs to another session.'; exit 2; }
+            $PHONE_GUARD
+            nt_phone_owned ${q(target(nodeId))} || { echo 'nodeterm: This terminal id belongs to another session.'; exit 2; }
+            nt_previous=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} display-message -p -t ${q("=" + target(nodeId) + ":")} '#{${PhoneTerminals.CREATION_OPTION}}' 2>/dev/null) || exit 2
+            [ -z "${'$'}nt_previous" ] || [ "${'$'}nt_previous" = '$fingerprint' ] || { echo 'nodeterm: This terminal id belongs to another session.'; exit 2; }
+            nt_previous_id=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} display-message -p -t $paneTarget '#{${PhoneTerminals.ID_OPTION}}' 2>/dev/null) || exit 2
+            [ -z "${'$'}nt_previous_id" ] || [ "${'$'}nt_previous_id" = ${q(nodeId)} ] || { echo 'nodeterm: This terminal id belongs to another session.'; exit 2; }
+            # A retry reconciles the existing shell even if its original directory was renamed.
+            nt_previous_cwd=${'$'}("${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} display-message -p -t $paneTarget '#{${PhoneTerminals.CWD_OPTION}}' 2>/dev/null) || exit 2
+            if [ -n "${'$'}nt_previous_cwd" ]; then nt_cwd=${'$'}nt_previous_cwd; fi
+            # All writes address exactly this creation's session; no canvas or shared project file.
+            "${'$'}NT_TMUX" -L ${TmuxNames.PHONE_SOCKET} set-option -t $paneTarget ${PhoneTerminals.ID_OPTION} ${q(nodeId)} \
+              \; set-option -t $paneTarget ${PhoneTerminals.CREATION_OPTION} '$fingerprint' \
+              \; set-option -t $paneTarget ${PhoneTerminals.CWD_OPTION} "${'$'}nt_cwd" \
+              \; set-option -t $paneTarget mouse on \
+              \; set-option -t $paneTarget status off \
+              \; set-option -t $paneTarget destroy-unattached off \
+              \; set-option -w -t $paneTarget history-limit 50000 || { echo 'nodeterm: Could not prepare the terminal.'; exit 1; }
+            echo 'created'
+        """.trimIndent()
+    }
+
+    fun killSession(nodeId: String, socket: String, phoneCreation: String? = null): String {
         val target = target(nodeId)
         return """
             $PRELUDE
+            $PHONE_GUARD
             [ -n "${'$'}NT_TMUX" ] || exit 127
+            ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(target)} || exit 2" else ""}
+            ${phonePin(socket, phoneCreation)}
             "${'$'}NT_TMUX" -L ${socket(socket)} kill-session -t ${q("=$target")}
         """.trimIndent()
     }
@@ -237,12 +357,15 @@ object SshScripts {
      * (`PtyManager.paneCommand`) before it types a resume line. Prints nothing when there is no tmux
      * or no such session.
      */
-    fun paneCommand(nodeId: String, socket: String): String {
+    fun paneCommand(nodeId: String, socket: String, phoneCreation: String? = null): String {
         // A PANE target, like [sendKeys]: the exact-session form for a pane command is `=name:`.
         val pane = q("=" + target(nodeId) + ":")
         return """
             $PRELUDE
+            $PHONE_GUARD
             [ -n "${'$'}NT_TMUX" ] || exit 127
+            ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(target(nodeId))} || exit 2" else ""}
+            ${phonePin(socket, phoneCreation)}
             "${'$'}NT_TMUX" -L ${socket(socket)} display-message -p -t $pane '#{pane_current_command}'
         """.trimIndent()
     }
@@ -253,7 +376,7 @@ object SshScripts {
      * Resolve the exact session's pane once and leave copy mode before typing: tmux otherwise
      * accepts the keys into copy mode and exits successfully without delivering the answer.
      */
-    fun sendKeys(nodeId: String, keys: String, socket: String): String {
+    fun sendKeys(nodeId: String, keys: String, socket: String, phoneCreation: String? = null): String {
         // A PANE target: `=name` alone is refused ("can't find pane", measured on tmux 3.4); the
         // exact-session form for a pane command is `=name:` — the session's current window/pane.
         val pane = q("=" + target(nodeId) + ":")
@@ -265,7 +388,10 @@ object SshScripts {
         }
         return """
             $PRELUDE
+            $PHONE_GUARD
             [ -n "${'$'}NT_TMUX" ] || exit 127
+            ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(target(nodeId))} || exit 2" else ""}
+            ${phonePin(socket, phoneCreation)}
             NT_STATE=${'$'}("${'$'}NT_TMUX" -L $s display-message -p -t $pane '#{pane_id} #{pane_in_mode}') || exit ${'$'}?
             NT_PANE=${'$'}{NT_STATE% *}
             case "${'$'}NT_PANE" in %*) ;; *) exit 1 ;; esac
@@ -311,11 +437,14 @@ object SshScripts {
 
     val PENDING_ID = Regex("^[A-Za-z0-9_-]{1,160}$")
 
-    /** A socket name is spliced into `tmux -L`, so only the two this app knows ever are. */
+    /** A socket name is spliced into `tmux -L`, so accept only the app's known sockets. */
     private fun socket(name: String): String {
         require(name in TmuxNames.SOCKETS) { "unknown tmux socket" }
         return name
     }
+
+    private fun phonePin(socket: String, creation: String?): String =
+        if (socket == TmuxNames.PHONE_SOCKET) "[ \"${'$'}nt_creation\" = ${q(creation ?: "")} ] || exit 2" else ""
 
     private fun target(nodeId: String): String {
         val t = TmuxNames.sessionName(nodeId)

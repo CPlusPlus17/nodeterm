@@ -248,7 +248,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
         // What a desktop that drives this computer over SSH left here, next to the host's own (A27).
         val snapshot = HostBrowse.assemble(own, out, now)
-        remember(snapshot)
+        remember(snapshot, out.phoneTerminals.associate { it.id to it.creation })
         return snapshot
     }
 
@@ -303,6 +303,27 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
     }
 
+    /**
+     * Explicitly start one independent plain shell, with no managed agent hook/account state.
+     * A lost/cancelled reply may leave the shell running: retry the SAME id and folder to reconcile
+     * it. Neither cancellation nor a viewer detach kills a successfully created terminal.
+     */
+    suspend fun createTerminal(nodeId: String, cwd: String? = null): Unit = withContext(Dispatchers.IO) {
+        val script = SshScripts.createTerminal(nodeId, cwd)
+        val (code, out) = run(script)
+        if (code != 0 || out.trim() != "created") {
+            val message = out.trim().takeIf { it.startsWith("nodeterm:") }
+                ?: "Couldn't create the terminal over SSH (exit ${code ?: "unknown"}). Retry the same terminal."
+            if (code == 2 && out.trim() in setOf(
+                    "nodeterm: Choose an absolute folder.",
+                    "nodeterm: That folder no longer exists or cannot be opened.",
+                    "nodeterm: This terminal id is already in use.",
+                    "nodeterm: This terminal id belongs to another session."
+                )) throw SshTerminalCreationRefusedException(message)
+            throw HostException(message)
+        }
+    }
+
     override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream {
         // The blocking open finishes even when the caller is cancelled meanwhile, and withContext
         // then drops its result: a tmux client attached for the life of the connection, which
@@ -312,15 +333,16 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             return withContext(Dispatchers.IO) {
                 ensureListed()
                 refuseRemoteNode(nodeId)
+                val phoneCreation = if (PhoneTerminals.validId(nodeId)) ownedPhoneCreation(nodeId) else null
                 // Where the session is NOW, on either socket (A27): one exec that is also the
                 // existence check, so a session listed on one socket is never attached on the other.
-                val socket = run(SshScripts.whichSocket(nodeId)).second.trim().takeIf { it in TmuxNames.SOCKETS }
+                val socket = run(SshScripts.whichSocket(nodeId, phoneCreation)).second.trim().takeIf { it in TmuxNames.SOCKETS }
                     ?: throw notRunning(nodeId)
                 val session = client.startSession()
                 try {
                     session.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
-                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId, socket)))
-                    SshStream(session, cmd, fresh = false, sink = sink).also {
+                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId, socket, phoneCreation)))
+                    SshStream(session, cmd, fresh = false, sink = sink, nodeId = nodeId, socket = socket).also {
                         opened = it
                         it.start()
                     }
@@ -356,18 +378,28 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * as the computer's own sessions ([notRunning]).
      */
     @Volatile private var ownNodes: Set<String> = emptySet()
+    /** Fingerprints validated from the atomic creation tuple, pinned before each phone action. */
+    @Volatile private var phoneOwners: Map<String, String> = emptyMap()
 
     /** Whether a browse has answered on THIS connection ([ensureListed]). */
     @Volatile private var listed = false
     private val listLock = Any()
 
-    private fun remember(snapshot: ProjectsSnapshot) {
+    private fun remember(snapshot: ProjectsSnapshot, phone: Map<String, String> = emptyMap()) {
         rememberRemoteNodes(snapshot)
         sockets = snapshot.sockets
         drivenNodes = snapshot.projects.filter { it.drivenRemotely }.flatMapTo(HashSet()) { p -> p.nodes.map { it.id } }
         ownNodes = snapshot.projects.filter { !it.drivenRemotely && it.sshTarget == null }
             .flatMapTo(HashSet()) { p -> p.nodes.map { it.id } }
+        phoneOwners = phone
         listed = true
+    }
+
+    private fun ownedPhoneCreation(nodeId: String): String {
+        phoneOwners[nodeId]?.let { return it }
+        // A create may have followed this connection's last browse; discover it once before acting.
+        try { browseNow() } catch (_: NothingFoundException) { /* no phone terminal is an answer */ }
+        return phoneOwners[nodeId] ?: throw notRunning(nodeId)
     }
 
     /**
@@ -399,6 +431,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * would be on — where the command then fails as "no such session", which is the truth.
      */
     private fun socketFor(nodeId: String): String {
+        if (PhoneTerminals.validId(nodeId)) return TmuxNames.PHONE_SOCKET
         sockets[TmuxNames.sessionName(nodeId)]?.let { return it }
         run(SshScripts.whichSocket(nodeId)).second.trim().takeIf { it in TmuxNames.SOCKETS }?.let { return it }
         return if (nodeId in drivenNodes) TmuxNames.REMOTE_SOCKET else TmuxNames.SOCKET
@@ -411,6 +444,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * create a phantom local session and offer to resume the agent on the wrong machine.
      */
     private fun refuseRemoteNode(nodeId: String) {
+        if (PhoneTerminals.validId(nodeId)) return // never route a reserved phone id to a creating relay
         val where = remoteNodes[nodeId] ?: return
         throw NeedsRelayException(
             nodeId,
@@ -428,10 +462,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * it does not find). That covers a driven project's node, and a node no listing names at all: a
      * driven project no longer listed (its desktop quit and its sessions ended), a deleted node.
      */
-    private fun notRunning(nodeId: String): Exception = when (nodeId) {
+    private fun notRunning(nodeId: String): Exception = when {
+        PhoneTerminals.validId(nodeId) -> HostException("This phone terminal has ended or is no longer owned by the phone. Start a new terminal over SSH.")
         // Its desktop is not the one behind this connection's relay: there is nothing to offer.
-        in drivenNodes -> HostException(DRIVEN_NOT_RUNNING)
-        in ownNodes -> NeedsRelayException(
+        nodeId in drivenNodes -> HostException(DRIVEN_NOT_RUNNING)
+        nodeId in ownNodes -> NeedsRelayException(
             nodeId,
             "This session isn't running on the computer right now. Starting it over your network would leave it " +
                 "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer).",
@@ -463,7 +498,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         private val session: Session,
         private val cmd: Session.Command,
         override val fresh: Boolean,
-        private val sink: TerminalSink
+        private val sink: TerminalSink,
+        private val nodeId: String,
+        private val socket: String
     ) : TerminalStream {
         private val stdin: OutputStream = cmd.outputStream
         private val io: ExecutorService = Executors.newSingleThreadExecutor { r ->
@@ -551,7 +588,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
 
         override suspend fun endSession() {
-            throw HostException("Ending a session needs the relay connection (it also removes the node from the canvas).")
+            if (socket != TmuxNames.PHONE_SOCKET) {
+                throw HostException("Ending a session needs the relay connection (it also removes the node from the canvas).")
+            }
+            killSession(nodeId)
+            detach()
         }
     }
 
@@ -618,7 +659,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         withContext(Dispatchers.IO) {
             ensureListed()
             refuseRemoteNode(nodeId)
-            val (code, _) = run(SshScripts.sendKeys(nodeId, keys, socketFor(nodeId)))
+            val creation = if (PhoneTerminals.validId(nodeId)) ownedPhoneCreation(nodeId) else null
+            val (code, _) = run(SshScripts.sendKeys(nodeId, keys, socketFor(nodeId), creation))
             if (code != 0) throw HostException("Couldn't type into the session (tmux exited ${code ?: "without a status"}).")
         }
     }
@@ -628,7 +670,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             ensureListed()
             // A remote node's pane is on ITS host; this computer's tmux has nothing to say about it.
             if (remoteNodes.containsKey(nodeId)) return@withContext null
-            val (code, out) = run(SshScripts.paneCommand(nodeId, socketFor(nodeId)))
+            val creation = if (PhoneTerminals.validId(nodeId)) ownedPhoneCreation(nodeId) else null
+            val (code, out) = run(SshScripts.paneCommand(nodeId, socketFor(nodeId), creation))
             out.trim().takeIf { code == 0 && it.isNotEmpty() && '\n' !in it }
         } catch (e: HostException) {
             null // the transport dropped; `run` has already reported it through onClosed
@@ -641,7 +684,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     suspend fun killSession(nodeId: String) = withContext(Dispatchers.IO) {
         ensureListed()
         refuseRemoteNode(nodeId)
-        run(SshScripts.killSession(nodeId, socketFor(nodeId)))
+        val creation = if (PhoneTerminals.validId(nodeId)) ownedPhoneCreation(nodeId) else null
+        val (code, _) = run(SshScripts.killSession(nodeId, socketFor(nodeId), creation))
+        if (code != 0) throw HostException("Couldn't end the session (tmux exited ${code ?: "without a status"}).")
     }
 
     /** `~/.nodeterm/relay.json`, when the computer advertises its relay identity (late adoption). */

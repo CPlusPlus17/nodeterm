@@ -14,6 +14,7 @@ import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.NewSessionChoice
 import dev.nodeterm.protocol.model.Pane
+import dev.nodeterm.protocol.model.TmuxNames
 import dev.nodeterm.protocol.pairing.SshIdentity
 import dev.nodeterm.protocol.ssh.HostBrowse
 import dev.nodeterm.protocol.ssh.HostKeyChangedException
@@ -22,6 +23,8 @@ import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import dev.nodeterm.protocol.ssh.SshScripts
+import dev.nodeterm.protocol.ssh.PhoneTerminals
+import dev.nodeterm.protocol.ssh.SshTerminalCreationRefusedException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -200,6 +203,7 @@ class SshTransportTest {
         if (!::server.isInitialized) return
         runCatching { tmux("kill-server") }
         runCatching { stopRmtServer() }
+        runCatching { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
         server.stop(true)
         root.deleteRecursively()
     }
@@ -625,6 +629,266 @@ class SshTransportTest {
         assertTrue(System.currentTimeMillis() - t0 < 10_000, "the deadline bounded the call")
         assertTrue(closed.await(5, TimeUnit.SECONDS), "the drop was reported, so the owner can fall back")
         conn.close()
+    }
+
+    @Test
+    fun `phone terminal creates at home with no desktop data, browses, reattaches and ends independently`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        try {
+            withoutOwnData {
+                runBlocking {
+                    connect().use { conn ->
+                        assertFailsWith<NothingFoundException> { conn.listProjects() }
+                        conn.createTerminal(id)
+                        val snap = conn.listProjects()
+                        val p = snap.projects.single { it.id == PhoneTerminals.PROJECT_ID }
+                        assertEquals(home.path, p.nodes.single().cwd)
+                        assertEquals(TmuxNames.PHONE_SOCKET, snap.socketOf(id))
+                        assertTrue(snap.isLive(id))
+                        val sink = Sink()
+                        val stream = conn.attach(id, 52, 12, sink)
+                        assertFalse(stream.fresh, "explicit creation does not invoke cold-agent launch")
+                        stream.write("printf 'phone_%s\\n' home\r")
+                        sink.waitFor("phone_home")
+                        stream.detach()
+                        assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "has-session", "-t", "=nt-$id").first)
+                    }
+                    connect().use { conn ->
+                        val snap = conn.listProjects()
+                        assertEquals(home.path, snap.findNode(id)!!.second.cwd)
+                        val stream = conn.attach(id, 56, 25, Sink())
+                        stream.endSession()
+                        assertFailsWith<NothingFoundException> { conn.listProjects() }
+                        val ended = assertFailsWith<HostException> { conn.attach(id, 80, 24, Sink()) }
+                        assertFalse(ended is NeedsRelayException)
+                        assertEquals(0, tmux("has-session", "-t", "=nt-term-a-1").first, "other sockets are untouched")
+                    }
+                }
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
+    }
+
+    @Test
+    fun `phone terminal quotes hostile folder names and retries the same creation without respawning`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        val folder = File(root, "it's a \$(touch phone-injected) folder").apply { mkdirs() }
+        try {
+            connect().use { conn ->
+                conn.createTerminal(id, folder.path)
+                val target = "=nt-$id:"
+                val pid = tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_pid}").second.trim()
+                conn.createTerminal(id, folder.path)
+                assertEquals(pid, tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_pid}").second.trim())
+                assertEquals(folder.path, conn.listProjects().findNode(id)!!.second.cwd)
+                assertFalse(File(root, "phone-injected").exists())
+                assertFailsWith<SshTerminalCreationRefusedException> { conn.createTerminal(id, home.path) }
+                assertEquals(folder.path, conn.listProjects().findNode(id)!!.second.cwd)
+                assertFailsWith<SshTerminalCreationRefusedException> { conn.createTerminal("phone-" + java.util.UUID.randomUUID(), File(root, "gone").path) }
+                val renamed = File(root, "renamed-phone-folder")
+                assertTrue(folder.renameTo(renamed))
+                try {
+                    conn.createTerminal(id, folder.path)
+                    assertEquals(pid, tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_pid}").second.trim())
+                    assertEquals(folder.path, conn.listProjects().findNode(id)!!.second.cwd, "retry retains original metadata after directory rename")
+                } finally { assertTrue(renamed.renameTo(folder)) }
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server"); folder.deleteRecursively() }
+    }
+
+    @Test
+    fun `phone terminal uses driven project folder without changing its canvas or cold-agent refusal`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        try {
+            layOutDrivenHost(System.currentTimeMillis())
+            val file = File(remoteRepo, ".nodeterm/project.json")
+            val before = file.readBytes()
+            withoutOwnData {
+                runBlocking {
+                    connect().use { conn ->
+                        val driven = conn.listProjects().projects.first { it.id == "project-drv" }
+                        assertTrue(driven.drivenRemotely)
+                        conn.createTerminal(id, driven.cwd)
+                        val snap = conn.listProjects()
+                        assertEquals(remoteRepo.path, snap.findNode(id)!!.second.cwd)
+                        assertEquals(TmuxNames.PHONE_SOCKET, snap.socketOf(id))
+                        assertTrue(before.contentEquals(file.readBytes()), "the driving desktop owns this canvas")
+                        val cold = assertFailsWith<HostException> { conn.attach("term-r-3", 80, 24, Sink()) }
+                        assertFalse(cold is NeedsRelayException)
+                        assertEquals(1, tmuxOn(TmuxNames.REMOTE_SOCKET, "has-session", "-t", "=nt-term-r-3").first)
+                        val sink = Sink()
+                        val stream = conn.attach(id, 52, 20, sink)
+                        stream.write("printf 'driven_%s\\n' folder\r")
+                        sink.waitFor("driven_folder")
+                        stream.detach()
+                    }
+                }
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server"); clearDrivenHost() }
+    }
+
+    @Test
+    fun `phone terminal foreign collisions and stale ownership never attach type or kill`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        val target = "=nt-$id:"
+        try {
+            assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "-f", "/dev/null", "new-session", "-d", "-s", "nt-$id", *paneShell).first)
+            connect().use { conn ->
+                assertFailsWith<SshTerminalCreationRefusedException> { conn.createTerminal(id, home.path) }
+                val refused = assertFailsWith<HostException> { conn.attach(id, 80, 24, Sink()) }
+                assertFalse(refused is NeedsRelayException)
+                assertFailsWith<HostException> { conn.sendKeys(id, "must_not_arrive\r") }
+                assertFailsWith<HostException> { conn.killSession(id) }
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "has-session", "-t", "=nt-$id").first)
+                assertFalse(tmuxOn(TmuxNames.PHONE_SOCKET, "capture-pane", "-p", "-t", target).second.contains("must_not_arrive"))
+            }
+            tmuxOn(TmuxNames.PHONE_SOCKET, "kill-session", "-t", "=nt-$id")
+            // A completed listing must not authorize a target whose ownership changed afterwards.
+            Thread.sleep(150)
+            connect().use { conn ->
+                conn.createTerminal(id, home.path)
+                assertTrue(conn.listProjects().isLive(id))
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "set-option", "-t", target, PhoneTerminals.CREATION_OPTION, "wrong").first)
+                assertFailsWith<HostException> { conn.sendKeys(id, "stale_write\r") }
+                assertFailsWith<HostException> { conn.killSession(id) }
+                assertFailsWith<SshTerminalCreationRefusedException> { conn.createTerminal(id, home.path) }
+                assertFalse(conn.listProjects().isLive(id))
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
+    }
+
+    @Test
+    fun `phone terminal malformed atomic tuples and fully replaced stale markers cannot authorize actions`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        val target = "=nt-$id:"
+        val wrong = "a".repeat(64)
+        try {
+            assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "-f", "/dev/null", "new-session", "-d", "-s", "nt-$id",
+                "-e", "${PhoneTerminals.ID_ENV}=$id", "-e", "${PhoneTerminals.CWD_ENV}=${home.path}",
+                "-e", "${PhoneTerminals.REQUEST_ENV}=${home.path}", "-e", "${PhoneTerminals.CREATION_ENV}=$wrong", *paneShell).first)
+            connect().use { conn ->
+                assertFalse(conn.listProjects().isLive(id))
+                assertFailsWith<HostException> { conn.attach(id, 80, 24, Sink()) }
+                assertFailsWith<HostException> { conn.sendKeys(id, "forged_write\r") }
+                assertFailsWith<HostException> { conn.killSession(id) }
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "has-session", "-t", "=nt-$id").first)
+            }
+            tmuxOn(TmuxNames.PHONE_SOCKET, "kill-session", "-t", "=nt-$id")
+            Thread.sleep(150)
+            connect().use { conn ->
+                conn.createTerminal(id, home.path)
+                assertTrue(conn.listProjects().isLive(id))
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "set-environment", "-t", "=nt-$id", PhoneTerminals.CREATION_ENV, wrong).first)
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "set-option", "-t", target, PhoneTerminals.CREATION_OPTION, wrong).first)
+                // Options still agree with the environment; this connection pins the valid tuple
+                // from its last listing, so replacing both cannot authorize writes or deletion.
+                assertFailsWith<HostException> { conn.attach(id, 80, 24, Sink()) }
+                assertFailsWith<HostException> { conn.sendKeys(id, "replaced_write\r") }
+                assertNull(conn.paneCommand(id))
+                assertFailsWith<HostException> { conn.killSession(id) }
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "has-session", "-t", "=nt-$id").first)
+                assertFalse(tmuxOn(TmuxNames.PHONE_SOCKET, "capture-pane", "-p", "-t", target).second.contains("replaced_write"))
+                assertFalse(conn.listProjects().isLive(id))
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
+    }
+
+    @Test
+    fun `phone terminal reserved id cannot create or reopen on either desktop socket`() = runBlocking<Unit> {
+        for (socket in listOf(TmuxNames.SOCKET, TmuxNames.REMOTE_SOCKET)) {
+            val id = "phone-" + java.util.UUID.randomUUID()
+            try {
+                assertEquals(0, tmuxOn(socket, "-f", "/dev/null", "new-session", "-d", "-s", "nt-$id", *paneShell).first)
+                connect().use { conn ->
+                    assertFailsWith<SshTerminalCreationRefusedException> { conn.createTerminal(id, home.path) }
+                    assertFailsWith<HostException> { conn.attach(id, 80, 24, Sink()) }
+                    assertEquals(1, tmuxOn(TmuxNames.PHONE_SOCKET, "has-session", "-t", "=nt-$id").first)
+                    assertEquals(0, tmuxOn(socket, "has-session", "-t", "=nt-$id").first)
+                }
+            } finally { tmuxOn(socket, "kill-session", "-t", "=nt-$id") }
+        }
+    }
+
+    @Test
+    fun `phone terminal warm server clears all stale managed hook identities and has configured history`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        try {
+            assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "-f", "/dev/null", "new-session", "-d", "-s", "warm", *paneShell).first)
+            for (name in listOf("NODETERM_NODE_ID", "NODETERM_HOOK_TOKEN", "NODETERM_FUTURE_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME")) {
+                assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "set-environment", "-g", name, "fixture-stale-value").first)
+            }
+            for (name in listOf("LANG", "LC_ALL")) assertEquals(0, tmuxOn(TmuxNames.PHONE_SOCKET, "set-environment", "-g", name, "C").first)
+            connect().use { conn ->
+                conn.createTerminal(id, home.path)
+                val target = "=nt-$id:"
+                assertEquals("50000", tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{history_limit}").second.trim())
+                val sink = Sink()
+                val stream = conn.attach(id, 52, 10, sink)
+                stream.write("n=\$(env | grep '^NODETERM_' | wc -l | tr -d ' '); printf 'cleared_%s\\n' \"\$n\"\r")
+                sink.waitFor("cleared_0")
+                stream.write("printf 'accounts_%s_%s\\n' \"\${CLAUDE_CONFIG_DIR:-none}\" \"\${CODEX_HOME:-none}\"\r")
+                sink.waitFor("accounts_none_none")
+                stream.write("printf 'phone_locale_%s\\n' \"\$(locale charmap)\"\r")
+                sink.waitFor("phone_locale_UTF-8")
+                stream.write("i=1; while [ \$i -le 80 ]; do printf 'phone_history_%s\\n' \"\$i\"; i=\$((i+1)); done\r")
+                sink.waitFor("phone_history_80")
+                stream.scroll(true, 20)
+                val modeDeadline = System.currentTimeMillis() + 5000
+                while (System.currentTimeMillis() < modeDeadline && tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_in_mode}").second.trim() != "1") Thread.sleep(20)
+                assertEquals("1", tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_in_mode}").second.trim())
+                conn.sendKeys(id, "\u001b")
+                assertEquals("0", tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_in_mode}").second.trim())
+                stream.detach()
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
+    }
+
+    @Test
+    fun `phone terminal interrupted option finalization is discoverable after a process restart`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        val target = "=nt-$id:"
+        try {
+            // Stop the actual generated shell immediately after its new-session command returns.
+            // No metadata options or viewer attach have run; only the atomic creation tuple exists.
+            val script = SshScripts.createTerminal(id, home.path)
+            val partial = script.substringBefore("nt_marker=") + "exit 99\n"
+            assertTrue(partial.contains("new-session"))
+            connect().use { conn -> assertEquals(99, conn.run(partial).first) }
+            assertEquals("", tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{${PhoneTerminals.CREATION_OPTION}}").second.trim())
+            assertEquals("50000", tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{history_limit}").second.trim(),
+                "startup output already gets the configured history before option finalization or attach")
+            connect().use { conn ->
+                val snap = conn.listProjects()
+                assertTrue(snap.isLive(id), "restart must rediscover an owned creation, not orphan it")
+                assertEquals(home.path, snap.findNode(id)!!.second.cwd)
+                val sink = Sink()
+                val stream = conn.attach(id, 52, 20, sink)
+                stream.write("printf 'recovered_%s\\n' partial\r")
+                sink.waitFor("recovered_partial")
+                assertEquals("on", tmuxOn(TmuxNames.PHONE_SOCKET, "show-options", "-v", "-t", target, "mouse").second.trim())
+                stream.endSession()
+                assertEquals(1, tmuxOn(TmuxNames.PHONE_SOCKET, "has-session", "-t", "=nt-$id").first)
+            }
+        } finally { tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
+    }
+
+    @Test
+    fun `phone terminal a lost exit status preserves ownership for an idempotent retry`() = runBlocking<Unit> {
+        val id = "phone-" + java.util.UUID.randomUUID()
+        try {
+            connect().use { conn ->
+                onCommand = { command, cmd -> if (command.contains("new-session") && command.contains(id)) cmd.omitExitStatus = true }
+                val failed = assertFailsWith<HostException> { conn.createTerminal(id, home.path) }
+                assertFalse(failed is SshTerminalCreationRefusedException, "unknown outcome must preserve the request")
+                onCommand = null
+                val target = "=nt-$id:"
+                val pid = tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_pid}").second.trim()
+                assertTrue(pid.toLongOrNull() != null)
+                conn.createTerminal(id, home.path)
+                assertEquals(pid, tmuxOn(TmuxNames.PHONE_SOCKET, "display-message", "-p", "-t", target, "#{pane_pid}").second.trim())
+                assertTrue(conn.listProjects().isLive(id))
+                assertEquals("", tmuxOn(TmuxNames.PHONE_SOCKET, "list-clients", "-t", "=nt-$id").second.trim(), "creation itself reserves no viewer")
+            }
+        } finally { onCommand = null; tmuxOn(TmuxNames.PHONE_SOCKET, "kill-server") }
     }
 
     @Test
