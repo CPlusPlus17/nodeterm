@@ -9,6 +9,7 @@ import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.InboxNotificationActions
 import dev.nodeterm.protocol.host.LegRouting
+import dev.nodeterm.protocol.host.ListingFailure
 import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.host.RelayApprovalGate.Trigger
 import dev.nodeterm.protocol.host.RelayConnectStatus
@@ -536,6 +537,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            _snapshot.value = ListingFailure.snapshot(_snapshot.value, e)
             // Never null: an exception without a message must still say that the listing failed.
             // "Nothing found" offers the relay only when this phone has one to offer (review of A27b).
             _lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message ?: e.javaClass.simpleName

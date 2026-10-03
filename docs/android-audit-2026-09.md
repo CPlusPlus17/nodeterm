@@ -110,6 +110,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
 | [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66, app compile and 32 mutants pass; beta-8/code-9 release/R8/signing/artifact review/install and Pixel New terminal visible/enabled pass; actual item 32 Create/cwd/history/reconnect/End pending · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
+| [A91](#a91) | medium | | small | runtime/bug | ✅ fixed on branch; beta9 delivery pending; protocol 688/67, offline app compile and six mutants pass; installed beta8 unchanged, beta9 planned; physical empty-host verification pending · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
 
 ## A01
 
@@ -1693,8 +1694,8 @@ untested. Item 20 remains Partial; no runtime change, phone command or new produ
 Protocol/offline app tasks at that stage passed in 50/1 seconds; current A90 checks are recorded below.
 The [64-row record](android.md#what-is-verified-and-how) has seven Pass, twenty Partial and
 37 Pending items with named conditional SKIP variants; `A50` remains partial. Private synthetic
-proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Current branch `17eb9487` has all
-five jobs green in [run `37099251563`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37099251563),
+proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Current branch `19da35a2` has all
+five jobs green in [run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345),
 including A90; the APK remains separately bound to `b88d1415`. The next documentation push needs
 its own checks/green workflow.
 The requirement review promotes item 18 using existing all-key/software-input/font/rotation SSH
@@ -2961,3 +2962,37 @@ Sessions → New terminal → Home/project/custom absolute folder → Create; ve
 disconnect/app-restart rediscovery and exact owned End on the intended Pixel over SSH/WireGuard.
 Existing desktop sessions, project files and canvas must remain unchanged. Full relay/managed-agent
 creation and the rest of the 64-item matrix remain separate pending requirements.
+
+## A91
+
+**Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible (2026-10-03).**
+
+- Severity: **medium**; effort: small; area: runtime; kind: bug
+- Status: **fixed on branch; beta 9 delivery pending**. Installed beta 8/code 9/source `b88d1415`
+  is unchanged; beta 9 is planned, not prepared or installed. Physical verification remains pending.
+- Locations: `android/app/src/main/kotlin/dev/nodeterm/android/conn/ConnectionManager.kt`
+  (`HostSession.refreshNow`), `android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/ListingFailure.kt`
+
+When the last phone-owned shell is ended and the SSH host has no workspace, driven sessions or
+other phone shells, browse throws `NothingFoundException`. The session has ended, but native
+refresh previously kept the last successful snapshot, so Sessions still showed its row. A lost
+reply or host refusal cannot prove nodes are gone; blindly clearing every failed listing would
+also discard useful cached rows during an outage.
+
+**Fix:** `ListingFailure.snapshot` returns `ProjectsSnapshot.EMPTY` only for the authoritative
+`NothingFoundException`; generic host/transport failures retain the previous snapshot, and
+cancellation rethrows before replacement. `ConnectionManager` applies the policy while preserving
+the route-specific error and existing connection rules. The authoritative empty answer leaves
+SSH connected and New terminal available. No current RPC, projects blob, pairing, mirror or
+SSH-visible file contract changes.
+
+**Verification:** four `ListingFailureTest` methods use an actual parsed phone listing to verify
+last-row removal, generic-error retention, cancellation identity and native error/connection
+wiring. Full real Gradle protocol passes **688 tests / 67 suites**, zero failures/errors/skips,
+in 52 seconds; offline app `compileKotlin` passes in 6 seconds. All six isolated Kotlin 2.2/JDK 21
+mutants are caught, and independent review finds no blocker. Ignored XML/mutation proof is in
+`.nodeterm/android-beta-build-9/`. These are host checks; no incomplete new physical QA or ledger
+promotion is recorded. Installed beta 8 is unchanged; beta 9 release preparation, delivery and
+the intended Pixel's last-shell End/empty-list/New-terminal check remain pending. Last prior
+green branch CI is `19da35a2`, all five jobs in run `37140762345`; the next push needs its own
+checks/green workflow.

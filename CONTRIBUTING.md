@@ -132,6 +132,9 @@ applicable here":
    flag isolated socket/creation-marker/metadata adoption for **@eneskirca** in iOS. Host regression
    and build checks pass in beta 8 / code 9, now installed on the intended Pixel; physical feature
    verification remains pending.
+   Listing failures (`A91`) clear cached rows only for authoritative SSH `NothingFoundException`;
+   other failures retain them and cancellation propagates. Preserve the route-specific error and
+   connected SSH state on an empty host; this client policy changes no shared host contract.
    The Android interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.

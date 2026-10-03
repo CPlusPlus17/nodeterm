@@ -47,7 +47,7 @@ application, leaves copy mode and resolves the question. Item 41 stays Partial: 
 direct-SSH and target-guard variants lack device proof. No live Claude CLI/account was used.
 QR/scanner, cellular relay, SAS denial/revoke, remaining node actions, remaining question routes,
 notifications
-remain open. Current branch CI `17eb9487` has all five jobs green in [run `37099251563`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37099251563); the installed APK is separately bound to `b88d1415`. Each later push still requires its own green workflow.
+remain open. Current branch CI `19da35a2` has all five jobs green in [run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345); the installed APK is separately bound to `b88d1415`. Each later push still requires its own green workflow.
 Only disposable fixture resources were removed and the phone returned to regular Sessions;
 cleanup does not establish the full revoke matrix. **Final beta-6/code-7 cellular check:** with
 WireGuard enabled and Wi-Fi off, the user confirms "Connects and scrolls smoothly" in their usual
@@ -80,6 +80,16 @@ passes (1 second), and **32** protocol/helper/native-wiring mutations are caught
 Desktop and Server Edition retain their own sockets and canvas behavior; existing RPC, projects
 blob, pairing, mirror and SSH-visible file contracts are unchanged. **iOS follow-up for @eneskirca:**
 adopt the isolated phone socket and atomic creation marker/session metadata for independent shells.
+
+**Empty-host refresh fix (`A91`) is host-verified, awaiting delivery.** Ending the last phone shell
+on an otherwise empty SSH host returns an authoritative "nothing found" answer. Installed beta 8
+keeps its stale cached row; the branch now clears that listing while preserving the error and
+connected SSH route. Other failed refreshes keep the last listing, and cancellation propagates.
+The full real Gradle suite passes **688 tests / 67 suites**, zero failures/errors/skips (52 seconds),
+offline app `compileKotlin` passes (6 seconds), and six isolated Kotlin 2.2/JDK 21 mutants are caught.
+Proof is in `.nodeterm/android-beta-build-9/`. Beta 9 is planned, not prepared or installed;
+installed beta 8/code 9 remains bound to `b88d1415`. No shared host contract or device-ledger
+change is made. Actual empty-host End/refresh/New-terminal proof remains pending.
 
 Private **`0.1.0-beta.8` / code `9` is installed on the intended Pixel**, from clean source
 `b88d141528c1051964da07faf22cc7fa923c4846`, using the retained signer. Offline AGP built in

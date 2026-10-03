@@ -320,6 +320,20 @@ unchanged.
 
 ## What is verified, and how
 
+**`A91` empty-host stale rows are host-fixed (2026-10-03).** Ending the last phone-owned shell
+on an otherwise empty SSH host makes browse return `NothingFoundException`. The native refresh
+previously kept the ended shell's cached row. `ListingFailure.snapshot` now replaces the cached
+listing with `ProjectsSnapshot.EMPTY` only for that authoritative empty answer; ordinary host or
+transport failures retain it, and cancellation propagates. `ConnectionManager` preserves the
+route-specific error and connected SSH state, so New terminal remains available. Four new
+`ListingFailureTest` methods cover the real parsed phone row, retention, cancellation and native
+wiring. The complete real Gradle protocol suite passes **688 tests / 67 suites**, zero
+failures/errors/skips, in 52 seconds; offline app `compileKotlin` passes in 6 seconds. Six isolated
+Kotlin 2.2/JDK 21 mutants are caught; proof is in `.nodeterm/android-beta-build-9/`.
+This fix is not in the installed beta 8 / code 9 (`b88d1415`). Beta 9 is planned, not yet prepared
+or installed. No RPC/blob/pairing/mirror/SSH-visible file contract changes, new physical QA claims
+or device-ledger changes are included here.
+
 **Beta-8 installation receipt (2026-10-03):** the exact intended Pixel 10 Pro / Android 17 was
 confirmed before a 28.05-second same-signer `adb install -r` of `0.1.0-beta.8` / code `9`.
 The pulled pre-update APK matches the known beta-6/code-7 hash; SDK 37 confirms the retained public
@@ -482,8 +496,8 @@ Private JSON/PNG/log proof is in `.nodeterm/android-beta-build-6/checklist-20261
 `physical-chips-interior.json`, `osc52-results.json`, `keyboard-results.json`, `copy-result.json`,
 `link-checks.json`, `recovery-results.json` and `activity-results.json`. The 64 rows below reconcile
 that physical evidence with the earlier draft ledger. Recorded CI baseline
-`17eb9487` has all five jobs green in
-[run `37099251563`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37099251563), including
+`19da35a2` has all five jobs green in
+[run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345), including
 the A90 branch work. The installed APK remains bound to source `b88d1415`; the CI revision also
 includes documentation. The next documentation push needs its own checks/green workflow.
 CI does not imply full device validation.
@@ -1869,6 +1883,11 @@ the wider relay action matrix remain device checks.
   creation. Host regressions/mutations and the beta-8/code-9 build pass; that APK is installed.
   Actual creation/reopen/End under item 32 remains pending. Historical beta-6 proof and the
   device ledger remain unchanged.
+- **An empty SSH host retains ended rows in installed beta 8 (`A91`).** The branch clears them
+  only on authoritative `NothingFoundException`, retaining cached rows on uncertain failures and
+  keeping the SSH route/error intact. Host regressions/mutations pass; beta 9 delivery and physical
+  last-shell End/empty-list/New-terminal verification remain pending. Broader device checks stay
+  deferred except the explicitly authorized A90 scope; no new physical tally is recorded yet.
 - **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and canvas-registered new sessions
   go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
   SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over

@@ -3,11 +3,18 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A90`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A91`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
+- **`A91`: empty-host stale rows are host-fixed, awaiting beta 9 delivery.** The last phone-shell
+  End on an otherwise empty SSH host returns `NothingFoundException`; native refresh now clears
+  that authoritative empty listing while retaining cached rows on other errors and propagating
+  cancellation. The error and connected SSH route remain. Four new regressions and six isolated
+  Kotlin 2.2/JDK 21 mutants pass; full protocol **688/67**, zero failures/errors/skips (52 seconds),
+  and offline app compile (6 seconds). Installed beta 8/code 9/source `b88d1415` is unchanged;
+  beta 9 is planned, not prepared or installed. Physical proof/tally is not updated yet.
 - **`A90`: explicit plain SSH-terminal creation is implemented and host-verified.** Protocol
   `bcc92367` and UI/model `b88d1415` add the path. The manual
   SSH/WireGuard host has driven projects but no own desktop workspace. Create a shell in a
@@ -42,8 +49,8 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   with the IME open is 129×1, not a verified usable-height case. The [64-row table](android.md#what-is-verified-and-how)
   records seven Pass, twenty Partial and 37 Pending items with conditional SKIP variants. Those
   checklist results used beta-6 source `c4b1f6cf`; current installed beta 8 uses `b88d1415`.
-  Current branch CI `17eb9487` has all five jobs green in
-  [run `37099251563`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37099251563), including A90.
+  Current branch CI `19da35a2` has all five jobs green in
+  [run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345), including A90.
   The next documentation push needs its own checks/green workflow.
 - The user defers remaining Pixel release checks until after the hike. Item 18's Pass comes from
   reviewing existing proof against its written requirement, with no new phone work. Item 1 needs
@@ -70,7 +77,7 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   device variants remain open. Cleanup forgot only the fixture host, stopped owned resources and
   returned the phone to regular Sessions. The user confirms beta 6 / code 7 connects and scrolls
   smoothly there over cellular WireGuard; hosted cellular relay remains untested.
-- Current A90 checks pass **684 protocol tests in 66 suites, zero failures/errors/skips** (48 seconds),
+- The A90 baseline checks pass **684 protocol tests in 66 suites, zero failures/errors/skips** (48 seconds),
   plus offline app `compileKotlin` (1 second). Eleven actual Gradle/Kotlin 2.2 protocol behavioral,
   twelve helper behavior and nine native wiring mutations are caught (32 total). Historical scroll
   checks caught thirty-five JS, eleven native and three CSS mutations (49 total), including the
@@ -118,6 +125,27 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### Empty-host stale listing fixed on the host; beta 9 planned (`A91`, 2026-10-03)
+
+Ending the last phone-owned shell on an otherwise empty SSH host yields `NothingFoundException`,
+but `ConnectionManager.refreshNow` previously retained the cached row. The pure
+`ListingFailure.snapshot` policy clears only that authoritative empty answer. Host refusals and
+transport errors retain the previous snapshot; cancellation propagates before replacement.
+Native wiring preserves the route-specific error and the existing connection rules, including
+connected SSH/New terminal on an empty host. No RPC, projects blob, pairing, mirror or SSH-visible
+file contract changes.
+
+`ListingFailureTest` adds four methods for an actual parsed phone-terminal listing, generic-error
+retention, cancellation identity and native error/connection wiring. The real full Gradle run
+passes 688 tests in 67 suites, zero failures/errors/skips, in 52 seconds; offline app compile
+passes in 6 seconds. All six isolated Kotlin 2.2/JDK 21 mutants are caught; ignored proof is in
+`.nodeterm/android-beta-build-9/`. Independent review finds no blocker. Beta 9 is planned,
+not yet prepared or installed; installed beta 8/code 9 stays bound to `b88d1415`. The previous
+green branch is `19da35a2`, all five jobs in run `37140762345`; the fix's next push needs its own
+gates and green workflow. Broader phone work remains deferred except explicitly authorized A90
+checks. Incomplete new physical QA is not recorded here; the 7 Pass / 20 Partial / 37 Pending
+ledger remains unchanged.
+
 ### Beta 8 installed on the intended Pixel with app data retained (2026-10-03)
 
 The user supplied a new wireless-debugging address and authorized the update. The exact intended
@@ -136,7 +164,7 @@ Broader device checks stay after the hike.
 
 Private proof is `.nodeterm/android-beta-build-8/device-install-20261003/receipt.json`, with
 package before/after, APK pulls/public certificate checks, `sessions.png` and `ui-sessions-ready.xml`. Current branch
-`17eb9487` has all five CI jobs green in run `37099251563`; the APK remains bound to `b88d1415`.
+`19da35a2` has all five CI jobs green in run `37140762345`; the APK remains bound to `b88d1415`.
 The next documentation push needs its own checks/green workflow. For item 1, pair on current
 beta 8 using desktop-issued JSON or QR and verify those pairing/relay credentials across a later
 same-signer higher-code update, without downgrading or uninstalling the working app.
@@ -788,6 +816,9 @@ The user authorized beta-8 installation; broader Pixel release checks remain def
 the hike. `A90` plain SSH-terminal creation is implemented and host-verified in installed beta 8 /
 code 9. Verify its create/cwd/input/history/reopen/exact-End flow on the intended Pixel (item 32)
 when authorized. Historical beta-6 proof and the device ledger remain unchanged.
+The `A91` authoritative-empty refresh fix is host-verified but absent from installed beta 8;
+beta 9 preparation/delivery and physical last-shell End/empty-list/New-terminal verification are
+pending. Do not infer a new device pass from the host regressions or incomplete phone QA.
 
 **Next work after the hike, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
@@ -935,7 +966,7 @@ What is in the tree:
 - `android/protocol` is pure Kotlin/JVM with no Android dependency. It holds the NaCl port, the relay
   client, the host RPC, pairing, direct SSH over sshj, the parsers, and the pure rules the app's
   screens use (most app logic lives here so it can be tested). The remote branch had 589 tests
-  before these continuation additions; the current full suite passes 684 tests in 66 suites with
+  before these continuation additions; the current full suite passes 688 tests in 67 suites with
   zero failures, errors or skips. Its JVM tests
   include desktop interop and SSH harnesses. The
   interop tests run the desktop's own `connectHostSession` / `createPairingService` through
@@ -964,6 +995,10 @@ What is in the tree:
 
 Verified:
 
+- `A91` clears only an authoritative empty SSH listing, retaining uncertain cached listings and
+  propagating cancellation without changing route/error/connection policy. Four new regressions,
+  full protocol 688/67, offline app compile and six new isolated mutants pass. Beta 9 delivery and
+  physical empty-host verification remain pending; beta 8 remains installed.
 - `A90` plain SSH shells are implemented in `bcc92367` / `b88d1415` and host-verified by the full
   684-test/66-suite protocol run, offline app compile and 32 new behavioral/wiring mutations.
   Atomic interrupted-creation rediscovery, frozen retry, fingerprint guards, dedicated sockets,
@@ -1001,7 +1036,7 @@ Verified:
   Approve/Deny/expiry). Copy sheet,
   links and SSH background/detach recovery have additional partial evidence; the 64-row table
   records exact scope. Those results remain historical beta-6/code-7 proof; beta 8 / code 9 is now
-  installed. Current branch `17eb9487` passed all five CI jobs in run `37099251563`; the APK source
+  installed. Current branch `19da35a2` passed all five CI jobs in run `37140762345`; the APK source
   is separately bound to `b88d1415`. Pairing/relay credential survival still requires pairing on
   current code 9 then a later higher-code update after the hike. Each later push still requires
   its own green workflow.
@@ -1220,7 +1255,12 @@ were removed. The user confirms terminal access over mobile-data WireGuard with 
 Encrypted paste pairing and hosted relay browse now work. QR pairing, cellular relay/SAS variants,
 actual outage/notification/answer behavior and the full device checklist remain open.
 
-1. A90 is implemented in protocol bcc92367 and UI/model b88d1415: 684 tests / 66 suites / zero
+1. A91 is host-fixed: authoritative NothingFound clears cached rows, other errors retain them,
+   cancellation propagates and SSH route/error stay intact. Full protocol 688/67/zero
+   failures/errors/skips (52s), offline app compile (6s) and six new Kotlin mutants pass.
+   Prepare/deliver beta 9, then verify last-shell End on an otherwise empty SSH host removes the
+   row and keeps New terminal available. Beta 9 is not prepared/installed yet; no new physical
+   QA/tally is recorded. A90 is implemented in protocol bcc92367 and UI/model b88d1415: 684 tests / 66 suites / zero
    failures/errors/skips (48s), offline app compile (1s) and 32 new protocol/helper/wiring mutants pass.
    Clean b88d1415 built beta 8 / code 9 in 49s; R8, retained-signer packaging and independent SDK 36/37
    artifact review pass. APK SHA256 d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce;
@@ -1237,14 +1277,14 @@ actual outage/notification/answer behavior and the full device checklist remain 
    reversal/remaining lifecycle/FPS/custom-binding checks on the intended Pixel in
    docs/android.md (#device-checklist). Record results in "What is verified" and turn every failure
    into a finding. Code-3 build/sign/update, identity persistence, SSH browse/input, font/keyboard
-   resizing and pre-attach tmux history are verified; all 684 protocol tests and the offline app
+   resizing and pre-attach tmux history are verified; all 688 protocol tests and the offline app
    type-check pass. Mobile-data WireGuard terminal access is user-confirmed with Wi-Fi off;
    encrypted paste pairing and forced hosted relay browse work. QR/cellular-relay/SAS,
    actual outage/notification/answer behavior and the full checklist remain open.
    Requirement-audited real Pixel QA completes items 18/19/21/22/24/38/39 and adds partial copy/link/
    SSH recovery proof; see the 64-row table. Background am kill restores Inbox tab and host back stack.
-   Current installed beta 8's source is b88d1415; branch CI 17eb9487 passed all five jobs in
-   run 37099251563. The next push needs its own green workflow. Beta 7 / code 8 remains
+   Current installed beta 8's source is b88d1415; branch CI 19da35a2 passed all five jobs in
+   run 37140762345. The next push needs its own green workflow. Beta 7 / code 8 remains
    a historical prepared, unused candidate; beta-6 physical evidence is preserved.
    The device ledger remains 7 Pass / 20 Partial / 37 Pending.
    Live /v1/relay/join accepts the current client shape against production desktop source 58a202be
