@@ -827,6 +827,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.wrong = 0
     c.name = attempt.name
     sendControl(c, { state: 'controlling' })
+    // That send can end the connection (a backlog past VIEWER_BACKLOG_CLOSE): then nobody took control.
+    if (c.ended) return
     safe('onControlTaken', () => deps.onControlTaken(attempt.name))
     safe('onChange', deps.onChange)
   }
@@ -849,6 +851,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   function lockLink(): void {
     controlEpoch++
     safe('onControlLocked', () => deps.onControlLocked())
+    // The lock rests on the service recording it before it returns. If it did not (it threw, or a
+    // wiring slip), the next attempt would be verified again: say so loudly, and still demote and tell.
+    if (record.control?.locked !== true) console.error('[watch-link] onControlLocked did not lock the link')
     for (const c of joinedConns()) {
       c.controlling = false
       sendControl(c, { state: 'locked', reason: 'locked' })
@@ -1039,7 +1044,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
         name: c.name,
         joinedAt: c.joinedAt,
         waiting: c.joinRefused && c.sessionId === null,
-        controlling: c.controlling,
+        // The effective state: a flag the host has not yet been told to clear never reads as control.
+        controlling: controlStateFor(c).state === 'controlling',
         typing: false
       })
     }
