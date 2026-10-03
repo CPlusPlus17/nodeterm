@@ -54,6 +54,7 @@ import dev.nodeterm.protocol.model.NodeInfo
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.model.SessionBucket
+import dev.nodeterm.protocol.ssh.PhoneTerminals
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.coroutines.launch
 
@@ -171,28 +172,30 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                             // the relay leg opened next to SSH, on a tap. Where this phone has none they
                             // stay listed, disabled, with the reason (audit A26) — and so they do for a
                             // project another desktop drives over SSH, whose app is that desktop (A27).
-                            val blocked = session.route(Capability.NODE_ACTIONS, project) as? LegRouting.Leg.Unavailable
-                            if (snapshot.statusOf(node.id)?.hibernated == true) {
-                                DropdownMenuItem(text = { Text("Wake") }, enabled = blocked == null, onClick = {
+                            if (!PhoneTerminals.validId(node.id)) {
+                                val blocked = session.route(Capability.NODE_ACTIONS, project) as? LegRouting.Leg.Unavailable
+                                if (snapshot.statusOf(node.id)?.hibernated == true) {
+                                    DropdownMenuItem(text = { Text("Wake") }, enabled = blocked == null, onClick = {
+                                        menuFor = null
+                                        act("Wake") { session.connectionFor(Capability.NODE_ACTIONS, project = project).wake(node.id) }
+                                    })
+                                }
+                                DropdownMenuItem(text = { Text("Refresh view on computer") }, enabled = blocked == null, onClick = {
                                     menuFor = null
-                                    act("Wake") { session.connectionFor(Capability.NODE_ACTIONS, project = project).wake(node.id) }
+                                    act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS, project = project).refresh(node.id) }
                                 })
-                            }
-                            DropdownMenuItem(text = { Text("Refresh view on computer") }, enabled = blocked == null, onClick = {
-                                menuFor = null
-                                act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS, project = project).refresh(node.id) }
-                            })
-                            DropdownMenuItem(text = { Text("Rename…") }, enabled = blocked == null, onClick = {
-                                menuFor = null
-                                renaming = node
-                            })
-                            if (blocked != null) {
-                                Text(
-                                    blocked.reason,
-                                    Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                DropdownMenuItem(text = { Text("Rename…") }, enabled = blocked == null, onClick = {
+                                    menuFor = null
+                                    renaming = node
+                                })
+                                if (blocked != null) {
+                                    Text(
+                                        blocked.reason,
+                                        Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 6.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                             DropdownMenuItem(text = { Text("End session…", color = NtColors.attention) }, onClick = {
                                 menuFor = null
@@ -231,7 +234,8 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
             title = { Text("End ${displayTitle(node, snapshot)}?") },
             text = {
                 Text(
-                    if (viaSsh) "This stops the session's tmux session on the computer, and everything running in it. " +
+                    if (PhoneTerminals.validId(node.id)) "This stops the shell and everything running in it, and removes it from the phone terminals list."
+                    else if (viaSsh) "This stops the session's tmux session on the computer, and everything running in it. " +
                         "The node stays on the canvas until you remove it there."
                     else "This permanently ends the session and removes the node from the canvas — like its × on the computer."
                 )
@@ -241,6 +245,9 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                     ending = null
                     val c = conn ?: return@TextButton
                     act("End session") {
+                        if (PhoneTerminals.validId(node.id) && c !is SshHostConnection) {
+                            throw HostException("Connect over SSH to end this phone terminal.")
+                        }
                         val quiet = object : TerminalSink {
                             override fun onPaint(text: String) {}
                             override fun onOutput(bytes: ByteArray) {}
@@ -312,7 +319,9 @@ private fun ProjectHeader(project: ProjectInfo, onSourceControl: () -> Unit) {
                 )
             }
         }
-        TextButton(onClick = onSourceControl) { Text("Source control") }
+        if (project.id != PhoneTerminals.PROJECT_ID) {
+            TextButton(onClick = onSourceControl) { Text("Source control") }
+        }
     }
 }
 
@@ -336,6 +345,7 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
             Text(displayTitle(node, snapshot), maxLines = 1, overflow = TextOverflow.Ellipsis)
             val detail = buildList {
                 add(agent?.label ?: "Terminal")
+                if (PhoneTerminals.validId(node.id)) node.cwd?.let { add(it) }
                 now?.activity?.let { add(it) }
                 ContextFill.label(now?.contextPercent)?.let { add(it) }
                 AccountNames.observed(status?.account, snapshot.status)?.let { add(it) }

@@ -19,6 +19,7 @@ import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.OnScreenTracker
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectInfo
+import dev.nodeterm.protocol.model.SshTerminalCreation
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.RelayBlock
@@ -27,6 +28,7 @@ import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.LanRefresh
 import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshFallback
+import dev.nodeterm.protocol.ssh.SshTerminalCreationRefusedException
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +93,24 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     private val users = ConnectionUsers()
 
     val connection: HostConnection? get() = conn
+
+    // Host-owned, rather than dialog-owned: dismissal/background must not cancel a sent creation.
+    val sshTerminalCreation = SshTerminalCreation(graph.scope, { request ->
+        createAndRefreshSshTerminal(request.nodeId, request.cwd)
+    }, definitiveFailure = { it is IllegalArgumentException || it is SshTerminalCreationRefusedException })
+
+    suspend fun createAndRefreshSshTerminal(nodeId: String, cwd: String?) = inBackground {
+        try {
+            val ssh = ensureConnected(Trigger.BACKGROUND) as? SshHostConnection
+                ?: throw HostException("Connect over SSH to create a plain terminal.")
+            ssh.createTerminal(nodeId, cwd)
+        } finally {
+            // Also re-list after a lost reply, and when the user has already closed the dialog.
+            // Cancellation still propagates; refreshNow handles ordinary listing errors itself.
+            refreshNow(Trigger.BACKGROUND)
+        }
+    }
+
 
     /** A screen is showing this computer right now (so its connection is worth keeping open). */
     val isWatched: Boolean get() = users.watched

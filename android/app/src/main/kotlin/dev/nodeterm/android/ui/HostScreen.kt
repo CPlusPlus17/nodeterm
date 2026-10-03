@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -50,6 +51,8 @@ import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.AllComputers
 import dev.nodeterm.protocol.model.NewSessionChoice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,12 +74,36 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     // kept while another tab shows. The holder itself lives in this entry's saved state.
     val tabStates = rememberSaveableStateHolder()
     var newSession by remember { mutableStateOf(false) }
+    val creation = session.sshTerminalCreation
+    val creationState by creation.state.collectAsState()
+    var terminalTicket by remember { mutableStateOf<Long?>(null) }
+    var hostStarted by remember { mutableStateOf(false) }
+    val screenKey = remember { nav.top.key }
+    fun dismissTerminal() {
+        terminalTicket?.let(creation::hide)
+        terminalTicket = null
+    }
+    fun openCreated(ticket: Long) {
+        if (!hostStarted || terminalTicket != ticket || nav.top.key != screenKey || graph.hosts.get(hostId) == null) return
+        val request = creation.takeReady(ticket) ?: return
+        dismissTerminal()
+        nav.push(dev.nodeterm.android.Route.Terminal(hostId, request.nodeId, "Terminal"))
+    }
+    DisposableEffect(creation) {
+        onDispose { terminalTicket?.let(creation::hide) }
+    }
 
     // Watch (the 8 s poll) only while the screen is STARTED: a backgrounded app used to keep
     // polling, and keep its relay stream open, for as long as the process ran (audit A18).
     LifecycleStartEffect(hostId) {
+        hostStarted = true
+        if (terminalTicket != null) terminalTicket = creation.show()
         session.startWatching()
-        onStopOrDispose { session.stopWatching() }
+        onStopOrDispose {
+            hostStarted = false
+            terminalTicket?.let(creation::hide)
+            session.stopWatching()
+        }
     }
 
     // One count for this tab, the computer's row in the list and the All computers screen (A55).
@@ -84,6 +111,7 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     // New session goes through nodeterm the app (the relay's `projects.registerNode`): on the LAN
     // (direct SSH) that is the relay leg opened next to it, and where this phone has none the button
     // stays, disabled, with the reason (audit A26) — it used to vanish without a word.
+    val offersSshTerminal = (state as? ConnState.Connected)?.kind == TransportKind.SSH
     val offersNew = state is ConnState.Connected && NewSessionChoice.offeredProjects(snapshot).isNotEmpty()
     // Re-asked when what the routing reads changes: the connection, each listing (it says whether the
     // computer advertises its relay right now), and the stored relay leg — a late adoption stores a
@@ -118,19 +146,32 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
             )
         },
         floatingActionButton = {
-            if (tab == 0 && offersNew) {
-                if (newBlocked == null) {
-                    ExtendedFloatingActionButton(
-                        onClick = { newSession = true },
-                        icon = { Icon(Icons.Filled.Add, null) },
-                        text = { Text("New session") }
-                    )
-                } else {
-                    // Kept as small as the FAB it stands in for: its reason is the Sessions list's
-                    // first row (a floating box of five to seven lines covered the last sessions).
-                    Button(onClick = {}, enabled = false) {
-                        Icon(Icons.Filled.Add, null)
-                        Text("New session")
+            if (tab == 0 && (offersSshTerminal || offersNew)) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (offersSshTerminal) {
+                        ExtendedFloatingActionButton(
+                            onClick = { terminalTicket = creation.show() },
+                            icon = { Icon(Icons.Filled.Add, null) },
+                            text = { Text("New terminal") }
+                        )
+                    }
+                    if (offersNew) {
+                        if (newBlocked == null) {
+                            if (offersSshTerminal) {
+                                Button(onClick = { newSession = true }) { Text("New session") }
+                            } else {
+                                ExtendedFloatingActionButton(
+                                    onClick = { newSession = true },
+                                    icon = { Icon(Icons.Filled.Add, null) },
+                                    text = { Text("New session") }
+                                )
+                            }
+                        } else {
+                            Button(onClick = {}, enabled = false) {
+                                Icon(Icons.Filled.Add, null)
+                                Text("New session")
+                            }
+                        }
                     }
                 }
             }
@@ -192,6 +233,21 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
                 }
             }
         }
+    }
+
+    terminalTicket?.let { ticket ->
+        SshTerminalDialog(
+            snapshot = snapshot,
+            state = creationState,
+            onDismiss = { dismissTerminal() },
+            onCreate = { cwd ->
+                creation.submit(ticket, cwd) {
+                    // AppGraph.scope uses Default. Compose state and navigation belong to Main.
+                    withContext(Dispatchers.Main) { openCreated(ticket) }
+                }
+            },
+            onOpen = { openCreated(ticket) }
+        )
     }
 
     if (newSession) {
