@@ -387,7 +387,8 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       leave: (clientId, sessionId, viewerId) => deps.pty.leave(clientId, sessionId, viewerId),
       captureVisible: (sessionId) => deps.pty.captureVisible(sessionId),
       syncSize: (sessionId) => deps.pty.syncSize(sessionId),
-      alive: (sessionId) => deps.pty.alive(sessionId)
+      alive: (sessionId) => deps.pty.alive(sessionId),
+      input: (sessionId, chunk) => deps.pty.input(sessionId, chunk)
     }
   }
 

@@ -11,9 +11,10 @@
 // it forwards nothing to any platform, and a request, or a cast the link's role does not admit, that
 // reaches it anyway means the access policy failed, so the session is CLOSED (fail closed, as
 // relay-host does for a throwing wrapSink). Input from a viewer that is not controlling is the same
-// breach. No viewer size or resize reaches a pty, and no viewer byte does yet (accepted input is not
-// delivered): the join, the size sync and the capture take only ids the host chose. No `interceptReq`
-// is ever supplied (it would bypass `access`).
+// breach (but for the GRACE below). No viewer size or resize reaches a pty; the only viewer bytes that
+// reach anything are a controller's input, into the pane of the session the host joined (TYPING
+// below). The join, the size sync, the capture and the input take only ids the host chose. No
+// `interceptReq` is ever supplied (it would bypass `access`).
 //
 // CONTROL (a Control link, role 'controller') is per CONNECTION: a viewer that unlocks with the link's
 // password (`watch:unlock`) is `controlling` until it releases, disconnects or is kicked, or until the
@@ -26,7 +27,39 @@
 // attempts end that connection (`attempts`), WRONG_PER_LINK across the link lock it. The link count
 // lives in memory and only `allowControl` resets it. A verification is re-checked after its await: an
 // ended viewer, a stopped host, or any change to control meanwhile (off, locked, a new password — the
-// control epoch) voids it, uncounted.
+// control epoch) voids it, uncounted. A join whose input route is `none` (Zellij, an unknown session;
+// also what a missing or unknown route reads as) makes that viewer's state `off`/`unsupported`: its
+// meta says so, an unlock is answered so (uncounted), and a controller is demoted.
+//
+// TYPING (`watch:input` from a controller). A cast whose data is not a string of 1..INPUT_MAX units is a
+// breach. A terminal's own answer to the pane's query (`isTerminalReport`: DA, CPR, a colour — every
+// controller's emulator answers every query) is dropped, uncounted. Then the connection's own token
+// bucket (INPUT_RATE / INPUT_BURST, UTF-8 bytes), a session to type into, and a batch the panes have
+// not taken yet holding at most INPUT_BURST decide; dropped input still goes through the splitter's
+// `discard` (a paste any part of which was dropped is discarded whole), and the viewer is told
+// `{controlling, dropped}` at most once per DROPPED_NOTICE_MIN_MS. Accepted data goes through the
+// connection's SPLITTER (control-input.ts: keys vs a bracketed paste) into its BATCH; the batch flushes
+// INPUT_BATCH_MS after its first input into ONE flush CHAIN per link host, so every controller's batch
+// reaches the pane whole and in flush order through `pty.input` (PtyManager's pane delivery, never a
+// tmux client's key table). A connection has at most one batch in the chain: while it waits there,
+// new input keeps collecting, so a slow pane coalesces input instead of piling up deliveries. Each
+// chunk is re-checked before it goes — same control period (`controlGen`, bumped by every loss of
+// control), still controlling, still the session it was typed at — and a false or a rejection stops
+// the batch with the `dropped` notice (an SSH host without tmux answers false on every chunk: never
+// silence). Input is never held for a later session: a session that ends drops the pending batch and
+// discards an open paste. Nothing typed is ever logged.
+//
+// GRACE. Keystrokes are in flight when control ends (a release, the owner turning typing off, a new
+// password, the lock, a join whose terminal cannot take input): input from a connection that stopped
+// controlling within INPUT_GRACE_MS is dropped silently — not delivered, not counted, not a breach.
+// From a connection that never controlled, or later than that, it is a breach as before.
+//
+// THE TYPING SET: the names with accepted input in the last TYPING_WINDOW_MS. It is recomputed at
+// most once per TYPING_EVENT_MIN_MS while anyone is in it (which is also what clears it), sent as
+// `watch:typing` to every joined viewer when the SET changes (a new order alone is no news), and to a
+// viewer right after its meta on every (re)join while it is not empty — otherwise a viewer that
+// reconnects mid-typing would never learn it. A connection that loses control or ends leaves it at
+// once (the event follows within a tick).
 //
 // relay-host never tells us about ends it caused itself (`deny`, `close`): every such path goes
 // through `ended()`, which reports to the scheduler exactly once (the hosted-service pattern).
@@ -95,7 +128,9 @@ import type { RpcErr } from '../../shared/rpc'
 import { bytesToB64, bytesToHex } from '../../shared/watch-link/bytes'
 import { deriveWatchLinkKeys } from '../../shared/watch-link/keys'
 import {
+  INPUT_MAX,
   PASSWORD_MAX,
+  TYPING_NAMES_MAX,
   WATCH_CHAT_CAST,
   WATCH_EVENT,
   WATCH_INPUT_CAST,
@@ -112,6 +147,9 @@ import {
 } from '../../shared/watch-link/protocol'
 import type { HostTokenResult } from './api'
 import { unavailableCapture, type VisibleCapture } from './capture-route'
+import { createInputSplitter, createTypingTracker, type InputSplitter } from './control-input'
+import type { ControlInputChunk, WatcherInputRoute } from './pane-input'
+import { isTerminalReport } from '../terminal-reports'
 import { createStreamFilter, type StreamFilter } from './stream-filter'
 import { createTokenBucket, type TokenBucket } from './token-bucket'
 import {
@@ -149,6 +187,18 @@ export const VIEWER_BACKLOG_CLOSE = 8 * 1024 * 1024
 export const UNLOCK_MIN_INTERVAL_MS = 2_000
 export const WRONG_PER_CONN = 3
 export const WRONG_PER_LINK = 10
+/** A controller's input budget (UTF-8 bytes): its own token bucket, separate from the stream's. */
+export const INPUT_RATE = 64 * 1024
+export const INPUT_BURST = 256 * 1024
+/** Input is collected this long per connection, then delivered as one batch. */
+export const INPUT_BATCH_MS = 20
+/** The typing set is recomputed (and sent, when it changed) at most this often. */
+export const TYPING_EVENT_MIN_MS = 1000
+/** A viewer is told its input was dropped at most this often. */
+export const DROPPED_NOTICE_MIN_MS = 10_000
+/** Input from a connection that stopped controlling this recently is dropped silently: keystrokes in
+ *  flight when control ended are not a breach. Later than this, they are. */
+export const INPUT_GRACE_MS = 5000
 const RATE = 256 * 1024
 const BURST = 1024 * 1024
 
@@ -161,6 +211,9 @@ export interface WatchJoin {
   /** The stream is a tmux client's output (`PtyCreateResult.tmuxClient`), which tmux paints on the
    *  alternate screen whatever the pane's application does (R18). */
   altScreen: boolean
+  /** How a controller's input reaches this session's pane (`PtyManager.watcherInputRoute`). `none`
+   *  (Zellij, an unknown session; also what a missing or unknown answer reads as) refuses control. */
+  input: WatcherInputRoute
 }
 
 /**
@@ -183,6 +236,9 @@ export interface WatchPty {
   syncSize(sessionId: string): Promise<boolean>
   /** The session is still known to the pty layer (an exit can race the join or a capture — R30). */
   alive(sessionId: string): boolean
+  /** Deliver one chunk of a controller's input to the session's PANE (`PtyManager.controlInput`, never
+   *  a tmux client's key table). Whether it was delivered; a rejection counts as false. */
+  input(sessionId: string, chunk: ControlInputChunk): Promise<boolean>
 }
 export interface QuietClients {
   attach(sink: UiSink): number
@@ -223,7 +279,7 @@ export interface LinkViewer {
   waiting: boolean
   /** Unlocked this Control link with its password and has not lost control since. */
   controlling: boolean
-  /** Typed in the last few seconds. False until input is delivered. */
+  /** Gave accepted input in the last TYPING_WINDOW_MS, while controlling. */
   typing: boolean
 }
 export interface LinkHost {
@@ -264,6 +320,22 @@ interface Conn {
   wrong: number
   /** When this viewer's last unlock attempt was taken (a too-soon one is not). */
   lastUnlockAt: number
+  /** When this connection last stopped controlling (INPUT_GRACE_MS); null while it never did. */
+  controlStoppedAt: number | null
+  /** Bumped every time this connection loses control: a batch from before is never delivered. */
+  controlGen: number
+  /** The last landed join's input route; null before the first one. */
+  input: WatcherInputRoute | null
+  splitter: InputSplitter
+  inputBucket: TokenBucket
+  /** Input collected since the last flush: its chunks, the session it was typed at, its UTF-8 bytes. */
+  batch: ControlInputChunk[]
+  batchSession: string | null
+  batchBytes: number
+  batchTimer: unknown
+  /** A batch of this connection is in the host-wide flush chain and has not finished. */
+  inChain: boolean
+  lastDroppedAt: number
   // The watched session (null while waiting).
   sessionId: string | null
   altScreen: boolean
@@ -300,6 +372,12 @@ interface CaptureSlot {
 }
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+/** The same members, in any order (the typing set is a set: a new order alone is no news). */
+function sameMembers(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(b)
+  return a.every((x) => set.has(x))
+}
 
 /** The session a join attached to, if it answered one (a refused join may still have attached). */
 function joinedSessionId(r: unknown): string | null {
@@ -316,8 +394,11 @@ function normalizeJoin(r: unknown): WatchJoin | null {
   const o = r as Partial<WatchJoin>
   const dim = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0
   if (!dim(o.cols) || !dim(o.rows)) return null
-  return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true }
+  // A missing or unknown route refuses control: typing must never be guessed onto a backend.
+  const input = (INPUT_ROUTES as readonly unknown[]).includes(o.input) ? (o.input as WatcherInputRoute) : 'none'
+  return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true, input }
 }
+const INPUT_ROUTES: readonly WatcherInputRoute[] = ['tmux', 'ssh', 'write', 'none']
 
 /** A well-formed unlock payload, or null. The password is bounded before anything else reads it: over
  *  PASSWORD_MAX code points is malformed, and the cheap UTF-16 test first means a huge string is never
@@ -359,6 +440,15 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   /** Bumped by every change to control (off/on, a new password, the lock, allowControl): a check that
    *  started under an older epoch is void when it returns. */
   let controlEpoch = 0
+  /** One delivery at a time across the link: every controller's batch reaches the pane whole, in
+   *  flush order. Never rejects (each link is caught), so a failure cannot stall the chain. */
+  let inputChain: Promise<void> = Promise.resolve()
+  const tracker = createTypingTracker()
+  /** The typing set as last sent (names) and the viewers in it (for the owner's view). */
+  let typingNames: string[] = []
+  let typingIds: string[] = []
+  let typingTimer: unknown = null
+  let lastTypingAt = -Infinity
 
   const clearTimer = (h: unknown): void => {
     if (h !== null) deps.clearTimeout(h)
@@ -437,6 +527,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.sessionId = null
     c.streaming = false
     c.controlling = false
+    clearInput(c)
+    c.splitter.reset()
+    forgetTyping(c)
     if (sid !== null) leave(c.clientId, sid, c.viewerId, c)
     safe('the scheduler', () => c.ev.onClose())
     updateSyncTimer()
@@ -652,6 +745,11 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.settled = false
     c.followUpOnSettle = false
     c.waiting = false
+    c.input = res.input
+    // A terminal that cannot take input: whoever controls it stops (its keystrokes in flight get the
+    // grace), and the meta below says `unsupported`.
+    const demoted = res.input === 'none' && c.controlling
+    if (demoted) loseControl(c)
     // Meta after EVERY (re)attach: the viewer leaves `waiting` on it (R14).
     const meta: WatchMeta = {
       v: WATCH_PROTOCOL_VERSION,
@@ -665,6 +763,10 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     // A Control link's state for THIS viewer rides every (re)join; absent on every other role.
     if (record.role === 'controller') meta.control = controlStateFor(c)
     if (!send(c, WATCH_EVENT.meta, meta)) return
+    // The typing set is otherwise sent only when it changes: a viewer (re)joining mid-typing would
+    // never learn it.
+    if (typingNames.length > 0) send(c, WATCH_EVENT.typing, { names: typingNames })
+    if (demoted) safe('onChange', deps.onChange)
     clearTimer(c.settleTimer)
     c.settleTimer = deps.setTimeout(() => {
       c.settleTimer = null
@@ -685,6 +787,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const clientId = c.clientId
     // Deferred: a lifecycle event arrives from inside PtyManager's own delivery loop for that session.
     queueMicrotask(() => leave(clientId, sid, c.viewerId, c))
+    // Input typed at this session's screen never reaches the next session.
+    abandonInput(c)
     enterWaiting(c)
     scheduleRejoin(c)
     updateSyncTimer()
@@ -741,7 +845,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
         return
       }
       if (method === WATCH_INPUT_CAST) {
-        onInput(c)
+        onInput(c, args)
         return
       }
       if (method === WATCH_RELEASE_CAST) {
@@ -770,6 +874,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   /** This viewer's control state, as meta and every unprompted `watch:control` carry it. */
   function controlStateFor(c: Conn): WatchControlEvent {
     const ctl = record.control
+    // The watched terminal cannot take input (Zellij, an unknown session): no password changes that.
+    if (c.input === 'none') return { state: 'off', reason: 'unsupported' }
     if (c.controlling && ctl && ctl.enabled && !ctl.locked) return { state: 'controlling' }
     if (ctl?.locked) return { state: 'locked' }
     if (!ctl || !ctl.enabled) return { state: 'off' }
@@ -789,7 +895,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       return
     }
     if (state.state === 'locked' || state.state === 'off') {
-      sendControl(c, { state: state.state, reason: state.state })
+      sendControl(c, { state: state.state, reason: state.reason ?? state.state })
       return
     }
     const now = deps.now()
@@ -835,9 +941,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   /** A check whose answer no longer applies (control changed under it, or it failed): void, not
    *  wrong. Nothing is counted, and the viewer may try again. */
   function refuseVoid(c: Conn): void {
-    const state = controlStateFor(c).state
-    if (state === 'locked' || state === 'off') sendControl(c, { state, reason: state })
-    else sendControl(c, { state, reason: 'too-soon' })
+    const state = controlStateFor(c)
+    if (state.state === 'locked' || state.state === 'off') sendControl(c, { state: state.state, reason: state.reason ?? state.state })
+    else sendControl(c, { state: state.state, reason: 'too-soon' })
   }
   function wrongAttempt(c: Conn): void {
     c.wrong++
@@ -855,7 +961,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     // wiring slip), the next attempt would be verified again: say so loudly, and still demote and tell.
     if (record.control?.locked !== true) console.error('[watch-link] onControlLocked did not lock the link')
     for (const c of joinedConns()) {
-      c.controlling = false
+      loseControl(c)
       sendControl(c, { state: 'locked', reason: 'locked' })
     }
     safe('onChange', deps.onChange)
@@ -866,24 +972,188 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const ctl = record.control
     const usable = !!ctl && ctl.enabled && !ctl.locked
     for (const c of joinedConns()) {
-      if (!usable) c.controlling = false
+      if (!usable) loseControl(c)
       sendControl(c, controlStateFor(c))
     }
     safe('onChange', deps.onChange)
   }
   function onRelease(c: Conn): void {
     if (c.ended || c.joinedAt === null || !c.controlling) return
-    c.controlling = false
+    loseControl(c)
     sendControl(c, controlStateFor(c))
     safe('onChange', deps.onChange)
   }
-  function onInput(c: Conn): void {
+
+  // --- typing: the input path ---------------------------------------------------------------------------
+
+  /** This connection stops controlling: its pending input is discarded, an open paste forgotten, it
+   *  leaves the typing set, and its keystrokes still in flight get INPUT_GRACE_MS of silence. */
+  function loseControl(c: Conn): void {
+    if (!c.controlling) return
+    c.controlling = false
+    c.controlStoppedAt = deps.now()
+    c.controlGen++
+    clearInput(c)
+    c.splitter.reset()
+    forgetTyping(c)
+  }
+  function clearInput(c: Conn): void {
+    clearTimer(c.batchTimer)
+    c.batchTimer = null
+    c.batch = []
+    c.batchBytes = 0
+    c.batchSession = null
+  }
+  /** The watched session ended: pending input is dropped (and the controller told), and an open paste
+   *  is discarded whole when its end arrives. */
+  function abandonInput(c: Conn): void {
+    const had = c.batch.length > 0
+    clearInput(c)
+    c.splitter.discard('')
+    if (had) noteDropped(c)
+  }
+  /** "Some of your input did not reach the terminal", at most once per DROPPED_NOTICE_MIN_MS, and only
+   *  to a connection that is still controlling (one that lost control was told its new state). */
+  function noteDropped(c: Conn): void {
+    if (c.ended || controlStateFor(c).state !== 'controlling') return
+    const now = deps.now()
+    if (now - c.lastDroppedAt < DROPPED_NOTICE_MIN_MS) return
+    c.lastDroppedAt = now
+    sendControl(c, { state: 'controlling', reason: 'dropped' })
+  }
+  const withinGrace = (c: Conn): boolean => c.controlStoppedAt !== null && deps.now() - c.controlStoppedAt <= INPUT_GRACE_MS
+
+  function onInput(c: Conn, args: unknown[]): void {
     if (c.ended) return
     if (controlStateFor(c).state !== 'controlling') {
+      // Keystrokes in flight when control ended (released, demoted, or the record changed and the
+      // host has not been told yet) are dropped silently. From anyone else, or later, a breach.
+      if (c.controlling || withinGrace(c)) return
       policyBreach(c, `cast ${WATCH_INPUT_CAST}`)
       return
     }
-    // Accepted from a controller, and not delivered yet: no viewer byte reaches the pane.
+    const p = args[0]
+    const data = p && typeof p === 'object' ? (p as { data?: unknown }).data : undefined
+    if (typeof data !== 'string' || data.length === 0 || data.length > INPUT_MAX) {
+      policyBreach(c, `malformed ${WATCH_INPUT_CAST}`)
+      return
+    }
+    // The viewer's emulator answering the pane's own queries (DA, CPR, a colour) is not typing: every
+    // controller would answer every query again into the pane. Not counted against the budget.
+    if (isTerminalReport(data)) return
+    const bytes = Buffer.byteLength(data, 'utf8')
+    const sid = c.sessionId
+    // No session to type into (waiting), or over budget — the bucket, or a batch the panes have not
+    // taken yet already holding a burst: dropped, and the viewer told. Input is never held for a
+    // later session. The splitter still sees it, so a paste it belonged to is discarded whole.
+    if (sid === null || c.batchBytes + bytes > INPUT_BURST || !c.inputBucket.take(bytes)) {
+      c.splitter.discard(data)
+      noteDropped(c)
+      return
+    }
+    if (c.batchSession !== null && c.batchSession !== sid) abandonInput(c)
+    c.batchSession = sid
+    c.batchBytes += bytes
+    appendChunks(c, c.splitter.push(data))
+    if (c.name) tracker.note(c.viewerId, c.name, deps.now())
+    scheduleTyping()
+    if (c.batchTimer === null) {
+      c.batchTimer = deps.setTimeout(() => {
+        c.batchTimer = null
+        flushBatch(c)
+      }, INPUT_BATCH_MS)
+    }
+  }
+  /** Adjacent keys merge (up to INPUT_MAX units): one pane delivery per run of typing, not per cast. */
+  function appendChunks(c: Conn, chunks: ControlInputChunk[]): void {
+    for (const ch of chunks) {
+      const last = c.batch[c.batch.length - 1]
+      if (ch.kind === 'keys' && last?.kind === 'keys' && last.data.length + ch.data.length <= INPUT_MAX) {
+        c.batch[c.batch.length - 1] = { kind: 'keys', data: last.data + ch.data }
+      } else c.batch.push(ch)
+    }
+  }
+  /** Hand the connection's batch to the host-wide chain. While its previous batch is still there, this
+   *  one waits (and keeps collecting) and follows it the moment it finishes: one batch per connection
+   *  in the chain at most, so a slow pane cannot pile up deliveries. */
+  function flushBatch(c: Conn): void {
+    if (c.ended || stopped || c.inChain) return
+    // A marker prefix still held after a whole batch interval is keys (a lone Esc).
+    appendChunks(c, c.splitter.drain())
+    const chunks = c.batch
+    const session = c.batchSession
+    c.batch = []
+    c.batchBytes = 0
+    c.batchSession = null
+    if (chunks.length === 0 || session === null) return
+    const batch = { chunks, session, gen: c.controlGen }
+    c.inChain = true
+    // A rejection here would skip every later batch of every controller: caught, by name only.
+    inputChain = inputChain
+      .then(() => deliverBatch(c, batch))
+      .catch((err) => warn(null, 'the input chain failed', err instanceof Error ? err.name : 'not an Error'))
+  }
+  /** Deliver one batch whole, chunk by chunk, re-checking before each that its sender still controls,
+   *  under the same control period, the session it typed at. A false (or a rejection) stops it. */
+  async function deliverBatch(c: Conn, b: { chunks: ControlInputChunk[]; session: string; gen: number }): Promise<void> {
+    try {
+      for (const chunk of b.chunks) {
+        // Control ended since it was typed (and the viewer was told its new state): void, silently.
+        if (stopped || c.ended || c.controlGen !== b.gen || controlStateFor(c).state !== 'controlling') return
+        // The session it was typed at is gone: what is left did not reach the terminal.
+        if (c.sessionId !== b.session) {
+          noteDropped(c)
+          return
+        }
+        let ok = false
+        try {
+          ok = (await deps.pty.input(b.session, chunk)) === true
+        } catch (err) {
+          // Never the error's text: what failed to type may be in it.
+          warn(c, 'delivering input failed', err instanceof Error ? err.name : 'not an Error')
+        }
+        if (!ok) {
+          noteDropped(c)
+          return
+        }
+      }
+    } finally {
+      c.inChain = false
+      // What it collected meanwhile, when its own timer has already fired.
+      if (c.batchTimer === null) safe('an input flush', () => flushBatch(c))
+    }
+  }
+
+  // --- typing: who is typing --------------------------------------------------------------------------
+
+  function forgetTyping(c: Conn): void {
+    tracker.drop(c.viewerId)
+    scheduleTyping()
+  }
+  /** Recompute the typing set now, or at most TYPING_EVENT_MIN_MS after the last time. */
+  function scheduleTyping(): void {
+    if (stopped || typingTimer !== null) return
+    const wait = TYPING_EVENT_MIN_MS - (deps.now() - lastTypingAt)
+    if (wait <= 0) evaluateTyping()
+    else typingTimer = deps.setTimeout(evaluateTyping, wait)
+  }
+  function evaluateTyping(): void {
+    typingTimer = null
+    if (stopped) return
+    const now = deps.now()
+    lastTypingAt = now
+    const names = tracker.names(now).slice(0, TYPING_NAMES_MAX)
+    const ids = joinedConns()
+      .filter((c) => tracker.typing(c.viewerId, now))
+      .map((c) => c.viewerId)
+    const namesChanged = !sameMembers(names, typingNames)
+    const idsChanged = !sameMembers(ids, typingIds)
+    typingNames = names
+    typingIds = ids
+    if (namesChanged) for (const c of joinedConns()) send(c, WATCH_EVENT.typing, { names })
+    if (namesChanged || idsChanged) safe('onChange', deps.onChange)
+    // While anyone is in the set, look again in a second (that is also what clears it).
+    if (names.length > 0 && typingTimer === null && !stopped) typingTimer = deps.setTimeout(evaluateTyping, TYPING_EVENT_MIN_MS)
   }
 
   // --- listeners and viewer sessions ----------------------------------------------------------------
@@ -911,6 +1181,17 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       controlling: false,
       wrong: 0,
       lastUnlockAt: -Infinity,
+      controlStoppedAt: null,
+      controlGen: 0,
+      input: null,
+      splitter: createInputSplitter(),
+      inputBucket: createTokenBucket({ ratePerSec: INPUT_RATE, burst: INPUT_BURST, now: deps.now }),
+      batch: [],
+      batchSession: null,
+      batchBytes: 0,
+      batchTimer: null,
+      inChain: false,
+      lastDroppedAt: -Infinity,
       sessionId: null,
       altScreen: false,
       joining: false,
@@ -1037,6 +1318,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
 
   function viewers(): LinkViewer[] {
     const out: LinkViewer[] = []
+    const now = deps.now()
     for (const c of conns) {
       if (c.joinedAt === null || c.ended) continue
       out.push({
@@ -1046,7 +1328,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
         waiting: c.joinRefused && c.sessionId === null,
         // The effective state: a flag the host has not yet been told to clear never reads as control.
         controlling: controlStateFor(c).state === 'controlling',
-        typing: false
+        typing: tracker.typing(c.viewerId, now)
       })
     }
     return out
@@ -1120,6 +1402,10 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       c.session?.close()
       ended(c)
     }
+    clearTimer(typingTimer)
+    typingTimer = null
+    typingNames = []
+    typingIds = []
     safe('onChange', deps.onChange)
   }
 

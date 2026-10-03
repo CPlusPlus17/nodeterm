@@ -90,11 +90,12 @@ function fakeHosts() {
 }
 
 const fakePty = (over: Partial<WatchPty> = {}): WatchPty => ({
-  join: async () => ({ sessionId: 's1', cols: 80, rows: 24, altScreen: true }),
+  join: async () => ({ sessionId: 's1', cols: 80, rows: 24, altScreen: true, input: 'tmux' }),
   leave: () => {},
   captureVisible: async () => ({ screen: '', cursor: null }),
   syncSize: async () => true,
   alive: () => true,
+  input: async () => true,
   ...over
 })
 
@@ -755,7 +756,7 @@ describe('createWatchLinkService — the host seams', () => {
   })
 
   it('checks the node before every join: absent ends the link (node-gone + revoke), unknown joins (R29/G8)', async () => {
-    const join = vi.fn(async () => ({ sessionId: 's1', cols: 80, rows: 24, altScreen: true }))
+    const join = vi.fn(async () => ({ sessionId: 's1', cols: 80, rows: 24, altScreen: true, input: 'tmux' as const }))
     const t = service({ pty: fakePty({ join }) })
     const r = await t.s.create(req())
     if (!r.ok) throw new Error('create failed')

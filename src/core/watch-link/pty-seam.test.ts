@@ -18,7 +18,7 @@ describe('createWatchPty — the WatchPty seam both shells wire (R39)', () => {
   it('joins with the host ids only (never a size), and reports the JOINED session size and tmux-ness', async () => {
     const m = fakeManager()
     const pty = createWatchPty(m as unknown as WatchPtyManager)
-    expect(await pty.join(7, 'n1', 'v-1')).toEqual({ sessionId: 's1', cols: 120, rows: 40, altScreen: true })
+    expect(await pty.join(7, 'n1', 'v-1')).toEqual({ sessionId: 's1', cols: 120, rows: 40, altScreen: true, input: 'none' })
     expect(m.joinAsWatcher).toHaveBeenCalledWith(7, { persistKey: 'n1', viewerId: 'v-1' })
     expect(m.sessionSize).toHaveBeenCalledWith('s1')
     expect(m.kill).not.toHaveBeenCalled()

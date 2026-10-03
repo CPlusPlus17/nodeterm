@@ -41,11 +41,14 @@ export function createWatchPty(pty: WatchPtyManager, remoteFor: (nodeId: string)
         pty.kill(clientId, res.sessionId, viewerId)
         return null
       }
-      return { sessionId: res.sessionId, cols: size.cols, rows: size.rows, altScreen: res.tmuxClient === true }
+      // Control is not wired to the pane yet: every join answers `none` (control refused) and no
+      // input is delivered (fail closed).
+      return { sessionId: res.sessionId, cols: size.cols, rows: size.rows, altScreen: res.tmuxClient === true, input: 'none' }
     },
     leave: (clientId, sessionId, viewerId) => pty.kill(clientId, sessionId, viewerId),
     captureVisible: (sessionId) => pty.captureVisible(sessionId),
     syncSize: (sessionId) => pty.syncWatcherClientSize(sessionId),
-    alive: (sessionId) => pty.hasSession(sessionId)
+    alive: (sessionId) => pty.hasSession(sessionId),
+    input: async () => false
   }
 }

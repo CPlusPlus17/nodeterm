@@ -65,7 +65,7 @@ function linksOver(store: WorkspaceStore) {
     clients: { attach: () => 1, detach: () => {} },
     pty: {
       join: async () => null, leave: () => {}, captureVisible: async () => ({ screen: '', cursor: null }),
-      syncSize: async () => true, alive: () => true
+      syncSize: async () => true, alive: () => true, input: async () => false
     },
     emit: () => {},
     createHost: (): LinkHost => ({
