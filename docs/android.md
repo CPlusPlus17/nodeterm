@@ -5,17 +5,19 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Current source checkpoint (2026-10-04, A100–A110).** The branch adds full retained
-terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
-offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
-questions. Source Control now works over direct SSH. A private typed file service lets a current
-Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
-an upstream contribution; no PR has been opened. Private beta 12/code 13 is prepared with passing release checks.
-Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
-ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
-Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
-the maintainers; the user has no backend checkout. Canvas-registered cold New over bare SSH still
-needs a host-owned launch API. See the audit and Known gaps for the remaining limits.
+**Current source checkpoint (2026-10-04, A100–A112).** The branch adds retained terminal history search,
+trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
+rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
+Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
+with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
+open local folder project (A111); the host resolves its command, account, environment and hooks.
+Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). This prepares the upstream Android contribution; no PR
+has been opened. Beta 13/code 14 release verification is in progress; beta 12 remains prepared.
+Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
+**10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
+and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
+source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
+over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
 
 **Post-beta-10 additions (2026-10-04).** Sessions search filters displayed names, agent labels,
 project names/folders and phone-terminal folders while keeping the existing project/status groups.
@@ -345,7 +347,7 @@ describes as the future. The Android client implements what the host actually se
 | Wake on open (`A103`, `A104`) | existing remote-viewer nudge wakes a mounted node or resolves one saved offscreen/closed-project node without switching views; exact owner/generation and Pause guards, no fresh shell or uncertain input replay | explicit Sleeping wake offer uses the agent's measured approval policy and host capabilities; the existing shell/WakeContext checks and user tap remain |
 | Wake, refresh, rename | `node.wake\|refresh\|rename` | current Desktop's selected-profile SSH service (`A108`); older hosts need an allowed relay; Server has no node nudges |
 | Board | `projects.ensureBoard\|setCardColumn\|editCardLabels` | current Desktop/Server selected-profile service (`A108`), using the real save queue; older hosts need an allowed relay |
-| New session on the canvas | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
+| New session on the canvas | SSH `sessions.createManagedV1` → host receipt → guarded attach; legacy relay `pty.attach` + `projects.registerNode` | A current enabled POSIX tmux host creates/registers/launches in an open local folder project. Older hosts retain the relay leg (`A26`). Durable uncertain requests never replay or switch transport. Physical managed/cellular cases remain pending. |
 | Explicit plain terminal on the SSH host (`A90`) | separate from canvas registration | Sessions → New terminal → Home/project/custom absolute folder → Create; phone-owned `nodeterm-phone` session, rediscovered under Phone terminals; focused Pixel creation/history/restart/update/reconnect/exact End pass, beta 10/code 11 installed. Item 32 Partial; relay plain-shell creation/input/End pass, managed/cellular pending; A91 empty-host variant passes |
 | Source control (`A107`) | unchanged `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd,…}` and typed result models; host project-root jail | the same eight verbs over typed POSIX Git argv, physically jailed to listed local/driven folders and repository root; excludes third-machine projects; bounded output, confirmed writes and exact missing-upstream-only push fallback |
 | Answer a held approval (`A105`) | `approvals.answer {nodeId, pendingId, decision}` keeps allow/deny and adds allow-always plus original `suggestionIndex`; host-owned live-card/request validation; honest answered/reason outcome | legacy allow/deny file unchanged; remembered reply is marker + request-derived hook JSON, streamed through stdin with post-stream request guard and confirmed status |
@@ -371,9 +373,30 @@ hook holds the request the prompt is not on screen, so the keystroke lands in th
 phone treats as "open the session" — never a guessed keystroke. The iOS app can adopt both verbs
 unchanged.
 
+**Host-owned managed SSH New (`A111`).** A current selected-profile service advertises
+`sessions.createManagedV1` only when Linux/macOS tmux is actually enabled and available. The
+request carries a creation UUID, project, kind, agent/account, optional title and initial dimensions;
+it carries no executable, cwd, env or hook identity. The actual WorkspaceStore/planner and PTY
+manager resolve launch facts, exclusively create one `node-terminal` session, attest its kernel
+process birth, publish the node, then submit the host command once. Shared project files carry
+portable cwd; shell stays in machine-local execution metadata. A private 0700 directory/0600 phase
+journal is synced before terminal side effects. Its actual command stays private; uncertain shared
+nodes contain an inert manual recovery notice. Duplicate/restarted requests never relaunch.
+
+The Android host-scoped checkpoint commits before dispatch and retains the returned public receipt
+until the first SSH viewer is confirmed. Adoption pins selected profile, service instance, session
+creation, exact pane/PID/birth and marker, then confirms the newly allocated SSH tty attached to
+that generation. It never creates an absent session or falls back after uncertainty. Explicit
+"I checked the computer" permits discarding stale proof, followed by a separate list/open action.
+The account picker freezes its choice; System does not silently take a later project default.
+Managed canvas End still needs the relay so the node is removed from the canvas; direct SSH
+Close leaves it running. Phone-owned plain terminal End keeps its separate exact-owned behavior.
+Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Claude startup.
+iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
+
 ## What is verified, and how
 
-**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+**Historical prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
 `b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
 checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
 Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
@@ -1859,6 +1882,12 @@ later fix left to a device.
     override conflicting create hints, and joining a warm session does not change its launch facts.
     Repeat with capable non-Claude agents and their project approval modes; verify the host Codex
     vocabulary and unsupported-mode defaults against the actual CLI, without a sandbox bypass.
+    With an updated enabled Linux/macOS tmux host and beta 13, repeat New session over direct SSH
+    for a shell and managed Claude account. Confirm real cwd/account/environment/hooks, canvas
+    registration and Inbox status; dismiss/background during creation, restart the app and reconnect.
+    Lost replies, a restarted service, changed account/folder or replaced/multiple panes must require
+    inspection without creating or launching again. A confirmed viewer retains normal reconnect.
+    This new variant is Pending and does not inherit the earlier relay/plain-shell passes. *(A111)*
     Separately, on the intended Pixel's installed beta 10 / code 11
     over manual SSH/WireGuard use Sessions → New terminal → project folder → Create, then create
     another in Home; also check a custom absolute folder. Confirm real shell cwd, input and history; disconnect/reopen and
@@ -2140,7 +2169,8 @@ the wider relay action matrix remain device checks.
   without an actions service. A current selected-profile service supplies owned Board writes on
   Desktop/Server and delivery-only Wake/Refresh/Rename on Desktop; Server has no node nudges.
   Missing service capabilities have no relay fallback on a manually added host, and
-  canvas-registered New still needs the relay. Phone-owned plain SSH New remains separate.
+  A111 supports canvas-registered New on a current enabled local POSIX tmux profile. Missing
+  creation capabilities still need the relay; phone-owned plain SSH New remains separate.
   It gets no push either: the grant an iOS phone drops in
   such a host's `~/.nodeterm/push-grants` and the backend's `/v1/push` fan-out are APNs-only (see
   Push), and Android drops none, so the phone polls it like any other computer; docs/SERVER.md's
@@ -2186,8 +2216,9 @@ the wider relay action matrix remain device checks.
   mounted edits. Old/unavailable services may use an allowed relay before submission; a submitted
   unanswered mutation never replays or switches transport. A Desktop can serve its own SSH-project
   metadata; another desktop's driven project is refused without selected-profile ownership.
-  Canvas-registered New is still relay-only: writing registration metadata cannot safely create
-  its cold managed shell/hook environment. The separate phone-owned plain SSH terminal remains.
+  A111 adds genuine host-owned create/launch/register for open local folder projects using enabled
+  POSIX tmux. Windows/non-tmux and third-machine creation remain unsupported. Ordinary attach
+  never creates a missing canvas node. The separate phone-owned plain SSH terminal remains.
 - **Direct SSH source control is implemented (`A107`); its physical matrix remains
   open.** The eight existing typed verbs run Git on listed local/driven folders of that computer,
   with physical cwd/repository-root jails, bounded output and honest confirmed/uncertain write

@@ -1,6 +1,7 @@
 package dev.nodeterm.android.ui
 
 import android.Manifest
+import android.widget.Toast
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -163,6 +164,13 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         ) {
                             Text(st.message)
                             Button(onClick = { controller.reattach() }) { Text("Reattach") }
+                            if (controller.managedReceiptBlocked) {
+                                Text("The created session may still be running. Check it on the computer before discarding its saved attachment receipt.")
+                                TextButton(onClick = {
+                                    try { if (controller.discardManagedReceipt()) nav.pop() }
+                                    catch (e: Exception) { Toast.makeText(context, e.message ?: "Couldn't save the receipt decision.", Toast.LENGTH_LONG).show() }
+                                }) { Text("I checked the computer") }
+                            }
                         }
                         is TermState.RelayOffer -> Column(
                             Modifier.align(Alignment.Center).blockTouchesBelow().background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),

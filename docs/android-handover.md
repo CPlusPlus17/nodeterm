@@ -3,22 +3,24 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A110`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A112`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-04, A100–A110).** The branch adds full retained
-terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
-offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
-questions. Source Control now works over direct SSH. A private typed file service lets a current
-Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
-an upstream contribution; no PR has been opened. Private beta 12/code 13 is prepared with passing release checks.
-Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
-ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
-Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
-the maintainers; the user has no backend checkout. Canvas-registered cold New over bare SSH still
-needs a host-owned launch API. See the audit and Known gaps for the remaining limits.
+**Current source checkpoint (2026-10-04, A100–A112).** The branch adds retained terminal history search,
+trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
+rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
+Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
+with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
+open local folder project (A111); the host resolves its command, account, environment and hooks.
+Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). This prepares the upstream Android contribution; no PR
+has been opened. Beta 13/code 14 release verification is in progress; beta 12 remains prepared.
+Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
+**10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
+and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
+source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
+over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
 
 - **Four additions are implemented after the beta-10 checkpoint (2026-10-04).** Sessions search,
   live All computers refresh, Find in captured terminal output, and recursive SSH Include anchor
@@ -27,7 +29,7 @@ needs a host-owned launch API. See the audit and Known gaps for the remaining li
   restoration/fixture Forget and background notification checks. The current device ledger stays
   10 Pass / 22 Partial / 32 Pending; new search/refresh/Include flows need physical verification.
 
-**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+**Historical prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
 `b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
 checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
 Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
@@ -252,7 +254,7 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ### Beta 12 prepared; merged release checks pass (2026-10-04)
 
-**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+**Historical prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
 `b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
 checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
 Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
@@ -1227,7 +1229,7 @@ section before starting, since the verifier corrections take precedence):
 3. **Verify the new source flows and remaining known gaps.** Batch D/E and A103/A104 source
    changes are done. Remaining physical/live cases include relay cellular/SAS-denial/revoke,
    offscreen Sleeping wake and non-Claude permission policy. Verify retained history, structured
-   hook answers, SSH Git and the selected-profile Board/node service too. Read-ack ownership is
+   hook answers, SSH Git, the selected-profile Board/node service and A111 managed SSH New too. Read-ack ownership is
    locally fixed in `A82`; finish its device verification.
    For iOS adoption, @eneskirca should read `relayApproved` and `sshHostKeyFingerprints` in the sealed
    `/pair` answer and `lan` beside `projects.list` output; iOS also needs to send `boxPublicKey`
@@ -1273,7 +1275,8 @@ section before starting, since the verifier corrections take precedence):
   local/driven folders independently of the service; Server advertises Board only. A manual
   SSH host has no relay fallback when a service capability is missing. The service admits only
   selected-profile ownership, including Desktop's own SSH-project metadata, never another
-  desktop's driven projects. Managed canvas New over bare SSH remains unsupported.
+  desktop's driven projects. Managed canvas New is implemented in A111 for a current local
+  POSIX tmux profile; Windows/non-tmux and another desktop's driven projects remain unsupported.
   Phone-owned plain SSH New remains separate, with historical focused Pixel proof.
   No immediate FCM or Live-Activity equivalent (A25); A93 needs the hosted relay maintainers.
   All-computers lifecycle/notifications and new source flows need physical verification. Dictation
@@ -1360,6 +1363,20 @@ What is in the tree:
     `lib/links.ts`).
   - CLAUDE.md gained an Android paragraph under Conventions → three surfaces, and CONTRIBUTING.md
     and README.md gained notes.
+
+**A111 — managed New over direct SSH (2026-10-04).** The host creates a genuine local tmux
+pane through normal PTY preparation, registers canonical project/local execution facts, and
+submits its own planned agent command once. Request UUIDs and public attachment receipts persist
+on the phone before dispatch and until an actual SSH viewer is confirmed. The private host phase
+journal has file/directory sync barriers; after uncertainty/restart it permits inspection, never
+blind replay. The shared recovery marker contains only an inert notice, not an expanded command.
+Managed canvas End still needs the relay; closing an SSH viewer leaves it running.
+System account selection stays explicit; removed/pending/remote accounts and changed folders are
+refused at spawn. Current runtime, kernel process birth and selected-profile service identity are
+required for the first attach. Non-tmux/Windows and third-machine creation remain unsupported.
+Actual isolated native-PTY/tmux creation with a fixture agent passes; live CLI and Pixel checks
+remain open. Companion interop and release gates are being completed for beta 13. iOS adoption
+of the new advertised action and receipt is owed to @eneskirca.
 
 ## What is verified, and what is not
 

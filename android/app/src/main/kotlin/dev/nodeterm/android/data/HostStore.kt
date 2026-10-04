@@ -5,6 +5,7 @@ import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.SeenLog
+import dev.nodeterm.protocol.host.ManagedSessionCreation
 import dev.nodeterm.protocol.secure.PlainStorage
 import dev.nodeterm.protocol.ssh.ManualHost
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,7 +84,7 @@ class HostStore(context: Context) {
     @Synchronized
     fun remove(id: String, successor: String? = null) {
         save(_hosts.value.filterNot { it.id == id })
-        prefs.edit().remove("route.$id").remove("relayApproved.$id").apply()
+        prefs.edit().remove("route.$id").remove("relayApproved.$id").remove("managedCreation.$id").apply()
         when (successor) {
             null -> seenLog.forgetHost(id)
             id -> Unit
@@ -132,6 +133,16 @@ class HostStore(context: Context) {
         private fun write(edit: android.content.SharedPreferences.Editor, durable: Boolean) {
             if (!durable) return edit.apply()
             if (!edit.commit()) throw java.io.IOException("Couldn't save the phone's relay id.")
+        }
+    }
+
+    /** Public creation identities only, scoped to this exact host record. Commit before dispatch. */
+    fun managedCreationStorage(hostId: String): ManagedSessionCreation.Storage = object : ManagedSessionCreation.Storage {
+        override fun read(): String? = prefs.getString("managedCreation.$hostId", null)
+        override fun write(encoded: String) {
+            if (!prefs.edit().putString("managedCreation.$hostId", encoded).commit()) {
+                throw java.io.IOException("Couldn't save the pending session creation. Nothing new will be sent.")
+            }
         }
     }
 

@@ -48,6 +48,8 @@ import dev.nodeterm.android.conn.ConnState
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.LegRouting
+import dev.nodeterm.protocol.host.ManagedSessionChoice
+import dev.nodeterm.protocol.host.ManagedSessionCreation
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.AllComputers
 import dev.nodeterm.protocol.model.NewSessionChoice
@@ -74,6 +76,9 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     // kept while another tab shows. The holder itself lives in this entry's saved state.
     val tabStates = rememberSaveableStateHolder()
     var newSession by remember { mutableStateOf(false) }
+    val managedCreation = session.managedSessionCreation
+    val managedState by managedCreation.state.collectAsState()
+    var managedTicket by remember { mutableStateOf<Long?>(null) }
     val creation = session.sshTerminalCreation
     val creationState by creation.state.collectAsState()
     var terminalTicket by remember { mutableStateOf<Long?>(null) }
@@ -89,8 +94,24 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
         dismissTerminal()
         nav.push(dev.nodeterm.android.Route.Terminal(hostId, request.nodeId, "Terminal"))
     }
+    fun dismissNewSession() {
+        managedTicket?.let(managedCreation::hide)
+        managedTicket = null
+        newSession = false
+    }
+    fun openManaged(ticket: Long) {
+        if (!hostStarted || managedTicket != ticket || nav.top.key != screenKey || graph.hosts.get(hostId) == null) return
+        try {
+            val ready = managedCreation.takeReady(ticket) ?: return
+            dismissNewSession()
+            nav.push(dev.nodeterm.android.Route.Terminal(hostId, ready.receipt.nodeId, ready.request.choice.title ?: "Terminal"))
+        } catch (e: Exception) { Toast.makeText(context, e.message ?: "Couldn't save the creation result.", Toast.LENGTH_LONG).show() }
+    }
     DisposableEffect(creation) {
         onDispose { terminalTicket?.let(creation::hide) }
+    }
+    DisposableEffect(managedCreation) {
+        onDispose { managedTicket?.let(managedCreation::hide) }
     }
 
     // Watch (the 8 s poll) only while the screen is STARTED: a backgrounded app used to keep
@@ -98,28 +119,35 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     LifecycleStartEffect(hostId) {
         hostStarted = true
         if (terminalTicket != null) terminalTicket = creation.show()
+        if (managedTicket != null) managedTicket = managedCreation.show()
         session.startWatching()
         onStopOrDispose {
             hostStarted = false
             terminalTicket?.let(creation::hide)
+            managedTicket?.let(managedCreation::hide)
             session.stopWatching()
         }
     }
 
     // One count for this tab, the computer's row in the list and the All computers screen (A55).
     val needsYou = AllComputers.needsYou(snapshot)
-    // New session goes through nodeterm the app (the relay's `projects.registerNode`): on the LAN
-    // (direct SSH) that is the relay leg opened next to it, and where this phone has none the button
-    // stays, disabled, with the reason (audit A26) — it used to vanish without a word.
+    // A current selected profile can create and hand off a managed terminal directly over SSH.
+    // Older hosts keep the existing relay creation route and its visible refusal reason (A26).
     val offersSshTerminal = (state as? ConnState.Connected)?.kind == TransportKind.SSH
-    val offersNew = state is ConnState.Connected && NewSessionChoice.offeredProjects(snapshot).isNotEmpty()
+    val managedNew = offersSshTerminal && session.connection?.capabilities?.managedCreate == true
+    val managedPending = managedState is ManagedSessionCreation.State.Creating || managedState is ManagedSessionCreation.State.Ready || managedState is ManagedSessionCreation.State.Uncertain
+    val offersNew = state is ConnState.Connected && NewSessionChoice.offeredProjects(snapshot).isNotEmpty() || managedPending
+    fun showNewSession() {
+        managedTicket = if (managedNew || managedPending) managedCreation.show() else null
+        newSession = true
+    }
     // Re-asked when what the routing reads changes: the connection, each listing (it says whether the
     // computer advertises its relay right now), and the stored relay leg — a late adoption stores a
     // token in the background, which moves the secrets' revision and the host record, not the listing.
     val secretsRevision by graph.secure.revision.collectAsState()
     val hostRecords by graph.hosts.hosts.collectAsState()
     val newRoute = remember(state, snapshot, secretsRevision, hostRecords) { session.route(Capability.REGISTER_NODE) }
-    val newBlocked = (newRoute as? LegRouting.Leg.Unavailable)?.reason
+    val newBlocked = if (managedNew || managedPending) null else (newRoute as? LegRouting.Leg.Unavailable)?.reason
     val relayApproval by session.relayApproval.collectAsState()
 
     Scaffold(
@@ -158,10 +186,10 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
                     if (offersNew) {
                         if (newBlocked == null) {
                             if (offersSshTerminal) {
-                                Button(onClick = { newSession = true }) { Text("New session") }
+                                Button(onClick = { showNewSession() }) { Text("New session") }
                             } else {
                                 ExtendedFloatingActionButton(
-                                    onClick = { newSession = true },
+                                    onClick = { showNewSession() },
                                     icon = { Icon(Icons.Filled.Add, null) },
                                     text = { Text("New session") }
                                 )
@@ -253,12 +281,22 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     if (newSession) {
         NewSessionDialog(
             snapshot = snapshot,
-            onDismiss = { newSession = false },
+            onDismiss = { dismissNewSession() },
             onCreate = { request ->
                 newSession = false
                 PendingLaunches.put(request)
                 nav.push(dev.nodeterm.android.Route.Terminal(hostId, request.nodeId, request.title))
                 Toast.makeText(context, "Starting ${request.title}…", Toast.LENGTH_SHORT).show()
+            },
+            onManagedCreate = managedTicket?.let { ticket -> { choice: ManagedSessionChoice ->
+                managedCreation.submit(ticket, choice) { withContext(Dispatchers.Main) { openManaged(ticket) } }
+                Unit
+            } },
+            managedState = managedState.takeIf { managedTicket != null },
+            onOpenManaged = { managedTicket?.let(::openManaged) },
+            onCheckedManaged = {
+                try { managedTicket?.let(managedCreation::acknowledgeChecked) }
+                catch (e: Exception) { Toast.makeText(context, e.message ?: "Couldn't save the pending creation.", Toast.LENGTH_LONG).show() }
             }
         )
     }

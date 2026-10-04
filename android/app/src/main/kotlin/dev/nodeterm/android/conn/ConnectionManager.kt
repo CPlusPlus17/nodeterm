@@ -11,6 +11,8 @@ import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.InboxNotificationActions
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.ListingFailure
+import dev.nodeterm.protocol.host.ManagedSessionCreation
+import dev.nodeterm.protocol.host.ManagedSessionRefusedException
 import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.host.RelayApprovalGate.Trigger
 import dev.nodeterm.protocol.host.RelayConnectStatus
@@ -102,6 +104,20 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     val sshTerminalCreation = SshTerminalCreation(graph.scope, { request ->
         createAndRefreshSshTerminal(request.nodeId, request.cwd)
     }, definitiveFailure = { it is IllegalArgumentException || it is SshTerminalCreationRefusedException })
+
+    val managedSessionCreation = ManagedSessionCreation(graph.scope, graph.hosts.managedCreationStorage(hostId),
+        prepare = { choice -> inBackground {
+            val ssh = ensureConnected(Trigger.USER) as? SshHostConnection
+                ?: throw ManagedSessionRefusedException("Connect over SSH to create this managed session.")
+            ssh.prepareManagedSession(choice)
+        } },
+        create = { request -> inBackground {
+            try {
+                val ssh = ensureConnected(Trigger.BACKGROUND) as? SshHostConnection
+                    ?: throw ManagedSessionRefusedException("The SSH route changed before creation was sent. Refresh and try again.")
+                ssh.createManagedSession(request)
+            } finally { refreshNow(Trigger.BACKGROUND) }
+        } })
 
     suspend fun createAndRefreshSshTerminal(nodeId: String, cwd: String?) = inBackground {
         try {

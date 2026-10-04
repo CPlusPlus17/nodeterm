@@ -51,6 +51,8 @@ import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.ContextFill
 import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.NewSessionChoice
+import dev.nodeterm.protocol.host.ManagedSessionChoice
+import dev.nodeterm.protocol.host.ManagedSessionCreation
 import dev.nodeterm.protocol.model.NodeInfo
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsSnapshot
@@ -384,8 +386,13 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
 }
 
 /** New session: a project on THIS computer, an agent (or a plain shell), and for Claude an account. */
+private fun noManagedAction() = Unit
+
 @Composable
-fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate: (LaunchRequest) -> Unit) {
+fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate: (LaunchRequest) -> Unit,
+                     onManagedCreate: ((ManagedSessionChoice) -> Unit)? = null,
+                     managedState: ManagedSessionCreation.State? = null,
+                     onOpenManaged: () -> Unit = ::noManagedAction, onCheckedManaged: () -> Unit = ::noManagedAction) {
     // Only projects the desktop can register a node in: on this computer, with a folder (A14).
     val projects = NewSessionChoice.offeredProjects(snapshot)
     // The user's taps are remembered, but the listing is re-fetched under the open dialog, so a tap
@@ -400,12 +407,21 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
     // again whenever the selection moves to another project.
     var accountPick by remember(selected?.id) { mutableStateOf(Launch.defaultAccount(settings, selected)) }
     val accountId = NewSessionChoice.account(settings, selected, accountPick)
+    val editable = managedState == null || managedState is ManagedSessionCreation.State.Idle || managedState is ManagedSessionCreation.State.Refused
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New session") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                when (val current = managedState) {
+                    is ManagedSessionCreation.State.Creating -> item { Text("Creating the session on the computer… You can close this dialog; creation will finish there.") }
+                    is ManagedSessionCreation.State.Uncertain -> item { Text(current.message + " Refresh the sessions list or inspect the computer before starting another session.") }
+                    is ManagedSessionCreation.State.Ready -> item { Text("The computer created the session. Open it to view the existing terminal.") }
+                    is ManagedSessionCreation.State.Refused -> item { Text(current.message) }
+                    else -> Unit
+                }
+                if (editable) {
                 item { Text("Project", style = MaterialTheme.typography.labelLarge) }
                 if (projects.isEmpty()) {
                     item {
@@ -438,13 +454,23 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
                         }
                     }
                 }
+                }
             }
         },
         confirmButton = {
-            TextButton(enabled = selected != null, onClick = start@{
+            if (managedState is ManagedSessionCreation.State.Ready) {
+                TextButton(onClick = onOpenManaged) { Text("Open session") }
+            } else if (managedState is ManagedSessionCreation.State.Uncertain) {
+                TextButton(onClick = onCheckedManaged) { Text("I checked the computer") }
+            } else TextButton(enabled = selected != null && editable, onClick = start@{
                 val p = selected ?: return@start
                 val a = agent
                 val acct = if (a == Agent.CLAUDE) accountId else null
+                if (onManagedCreate != null) {
+                    onManagedCreate(ManagedSessionChoice(projectId = p.id, kind = if (a == null) "shell" else "agent",
+                        agentId = a?.id, accountId = acct, title = a?.label ?: "Terminal"))
+                    return@start
+                }
                 val cmd = if (a != null) Launch.launchCommand(a, settings, acct, p.cwd, p.defaultPermissionMode)
                 else p.cwd?.let { if (Regex("^/[^'\\u0000-\\u001f]*$").matches(it)) "cd '$it'" else null }
                 onCreate(

@@ -6,17 +6,20 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Current source checkpoint (2026-10-04, A100–A110).** The branch adds full retained
-terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
-offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
-questions. Source Control now works over direct SSH. A private typed file service lets a current
-Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
-an upstream contribution; no PR has been opened. Private beta 12/code 13 is prepared with passing release checks.
-Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
-ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
-Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
-the maintainers; the user has no backend checkout. Canvas-registered cold New over bare SSH still
-needs a host-owned launch API. See the audit and Known gaps for the remaining limits.
+**Current source checkpoint (2026-10-04, A100–A112).** The branch adds retained terminal history search,
+trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
+rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
+Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
+with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
+open local folder project (A111); the host resolves its command, account, environment and hooks.
+Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Managed canvas End still requires the relay;
+closing the SSH viewer leaves the session running. This prepares the upstream Android contribution; no PR
+has been opened. Beta 13/code 14 release verification is in progress; beta 12 remains prepared.
+Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
+**10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
+and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
+source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
+over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
 
 **New work after beta 10 (2026-10-04):** the branch adds Sessions search by name, agent and folder;
 live refresh on All computers while visible; and captured-output Copy-sheet search,
@@ -24,7 +27,7 @@ with highlighted matches and Previous/Next. The computer now discovers SSH host-
 recursive configuration Includes. Beta 11/code 12 is prepared locally; the Pixel still runs
 beta 10/code 11. Phone checks remain paused, so none of these additions has a physical pass.
 
-**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+**Historical prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
 `b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
 checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
 Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
@@ -336,7 +339,7 @@ tested where the layer allows, and the numbered
 | Sleeping (Eco) session opened | ✓ | Relay wakes an eligible owned offscreen/closed-project node without switching tabs. Direct SSH offers an explicit wake tap. Both apply the agent's measured policy and preserve Pause/owner/process guards |
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay when it is the computer's own; a session another computer's nodeterm runs there, or one no listing names, is not offered the relay |
 | Terminal access to the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Direct terminal access through this computer needs relay; a current Desktop's SSH actions service can separately handle its owned SSH-project Board metadata and node nudges |
-| New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches. On your network the phone opens the relay leg next to SSH for it; with no relay leg (remote access off) the button is disabled and says why |
+| New session (agent / shell) → registered on the canvas | SSH / relay | Current Linux/macOS tmux hosts create and register the session themselves over SSH (A111). Choose an open local folder project, agent or shell and an available account. Older hosts use the relay route. An uncertain creation is inspected, never sent again automatically; physical managed-creation checks remain pending. |
 | New plain terminal on an SSH host | ✓ (`A90`, installed beta 10/code 11) | Focused Pixel Home/project/custom cwd/input/history, restart/update/reconnect and exact End pass. Independent Phone terminals group; no desktop canvas/agent registration. Item 32 Partial: relay plain-shell creation/input/End pass, managed and cellular creation pending; A91 empty-host variant passes |
 | Wake / refresh / rename / end session | relay and current Desktop SSH service (end: both) | Typed node verbs; SSH service acknowledges nudge delivery. Server has no renderer/node nudges; inspect actual wake/rename result |
 | Kanban board, move cards, labels | both on current Desktop/Server | Typed selected-profile SSH service uses the actual WorkspaceStore save queue and mounted change broadcasts. Server serves local owned projects; Desktop can serve its own SSH-project metadata. Older hosts need an allowed relay |

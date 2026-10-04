@@ -130,6 +130,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
 | [A109](#a109) | low | | small | tests/bug | ✅ source fixed in `4e2f877d` · Three-digit findings retain device coverage; source regression verified |
 | [A110](#a110) | low | | small | tests/bug | ✅ test fixtures fixed in `8c57016c`, `b2e41255` · SSH profile isolation and actual unsafe-directory mode; merged gates verified |
+| [A111](#a111) | medium | | medium | parity/gap | ✅ source fixed; release checks in progress, physical/live CLI pending · New session needs genuine host-owned create/launch/register over direct SSH |
+| [A112](#a112) | low | | small | tests/bug | ✅ source fixed; exact-head workflow pending · Managed producer imports session-host files missing from CI and incremental test inputs |
 
 ## A01
 
@@ -3613,3 +3615,47 @@ confirmed Pixel installation. Phone checks are paused, with **10 Pass / 22 Parti
 live Claude rule/question application and the new physical feature matrix remain unverified.
 Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
 remains deferred until a PR is requested.
+
+## A111
+
+**Canvas New over direct SSH needs host-owned creation, not registration metadata (2026-10-04).**
+
+A108's private actions service supplies Board/node metadata actions but cannot safely recreate a
+cold managed pane by registering a node alone. Phone-built commands would duplicate the desktop's
+account, trust, hook and launch policy; ordinary SSH attach must continue refusing missing panes.
+
+The additive `sessions.createManagedV1` action resolves actual open local project/settings/account
+facts through the host planner. An enabled Linux/macOS tmux backend exclusively creates a new
+host-minted session, confirms one exact pane/PID/kernel birth and records runtime ownership. The
+WorkspaceStore queue saves portable cwd and local shell, preserving pending intent until one
+attested host submission is confirmed. Its private journal syncs file and directory phases before
+side effects. Expanded launch text stays in private state/stdin, never shared project/receipt.
+Failures expose an inert manual recovery notice; restart/uncertain/different-choice requests never
+replay a launch or grant ownership from disk. Removed/pending accounts and changed cwd are refused
+again at synchronous spawn, while ordinary renderer Home fallback stays intact.
+
+Android saves the exact UUID/nonce/instance request before dispatch and public receipts until an
+actual guarded SSH viewer is confirmed. The first attach pins selected profile/service, whole
+single-pane session, creation/PID/birth marker, and fresh SSH tty; it is attach-only. Closing the
+dialog/backgrounding cannot resend or navigate a stale screen. Stale proof requires explicit
+inspection/discard; no automatic relay fallback or replacement creation. Older hosts retain the
+relay New flow. Windows/non-tmux and third-machine/driven project creation are unsupported V1.
+Managed canvas End remains relay-only so terminal termination also removes the canvas node;
+SSH viewer close leaves it running. The separate phone-owned plain terminal End is unchanged.
+
+Actual isolated native node-pty/Electron and tmux creation with a fixture agent passes; this proves
+one submission with the host cwd/account/hooks/env/policy, not real Claude startup. Protocol,
+producer interop, mutation and minified beta-13 gates are being completed. The Pixel remains on
+beta 10 and the 64-row ledger remains 10 Pass / 22 Partial / 32 Pending. iOS @eneskirca needs the
+new advertised action and durable attach-only receipt contract; no external message or PR opened.
+
+## A112
+
+**The managed producer exposes missing session-host CI and local incremental coverage (2026-10-04).**
+
+A111's actual PtyManager fixture imports `src/session-host/**`; the esbuild-metafile regression
+found those repository inputs absent from both Android workflow path filters. Gradle's declared
+external source input directories also omitted them, so a source edit could leave local protocol
+tests up to date. Both push/pull_request filters and Gradle inputs now include the directory.
+Actual fixture graph/declared-input regressions cover this addition; removing either trigger
+filter or the Gradle input must fail. A68's PR-stage trigger restriction stays deferred.

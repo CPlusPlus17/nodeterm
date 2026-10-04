@@ -35,6 +35,7 @@ import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RendererRecovery
 import dev.nodeterm.protocol.host.ResumeOffer
@@ -91,6 +92,17 @@ class TerminalController(
 ) {
     var state by mutableStateOf<TermState>(TermState.Connecting)
         private set
+    var managedReceiptBlocked by mutableStateOf(false)
+        private set
+
+    /** Explicit user decision after inspecting an uncertain/stale creation. No attach or launch. */
+    fun discardManagedReceipt(): Boolean {
+        if (!managedReceiptBlocked || attached) return false
+        session.managedSessionCreation.adopted(nodeId)
+        managedReceiptBlocked = false
+        session.refresh()
+        return true
+    }
 
     /**
      * Input can reach the pane. Read [state], not [stream]: the two change together in one main-thread
@@ -732,6 +744,8 @@ class TerminalController(
         js("nt.suspendScroll()")
         val ticket = slot.begin()
         val sink = sinkFor(ticket)
+        val managed = session.managedSessionCreation.receiptFor(nodeId)
+        managedReceiptBlocked = false
         attachJob = graph.scope.launch {
             val job = coroutineContext[Job]
             try {
@@ -740,10 +754,12 @@ class TerminalController(
                     if (st is RelayConnectStatus.AwaitingApproval) main.post { if (slot.isCurrent(ticket)) state = TermState.AwaitingApproval(st.sas) }
                 }
                 val conn = when {
+                    managed != null -> session.ensureConnected().also {
+                        if (it.kind != TransportKind.SSH) throw HostException("This host-created terminal must first be confirmed over SSH. It may already exist on the computer; check it before discarding the saved receipt.")
+                    }
                     useRelay -> session.viaRelay(onStatus = onStatus)
-                    // A session this phone starts is created and registered on the canvas by nodeterm
-                    // the app: over direct SSH that is the relay leg, opened next to it (audit A26).
-                    // The user tapped New session, so this may make the relay's first handshake.
+                    // Legacy New goes through the relay. A managed receipt above is SSH attach-only:
+                    // it already identifies a host-created pane and never enters PhoneLaunch.
                     PendingLaunches.peek(nodeId) != null -> session.connectionFor(Capability.REGISTER_NODE, onStatus = onStatus)
                     else -> session.ensureConnected()
                 }
@@ -760,13 +776,14 @@ class TerminalController(
                 // hand-off below) and hand its launch on. A cancelled attach dropped both (audit A40).
                 ensureActive()
                 val (s, launch) = withContext(NonCancellable) {
-                    val s = conn.attach(nodeId, c, r, sink, hint)
+                    val s = if (managed != null) conn.attachManagedSession(managed, c, r, sink) else conn.attach(nodeId, c, r, sink, hint)
                     val lease = StreamLease(s) { st -> graph.scope.launch { runCatching { st.detach() } } }
+                    if (managed != null) runCatching { session.managedSessionCreation.adopted(nodeId) }
                     // The host created this session for the launch just now, and the request is
                     // consumed here: the launch holds the stream until it is done, whatever this
                     // screen does next (audit A40). Started BEFORE the hand-off, so a screen that
                     // already left cannot detach the stream under it.
-                    val launch = if (hint != null) PendingLaunches.take(nodeId) else null
+                    val launch = if (managed == null && hint != null) PendingLaunches.take(nodeId) else null
                     if (launch != null) startLaunch(launch, lease, conn)
                     // The hand-off re-checks the screen: it may have left, or started a newer attach,
                     // since this one began. Then the stream is let go of instead of installed (A40).
@@ -777,12 +794,12 @@ class TerminalController(
                         attachedAt = System.currentTimeMillis()
                         state = TermState.Attached
                         // A session started for a launch types its own line: nothing to offer.
-                        if (launch != null) resumeOffer = null
+                        if (launch != null || managed != null) resumeOffer = null
                         if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
                     }
                     s to launch
                 }
-                if (launch == null && slot.isCurrent(ticket)) afterAttach(s, conn, ticket)
+                if (managed == null && launch == null && slot.isCurrent(ticket)) afterAttach(s, conn, ticket)
             } catch (e: NeedsRelayException) {
                 val msg = e.message ?: "This session opens through the relay."
                 main.post {
@@ -795,7 +812,12 @@ class TerminalController(
             } catch (e: Exception) {
                 // Includes our own cancel on ON_STOP (while connecting, or in afterAttach): the ticket
                 // is stale by then, so nothing is shown.
-                main.post { if (slot.isCurrent(ticket)) state = TermState.Ended(e.message ?: "Couldn't open the terminal.") }
+                main.post {
+                    if (slot.isCurrent(ticket)) {
+                        managedReceiptBlocked = managed != null
+                        state = TermState.Ended(e.message ?: "Couldn't open the terminal.")
+                    }
+                }
             } finally {
                 // Only this attach's own reference: a newer attach may have replaced it meanwhile.
                 main.post { if (attachJob === job) attachJob = null }
