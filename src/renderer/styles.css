@@ -2447,6 +2447,7 @@ body,
 .term-node__close,
 .term-node__move-worktree,
 .term-node__hide-fanout,
+.term-node__share,
 .term-node__tidy-fanout {
   display: inline-flex;
   align-items: center;
@@ -2476,6 +2477,7 @@ body,
 .term-node__maximize:hover,
 .term-node__move-worktree:hover,
 .term-node__hide-fanout:hover,
+.term-node__share:hover:not(:disabled),
 .term-node__tidy-fanout:hover {
   background: rgba(var(--tint-rgb), 0.1);
   color: var(--text);
@@ -2487,7 +2489,8 @@ body,
   color: var(--danger);
 }
 
-.term-node__ai:disabled {
+.term-node__ai:disabled,
+.term-node__share:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -3247,6 +3250,16 @@ body,
 }
 .term-chat__hint {
   opacity: 0.6;
+}
+/* The view is reading the node's persisted launch id, not a hook-confirmed one (ChatPanel
+   `sessionFallback`): one quiet line, never an alarm — it is usually the right conversation. */
+.term-chat__fallback-note {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
 }
 .term-chat__msgs {
   flex: 1 1 auto;

@@ -224,10 +224,11 @@ import {
   useMdModeFocus
 } from '../terminal/useMdModeFocus'
 import { canvasOwnsMarkdownChord } from '../lib/markdownChord'
-import { IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEyeOff, IconGrid, IconMic, IconMoveTo, IconPlay, IconReload, IconSearch, IconSparkle } from '../components/icons'
+import { IconBroadcast, IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEyeOff, IconGrid, IconMic, IconMoveTo, IconPlay, IconReload, IconSearch, IconSparkle } from '../components/icons'
 import { NodeLabels } from '../components/kanban/NodeLabels'
 import { MdViewHintButton } from '../components/MdViewHintButton'
 import { mdViewHint } from '../lib/mdViewHint'
+import { transcriptSessionFor } from '../lib/transcriptSession'
 import { Tooltip } from '../components/Tooltip'
 import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
@@ -276,6 +277,8 @@ import { isRemoteSessionNode } from '@shared/worktree'
 import { useSession, useActiveSessionPresence } from '../session/session'
 import { isHostedReadOnly, useHostedReadOnly } from '../state/hostedTeams'
 import { isBrowserRuntime } from '../bridge/runtime'
+import { liveLinkUnavailable } from '../lib/liveLinkEntry'
+import { useWatchLinks } from '../state/watchLinks'
 import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
@@ -1402,6 +1405,15 @@ export function TerminalNode({
   // mounted node right away instead of waiting for a remount. Search, Close and the worktree-move
   // button are absent from `isHidden`'s inventory and stay put whatever the list says.
   const hiddenHeaderButtons = useSettings((s) => s.settings.hiddenHeaderButtons)
+  // The header's "Share live link" button: the same availability rule every opener checks before the
+  // Pro gate (lib/liveLinkEntry). A primitive selector — the header must not re-render on every
+  // watch-link state push.
+  const activeLiveLinks = useWatchLinks((s) => s.links.length)
+  const shareLinkWhy = liveLinkUnavailable({
+    serverEdition: isBrowserRuntime(),
+    source: session.source,
+    activeLinks: activeLiveLinks
+  })
   const bodyRef = useRef<HTMLDivElement>(null)
   const middleClickPaste = useSettings((st) => st.settings.terminalMiddleClickPaste)
   // Chromium pastes the X PRIMARY selection into xterm's hidden textarea on middle click — a path
@@ -2219,13 +2231,21 @@ export function TerminalNode({
         .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
         .join(', ')
     : ''
+  // Which session this node's transcript READERS look at: the hook-confirmed id, else the id the
+  // node was launched with (`data.agentSessionId`) — ONE rule shared with the kanban card modal
+  // (lib/transcriptSession.ts). A fallback reads strictly by id and says so in the chat panel.
+  const transcript = transcriptSessionFor({
+    live: status?.sessionId,
+    persisted: data.agentSessionId,
+    cwd: (data.cwd as string) || undefined
+  })
   // Use the chat panel only for a chat-capable agent with a known session; otherwise the
   // markdown-of-output view (computed in the capture effect below) is shown as a fallback.
   // `chatAvailable` is split out because the label-row ⌘M hint names the face BEFORE it is open:
   // one value feeds both, so the hint cannot say "Chat view" while the chord opens markdown.
-  const chatAvailable = showChat && !!status?.sessionId
+  const chatAvailable = showChat && !!transcript.sessionId
   const useChat = mdMode && chatAvailable
-  useContextEnsure(session.api.context, id, agentId, status?.sessionId, (data.cwd as string) || undefined, accountForReads)
+  useContextEnsure(session.api.context, id, agentId, transcript.sessionId, transcript.cwd, accountForReads)
   const updateNodeInternals = useUpdateNodeInternals()
 
   const [searchOpen, setSearchOpen] = useState(false)
@@ -6178,7 +6198,7 @@ export function TerminalNode({
             SSH {(data.ssh as SshConnection).user}@{(data.ssh as SshConnection).host}
           </span>
         ) : null}
-        {showUsage && <ContextMeter sessionId={status?.sessionId ?? null} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
+        {showUsage && <ContextMeter sessionId={transcript.sessionId ?? null} fromLaunchId={transcript.fallback} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
         {/* Who else is in this node. Subscribes to presence itself — see PresenceChips. */}
         <PresenceChips nodeId={id} />
         {/* This terminal is broadcast by a live link — never hideable (live-link.guard.test.ts).
@@ -6469,6 +6489,28 @@ export function TerminalNode({
               onClick={() => setCommentsOpen((v) => !v)}
             >
               <IconChat />
+            </button>
+          </Tooltip>
+        )}
+        {!isHidden('share-link', hiddenHeaderButtons) && (
+          <Tooltip label={shareLinkWhy ?? 'Share live link'}>
+            {/* The node menu's "Share live link…" row as a header button. Canvas opens the dialog
+                (`nodeterm:live-link`) after re-checking availability and the Pro gate; a node only
+                ever lives in the active project's canvas, so that is the project it names. */}
+            <button
+              className="term-node__share nodrag"
+              aria-label="Share live link"
+              disabled={!!shareLinkWhy}
+              onClick={(e) => {
+                e.stopPropagation()
+                window.dispatchEvent(
+                  new CustomEvent('nodeterm:live-link', {
+                    detail: { nodeId: id, title: data.title, projectId: owningProjectId() }
+                  })
+                )
+              }}
+            >
+              <IconBroadcast />
             </button>
           </Tooltip>
         )}
@@ -6803,7 +6845,8 @@ export function TerminalNode({
             <Suspense fallback={<ChatPanelFallback />}>
               <ChatPanel
                 nodeId={id}
-                sessionId={status?.sessionId}
+                sessionId={transcript.sessionId}
+                sessionFallback={transcript.fallback}
                 cwd={data.cwd as string | undefined}
                 // A READER (the ⌘M transcript view) takes the account the session actually RUNS
                 // as, never the creation-time one, so a plain terminal launched under

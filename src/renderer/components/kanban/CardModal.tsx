@@ -64,6 +64,7 @@ import { inLiveChatDrawer } from '../../lib/liveChatPin'
 import { relativeTime } from '../../lib/relativeTime'
 import { TerminalMarkdownView } from '../../nodes/TerminalMarkdownView'
 import { canChat } from '@shared/agents/config'
+import { transcriptSessionFor } from '../../lib/transcriptSession'
 import { effectiveAccountId } from '../../lib/accountChip'
 import { useSettings } from '../../state/settings'
 import { chipFor, commandTooltip } from '../../lib/keybindingOverrides'
@@ -193,7 +194,14 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const createdAgent = session.agentId ?? session.spawn.agentId
   const claudeAccounts = useSettings((s) => s.settings.claudeAccounts)
   const accountForReads = effectiveAccountId(session.spawn.accountId, observedAccount, claudeAccounts)
-  const useChat = mdOpen && !!createdAgent && canChat(createdAgent) && !!agentSessionId
+  // The same session rule as the canvas node (lib/transcriptSession.ts): the hook-confirmed id, else
+  // the id the node was launched with — so a node whose hooks never reach this app still gets Chat.
+  const transcript = transcriptSessionFor({
+    live: agentSessionId,
+    persisted: session.spawn.agentSessionId,
+    cwd: session.spawn.cwd
+  })
+  const useChat = mdOpen && !!createdAgent && canChat(createdAgent) && !!transcript.sessionId
   const captureFull = useCallback((nodeId: string) => api.pty.capture(nodeId, true), [api])
   const mdChip = chipFor('node.toggleMarkdown')
   // The chord (main-intercepted on desktop, bridged in the browser) toggles THIS view while the
@@ -504,7 +512,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
           {isTerminal && (
             <>
               {/* Same context-window pill + popover as the node header (null until usage data). */}
-              <ContextMeter sessionId={agentSessionId ?? null} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? observedAgentId} />
+              <ContextMeter sessionId={transcript.sessionId ?? null} fromLaunchId={transcript.fallback} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? observedAgentId} />
               <button
                 className="kanban-modal__action"
                 title={commandTooltip(mdOpen ? 'Back to the live terminal' : 'Markdown / chat view', 'node.toggleMarkdown')}
@@ -672,7 +680,8 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                           <ChatPanel
                             key={session.id}
                             nodeId={session.id}
-                            sessionId={agentSessionId}
+                            sessionId={transcript.sessionId}
+                            sessionFallback={transcript.fallback}
                             cwd={session.spawn.cwd}
                             accountId={accountForReads}
                             agentId={createdAgent!}
