@@ -13322,7 +13322,8 @@ export function Canvas() {
               e.newTurn,
               e.pendingId,
               e.verified,
-              e.errored
+              e.errored,
+              e.permissionSuggestions
             )
           // A genuine new turn drops the previous fan-out — but only the cards that FINISHED
           // (issue #547). Claude launches subagents async, so "waiting for N background agents to

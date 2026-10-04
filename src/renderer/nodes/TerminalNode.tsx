@@ -5689,6 +5689,16 @@ export function TerminalNode({
             >
               ✕ Deny
             </button>
+            {status.permissionSuggestions?.map(suggestion => (
+              <button key={suggestion.index} className="term-node__approve-btn term-node__approve-btn--allow"
+                style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={`Allow and remember exactly this rule: ${suggestion.label}`}
+                onClick={() => void window.nodeTerminal.answerPermission({
+                  nodeId: id, pendingId: status.pendingId!, decision: 'allow-always', suggestionIndex: suggestion.index
+                })}>
+                ✓ Remember {suggestion.label}
+              </button>
+            ))}
           </span>
         )}
         {isUnread && (

@@ -1,6 +1,7 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { WORKING_STALE_MS } from '@shared/agents/stale'
 import type { AgentId } from '@shared/agents/config'
+import type { PermissionSuggestion } from '@shared/hook-answers'
 import type { AgentState } from '@shared/agents/normalize'
 import type { NodeTerminalApi, ObservedClaudeAccount } from '@shared/types'
 import type { WakeContext } from '../terminal/wake-identity'
@@ -193,6 +194,7 @@ export interface AgentNodeStatus {
    * leaves `blocked` (so the buttons vanish once the decision lands). Absent = legacy prompt path.
    */
   pendingId?: string
+  permissionSuggestions?: PermissionSuggestion[]
   /**
    * The station's LAST turn ended on an API/model error (issue #521) — set from the agent's own
    * `StopFailure` hook, cleared by the next genuine new turn.
@@ -258,7 +260,8 @@ export interface AgentStatusStore {
     newTurn?: boolean,
     pendingId?: string,
     verified?: boolean,
-    errored?: boolean
+    errored?: boolean,
+    permissionSuggestions?: PermissionSuggestion[]
   ): void
   /** Clear `working` entries whose last event is older than `staleMs` (lost-Stop safety net). */
   sweepStaleWorking(staleMs?: number): void
@@ -504,7 +507,7 @@ export function createAgentStatusSession(
         return s.activeId === id ? { activeId: null } : s
       }),
 
-    setState: (id, state, agentId, newTurn, pendingId, verified, errored) =>
+    setState: (id, state, agentId, newTurn, pendingId, verified, errored, permissionSuggestions) =>
       set((s) => {
         const prev = s.byId[id] ?? EMPTY
         const now = Date.now()
@@ -528,7 +531,8 @@ export function createAgentStatusSession(
         // path so the header buttons retarget the new answer file — otherwise treat same-state as
         // a freshness-only refresh.
         const samePendingWhileBlocked =
-          state !== 'blocked' || (pendingId ?? prev.pendingId) === prev.pendingId
+          state !== 'blocked' || ((pendingId ?? prev.pendingId) === prev.pendingId &&
+            JSON.stringify(permissionSuggestions ?? prev.permissionSuggestions) === JSON.stringify(prev.permissionSuggestions))
         if (
           prev.state === state &&
           (agentId === undefined || prev.agentId === agentId) &&
@@ -556,6 +560,9 @@ export function createAgentStatusSession(
         if (agentId !== undefined) next.agentId = agentId
         // Retain the approval ticket only while blocked; any other state clears it (transient).
         next.pendingId = state === 'blocked' ? (pendingId ?? prev.pendingId) : undefined
+        next.permissionSuggestions = state === 'blocked'
+          ? permissionSuggestions ?? (pendingId && pendingId !== prev.pendingId ? undefined : prev.permissionSuggestions)
+          : undefined
         // The last-turn verdict (issue #521). A genuine new turn retires it — the station is being
         // asked something else, and the old failure no longer describes what it is doing. Anything
         // else LEAVES IT STANDING (it rides the spread): the intermediate transitions between the
