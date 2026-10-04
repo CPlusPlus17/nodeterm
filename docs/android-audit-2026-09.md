@@ -138,6 +138,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A116](#a116) | medium | | medium | pairing/UX | ✅ fixed in `a6b3e88b`; six real HTTP / five interop methods, 56 assertion mutants; physical pending · Multiadapter pairing/refresh has no network choice |
 | [A117](#a117) | medium | | small | pairing/bug | ✅ fixed in `227a7262`; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
+| [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
 
 ## A01
 
@@ -3964,3 +3965,30 @@ method explicitly. This correction changes only a protocol test and documentatio
 beta 15's `aa902d0a` source; its shipped Android runtime inputs and private APK are unchanged.
 The APK remains prepared and uninstalled, live Claude application remains unverified after
 provider HTTP 401, and the physical ledger stays 10 Pass / 22 Partial / 32 Pending.
+
+## A119
+
+**Explicit SSH profile folder (2026-10-04).**
+
+Add SSH server now accepts an optional absolute **Profile folder**. Existing computers can change
+**SSH profile folder** in Settings → How to reach each computer. The saved phone-local choice
+selects a custom Desktop/Server data directory ahead of all automatic discovery. Blank restores
+discovery. A missing or invalid explicit choice reports an error and never selects another profile.
+Board, project reads and all three managed-view stages use the same captured profile. Saving a
+change invalidates pending connection work and clears old displayed rows while retaining uncertain
+creation receipts; it never recreates a session. SSH host pins, pairing and relay credentials remain
+unchanged. Paths are quoted literally and reject relative/dot components, controls and oversized input.
+
+Regression coverage uses actual Server config/platform/WorkspaceStore/mirror/actions producers,
+a real private MINA SSH server and isolated tmux. The fixture supplies a plain-shell planner/native
+create boundary; it does not run full Server boot, installed hooks or account probes. Native storage
+coverage uses actual app classes with in-memory Android adapters. Ten protocol model methods,
+three actual Server/SSH methods and the complete 62-method SSH/10-method workflow suites pass.
+Four compiled SSH profile mutants fail their intended assertions. Final native control/restored
+runs pass 19 cases and catch the retired-session mutation; seven earlier native variants have
+separate historical source bindings. Private receipts: `.nodeterm/android-ssh-setup-2026-10-04/`. Physical setup/profile switching remains unverified;
+phone testing is paused and the ledger stays **10 Pass / 22 Partial / 32 Pending**. Beta 15 is still
+the latest prepared APK at this checkpoint and does not contain A119. A later beta is needed.
+iOS implication for @eneskirca: offer an explicit saved SSH profile choice consistently for discovery
+and managed attachment. No host verb or pairing payload changed. A25/A93 and A68 remain open;
+no PR is opened.

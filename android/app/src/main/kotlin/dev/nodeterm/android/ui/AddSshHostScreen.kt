@@ -51,6 +51,7 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Route
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.ssh.ManualHost
+import dev.nodeterm.protocol.ssh.SshProfilePath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,6 +77,8 @@ fun AddSshHostScreen(nav: Navigator) {
     var address by rememberSaveable { mutableStateOf("") }
     var port by rememberSaveable { mutableStateOf(ManualHost.DEFAULT_PORT.toString()) }
     var user by rememberSaveable { mutableStateOf("") }
+    var profile by rememberSaveable { mutableStateOf("") }
+    var profileError by remember { mutableStateOf<String?>(null) }
     var addedId by rememberSaveable { mutableStateOf<String?>(null) }
     var invalid by remember { mutableStateOf<ManualHost.Check.Invalid?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -84,6 +87,9 @@ fun AddSshHostScreen(nav: Navigator) {
     val install = remember(keyLine) { ManualHost.installCommand(keyLine) }
 
     fun connect() {
+        profileError = profile.takeIf { it.isNotBlank() }?.let(SshProfilePath::error)
+        if (profileError != null) return
+        val profilePath = SshProfilePath.fromInput(profile)
         val checked = ManualHost.check(address, port, user, name)
         if (checked is ManualHost.Check.Invalid) {
             invalid = checked
@@ -102,6 +108,7 @@ fun AddSshHostScreen(nav: Navigator) {
                 // Blocking: if the screen goes away meanwhile, the connect still ends (and closes its
                 // connection) on the IO thread, and nothing is kept.
                 val record = withContext(Dispatchers.IO) { ManualHost.connectFirst(ok, graph.sshIdentity) }
+                    .copy(sshProfilePath = profilePath)
                 val already = graph.hosts.addManual(record)
                 if (already != null) error = "${ok.user}@${ok.host} is already in your list, as ${already.name}."
                 else addedId = record.id
@@ -177,6 +184,17 @@ fun AddSshHostScreen(nav: Navigator) {
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Name (optional)") },
+                singleLine = true,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = profile,
+                onValueChange = { profile = it },
+                label = { Text("Profile folder (optional)") },
+                supportingText = { Text(profileError ?: "Full path on the computer, for a custom Server data directory. Leave blank for automatic discovery.") },
+                isError = profileError != null,
                 singleLine = true,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth()

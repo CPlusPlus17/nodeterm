@@ -183,7 +183,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 val ssh = lifetime.dial(lease) { withContext(Dispatchers.IO) {
                     SshHostConnection.connect(
                         host.host, host.port, host.user, graph.sshIdentity, pinFor(host, lease),
-                        connectTimeoutMs = if (route == RoutePreference.AUTO) 4_000 else 10_000
+                        connectTimeoutMs = if (route == RoutePreference.AUTO) 4_000 else 10_000,
+                        profilePath = host.sshProfilePath
                     ).also { dialed = it }
                 } }
                 lifetime.publish(lease) {
@@ -703,6 +704,19 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * `NetworkOnMainThreadException` and would leak the socket (audit A01).
      */
     fun disconnect() = lifetime.disconnect { disconnectOwned() }
+
+    /** Change the browse/adoption profile under the same fence that retires old transport work. */
+    fun changeSshProfile(path: String?) {
+        dev.nodeterm.protocol.ssh.SshProfilePath.requireValid(path)
+        lifetime.disconnect {
+            if (!lifetime.active) return@disconnect
+            graph.hosts.update(hostId) { it.copy(sshProfilePath = path) }
+            disconnectOwned()
+            _snapshot.value = ProjectsSnapshot.EMPTY
+            _lastError.value = null
+            _sshWarning.value = null
+        }
+    }
 
     /** Removed from ConnectionManager permanently; a new pairing gets a new HostSession object. */
     fun retire() = lifetime.retire { disconnectOwned() }

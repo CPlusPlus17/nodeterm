@@ -161,7 +161,7 @@ class NothingFoundException : HostException(SshHostConnection.NO_USER_DATA) {
  * Board writes and renderer nudges. Cold canvas registration still needs the desktop managed
  * launch path through the relay, never a guessed shell environment.
  */
-class SshHostConnection private constructor(private val client: SSHClient) : HostConnection {
+class SshHostConnection private constructor(private val client: SSHClient, private val profilePath: String?) : HostConnection {
     override val kind = TransportKind.SSH
     private val actions = SshActions { script, timeout, stdin, write, limit ->
         run(script, timeout, stdin, uncertainWrite = write, outputLimit = limit)
@@ -258,7 +258,13 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     /** [listProjects], blocking: one browse, and what it says about the computer's nodes remembered. */
     private fun browseNow(): ProjectsSnapshot {
         val now = System.currentTimeMillis()
-        val (_, raw) = run(SshScripts.browse())
+        val (code, raw) = run(SshScripts.browse(profilePath))
+        if (code == SshScripts.SELECTED_PROFILE_MISSING_EXIT) {
+            remember(ProjectsSnapshot.EMPTY)
+            userData = null; actionListing = ActionListing(null, emptyList()); actions.clear()
+            relayAdvertised = null
+            throw HostException("The selected SSH profile folder is missing or has no nodeterm profile files. Check the folder in Settings on this phone and the data directory on the computer.")
+        }
         val out = HostBrowse.split(raw)
         val ud = out.userData
         // Nothing found is not "a computer with no sessions": it means we are looking in the wrong
@@ -426,16 +432,16 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 if (ad == null || ad.instance != r.hostInstance || ManagedSessions.METHOD !in ad.methods) {
                     throw HostException("The desktop restarted or creation is no longer available. Check the computer before discarding this saved receipt; the session will not be created again.")
                 }
-                val (code, proof) = run(SshScripts.attachManaged(adoption, ad, attach = false), outputLimit = 256)
+                val (code, proof) = run(SshScripts.attachManaged(adoption, ad, attach = false, profilePath = profilePath), outputLimit = 256)
                 if (code != 0 || proof.trim() != "NT-MANAGED-VERIFIED") throw HostException("The host-created terminal changed or ended. Refresh the sessions list; no replacement was started.")
                 val channel = client.startSession()
                 try {
                     channel.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
-                    val command = channel.exec("/bin/sh -c " + SshScripts.q(SshScripts.attachManaged(adoption, ad)))
+                    val command = channel.exec("/bin/sh -c " + SshScripts.q(SshScripts.attachManaged(adoption, ad, profilePath = profilePath)))
                     val deadline = WATCHDOG.schedule({ runCatching { channel.close() } }, 10, TimeUnit.SECONDS)
                     try {
                         val tty = ManagedViewHandshake.read(command.inputStream)
-                        val (attached, confirmed) = run(SshScripts.attachManaged(adoption, ad, attach = false, clientTty = tty), timeoutSec = 8, outputLimit = 256)
+                        val (attached, confirmed) = run(SshScripts.attachManaged(adoption, ad, attach = false, clientTty = tty, profilePath = profilePath), timeoutSec = 8, outputLimit = 256)
                         if (attached != 0 || confirmed.trim() != "NT-MANAGED-VERIFIED") throw HostException("The created terminal could not confirm this SSH viewer. Check it on the computer; no replacement was started.")
                     } finally { deadline.cancel(false) }
                     // The host already created and launched this generation; this attach is warm.
@@ -984,8 +990,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             identity: SshIdentity,
             pin: HostKeyPin,
             connectTimeoutMs: Int = 8_000,
-            socketFactory: SocketFactory? = null
+            socketFactory: SocketFactory? = null,
+            profilePath: String? = null
         ): SshHostConnection {
+            SshProfilePath.requireValid(profilePath)
             // KEEP_ALIVE, not sshj's default HEARTBEAT: a heartbeat is an SSH_MSG_IGNORE that expects
             // no reply, so it never notices a dead peer. keepalive@openssh.com wants a reply and
             // kills the transport after [KEEPALIVE_MAX_MISSED] misses, which fires the disconnect
@@ -1072,7 +1080,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 val why = authFailureCause(e) ?: e
                 throw HostException("Couldn't connect over SSH to $user@$host:$port (${why.message ?: why.javaClass.simpleName}).")
             }
-            val conn = SshHostConnection(client)
+            val conn = SshHostConnection(client, profilePath)
             // The transport dying (network change, sleep, the computer going away) is the one event
             // nothing else would report: without this the owner keeps a dead connection forever.
             client.transport.disconnectListener = net.schmizz.sshj.transport.DisconnectListener { _, message ->

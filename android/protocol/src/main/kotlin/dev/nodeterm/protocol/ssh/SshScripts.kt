@@ -28,8 +28,7 @@ import dev.nodeterm.protocol.model.TerminalHistory
  *  - the Server Edition keeps the same files in its data dir: `~/.nodeterm-server` by default
  *    (src/server/config.ts), or wherever `--data-dir` / `NODETERM_DATA_DIR` put it. The browse checks
  *    `$NODETERM_DATA_DIR` when the SSH session happens to carry it, then the default; a server whose
- *    data dir is elsewhere is simply not found, which the app reports as "not found", never as "no
- *    nodeterm here".
+ *    data dir is elsewhere needs the phone's explicit saved profile folder selection.
  */
 object SshScripts {
     const val META_START = "##NT-META"
@@ -51,7 +50,9 @@ object SshScripts {
     /** Single-quote for sh: `'` → `'\''`. */
     fun q(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
-    private val PRELUDE = """
+    const val SELECTED_PROFILE_MISSING_EXIT = 46
+
+    private val PREPARE = """
         unset TMUX TMUX_PANE
         PATH="${'$'}PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:${'$'}HOME/.local/bin"; export PATH
         NT_TMUX=${'$'}(command -v tmux 2>/dev/null)
@@ -60,6 +61,10 @@ object SshScripts {
             if [ -x "${'$'}c" ]; then NT_TMUX="${'$'}c"; break; fi
           done
         fi
+    """.trimIndent()
+
+    private val PRELUDE = """
+        $PREPARE
         NT_UD=""
         for d in "${'$'}HOME/Library/Application Support/node-terminal" "${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}/node-terminal" \
                  "${'$'}HOME/Library/Application Support/nodeterm" "${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}/nodeterm"; do
@@ -71,6 +76,20 @@ object SshScripts {
           done
         fi
     """.trimIndent()
+
+    private fun prelude(profilePath: String?): String {
+        SshProfilePath.requireValid(profilePath)
+        if (profilePath == null) return PRELUDE
+        // Keep tmux/PATH preparation, but never run automatic profile discovery for an explicit choice.
+        return """
+            $PREPARE
+            NT_UD=${q(profilePath)}
+            [ -d "${'$'}NT_UD" ] || exit $SELECTED_PROFILE_MISSING_EXIT
+            if [ ! -f "${'$'}NT_UD/workspace.json" ] && [ ! -f "${'$'}NT_UD/agent-status.json" ] && [ ! -f "${'$'}NT_UD/install-meta.json" ]; then
+              exit $SELECTED_PROFILE_MISSING_EXIT
+            fi
+        """.trimIndent()
+    }
 
     /** Validate atomic ownership metadata, including sessions with interrupted option setup. */
     private val PHONE_GUARD = """
@@ -141,8 +160,8 @@ object SshScripts {
      * Splitting is by lines in the shell (`IFS` = newline, globbing off), never by a here-document:
      * this template keeps its indentation, and a here-document's terminator must start its line.
      */
-    fun browse(): String = """
-        $PRELUDE
+    fun browse(profilePath: String? = null): String = """
+        ${prelude(profilePath)}
         printf '%s\n' '$META_START'
         printf 'ud=%s\n' "${'$'}NT_UD"
         printf 'tmux=%s\n' "${'$'}NT_TMUX"
@@ -276,7 +295,7 @@ object SshScripts {
     }
 
     /** View only the exact host-created pane. Missing/replaced generations are never recreated. */
-    internal fun attachManaged(adoption: ManagedSessionAdoption, ad: SshActions.Advertisement, attach: Boolean = true, clientTty: String? = null): String {
+    internal fun attachManaged(adoption: ManagedSessionAdoption, ad: SshActions.Advertisement, attach: Boolean = true, clientTty: String? = null, profilePath: String? = null): String {
         val r = adoption.receipt
         require(ad.instance == r.hostInstance)
         require(clientTty == null || !attach && ManagedViewHandshake.validTty(clientTty))
@@ -286,7 +305,7 @@ object SshScripts {
             "#{==:#{pane_id},${r.paneId}}", "#{==:#{pane_pid},${r.panePid}}", "#{==:#{NODETERM_MANAGED_CREATION_ID},${r.creationId}}")
         val condition = parts.reduce { a, b -> "#{&&:$a,$b}" }
         return """
-            $PRELUDE
+            ${prelude(profilePath)}
             [ "${'$'}NT_UD" = ${q(adoption.request.profile)} ] || exit $NO_SESSION_EXIT
             [ -n "${'$'}NT_TMUX" ] || exit $NO_SESSION_EXIT
             ${SshActionsScripts.adoptionGuard(adoption.request.profile, ad)}

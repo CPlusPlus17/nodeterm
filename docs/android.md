@@ -230,7 +230,10 @@ on the computer in this order: the desktop app's (`~/Library/Application Support
 `$XDG_CONFIG_HOME/node-terminal`, then the legacy `nodeterm` spelling), then the Server Edition's
 (`$NODETERM_DATA_DIR` when the SSH session carries it, then `~/.nodeterm-server`, the default in
 `src/server/config.ts`; a fresh install that has written only `install-meta.json` counts). A server
-started with `--data-dir` elsewhere is not found, and a computer with nothing found reads as "not
+started with `--data-dir` elsewhere can be selected with **Profile folder** in Add SSH server or
+**SSH profile folder** under Settings → How to reach each computer (A119). The saved absolute path
+overrides discovery; a missing explicit folder reports an error without falling back. Leave the
+field blank to restore discovery. A computer with nothing found reads as "not
 found, here is where the phone looked", never as an empty computer; it ends by offering the relay
 only when the phone has a relay leg for the computer (`NothingFoundException.said`), and for a
 computer added by its SSH address it suggests checking the user instead. "Nothing found" is judged
@@ -2237,15 +2240,15 @@ the wider relay action matrix remain device checks.
   line), the Server Edition's `install-server.sh` one-liner offered per connection, and Windows (the
   browse is POSIX `sh` + tmux, as for a paired computer). The host key is trust on first use, as for
   a paired computer, but with no pairing LAN behind the first connect: compare the fingerprint the
-  screen shows. Smaller limits of the browse: a Server Edition with a `--data-dir` elsewhere is not found unless the SSH session carries
-  `NODETERM_DATA_DIR`; a slice's freshness compares the phone's clock with the driving desktop's; on a
+  screen shows. A119 adds an explicit saved profile folder for a Server Edition's custom `--data-dir`;
+  a slice's freshness compares the phone's clock with the driving desktop's; on a
   computer that runs its own nodeterm AND is driven, launch settings come from its own mirror (a
   driven session's wake line uses its permission mode); a project whose sessions all start outside
   its folder (a worktree beside it) has no file found, so it is named by its id from its slice, and
   its plain terminals are listed under "Other sessions on this computer". When no data dir is found
   but another desktop's sessions are, the listing shows that desktop's projects and nothing of the
   `node-terminal` sessions of a nodeterm whose data dir the phone could not find (a Server Edition
-  with `--data-dir` elsewhere), and nothing says they are missing.
+  with `--data-dir` elsewhere and no explicit selection), and nothing says they are missing.
 - **Read-ack ownership is locally fixed; device validation remains open** (`A82`). Both the local
   `src/core/ack-sweep.ts` consumer and `sweepRemoteAcks` require ownership before reading/removing
   `~/.nodeterm/acks/<nodeId>.seen`. Remote ownership combines all connected projects on the host.
@@ -2628,3 +2631,28 @@ method explicitly. This correction changes only a protocol test and documentatio
 beta 15's `aa902d0a` source; its shipped Android runtime inputs and private APK are unchanged.
 The APK remains prepared and uninstalled, live Claude application remains unverified after
 provider HTTP 401, and the physical ledger stays 10 Pass / 22 Partial / 32 Pending.
+
+## A119: explicit SSH profile folder (2026-10-04)
+
+Add SSH server now accepts an optional absolute **Profile folder**. Existing computers can change
+**SSH profile folder** in Settings → How to reach each computer. The saved phone-local choice
+selects a custom Desktop/Server data directory ahead of all automatic discovery. Blank restores
+discovery. A missing or invalid explicit choice reports an error and never selects another profile.
+Board, project reads and all three managed-view stages use the same captured profile. Saving a
+change invalidates pending connection work and clears old displayed rows while retaining uncertain
+creation receipts; it never recreates a session. SSH host pins, pairing and relay credentials remain
+unchanged. Paths are quoted literally and reject relative/dot components, controls and oversized input.
+
+Regression coverage uses actual Server config/platform/WorkspaceStore/mirror/actions producers,
+a real private MINA SSH server and isolated tmux. The fixture supplies a plain-shell planner/native
+create boundary; it does not run full Server boot, installed hooks or account probes. Native storage
+coverage uses actual app classes with in-memory Android adapters. Ten protocol model methods,
+three actual Server/SSH methods and the complete 62-method SSH/10-method workflow suites pass.
+Four compiled SSH profile mutants fail their intended assertions. Final native control/restored
+runs pass 19 cases and catch the retired-session mutation; seven earlier native variants have
+separate historical source bindings. Private receipts: `.nodeterm/android-ssh-setup-2026-10-04/`. Physical setup/profile switching remains unverified;
+phone testing is paused and the ledger stays **10 Pass / 22 Partial / 32 Pending**. Beta 15 is still
+the latest prepared APK at this checkpoint and does not contain A119. A later beta is needed.
+iOS implication for @eneskirca: offer an explicit saved SSH profile choice consistently for discovery
+and managed attachment. No host verb or pairing payload changed. A25/A93 and A68 remain open;
+no PR is opened.

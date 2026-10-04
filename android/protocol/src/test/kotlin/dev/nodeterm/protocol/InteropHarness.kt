@@ -129,6 +129,18 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         }
         internal val sshActionsBundleMeta: File by lazy { File(sshActionsBundle.path + ".meta.json") }
 
+        /** Actual selected Server config/platform/store/mirror, with a private OS-home abstraction. */
+        internal val serverProfileBundle: File by lazy {
+            val out = File(repoRoot, "android/protocol/build/interop/server-profile-fixture.cjs")
+            File(out.path + ".meta.json").delete()
+            val proc = ProcessBuilder(bundleCommand(out) + "android/protocol/src/test/interop/server-profile-fixture.ts")
+                .directory(repoRoot).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "esbuild failed: $log" }
+            out
+        }
+        internal val serverProfileBundleMeta: File by lazy { File(serverProfileBundle.path + ".meta.json") }
+
         /** Actual managed host transaction with an explicit native-process recorder boundary. */
         internal val managedSessionBundle: File by lazy {
             val out = File(repoRoot, "android/protocol/build/interop/managed-session-fixture.cjs")
@@ -163,7 +175,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
             // The esbuild PACKAGE (its JS API), not the .bin shim the harness no longer runs.
             return node && File(repoRoot, "node_modules/esbuild/package.json").exists() &&
-                (mode == "ack-sweep" || mode == "ssh-actions" || mode == "managed-session" || (File(repoRoot, "node_modules/ws").exists() &&
+                (mode == "ack-sweep" || mode == "ssh-actions" || mode == "managed-session" || mode == "server-profile" || (File(repoRoot, "node_modules/ws").exists() &&
                     File(repoRoot, "node_modules/tweetnacl").exists()))
         }
 
@@ -184,6 +196,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
                 "project-launch" -> projectLaunchBundle
                 "ssh-actions" -> sshActionsBundle
                 "managed-session" -> managedSessionBundle
+                "server-profile" -> serverProfileBundle
                 else -> bundle
             }
             val pb = ProcessBuilder("node", fixture.path, mode).directory(repoRoot)

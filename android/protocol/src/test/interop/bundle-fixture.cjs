@@ -37,6 +37,16 @@ const esbuild = require(require.resolve('esbuild', { paths: [root] }))
 // Settings/trust/workspace/host handlers are the production implementations, never aliases.
 const projectLaunch = entry === 'android/protocol/src/test/interop/project-launch-fixture.ts'
 const managedSession = entry === 'android/protocol/src/test/interop/managed-session-fixture.ts'
+const serverProfile = entry === 'android/protocol/src/test/interop/server-profile-fixture.ts'
+const serverProfilePlugin = {
+  name: 'isolated-server-profile-home',
+  setup(build) {
+    build.onResolve({ filter: /^(?:os|node:os)$/ }, (args) => {
+      if (args.importer.endsWith('/server-profile-os.ts')) return
+      return { path: path.join(root, 'android/protocol/src/test/interop/server-profile-os.ts') }
+    })
+  }
+}
 const launchSeams = {
   'os': 'launch-os.ts', 'node:os': 'launch-os.ts',
   'node-pty': 'launch-native.ts'
@@ -71,7 +81,7 @@ esbuild
       '@renderer': './src/renderer'
     },
     external: ['ws'],
-    plugins: projectLaunch || managedSession ? [launchPlugin] : [],
+    plugins: projectLaunch || managedSession ? [launchPlugin] : serverProfile ? [serverProfilePlugin] : [],
     metafile: true,
     logLevel: 'warning'
   })

@@ -112,6 +112,7 @@ class SshTransportTest {
         private val server = SshServer.setUpDefaultServer()
         @Volatile var onCommand: ((String, ShCommand) -> Unit)? = null
         @Volatile var commandPath: String? = null
+        val privateTmuxDirectory: String get() = tmuxDir.path
 
         init {
             try {
@@ -133,7 +134,7 @@ class SshTransportTest {
             }
         }
 
-        fun connect() = SshHostConnection.connect("127.0.0.1", server.port, "dev", identity, MemoryPin())
+        fun connect(profilePath: String? = null) = SshHostConnection.connect("127.0.0.1", server.port, "dev", identity, MemoryPin(), profilePath = profilePath)
 
         fun tmux(vararg args: String): Pair<Int, String> {
             val p = ProcessBuilder(listOf("tmux", "-L", "node-terminal") + args).redirectErrorStream(true).apply {
@@ -158,6 +159,118 @@ class SshTransportTest {
         }
         override fun close() {
             try { server.stop(true) } finally { runCatching { tmux("kill-server") }; ownedRoot.deleteRecursively() }
+        }
+    }
+
+    /** Genuine Server services publish under resolveConfig(--data-dir); native fixture is explicit. */
+    private fun serverProfileFixture(host: SshTestHost, profile: File): InteropHarness {
+        val lookup = ProcessBuilder("/bin/sh", "-c", "command -v tmux").start()
+        val tmux = lookup.inputStream.bufferedReader().readText().trim()
+        assertEquals(0, lookup.waitFor()); assertTrue(File(tmux).isFile)
+        return InteropHarness.start("server-profile", mapOf(
+            "FIXTURE_HOME" to host.home.path, "FIXTURE_USERDATA" to profile.path,
+            "FIXTURE_TMUX_DIR" to host.privateTmuxDirectory, "FIXTURE_TMUX_BIN" to tmux
+        ))
+    }
+
+    @Test fun `explicit Server profile reads actual custom publication and Board instead of coexisting desktop`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val profile = File(host.home, "profiles/Server α ' quoted")
+            serverProfileFixture(host, profile).use { fixture ->
+                host.connect().use { automatic ->
+                    assertEquals(listOf("server-default"), automatic.listProjects().projects.map { it.id })
+                    assertFalse(automatic.capabilities.boardWrites, "a different profile's service is never borrowed")
+                }
+                host.connect(profile.path).use { conn ->
+                    val listed = conn.listProjects()
+                    assertEquals(listOf("server-custom"), listed.projects.map { it.id })
+                    assertEquals(AgentState.DONE, listed.statusOf("term-server-seed")?.state)
+                    assertEquals("fixture-custom", listed.status?.server?.version)
+                    assertTrue(conn.capabilities.boardWrites)
+                    assertTrue(conn.capabilities.managedCreate)
+                    assertFalse(conn.capabilities.nodeActions, "Server still has no Desktop renderer nudge")
+                    val board = conn.ensureBoard("server-custom")
+                    assertEquals(3, assertNotNull(board).size)
+                    fixture.command("snapshot")
+                    val proof = fixture.awaitEvent("snapshot")
+                    assertEquals(3, proof.getValue("file").jsonObject.getValue("kanban").jsonObject.getValue("columns").jsonArray.size)
+                    assertNull(proof.getValue("defaultFile").jsonObject["kanban"], "the checked default project stays unchanged")
+                }
+            }
+        }
+    }
+
+    @Test fun `custom Server profile creates actual owned shell and all three receipt view stages adopt it`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val profile = File(host.home, "profiles/custom managed")
+            serverProfileFixture(host, profile).use { fixture ->
+                var adoption: ManagedSessionAdoption? = null
+                val stages = java.util.concurrent.atomic.AtomicInteger()
+                host.onCommand = { command, _ -> if (command.contains("NT-MANAGED-VERIFIED") || command.contains("NT-MANAGED-VIEW")) stages.incrementAndGet() }
+                host.connect(profile.path).use { conn ->
+                    conn.listProjects()
+                    val prepared = conn.prepareManagedSession(ManagedSessionChoice("server-custom", "shell", title = "Custom owned shell"))
+                    assertEquals(profile.path, prepared.profile)
+                    val receipt = conn.createManagedSession(prepared)
+                    assertEquals("server-custom", receipt.projectId)
+                    assertEquals("node-terminal", receipt.socket)
+                    adoption = ManagedSessionAdoption(prepared, receipt)
+                    val sink = Sink()
+                    val stream = try { conn.attachManagedSession(adoption!!, 56, 25, sink) }
+                    catch (e: HostException) { throw AssertionError("All three managed view stages must adopt the explicitly selected custom Server profile", e) }
+                    try {
+                        stream.write("printf 'custom_%s\\n' profile_input\r")
+                        sink.waitFor("custom_profile_input")
+                        assertFalse(stream.fresh)
+                        assertEquals(receipt.panePid.toString(), host.tmux("display-message", "-p", "-t", receipt.paneId, "#{pane_pid}").second.trim())
+                    } finally { stream.detach() }
+                    fixture.command("snapshot")
+                    val proof = fixture.awaitEvent("snapshot")
+                    assertEquals(1, proof.getValue("created").jsonArray.size, "one request creates exactly one actual pane")
+                    assertTrue(proof.getValue("file").jsonObject.getValue("nodes").jsonArray.any { it.jsonObject.getValue("id").jsonPrimitive.content == receipt.nodeId })
+                    assertEquals(listOf("term-server-default"), proof.getValue("defaultFile").jsonObject.getValue("nodes").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+                }
+                assertEquals(3, stages.get(), "initial proof, actual viewer and matching tty acknowledgement all use custom selection")
+                host.onCommand = null
+                host.connect(profile.path).use { reopened ->
+                    val sink = Sink(); val stream = reopened.attachManagedSession(adoption!!, 52, 20, sink)
+                    try { stream.write("printf 'custom_%s\\n' reopened\r"); sink.waitFor("custom_reopened") }
+                    finally { stream.detach() }
+                }
+                fixture.command("snapshot")
+                assertEquals(1, fixture.awaitEvent("snapshot").getValue("created").jsonArray.size, "reconnect never recreates the pane")
+            }
+        }
+    }
+
+    @Test fun `missing explicit profile never falls back and loss clears custom actions before subsequent writes`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val profile = File(host.home, "profiles/explicit")
+            serverProfileFixture(host, profile).use { fixture ->
+                host.connect(File(host.home, "missing explicit").path).use { absent ->
+                    assertFailsWith<HostException> { absent.listProjects() }
+                    assertFalse(absent.capabilities.boardWrites)
+                }
+                host.connect(profile.path).use { conn ->
+                    assertEquals(listOf("server-custom"), conn.listProjects().projects.map { it.id })
+                    assertTrue(conn.capabilities.boardWrites)
+                    val held = File(host.home, "profiles/held")
+                    assertTrue(profile.renameTo(held))
+                    try {
+                        assertFailsWith<HostException> { conn.listProjects() }
+                        assertFalse(conn.capabilities.boardWrites)
+                        assertFalse(conn.capabilities.managedCreate)
+                        assertFailsWith<HostException> { conn.ensureBoard("server-custom") }
+                        assertFailsWith<HostException> { conn.prepareManagedSession(ManagedSessionChoice("server-custom", "shell")) }
+                    } finally { assertTrue(held.renameTo(profile)) }
+                    assertEquals(listOf("server-custom"), conn.listProjects().projects.map { it.id })
+                    fixture.command("snapshot")
+                    val proof = fixture.awaitEvent("snapshot")
+                    assertNull(proof.getValue("file").jsonObject["kanban"])
+                    assertNull(proof.getValue("defaultFile").jsonObject["kanban"])
+                    assertTrue(proof.getValue("created").jsonArray.isEmpty())
+                }
+            }
         }
     }
 

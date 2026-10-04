@@ -61,6 +61,11 @@ tasks.test {
     for (dir in listOf("src/core", "src/shared", "src/main", "src/session-host")) {
         inputs.dir(rootDir.resolve("../../$dir")).withPathSensitivity(PathSensitivity.RELATIVE)
     }
+    // The custom-profile fixture uses the actual Server path resolver/platform without starting
+    // Server services. These imported sources must also invalidate the locally cached test task.
+    inputs.file(rootDir.resolve("../../src/server/config.ts")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../../src/server/platform-server.ts")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../../src/server/proxy-trust.ts")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../tsconfig.json")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootDir.resolve("../app/src/main/assets/terminal")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootDir.resolve("../app/src/main/kotlin")).withPathSensitivity(PathSensitivity.RELATIVE)

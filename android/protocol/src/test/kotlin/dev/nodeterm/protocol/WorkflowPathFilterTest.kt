@@ -116,6 +116,32 @@ class WorkflowPathFilterTest {
     }
 
     @Test
+    fun `every actual custom Server profile producer file runs the workflow and invalidates Gradle tests`() {
+        assumeTrue(InteropHarness.available("server-profile"), "node + esbuild are needed for Server profile interop")
+        val inputs = Json.parseToJsonElement(InteropHarness.serverProfileBundleMeta.readText()).jsonObject
+            .getValue("inputs").jsonObject.keys
+        for (required in listOf("src/server/config.ts", "src/server/platform-server.ts",
+            "src/core/workspace-store.ts", "src/core/agent-status-mirror.ts", "src/core/ssh-actions.ts",
+            "src/core/managed-terminals.ts", "android/protocol/src/test/interop/server-profile-os.ts")) {
+            assertTrue(required in inputs, "fixture must execute actual producer $required")
+        }
+        assertFalse("src/server/index.ts" in inputs,
+            "this component fixture must not start the full Server boot/hook lifecycle")
+        assertCovered(inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet(),
+            "bundled into server-profile-fixture.ts")
+
+        val build = File(root, "android/protocol/build.gradle.kts").readText()
+            .replace(Regex("//[^\n]*"), "")
+        val directoryLoop = Regex("""for\s*\(dir\s+in\s+listOf\(([^)]*)\)\)\s*\{\s*inputs\.dir\(rootDir\.resolve\("\.\./\.\./\${'$'}dir"\)\)\.withPathSensitivity\(PathSensitivity\.RELATIVE\)\s*}""")
+            .find(build) ?: fail("the protocol test task must declare its actual desktop source directories as Gradle inputs")
+        val directories = Regex("\"([^\"]+)\"").findAll(directoryLoop.groupValues[1]).map { it.groupValues[1] }.toSet()
+        val files = Regex("""inputs\.file\(rootDir\.resolve\("\.\./\.\./([^"${'$'}]+)"\)\)\.withPathSensitivity\(PathSensitivity\.RELATIVE\)""")
+            .findAll(build).map { it.groupValues[1] }.toSet()
+        val missed = inputs.filter { it.startsWith("src/") && it !in files && directories.none { dir -> it.startsWith("$dir/") } }
+        assertTrue(missed.isEmpty(), "these actual Server producer inputs leave local Gradle tests up to date: $missed")
+    }
+
+    @Test
     fun `managed creation producer inputs also invalidate Gradle protocol tests`() {
         assumeTrue(InteropHarness.available("managed-session"), "node + esbuild are needed for managed creation interop")
         val inputs = Json.parseToJsonElement(InteropHarness.managedSessionBundleMeta.readText()).jsonObject

@@ -31,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -49,6 +50,8 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.data.RoutePreference
 import dev.nodeterm.android.data.DictationPreferences
 import dev.nodeterm.protocol.model.DictationLanguage
+import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.ssh.SshProfilePath
 import dev.nodeterm.android.notify.InboxNotifier
 import dev.nodeterm.protocol.crypto.B64
 import dev.nodeterm.protocol.relay.ApiBaseSetting
@@ -226,6 +229,7 @@ fun SettingsScreen(nav: Navigator) {
                 Text("How to reach each computer", style = MaterialTheme.typography.titleMedium)
                 hosts.forEach { host ->
                     Text(host.name, style = MaterialTheme.typography.labelLarge)
+                    SshProfileField(host) { path -> graph.connections.session(host.id).changeSshProfile(path) }
                     // Added by its SSH address (audit A27): SSH is its only route, so there is no choice.
                     if (host.manual) {
                         Text(
@@ -295,4 +299,23 @@ fun SettingsScreen(nav: Navigator) {
             )
         }
     }
+}
+
+@Composable
+private fun SshProfileField(host: PairedHost, save: (String?) -> Unit) {
+    var input by remember(host.id, host.sshProfilePath) { mutableStateOf(host.sshProfilePath ?: "") }
+    var error by remember(host.id, host.sshProfilePath) { mutableStateOf<String?>(null) }
+    OutlinedTextField(
+        value = input,
+        onValueChange = { input = it; error = null },
+        label = { Text("SSH profile folder") },
+        supportingText = { Text(error ?: "Full path on this computer. Leave blank for automatic discovery. Saving disconnects its current session.") },
+        isError = error != null,
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    TextButton(onClick = {
+        error = input.takeIf { it.isNotBlank() }?.let(SshProfilePath::error)
+        if (error == null) save(SshProfilePath.fromInput(input))
+    }, enabled = input != (host.sshProfilePath ?: "")) { Text("Save profile folder") }
 }

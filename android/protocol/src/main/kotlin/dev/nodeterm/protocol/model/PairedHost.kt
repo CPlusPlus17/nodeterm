@@ -64,7 +64,9 @@ data class PairedHost(
      * there are some, so a record without them is what it was; a build that predates the key drops it
      * on its next save, which leaves the computer on trust on first use, as that build always had it.
      */
-    val sshHostKeyAnchors: List<String> = emptyList()
+    val sshHostKeyAnchors: List<String> = emptyList(),
+    /** Explicit remote Desktop/Server profile folder; null keeps automatic SSH discovery. */
+    val sshProfilePath: String? = null
 ) {
     /** The relay host key: the relay block's when present, else the QR's `hostKey` (same key). */
     val relayHostKeyB64: String? get() = relay?.hostPublicKeyB64 ?: hostKeyB64
@@ -96,6 +98,7 @@ data class PairedHost(
         put("pairedAt", pairedAt)
         // Only when set: a paired computer's record is byte-for-byte what it was before A27.
         if (manual) put("manual", true)
+        sshProfilePath?.let { put("sshProfilePath", it) }
     }
 
     companion object {
@@ -108,6 +111,8 @@ data class PairedHost(
 
         fun fromJson(o: JsonObject): PairedHost? {
             val id = o.s("id") ?: return null
+            // A malformed explicit choice must never silently select another profile.
+            if ("sshProfilePath" in o && o.s("sshProfilePath") == null) return null
             // The key, or the id when a build that predates the key saved the record without it: going
             // back to such a build and forward again must not turn this computer into a paired one,
             // with route choices, a relay adoption and "turn on remote access" advice (review of A27b).
@@ -127,7 +132,8 @@ data class PairedHost(
                 pairedAt = o.l("pairedAt") ?: 0,
                 manual = manual,
                 // Nothing pairs a computer added by address, so nothing anchors its first connect.
-                sshHostKeyAnchors = if (manual) emptyList() else HostKeyAnchors.parse(o["sshHostKeyAnchors"])
+                sshHostKeyAnchors = if (manual) emptyList() else HostKeyAnchors.parse(o["sshHostKeyAnchors"]),
+                sshProfilePath = o.s("sshProfilePath")
             )
         }
 
