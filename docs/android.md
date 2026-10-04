@@ -2208,9 +2208,10 @@ recovery does not establish recovery on a fresh different identity; no backend f
   shared Desktop/Server renderer's capped paragraph could omit the hovered row after more than
   32 continuing rows. Reserving one upward-budget row fixes complete URL lookup. Focused Vitest
   24/24, all affected link/dialect tests 54/54, full TypeScript check and three isolated mutants
-  pass; interactive desktop hover remains unverified. Android already has the `A32` correction.
-  No host RPC/blob/pairing/mirror/SSH-file change or iOS adoption is owed. Installed beta 9 and
-  the device ledger are unchanged; no new phone evidence is claimed.
+  pass; all eight native Linux Desktop UI cases now pass at `01b4a2f5` with A121's leave fix.
+  Server/GPU/macOS remain unverified. Android already has the `A32` correction.
+  No host RPC/blob/pairing/mirror/SSH-file change or iOS adoption is owed. Beta 10/code 11
+  remains last installed; the device ledger is unchanged and no new phone evidence is claimed.
 
 The current `/v1/relay/join` contract is verified against the live hosted backend: the Pixel's
 encrypted paste pairing and forced relay-only browse succeed against production desktop source
@@ -2783,7 +2784,35 @@ synchronous blur redraws xterm's DOM rows before its screen receives mouseleave,
 link pointer active after a native non-drag leave in the SGR mouse case. A121 now defers only
 owned blur to the next timer task and cancels it on re-entry, focus and cleanup before park.
 Nine behavioral methods, all 63 affected terminal tests, full TypeScript and five assertion
-mutants pass. The full native eight-case control and synchronous-blur mutant are still pending;
-the earlier old-bound A92 mutant already fails on actual native tail hover. No Android runtime, APK, external contract
+mutants pass. Fresh full Linux Desktop control and restored builds each pass all eight native
+UI cases at `01b4a2f5`; the old-bound A92 and synchronous-blur A121 mutants fail on their named
+hover/leave assertions after trusted mouse delivery. Server/GPU/native macOS remain unverified. No Android runtime, APK, external contract
 or iOS change is involved. Phone testing remains paused: beta 10/code 11 is last installed,
 beta 16/code 17 is prepared, and the physical ledger stays **10 Pass / 22 Partial / 32 Pending**.
+
+## Native Desktop wrapped-link and leave verification (A92/A121, 2026-10-05)
+
+Signed source `01b4a2f5` now passes the full actual Linux Electron Desktop UI check. Four fresh
+full builds consume all **2,462 exact raw Git blobs**, with only the one approved source literal
+changed in each mutant. Control and restored runs each pass all eight combinations of Canvas
+and maximized Board modal, hard/soft wraps, and normal/SGR mouse reporting. A real plain native
+NodePTY paints the long run; native trusted XTest tail hover shows the entire URL underline and
+pointer, plain click opens nothing, Ctrl-click opens exactly the complete URL once, and a native
+non-drag leave clears the pointer and underline. No direct provider or activation call is used.
+
+The old upward cap fails with `A92_TAIL_HOVER_MISSING` after calibrated native tail hover.
+Restoring synchronous Canvas blur fails with `A92_HOVER_CLEAR_FAILED` after trusted hover, full
+Ctrl-click activation and native leave, retaining pointer/link state. The final blur mutant fails
+in Canvas soft/SGR; an earlier run also reproduced it in hard/normal mode. Nine controller tests
+and five assertion mutants cover cancellation, replacement, same-object park/adopt and cleanup
+reuse; all 63 affected terminal Vitest methods and full TypeScript pass.
+
+Private durable proof: `.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/`
+contains `a92/results.json` with 72 source/build/runtime evidence files, `a121-unit/results.json`
+and `a121-affected/result.json`. Network/PID/home isolation and unchanged source/tools/held output
+checks pass. Earlier archive-line-ending refusal, phase-specific classification rejection and
+quit timeout are preliminary recipe results; they were not counted as product failures or final
+controls. The final disposable fixture uses explicit exit after recording the checks; ordinary
+app quit is outside this proof. Synthetic SGR reporting does not verify a real TUI/tmux/SSH path,
+Server Edition, GPU, macOS or Android. No APK, host/client contract, iOS adoption or physical
+checklist promotion follows. Phone testing remains paused at **10 Pass / 22 Partial / 32 Pending**.

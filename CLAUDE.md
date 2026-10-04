@@ -5693,4 +5693,6 @@ mouseout handling can detach the native target before screen mouseleave clears t
 Do not replace the timer with a microtask. Cancel pending blur on re-entry, intentional focus
 and lifecycle cleanup before parking; a parked Terminal can be adopted by another component.
 Status/presence release stays synchronous. Behavioral tests cover cancellation and ownership;
-full native Linux Desktop checks are separate from Server, GPU and Android device verification.
+eight native Linux Desktop cases pass at `01b4a2f5`, with the immediate-blur and old-cap
+mutants caught and restored control passing. Synthetic SGR, DOM rendering and explicit disposable
+fixture exit do not verify real tmux/SSH, Server, GPU, macOS, ordinary app quit or Android.
