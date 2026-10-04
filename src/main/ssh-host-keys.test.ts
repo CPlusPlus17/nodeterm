@@ -129,6 +129,90 @@ describe('Include host-key discovery', () => {
     expect(opened).not.toContain(generatedPrivate)
   })
 
+  it('excludes declared relative private names from lexical and canonical Include targets without anchoring them', async () => {
+    const root = tempDir()
+    const external = tempDir()
+    const lexical = tempDir()
+    const keys = tempDir()
+    const [valid, fp] = publicKey(keys, 'valid')
+    const [decoy] = publicKey(keys, 'decoy')
+    const custom = path.join(external, 'custom-host')
+    const dotted = path.join(external, 'normalized-host')
+    const lexicalTarget = path.join(keys, 'lexical-target.conf')
+    // These are synthetic sentinels, never real host keys. Their declaration does not establish
+    // sshd's launch directory, so matching names must be excluded rather than resolved as anchors.
+    writeFileSync(custom, 'SYNTHETIC PRIVATE HOSTKEY SENTINEL\n')
+    writeFileSync(dotted, 'SYNTHETIC DOT/PARENT HOSTKEY SENTINEL\n')
+    writeFileSync(lexicalTarget, `HostKey ${decoy}\n`)
+    symlinkSync(custom, path.join(external, '00-alias.conf'))
+    // A lexical name match is excluded even when its current symlink resolves somewhere else.
+    symlinkSync(lexicalTarget, path.join(lexical, 'custom-host'))
+    writeFileSync(path.join(root, 'sshd_config'), [
+      'HOSTKEY="keys/../custom-host"',
+      'HostKey ./parent/../normalized-host',
+      `HostKey ${valid}`,
+      `Include ${external}/* ${lexical}/*`
+    ].join('\n'))
+    const opened: string[] = []
+    const original = fs.open.bind(fs)
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      opened.push(String(args[0]))
+      return original(...args)
+    })
+    const found = await readSshHostKeyFingerprints([root])
+    expect(opened).not.toContain(custom)
+    expect(opened).not.toContain(dotted)
+    expect(opened).not.toContain(lexicalTarget)
+    expect(found).toEqual([fp])
+  })
+
+  it('keeps custom public declarations readable while relative public names remain unanchored', async () => {
+    const root = tempDir()
+    const external = tempDir()
+    const keys = tempDir()
+    const [relative, relativeFp] = publicKey(external, 'custom-public')
+    const [absolute, absoluteFp] = publicKey(keys, 'agent-held')
+    const [valid, validFp] = publicKey(keys, 'valid')
+    const relativePublic = relative + '.pub'
+    // Neither the config root nor a matching Include establishes the daemon's HostKey base.
+    publicKey(root, 'custom-public')
+    writeFileSync(path.join(root, 'sshd_config'), [
+      'HostKey keys/../custom-public.pub',
+      `HostKey ${absolute}.pub`,
+      `HostKey ${valid}`,
+      `Include ${external}/*.pub`
+    ].join('\n'))
+    const opened: string[] = []
+    const original = fs.open.bind(fs)
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      opened.push(String(args[0]))
+      return original(...args)
+    })
+    const found = await readSshHostKeyFingerprints([root])
+    expect(found).toEqual([absoluteFp, validFp])
+    expect(found).not.toContain(relativeFp)
+    expect(opened).toContain(relativePublic)
+  })
+
+  it('bounds relative HostKey declarations before visiting any more Includes', async () => {
+    const root = tempDir()
+    const external = tempDir()
+    const [valid, fp] = publicKey(tempDir(), 'valid')
+    const [late] = publicKey(tempDir(), 'late')
+    const included = path.join(external, 'after-overflow.conf')
+    writeFileSync(included, `HostKey ${late}\n`)
+    const relative = Array.from({ length: SSH_HOST_KEY_DISCOVERY_LIMITS.publicFiles }, (_, i) => `HostKey keys/relative-${i}\n`).join('')
+    writeFileSync(path.join(root, 'sshd_config'), `HostKey ${valid}\n${relative}Include ${included}\n`)
+    const opened: string[] = []
+    const original = fs.open.bind(fs)
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      opened.push(String(args[0]))
+      return original(...args)
+    })
+    expect(await readSshHostKeyFingerprints([root])).toEqual([fp])
+    expect(opened).not.toContain(included)
+  })
+
   it.skipIf(process.platform === 'win32')('never blocks if a config or public file becomes a FIFO between stat and open', async () => {
     const root = tempDir()
     const external = tempDir()

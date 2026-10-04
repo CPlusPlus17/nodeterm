@@ -6,7 +6,7 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Current source checkpoint (2026-10-04, A100–A116).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-04, A100–A117).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
@@ -993,3 +993,26 @@ its exit-zero reattach fallback for older hosts. The same host policy preserves 
 @eneskirca should verify physical coattachment. Prepared beta 14/code 15's Android client remains
 unchanged and uninstalled; host-side verification uses the later source. The device ledger stays
 10 Pass / 22 Partial / 32 Pending, and phone testing remains paused.
+
+## A117
+
+**Relative private HostKey declarations can be opened by a configuration Include (2026-10-04).**
+
+A relative `HostKey` is still excluded from SSH anchors because discovery does not know the
+daemon's working directory. Its normalized private basename now also excludes lexical and
+canonical Include candidates before they are opened. Explicit public `.pub` declarations remain
+readable, and relative declarations share the existing bounded declaration budget. This is a
+conservative exclusion by name; it does not infer relative paths or discover unknown aliases.
+
+All 22 host-reader methods pass on this Linux host, including the existing real FIFO race.
+Seven isolated reader mutations fail assertions with passing controls/restored runs. The real
+pairing-service → Android regression seals only a disposable server's permitted key, preserves
+the anchors in the phone record, accepts that real SSH server and refuses a second real server.
+The original source and removal of the canonical exclusion both fail that regression; restored
+source passes. Private-file inputs are synthetic config sentinels, never actual private keys.
+Proof is retained in `.nodeterm/android-relative-hostkey-2026-10-04/`.
+
+The sealed field and Android production code are unchanged; the actual interop fixture is updated
+with the producer. iOS @eneskirca should verify the existing anchor handling against the current
+host. Prepared beta 14 remains valid client source and is not installed. Physical checks remain
+pending; phone testing is paused and the ledger stays 10 Pass / 22 Partial / 32 Pending.

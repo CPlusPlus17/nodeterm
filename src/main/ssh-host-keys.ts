@@ -115,6 +115,11 @@ async function readBoundedText(file: string, limit: number): Promise<{ text: str
  * token-bearing path is skipped: there is no telling here what sshd would resolve it to.
  */
 export function hostKeyPathsInSshdConfig(text: string): string[] {
+  return hostKeyValuesInSshdConfig(text).filter((value) => path.posix.isAbsolute(value))
+}
+
+/** Relative declarations are useful only for excluding private reads, never for guessing anchors. */
+function hostKeyValuesInSshdConfig(text: string): string[] {
   const out: string[] = []
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*hostkey(?:\s*=\s*|\s+)(.*)$/i.exec(raw)
@@ -122,7 +127,7 @@ export function hostKeyPathsInSshdConfig(text: string): string[] {
     let value = m[1].trim()
     const quoted = /^"([^"]*)"/.exec(value)
     value = quoted ? quoted[1] : value.split(/\s+/)[0]
-    if (path.posix.isAbsolute(value) && !value.includes('%')) out.push(value)
+    if (value && !value.includes('%') && !value.includes('\0')) out.push(value)
   }
   return out
 }
@@ -158,6 +163,7 @@ type Discovery = {
   matches: number
   visited: Set<string>
   privateKeys: Set<string>
+  relativePrivateNames: Set<string>
   keyPaths: Set<string>
   keysExhausted: boolean
 }
@@ -261,17 +267,19 @@ async function configuredHostKeys(dir: string, includeBase: string, state: Disco
   const visit = async (file: string, depth: number): Promise<void> => {
     if (depth > SSH_HOST_KEY_DISCOVERY_LIMITS.depth || state.files >= SSH_HOST_KEY_DISCOVERY_LIMITS.configFiles ||
         state.bytes >= SSH_HOST_KEY_DISCOVERY_LIMITS.totalConfigBytes || state.keysExhausted) return
-    if (PRIVATE_KEY_NAME.test(path.basename(file)) || state.privateKeys.has(path.resolve(file))) return
+    if (PRIVATE_KEY_NAME.test(path.basename(file)) || state.privateKeys.has(path.resolve(file)) ||
+        state.relativePrivateNames.has(path.basename(file))) return
     state.files++ // failed/unreadable attempts count too.
     const real = await fs.realpath(file).catch(() => null)
-    if (!real || state.visited.has(real) || PRIVATE_KEY_NAME.test(path.basename(real)) || state.privateKeys.has(real)) return
+    if (!real || state.visited.has(real) || PRIVATE_KEY_NAME.test(path.basename(real)) || state.privateKeys.has(real) ||
+        state.relativePrivateNames.has(path.basename(real))) return
     state.visited.add(real)
     const read = await readBoundedText(real, Math.min(MAX_CONFIG_BYTES, SSH_HOST_KEY_DISCOVERY_LIMITS.totalConfigBytes - state.bytes))
     if (!read) return
     state.bytes += read.bytes
-    const keys = [...new Set(hostKeyPathsInSshdConfig(read.text))]
+    const keys = [...new Set(hostKeyValuesInSshdConfig(read.text))]
     // A glob must not read the private paths this config names, even if they have custom names.
-    for (const key of keys.filter((key) => !key.endsWith('.pub'))) {
+    for (const key of keys.filter((key) => path.posix.isAbsolute(key) && !key.endsWith('.pub'))) {
       state.privateKeys.add(path.resolve(key))
     }
     for (const key of keys) {
@@ -283,6 +291,14 @@ async function configuredHostKeys(dir: string, includeBase: string, state: Disco
         break
       }
       state.keyPaths.add(key)
+      if (!path.posix.isAbsolute(key)) {
+        // The daemon's working directory is unknown. A same-named Include could be its private
+        // key, including through a symlink, so exclude lexical and canonical basenames instead
+        // of resolving the declaration under our config root. Explicit .pub names stay public.
+        const normalized = path.posix.normalize(key)
+        if (!normalized.endsWith('.pub')) state.relativePrivateNames.add(path.posix.basename(normalized))
+        continue
+      }
       out.push(key)
       if (key.endsWith('.pub')) continue
       const realKey = await fs.realpath(key).catch(() => null)
@@ -310,7 +326,7 @@ async function configuredHostKeys(dir: string, includeBase: string, state: Disco
 export async function readSshHostKeyFingerprints(dirs: readonly string[] = SSH_HOST_KEY_DIRS): Promise<string[]> {
   const files: string[] = []
   const state: Discovery = {
-    files: 0, bytes: 0, entries: 0, matches: 0, visited: new Set(), privateKeys: new Set(),
+    files: 0, bytes: 0, entries: 0, matches: 0, visited: new Set(), privateKeys: new Set(), relativePrivateNames: new Set(),
     keyPaths: new Set(), keysExhausted: false
   }
   const includeBase = dirs[0] ?? SSH_HOST_KEY_DIRS[0]

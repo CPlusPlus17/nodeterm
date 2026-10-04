@@ -136,6 +136,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A114](#a114) | low | | small | phone/UX | ✅ fixed in `6b989e59`; 39 focused methods / 18 assertion mutants; physical pending · Dictation has no language picker |
 | [A115](#a115) | medium | | medium | phone/bug | ✅ fixed in `0a71c028`; 73 assertion mutants and one equivalent survivor; physical pending · Replaced records and late connections retain stale preferences/credentials |
 | [A116](#a116) | medium | | medium | pairing/UX | ✅ fixed in `a6b3e88b`; six real HTTP / five interop methods, 56 assertion mutants; physical pending · Multiadapter pairing/refresh has no network choice |
+| [A117](#a117) | medium | | small | pairing/bug | ✅ source fixed on this branch; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
 
 ## A01
 
@@ -3836,3 +3837,26 @@ mutants (32 Desktop, six real HTTP, eighteen interop); preliminary receipts rema
 The existing wire shape is unchanged and the Android client needs no parser change. iOS @eneskirca
 should adopt the existing authenticated `lan` field; it now reflects the saved Desktop adapter.
 Physical QR/VPN/DHCP, search UI and multiadapter checks remain pending. No external message sent.
+
+## A117
+
+**Relative private HostKey declarations can be opened by a configuration Include (2026-10-04).**
+
+A relative `HostKey` is still excluded from SSH anchors because discovery does not know the
+daemon's working directory. Its normalized private basename now also excludes lexical and
+canonical Include candidates before they are opened. Explicit public `.pub` declarations remain
+readable, and relative declarations share the existing bounded declaration budget. This is a
+conservative exclusion by name; it does not infer relative paths or discover unknown aliases.
+
+All 22 host-reader methods pass on this Linux host, including the existing real FIFO race.
+Seven isolated reader mutations fail assertions with passing controls/restored runs. The real
+pairing-service → Android regression seals only a disposable server's permitted key, preserves
+the anchors in the phone record, accepts that real SSH server and refuses a second real server.
+The original source and removal of the canonical exclusion both fail that regression; restored
+source passes. Private-file inputs are synthetic config sentinels, never actual private keys.
+Proof is retained in `.nodeterm/android-relative-hostkey-2026-10-04/`.
+
+The sealed field and Android production code are unchanged; the actual interop fixture is updated
+with the producer. iOS @eneskirca should verify the existing anchor handling against the current
+host. Prepared beta 14 remains valid client source and is not installed. Physical checks remain
+pending; phone testing is paused and the ledger stays 10 Pass / 22 Partial / 32 Pending.

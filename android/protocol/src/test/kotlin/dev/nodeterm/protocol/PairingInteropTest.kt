@@ -221,6 +221,42 @@ class PairingInteropTest {
     }
 
     @Test
+    fun `relative private HostKey names never add anchors through an Include (A117)`() = runBlocking<Unit> {
+        assumeTrue(!System.getProperty("os.name").startsWith("Windows"), "POSIX sshd configuration")
+        val identity = SshIdentity.generate()
+        val (served, servedKey) = sshServer(identity)
+        val (unpaired, unpairedKey) = sshServer(identity)
+        val root = hostKeyDir("fixture" to servedKey)
+        val external = hostKeyDir("rogue" to unpairedKey)
+        val roguePublic = File(external, "rogue.pub")
+        assertTrue(File(external, "ssh_host_rogue_key.pub").renameTo(roguePublic))
+        // A synthetic private-file sentinel deliberately contains a valid config directive. If
+        // Include opens it, the real producer incorrectly seals the unpaired server's public key.
+        // Nothing here contains or reads an actual private host key.
+        val privateSentinel = File(external, "custom-host")
+        privateSentinel.writeText("HostKey \"${roguePublic.path}\"\n")
+        Files.createSymbolicLink(File(external, "alias.conf").toPath(), privateSentinel.toPath())
+        File(root, "sshd_config").writeText("HostKey ../keys/custom-host\nInclude \"${external.path}/*\"\n")
+
+        val (h, _) = start(withRelay = false, env = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to root.path))
+        val payload = payloadOf(h)
+        assertTrue(!h.ready["payload"]!!.jsonPrimitive.content.contains("SHA256:"), "anchors remain sealed")
+        val paired = PairingClient().pair(payload, identity.authorizedKeysLine(), "Pixel", "android-relative-key")
+        val expected = SshHostConnection.fingerprint(servedKey)
+        assertEquals(listOf(expected), paired.sshHostKeyFingerprints, "a private Include cannot advertise another server")
+        val host = assertNotNull(PairedHost.fromJson(PairedHost.from(payload, paired).toJson()))
+        assertEquals(listOf(expected), host.sshHostKeyAnchors)
+        val pin = Pin(host.sshHostKeyAnchors)
+        SshHostConnection.connect("127.0.0.1", served.port, "dev", identity, pin).close()
+        assertEquals(expected, pin.value)
+        val refused = Pin(host.sshHostKeyAnchors)
+        assertFailsWith<HostKeyNotPairedException> {
+            SshHostConnection.connect("127.0.0.1", unpaired.port, "dev", identity, refused).close()
+        }
+        assertNull(refused.value, "the excluded server must never pin")
+    }
+
+    @Test
     fun `a plaintext answer carries no SSH host keys, whatever the computer has (A49-anchor)`() = runBlocking<Unit> {
         // No `hostKey` in the QR: the phone pairs in the clear, and a clear answer could have been
         // rewritten on the LAN, so the desktop leaves the keys out of it.
