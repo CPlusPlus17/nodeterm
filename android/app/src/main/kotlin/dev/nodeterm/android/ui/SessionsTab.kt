@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,7 @@ import dev.nodeterm.protocol.model.NodeInfo
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.model.SessionBucket
+import dev.nodeterm.protocol.model.SessionSearch
 import dev.nodeterm.protocol.ssh.PhoneTerminals
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.coroutines.launch
@@ -95,10 +97,7 @@ private fun bucketTitle(b: SessionBucket) = when (b) {
 
 /** What a session row is called: the agent's own session name, else the node title, else the agent. */
 fun displayTitle(node: NodeInfo, snapshot: ProjectsSnapshot): String =
-    snapshot.statusOf(node.id)?.name?.takeIf { it.isNotBlank() }
-        ?: node.title.takeIf { it.isNotBlank() }
-        ?: Agent.of(node.agentId)?.label
-        ?: "Terminal"
+    SessionSearch.title(node, snapshot)
 
 /**
  * [newSessionNote] is why New session is unavailable (audit A26), shown as the list's first row while
@@ -112,6 +111,8 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
     var menuFor by remember { mutableStateOf<NodeInfo?>(null) }
     var renaming by remember { mutableStateOf<NodeInfo?>(null) }
     var ending by remember { mutableStateOf<NodeInfo?>(null) }
+    // Stored by the host/tab's A43 saved-state holders, including a terminal pushed above this page.
+    var query by rememberSaveable(hostId) { mutableStateOf("") }
 
     fun act(label: String, block: suspend () -> Unit) {
         scope.launch {
@@ -124,83 +125,96 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
         }
     }
 
-    val projects = snapshot.openProjects().filter { it.sessions.isNotEmpty() }
-    if (projects.isEmpty()) {
-        Column(Modifier.fillMaxSize()) {
+    val projects = SessionSearch.projects(snapshot, query)
+    Column(Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("Search sessions") },
+            singleLine = true,
+            trailingIcon = {
+                if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("Clear search") }
+            },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        if (projects.isEmpty()) {
             newSessionNote?.let { NewSessionNote(it) }
-            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    if (snapshot.fetchedAt == 0L) "Loading sessions…" else "No sessions on this computer yet.",
+                    when (SessionSearch.emptyState(snapshot, query)) {
+                        SessionSearch.EmptyState.LOADING -> "Loading sessions…"
+                        SessionSearch.EmptyState.EMPTY -> "No sessions on this computer yet."
+                        SessionSearch.EmptyState.NO_MATCHES -> "No sessions match your search."
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        }
-        return
-    }
-
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
-        if (newSessionNote != null) item(key = "new-session-note") { NewSessionNote(newSessionNote) }
-        for (project in projects) {
-            item(key = "p-${project.id}") {
-                ProjectHeader(project, onSourceControl = { nav.push(Route.SourceControl(hostId, project.id)) })
-            }
-            val grouped = project.sessions.groupBy { snapshot.statusOf(it.id)?.bucket ?: SessionBucket.UNKNOWN }
-            for (bucket in BUCKET_ORDER) {
-                val rows = grouped[bucket].orEmpty().sortedByDescending { snapshot.statusOf(it.id)?.updatedAt ?: 0 }
-                if (rows.isEmpty()) continue
-                item(key = "b-${project.id}-$bucket") {
-                    Text(
-                        bucketTitle(bucket).uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp)
-                    )
-                }
-                items(rows, key = { "n-${project.id}-${it.id}" }) { node ->
-                    Box {
-                        SessionRow(
-                            node, snapshot,
-                            onClick = { nav.push(Route.Terminal(hostId, node.id, displayTitle(node, snapshot))) },
-                            onLongClick = { menuFor = node }
-                        )
-                        DropdownMenu(expanded = menuFor?.id == node.id, onDismissRequest = { menuFor = null }) {
-                            DropdownMenuItem(text = { Text("Open") }, onClick = {
-                                menuFor = null
-                                nav.push(Route.Terminal(hostId, node.id, displayTitle(node, snapshot)))
-                            })
-                            // Wake/refresh/rename are nodeterm the app's (`node.*`): on the LAN that is
-                            // the relay leg opened next to SSH, on a tap. Where this phone has none they
-                            // stay listed, disabled, with the reason (audit A26) — and so they do for a
-                            // project another desktop drives over SSH, whose app is that desktop (A27).
-                            if (!PhoneTerminals.validId(node.id)) {
-                                val blocked = session.route(Capability.NODE_ACTIONS, project) as? LegRouting.Leg.Unavailable
-                                if (snapshot.statusOf(node.id)?.hibernated == true) {
-                                    DropdownMenuItem(text = { Text("Wake") }, enabled = blocked == null, onClick = {
+        } else {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                if (newSessionNote != null) item(key = "new-session-note") { NewSessionNote(newSessionNote) }
+                for (project in projects) {
+                    item(key = "p-${project.id}") {
+                        ProjectHeader(project, onSourceControl = { nav.push(Route.SourceControl(hostId, project.id)) })
+                    }
+                    val grouped = project.sessions.groupBy { snapshot.statusOf(it.id)?.bucket ?: SessionBucket.UNKNOWN }
+                    for (bucket in BUCKET_ORDER) {
+                        val rows = grouped[bucket].orEmpty().sortedByDescending { snapshot.statusOf(it.id)?.updatedAt ?: 0 }
+                        if (rows.isEmpty()) continue
+                        item(key = "b-${project.id}-$bucket") {
+                            Text(
+                                bucketTitle(bucket).uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp)
+                            )
+                        }
+                        items(rows, key = { "n-${project.id}-${it.id}" }) { node ->
+                            Box {
+                                SessionRow(
+                                    node, snapshot,
+                                    onClick = { nav.push(Route.Terminal(hostId, node.id, displayTitle(node, snapshot))) },
+                                    onLongClick = { menuFor = node }
+                                )
+                                DropdownMenu(expanded = menuFor?.id == node.id, onDismissRequest = { menuFor = null }) {
+                                    DropdownMenuItem(text = { Text("Open") }, onClick = {
                                         menuFor = null
-                                        act("Wake") { session.connectionFor(Capability.NODE_ACTIONS, project = project).wake(node.id) }
+                                        nav.push(Route.Terminal(hostId, node.id, displayTitle(node, snapshot)))
+                                    })
+                                    // Wake/refresh/rename are nodeterm the app's (`node.*`): on the LAN that is
+                                    // the relay leg opened next to SSH, on a tap. Where this phone has none they
+                                    // stay listed, disabled, with the reason (audit A26) — and so they do for a
+                                    // project another desktop drives over SSH, whose app is that desktop (A27).
+                                    if (!PhoneTerminals.validId(node.id)) {
+                                        val blocked = session.route(Capability.NODE_ACTIONS, project) as? LegRouting.Leg.Unavailable
+                                        if (snapshot.statusOf(node.id)?.hibernated == true) {
+                                            DropdownMenuItem(text = { Text("Wake") }, enabled = blocked == null, onClick = {
+                                                menuFor = null
+                                                act("Wake") { session.connectionFor(Capability.NODE_ACTIONS, project = project).wake(node.id) }
+                                            })
+                                        }
+                                        DropdownMenuItem(text = { Text("Refresh view on computer") }, enabled = blocked == null, onClick = {
+                                            menuFor = null
+                                            act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS, project = project).refresh(node.id) }
+                                        })
+                                        DropdownMenuItem(text = { Text("Rename…") }, enabled = blocked == null, onClick = {
+                                            menuFor = null
+                                            renaming = node
+                                        })
+                                        if (blocked != null) {
+                                            Text(
+                                                blocked.reason,
+                                                Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 6.dp),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    DropdownMenuItem(text = { Text("End session…", color = NtColors.attention) }, onClick = {
+                                        menuFor = null
+                                        ending = node
                                     })
                                 }
-                                DropdownMenuItem(text = { Text("Refresh view on computer") }, enabled = blocked == null, onClick = {
-                                    menuFor = null
-                                    act("Refresh") { session.connectionFor(Capability.NODE_ACTIONS, project = project).refresh(node.id) }
-                                })
-                                DropdownMenuItem(text = { Text("Rename…") }, enabled = blocked == null, onClick = {
-                                    menuFor = null
-                                    renaming = node
-                                })
-                                if (blocked != null) {
-                                    Text(
-                                        blocked.reason,
-                                        Modifier.widthIn(max = 280.dp).padding(horizontal = 12.dp, vertical = 6.dp),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
                             }
-                            DropdownMenuItem(text = { Text("End session…", color = NtColors.attention) }, onClick = {
-                                menuFor = null
-                                ending = node
-                            })
                         }
                     }
                 }
@@ -344,7 +358,7 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(displayTitle(node, snapshot), maxLines = 1, overflow = TextOverflow.Ellipsis)
             val detail = buildList {
-                add(agent?.label ?: "Terminal")
+                add(SessionSearch.agentLabel(node, snapshot))
                 if (PhoneTerminals.validId(node.id)) node.cwd?.let { add(it) }
                 now?.activity?.let { add(it) }
                 ContextFill.label(now?.contextPercent)?.let { add(it) }
