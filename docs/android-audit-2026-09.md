@@ -69,7 +69,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 🟡 beta-8/code-9 installed on intended Pixel with matching signer/APK, non-debuggable metadata, install identity/notification grant/manual-SSH reconnect+browse retained; beta-6 checklist proof stays historical, broader validation pending · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 🟡 private beta10/code11 installed from clean e3ce041c with verified signer/APK/non-debuggable metadata; desktop-issued pairing/relay survives same-signer update and real saved relay reconnect/input pass; A91/A94 full physical empty-host flow passes, 8/22/34 ledger and broader minified/device validation pending · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -109,11 +109,12 @@ the audit's proposal, the handover's progress log says how and why.
 | [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
-| [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect and exact UI End pass; item 32 Partial, relay/managed/cellular pending; beta-9 Oct4 A91 empty-host flow passes · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
-| [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; beta-9 Oct4 physical empty-host first Home/exact last-End/row-group removal/connected SSH/second Home flow pass; A94 label fix delivery pending · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
+| [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect/exact End pass; beta 10 relay plain-shell creation/input/exact End also pass; item 32 Partial for managed/cellular variants; beta-9 Oct4 A91 empty-host flow passes · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
+| [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; beta-9 Oct4 physical empty-host first Home/exact last-End/row-group removal/connected SSH/second Home flow pass; A94 delivered full installed End/recreate/open/End flow passes · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
 | [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; interactive desktop hover remains unverified |
-| [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; same-desktop recovery policy unverified |
-| [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants pass, full Gradle and APK/physical delivery pending · Authoritative empty SSH listing remains labelled Loading sessions |
+| [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; original same-desktop recovery succeeds; fresh-different-desktop failure remains open |
+| [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants and full689/67 pass, beta 10 delivered; full physical completed-empty End/recreate/open/End flow passes · Authoritative empty SSH listing remains labelled Loading sessions |
+| [A95](#a95) | medium | | small | desktop/interop | ✅ fixed in `ec12ea9a`; actual beta 10 phone move/remove/re-add/create-label updates reach rebuilt production desktop Board with unchanged page time origin and matching persisted state; item 36 Pass; nine suites/133 tests, full TypeScript and four mutants pass · Held desktop Board remained stale after phone moves/labels |
 
 ## A01
 
@@ -1613,6 +1614,16 @@ Record the fingerprint in verify() but persist it only after authPublickey succe
 - Severity: **low**; claimed by auditor: medium; effort: medium; area: security; kind: risk
 - Location: `android/app/build.gradle.kts:19`
 
+**Current private-beta status (2026-10-04):** beta10/code11 from clean e3ce041c is installed on
+the intended Pixel with verified signature/non-debuggable metadata, exact APK hash, install
+identity and notification grant. Genuine desktop-issued beta9 pairing/relay credentials survive
+the same-signer update; actual saved relay reopen/input reaches the scoped PTY. A91/A94 installed
+End/recreate/open/End completed-empty flow also passes. Items 1/36 pass and item 49 is Partial, giving 10 Pass / 22 Partial /
+32 Pending. This still leaves broader minified worker/QR/cellular-relay/device checks open; the
+public distribution/link work is separate from this user's private-beta scope. Receipt:
+`.nodeterm/android-beta-build-10/paired-update-result.json`; exact-source CI37194375778 has all
+five jobs green. Earlier installation/results below retain their original historical scope.
+
 **Evidence**
 
 The release buildType has no signingConfig (lines 19-25). The README's only install path is `./gradlew :app:assembleDebug → app-debug.apk` (android/README.md:32-38). CI uploads `nodeterm-android-debug` (.github/workflows/android.yml:73-80). The desktop sends users to that folder (src/renderer/lib/links.ts:7 `ANDROID_APP_URL = '.../tree/main/android'`). AGP marks debug builds `android:debuggable=true`, which enables `adb shell run-as dev.nodeterm.android` and JDWP attach to the app process. SecureStore's guarantee ('it never leaves the secure hardware') is about the key material only: the key is usable by any code running as the app's UID or inside its process.
@@ -1695,19 +1706,19 @@ final beta-6/code-7 usual manual-SSH terminal "Connects and scrolls smoothly", c
 and smooth scrolling with WireGuard enabled and Wi-Fi off over cellular. Cellular hosted relay remains
 untested. Item 20 remains Partial; no runtime change, phone command or new product finding resulted.
 Protocol/offline app tasks at that stage passed in 50/1 seconds; current A90 checks are recorded below.
-The [64-row record](android.md#what-is-verified-and-how) now has seven Pass, 21 Partial and
-36 Pending after focused A90 proof; the earlier beta6 7/20/37 checkpoint is preserved, with named
+The [64-row record](android.md#what-is-verified-and-how) now has ten Pass, 22 Partial and
+32 Pending after item 1 paired-update, focused A90 proof and item 36 Board verification; the earlier beta6 7/20/37 checkpoint is preserved, with named
 conditional SKIP variants; `A50` remains partial. Private synthetic
 proof is in `.nodeterm/android-beta-build-6/checklist-20261002/`. Recorded prior all-green branch `19da35a2` has all
 five jobs green in [run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345),
-including A90. Installed beta 9 is bound to `4d33a5b5`; its source CI failed the documentation
-checklist mapping in run `37144282865`. The next documentation push needs
+including A90. Historical beta9 source `4d33a5b5` failed documentation mapping in run `37144282865`;
+current installed beta 10 source `e3ce041c` passes all five jobs in run `37194375778`. The next documentation push needs
 its own checks/green workflow.
 The requirement review promotes item 18 using existing all-key/software-input/font/rotation SSH
 survival proof, without new phone work. Viewport/Fit belongs to item 23 and stays Partial; item 1
-needs desktop-issued pairing/relay credential survival across a higher-code update, using JSON or QR.
-The user defers remaining Pixel release checks until after the hike; full release, cellular hosted
-relay and live-Claude verification remain open. No new product finding is added.
+now passes desktop-issued beta9 pairing/relay survival across the code10→11 update.
+The user resumed Pixel release checks on Oct4; full release, cellular hosted relay and live-Claude
+verification remain open. No new product finding is added.
 QA-driver coordinates/side-Back and Compose class assumptions are not product findings. No
 production/host contract changed and no new audit finding is added.
 
@@ -2904,8 +2915,9 @@ cellular hosted relay remains untested.
 **Manual SSH/WireGuard host cannot create a new plain terminal without a local desktop/relay (2026-10-03).**
 
 - Severity: **medium**; effort: medium; area: parity; kind: gap
-- Status: **implemented and host-verified** in `bcc92367` / `b88d1415`; beta 9/code 10 installed.
-  Focused physical plain-SSH flow passes; item 32 Partial, relay/managed/cellular pending.
+- Status: **implemented and host-verified** in `bcc92367` / `b88d1415`; beta 10/code 11 installed.
+  Focused physical plain-SSH and beta 10 relay plain-shell creation/input/exact End pass;
+  item 32 stays Partial for managed/cellular variants.
   The separate A91 otherwise-empty-host flow passes on beta 9 Oct4.
 - Locations: Android Host screen/new-terminal choice, SSH scripts/connection and host listing
 
@@ -2991,7 +3003,7 @@ artifact, and clean native input passed; it did not produce a paste finding.
 
 - Severity: **medium**; effort: small; area: runtime; kind: bug
 - Status: **fixed in `4d33a5b5`, delivered in installed beta 9/code 10**.
-  The physical otherwise-empty-host flow passes on beta 9 Oct4; A94 label-fix delivery remains pending.
+  The physical otherwise-empty-host flow passes on beta9 Oct4; A94 is delivered in beta 10 with its full focused empty-host flow passed.
 - Locations: `android/app/src/main/kotlin/dev/nodeterm/android/conn/ConnectionManager.kt`
   (`HostSession.refreshNow`), `android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/ListingFailure.kt`
 
@@ -3018,13 +3030,13 @@ mutants are caught, and independent review finds no blocker. Ignored XML/mutatio
 **Physical otherwise-empty-host pass (2026-10-04):** installed beta 9/code 10 creates and opens
 its first Home shell through New terminal. Native End removes the exact row and Phone terminals
 group while SSH stays connected. New terminal remains usable and creates/opens a second Home
-shell. That second shell is retained for the later higher-code update check; final fixture cleanup
-is not claimed. Proof:
+shell. That second shell was retained for the beta 10 update and subsequently ended in the full
+A91/A94 flow below; final fixture/service cleanup is not yet claimed. Proof:
 `.nodeterm/android-beta-build-9/checklist-20261004/a91-beta9-focused-results.json` plus UI receipts.
 This closes A91's focused empty-host physical variant. Item 32 stays Partial and the ledger stays
-7 Pass /21 Partial /36 Pending because relay/managed and cellular creation remain open.
-A94's separate false Loading label was observed; its committed correction still awaits APK delivery
-and installed physical verification.
+At that checkpoint7 Pass /21 Partial /36 Pending because relay/managed and cellular creation remain open;
+later paired-update and item 36 Board verification bring the current tally to 10 Pass / 22 Partial / 32 Pending.
+A94's separate false Loading label was observed; beta 10 delivers the correction and its full installed End/recreate/open/End completed-empty flow passes.
 
 Private beta `0.1.0-beta.9` / code `10`, clean source
 `4d33a5b5366c99479b648086649205350c7752b1`, built in 43 seconds and updated the exact intended
@@ -3100,18 +3112,26 @@ For a direct-SSH desktop, production pairing deliberately retains its working SS
 when relay mint fails. That explains local success; it does not establish working “from anywhere”
 access or complete checklist items 8/12/17. Historical beta-6 hosted-relay proof remains valid.
 No phone identity reset, individual desktop identity/token copying or user-secret import was
-performed. Ordinary restart/re-pairing of the complete original owned fixture profile is being
-assessed as a legitimate same-desktop recovery test; its result is not yet claimed.
+performed. Ordinary restart/re-pairing of the complete original owned fixture profile now
+succeeds, preserving host/device identity and issuing actual relay credentials on beta 9.
+After the retained-signer code10→11 update, beta 10 reconnects through the saved relay pairing,
+opens the owned terminal and sends input to its real scoped PTY. An anchored SSH refusal warning
+remains before AUTO relay fallback; this does not claim OnlyRelay preference survival. This verifies one legitimate
+same-desktop recovery case, not the backend's full C2 policy or fresh-different-desktop repair.
+**iOS implication for @eneskirca:** check prior-token lookup and recovery messaging when Forget
+removes a relay token but persistent phone identity remains. No new external field/fixture
+change is introduced by this finding.
 New private evidence belongs in .nodeterm/android-beta-build-9/checklist-20261004/.
-The 64-row tally remains 7 Pass /21 Partial /36 Pending.
+Item 1 paired-update and item 36 rebuilt-Board verification pass; item 35 stays Partial, giving current 10 Pass / 22 Partial / 32 Pending.
 
 ## A94
 
 **Completed empty SSH listings still show “Loading sessions…” (2026-10-04).**
 
 - Severity: **medium**; effort: small; area: native Sessions state; kind: runtime bug
-- Status: **fixed in 3c217cba; delivery pending**. Five actual Kotlin regression methods and
-  eight isolated mutants pass; full Gradle checks and installed physical verification remain pending.
+- Status: **fixed in 3c217cba; delivered in beta10/code11**. Five actual Kotlin regression
+  methods/eight isolated mutants and full Gradle 689/67 zero failures/errors/skips pass;
+  the full installed End/recreate/open/End completed-empty flow passes.
 - Locations: android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/ListingFailure.kt,
   ListingFailureTest.kt and android/app/src/main/kotlin/dev/nodeterm/android/ui/SessionsTab.kt.
 
@@ -3125,5 +3145,133 @@ with fetchedAt=0, the marker for a first listing still pending. SessionsTab choo
 label from that timestamp. The fix stamps this authoritative empty answer with its completion
 time, retaining cancellation and the prior uncertain-failure cache/route/error behavior.
 No external host-service, pairing, mirror or SSH-file contract changed; no iOS adoption is owed.
-This source fix is not yet delivered to the phone, and does not claim the last-shell End/recreate
-matrix or promote item 32. The ledger remains 7 Pass /21 Partial /36 Pending.
+The clean e3ce041c snapshot builds private beta10/code11 in 52.4 seconds; R8 keeps and independent
+SDK36/37 artifact review pass. The retained-signer update is installed on the intended Pixel,
+with matching SHA-256 04ace0ea01540bb477fcf823395a299fa211cfef3745aa28674099038ceb3693,
+install identity/notification grant and the owned SSH pane preserved. Full protocol passes 689
+tests/67 suites with zero failures/errors/skips (86.08 seconds wall time including a new daemon),
+offline app compile passes in 6.78 seconds. The exact built source `e3ce041c` has all five CI jobs green in [run `37194375778`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37194375778). Each later documentation push needs its own green workflow. The installed full End/recreate/open/End completed-empty flow passes.
+Beta9 A91 last-End/recreate proof remains separate. No item 32 promotion follows.
+Item 1 paired-update and item 36 Board verification pass, giving 10 Pass / 22 Partial / 32 Pending.
+
+**Installed A91/A94 focused empty-host cycle passes (2026-10-04).** On beta10/code11,
+native End of the otherwise-empty fixture's sole owned Home shell removes its row/group and
+shows “No sessions on this computer yet.” with no Loading label; Over SSH and the data-not-found
+banner remain. New terminal → Home → Create opens a new actual bash pane in Home. Back to
+Sessions and exact native End removes that new UUID and restores the same completed empty
+screen. All three isolated host sockets are empty. Proof:
+`.nodeterm/android-beta-build-9/checklist-20261004/beta10-a94-full-cycle-result.json`,
+`beta10-a94-recreated-pane.json` and the matching empty-screen UI receipts. This passes the
+focused A91/A94 empty-host flow; item 32 remains Partial because managed and cellular
+creation remain open; the relay plain-shell variant passes. Total 10 Pass / 22 Partial / 32 Pending. Final fixture/service cleanup is
+not yet claimed.
+
+
+## A95
+
+**Phone Board move and label persist but the mounted desktop Board remains stale (2026-10-04).**
+
+- Severity: **medium**; effort: small; area: desktop/phone interop; kind: runtime bug
+- Status: **fixed in `ec12ea9a`; rebuilt production desktop physical verification passes**.
+  Actual beta 10 phone move/remove/re-add/create-label checks complete item 36; Android APK is unchanged.
+- Locations: `src/core/workspace-store.ts` (`kanbanWriteNow`/`announceProjectFile`),
+  `src/renderer/canvas/Canvas.tsx` (`onExternalChange`/`onServerChange`), Desktop
+  `src/preload/index.ts` (`workspace.onServerChange`) and the mounted
+  `src/renderer/components/kanban/KanbanView.tsx`.
+
+**Observed:** on the installed beta10/code11 Pixel, the phone's Board moves its owned
+relay-created plain shell to In Progress. Its card moves and the actual persisted project
+board assigns that exact node to the In Progress column. The already mounted desktop Board
+still places it in Ungrouped at two snapshots approximately 60 seconds apart, with unchanged
+page time origin and no reload. A new blue label is also created and applied through the phone: persisted metadata and the
+mobile card have it, while the mounted desktop still has no labels. The same view had already
+picked up phone New-session node
+creation and Rename, so those successes do not prove board propagation. The production desktop
+was the held `071735d6` build; Android uses the clean beta 10 snapshot `e3ce041c`. Those commits have
+identical relevant core/Canvas/Board code. Source tracing confirms `announceProjectFile` sends
+this core-owned Board write as `workspaceExternalChange`. The active dirty canvas classifies
+changed kanban metadata as a conflict and does not replace the projects-store Board; its conflict
+strip is under the Board overlay. The existing `onServerChange` path already applies core-owned
+updates while preserving live Flow state. Desktop's actual preload had deliberately made
+`workspace.onServerChange` a no-op under the old server-only assumption. A core-channel-only
+change would repair Server Edition but leave Desktop unaffected. Commit `ec12ea9a` includes
+both the existing server-change announcement and real Desktop IPC subscription with unsubscribe.
+The same owned paired profile was then restarted with the repaired production `ec12ea9a` build;
+the actual no-reload phone/desktop move/add/remove/create-label checks below pass.
+
+**Source verification:** nine affected Vitest suites (133 tests), full `npm run typecheck` and
+strict TypeScript checking of the acceptance test pass. Four isolated source mutants are caught,
+including the original Desktop preload no-op. `src/core/workspace-store.kanban.test.ts` verifies
+the own-write channel; `src/preload/index.test.ts` verifies payload delivery, channel separation
+and exact unsubscribe. `test/acceptance/phone-board-updates.test.ts` uses the actual Desktop preload
+and Server WebSocket adapters, production change planners and mounted real `KanbanView` for local
+and SSH projects, including default Board seeding and preservation of unsaved canvas movement on
+the next ordinary save. This does not replace physical rebuilt-desktop verification.
+
+**Private evidence:** the owned fixture's proof directory contains
+`release-qa-board-snapshot-1791110071897978622-f0b5c9.json` (persisted In Progress) and
+`release-qa-board-dom-1791110071897952231-481e0f.json` plus
+`release-qa-board-dom-1791110131369275364-a2e18b.json` (mounted Ungrouped, matchesPersisted=false,
+same page time origin). Native mobile proof is in
+`.nodeterm/android-beta-build-9/checklist-20261004/beta10-board-after-move-portrait` UI receipts.
+These observations preserve the original held-build failure separately from the repaired result.
+
+**Rebuilt physical verification:** the actual beta 10 phone moves the owned card to Ungrouped,
+removes its blue label, re-adds that label, and creates/applies a second blue label. Each action
+updates persisted state and the already mounted production desktop Board. Baseline
+`release-qa-board-dom-1791111329350981266-9c35ac.json` and resulting DOM receipts
+`release-qa-board-dom-1791111393296743731-3f0e0a.json`,
+`release-qa-board-dom-1791111472591205070-dde430.json` and
+`release-qa-board-dom-1791111663350183645-51ca7c.json` all match persisted state and share page time
+origin `1791111312961.1`; no reload is performed. Matching native result/UI receipts are
+`beta10-a95-rebuilt-first-move-result.json`, `beta10-a95-label-removal-result.json` and
+`beta10-a95-label-readd-create-result.json` under the Oct4 checklist directory. This completes
+item 36. Including item 49 Settings evidence, the current tally is 10 Pass / 22 Partial / 32 Pending. It verifies the owned production fixture,
+without deployment to the user's regular desktop or a new Android APK.
+Exact phone End also removes the adopted card from the mounted Board with the same page origin
+and matching persisted state (`release-qa-board-dom-1791111853036062170-ed2205.json`); the original
+producer terminal is preserved. This does not complete Wake/Refresh repaint checks in item 35.
+This is an existing remote-action behavior shared by phone clients; @eneskirca should verify
+iOS-triggered board changes after the repair. No external verb, payload or project-file format changes.
+
+**Relay creation, Rename and exact End verified; Refresh dispatch observed (2026-10-04).** On
+beta 10, Sessions → New session → Terminal (shell) → Start creates and opens one actual
+canvas-registered shell in the exact private project folder. Native input and pwd reach its
+scoped bash pane. Rename updates the mounted desktop title without reload. Sessions Refresh
+rediscovers both owned rows; the actual owned session-menu Refresh emits exactly one node-refresh
+IPC, preserving pane identity and page time origin. Its repaint effect remains unverified.
+Exact native End then removes only the adopted node/pane/PID birth; the original producer
+terminal remains unchanged. The mounted Board also removes that card without reload.
+Item 32's relay plain-shell variant passes; managed-account/cellular and other required variants
+remain pending. Item 35 stays Partial for missing Wake and Refresh repaint evidence; item 36
+passes actual repaired-desktop move/remove/re-add/create-label checks (A95). Earlier first-round rotation restoration is historical; final restoration remains pending. The tally is 10 Pass / 22 Partial / 32 Pending; no full release/device pass
+or final fixture/service cleanup is claimed.
+
+**Settings visible flow passes; item 49 remains Partial (A44, 2026-10-04).** On installed beta 10,
+a temporary phone name and safe HTTPS loopback API persist after actual system Back and reopen.
+An invalid HTTP address shows its field error after keyboard dismissal and a visually reviewed rejection toast; reopening
+retains the prior valid HTTPS value. Reset to default, system Back and reopen restores the built-in
+API; the original phone name/API are then restored and verified. Unedited leave/reopen preserves
+the visible values. Internal preference-key absence and absence of writes were not physically
+inspected on this nondebuggable app; existing `SettingsLeaveTest` behavior/source guards cover
+those rules. The strict device ledger therefore marks item 49 Partial, giving 10 Pass /
+22 Partial / 32 Pending. Native proof includes `beta10-settings-phase1-result.json`,
+`beta10-settings-phase2-result.json` and `beta10-settings-toast-visual-review.json` in the Oct4
+checklist directory.
+
+**Phone system-theme compatibility passes (item 51, 2026-10-04).** On the installed beta 10
+Pixel, Computers and Settings native screens remain readable under system dark and light modes,
+including status/navigation bars; four captured PNGs have a matching visual-review receipt.
+The app retains its fixed dark palette in both modes; an automatic light app palette is not claimed.
+Original system night mode `yes` is restored and verified. Tablet/foldable is conditional SKIP
+because neither is available. Proof: `beta10-system-theme-result.json`,
+`beta10-system-theme-restored.json` and `beta10-system-theme-visual-review.json` in the Oct4 checklist
+directory. Item 51 passes, giving the current 10 Pass / 22 Partial / 32 Pending ledger.
+
+**Final phone cleanup and background watch remain pending (2026-10-04).** The intended Pixel's
+wireless ADB endpoint is no longer reachable; its current endpoint has been requested. The guard
+refused before the final phone Forget and portrait-lock restoration, so neither action is claimed.
+Earlier rotation restoration belongs to the first test round; current final restoration is pending.
+The isolated empty SSH service is stopped. Phone name/API and system night mode `yes` restoration
+are verified. No natural-periodic background Done watch has started and no result is claimed.
+The remaining phone cleanup and notification checks can continue when the correct Pixel returns.

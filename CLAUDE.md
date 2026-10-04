@@ -5443,12 +5443,16 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      Cold-agent SSH refusal (`A08`) and relay canvas New session remain. This feature changes
      no current RPC/blob/pairing/mirror/file contract; mention **@eneskirca** for iOS adoption
      of the isolated socket and marker/metadata. Host regressions/build are verified in
-     the beta-8 baseline; beta 9/code 10 is installed. Focused Pixel plain-SSH creation/history/
-     restart/update/reconnect/exact End pass (item 32 Partial); relay/managed, cellular creation,
-     A91 empty-host and the full device matrix remain pending. Do not infer full readiness.
+     the beta-8 baseline; beta 10/code 11 is installed. Focused Pixel plain-SSH creation/history/
+     restart/update/reconnect/exact End pass (item 32 Partial), and focused relay plain-shell
+     creation/cwd/input pass. Managed-agent and cellular creation and the full device matrix
+     remain pending; the focused A91 otherwise-empty-host cycle passes.
+     Do not infer full readiness.
      **Listing failures (`A91`)** clear the cached phone listing only for authoritative SSH
      `NothingFoundException`; other failures retain it and cancellation propagates. Preserve
-     the route-specific error and connected SSH state on an empty host. This is client policy,
+     the route-specific error and connected SSH state on an empty host. A completed authoritative
+     empty snapshot must carry its fetch time (`A94`): zero is the initial loading sentinel and
+     leaves the UI saying Loading sessions indefinitely even after the fetch finishes. This is client policy,
      with no RPC/blob/pairing/mirror/SSH-visible file contract change.
      The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
@@ -5460,6 +5464,14 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      read-ack the `~/.nodeterm/acks` sweep runs for an SSH phone). An exact-match tmux PANE target
      is `=name:`; `=name` alone is refused ("can't find pane", measured on 3.4) — session commands
      take `=name`.
+
+  Core-origin phone Board writes announce `workspace:server-change` (`A95`). The existing
+  renderer consumer adopts kanban metadata live and preserves unsaved canvas edits, so a later
+  ordinary save retains both. `workspace:external-change` is for outside-file edits: the dirty
+  canvas conflict path can otherwise leave a mounted Board stale behind its conflict strip.
+  Desktop preload must provide the real subscription and unsubscribe for this channel too; its
+  former Server-only no-op would discard every repaired core event. Keep actual outside-file
+  conflict handling intact; this distinction changes no phone contract.
 
   **The canvas and the kanban board are TWO VIEWS of the same nodes — treat the board as a
   first-class surface, not an afterthought.** Every session/node feature you add to a canvas node

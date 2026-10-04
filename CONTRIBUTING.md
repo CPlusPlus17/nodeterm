@@ -130,12 +130,15 @@ applicable here":
    `nodeterm-rmt`; strip inherited `NODETERM_*` in a new phone pane. Cold-agent SSH refusal and
    relay canvas creation remain. No existing RPC/blob/pairing/mirror/file contract changes;
    flag isolated socket/creation-marker/metadata adoption for **@eneskirca** in iOS. Host regression
-   and build checks pass in the beta-8 baseline; beta 9 / code 10 is now installed on the intended
+   and build checks pass in the beta-8 baseline; beta 10 / code 11 is now installed on the intended
    Pixel. Focused plain-SSH creation/history/restart/update/reconnect/exact End pass (item 32 Partial);
-   relay/managed, cellular creation, A91 empty-host and the full device matrix remain pending.
+   Focused relay plain-shell creation/cwd/input also pass. Managed-agent and cellular creation
+   and the full device matrix remain pending; the focused A91 otherwise-empty-host cycle passes.
    Listing failures (`A91`) clear cached rows only for authoritative SSH `NothingFoundException`;
    other failures retain them and cancellation propagates. Preserve the route-specific error and
-   connected SSH state on an empty host; this client policy changes no shared host contract.
+   connected SSH state on an empty host. Stamp a completed authoritative empty snapshot with its
+   fetch time (`A94`); zero means the initial loading state. This client policy changes no shared
+   host contract.
    The Android interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
@@ -157,6 +160,11 @@ into that same ID. Preserve per-node write order across the whole delivery and n
 unconfirmed send. Control clients consume the startup attach reply before matching stdin replies;
 each control command gets one reply block, so do not combine multiple commands into one call.
 Android's SSH transport also requires exit status zero before reporting an answer sent.
+
+Phone Board writes made by this core use `workspace:server-change` so the mounted Board adopts
+them while retaining unsaved canvas edits (`A95`). Keep `workspace:external-change` for outside
+file edits: a dirty canvas may correctly ask the user to resolve those conflicts. Desktop preload
+must subscribe to the internal channel too; a Server-only or no-op bridge leaves Desktop stale.
 
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
