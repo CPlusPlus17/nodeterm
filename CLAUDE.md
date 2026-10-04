@@ -774,6 +774,49 @@ Lifecycle, by intent:
   The refusal is **only** in `spawnNew` — a co-attach JOIN to a live session for that node id is
   still correct. An offline node reports itself to `SshReconnector`, so the canvas heals itself;
   `retryNow` (banner Reconnect / node Reconnect) skips the backoff and clears the refuse window.
+  **The phone's relay `pty.attach` is the other way in, and it is closed the same way**
+  (`PtyManager.prepareRelayAttach`, pure routing in `core/relay-attach-plan.ts`). It used to call
+  `attachDetached(nodeId)` → `tmux new-session -A` on the LOCAL socket for whatever id the phone
+  named, with no `sshRemote` and no `requireRemote` — so an SSH project's node opened on the phone
+  before the desktop mounted it became a local shell in this machine's `$HOME` (no context meter, ⌘M
+  fell back to Markdown, work ran on the wrong machine), and the desktop's later mount created a
+  SECOND `nt-<id>` on the host: one node id, two sessions, two machines. Rules a refactor must not
+  undo:
+  - **Where is decided from THIS machine's records, never the phone's words.** The desktop wires
+    `setRelayNodeResolver` (`workspaceStore.relayNodePlacements` — EVERY project holding the id, the
+    node as that project recorded it — plus `SshProjectManager.spawnRefFor` and the index's SSH
+    identity). A node is remote when it carries `sshRemoteTmux` + `ssh` (a host attachment routes
+    over its attachment scope, as `sshConnectionScope` does) or sits in an SSH project; a plain
+    `ssh` terminal (`ssh` without `sshRemoteTmux`) runs `ssh` locally, as the renderer does. The
+    phone's optional `projectId` may only CHOOSE among those placements, or REFUSE (an unknown id it
+    places in an SSH project) — it never routes a node anywhere on its own.
+  - **Remote = over the project's live master, with `requireRemote`, or refused** with a sentence
+    the phone shows (`{message, reason}`: `not-connected` / `no-ssh` / `still-connecting` /
+    `unregistered-remote`). Never a local fallback. A master whose connect setup has not finished
+    (`Conn.setupDone`, set exactly where `connected` is emitted) may only JOIN a session the host
+    positively lists — the renderer's `waitForSshRemote` rule: a session created before the setup
+    chain carries no hook/account env and no tmux.conf, for life.
+  - **The env is the desktop's, from the one builder.** The plan hands `spawnSession` the node's
+    recorded `agentId` / `agentModel` / `accountId` / `cwd` / `shell` / `ownerProjectId`, so
+    `buildPtyEnv` (agent id, canvas-control grant, permission wait), the account dir and project
+    overrides apply exactly as on a desktop create; no second env is written for the relay. The
+    shared pre-spawn refusals (`requireRemote`, the managed-Codex scope) are ONE helper,
+    `spawnRefusal`, used by `spawnNew` and the relay. Pane ownership is still NOT recorded for a
+    relay-created session (unchanged): the owner would be derived from project files, which is the
+    one source that ledger refuses to trust.
+  - **One id in a local AND an SSH project** (the same committed canvas opened in two folders) is
+    answered by whichever session exists: a live LOCAL one wins, otherwise the remote one.
+  - **Existing damage is reported, never killed.** A stray local `nt-<id>` the old path left for a
+    node that only lives remotely is never attached from the relay again (and the desktop's own
+    mounts already pass `requireRemote`), and a relay attach that finds one logs a `[relay] … left
+    untouched` warning. It is not killed automatically: it may hold work typed into it, and nothing
+    proves it idle. Do NOT point a user at the session-memory panel's × for it — a delete resolves
+    remoteness from the index (`planRemoteEnd`) and would end the REAL remote session too; the
+    manual cleanup is `tmux -L node-terminal kill-session -t =nt-<id>`.
+  - Server Edition: no phone relay host, no resolver wired — `prepareRelayAttach` there is the bare
+    local attach it always was. Tests: `relay-attach-plan.test.ts` (matrix),
+    `pty-relay-attach.test.ts` (real PtyManager, node-pty mocked), `remote-security.test.ts`
+    (host reply), `main/relay-attach-wiring.test.ts` (the desktop wire, at source level).
 - **Codex's auto-started shared daemon: every nodeterm Codex TUI runs `--no-daemon`** (2026-09-30).
   From codex-cli **0.157.0** the `daemon_auto_start` feature is `stable, true` (0.156.1:
   `experimental, false`; 0.148.0: no such feature): a plain `codex` TUI no longer runs in-process

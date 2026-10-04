@@ -491,6 +491,12 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
 
+- **A relay attach never decides where a session runs from what the phone sends.** The phone's
+  `pty.attach` goes through `PtyManager.prepareRelayAttach`, which routes an SSH project's node over
+  its project's master or refuses it, and gives a local node the env the desktop would. Never spawn
+  a session for a phone-named node id directly (`attachDetached` / `createDetached`): that is how an
+  SSH node became a local shell in this machine's `$HOME`. CLAUDE.md, "A remote node is NEVER
+  spawned locally".
 - **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
   in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
   never write a desktop peer there), and revoke only through `src/main/remote/peer-revoke.ts`, which
