@@ -55,6 +55,8 @@ object Dictation {
         val base: String = "",
         /** The words of the latest partial result, so a blank final result keeps what the draft shows. */
         val heard: String = "",
+        /** The explicit language at Start; null preserves the recognizer's system default. */
+        val languageTag: String? = null,
     ) {
         /** The recognizer is running (or finishing): a tap on the mic stops it rather than starting one. */
         val active: Boolean get() = phase == Phase.Listening || phase is Phase.Partial || phase == Phase.Finishing
@@ -80,7 +82,7 @@ object Dictation {
 
     sealed interface Event {
         /** The mic was tapped with nothing listening, and the microphone permission is granted. */
-        data class Start(val draft: String) : Event
+        data class Start(val draft: String, val languageTag: String? = null) : Event
 
         /** A partial result. */
         data class Heard(val text: String?) : Event
@@ -118,7 +120,7 @@ object Dictation {
         return when (event) {
             is Event.Start ->
                 if (state.active) Step(state)
-                else Step(State(Phase.Listening, base = event.draft), effect = Effect.START)
+                else Step(State(Phase.Listening, base = event.draft, languageTag = DictationLanguage.canonical(event.languageTag)), effect = Effect.START)
             is Event.Heard -> {
                 // After a cancel, a stop that already ended, or an error: a late callback, ignored.
                 if (!state.active) return Step(state)
@@ -184,8 +186,8 @@ object Dictation {
         INSUFFICIENT_PERMISSIONS(9, "nodeterm may not use the microphone. Allow it in Android's settings."),
         TOO_MANY_REQUESTS(10, "Too many dictations for now. Try again later."),
         SERVER_DISCONNECTED(11, "The speech service disconnected. Try again."),
-        LANGUAGE_NOT_SUPPORTED(12, "The speech recognizer does not support the phone's language."),
-        LANGUAGE_UNAVAILABLE(13, "The phone's language is not downloaded for speech recognition yet."),
+        LANGUAGE_NOT_SUPPORTED(12, "The speech recognizer does not support this language."),
+        LANGUAGE_UNAVAILABLE(13, "This language is not downloaded for speech recognition yet."),
         CANNOT_CHECK_SUPPORT(14, "Speech recognition is not available."),
         CANNOT_LISTEN_TO_DOWNLOAD_EVENTS(15, "Speech recognition is not available."),
         UNKNOWN(null, "Speech recognition failed. Try again.");

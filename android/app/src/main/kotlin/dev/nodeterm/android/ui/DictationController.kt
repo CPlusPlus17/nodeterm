@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import dev.nodeterm.protocol.model.Dictation
+import dev.nodeterm.android.data.DictationPreferences
 
 /**
  * The terminal input bar's mic (audit A59): Android's speech recognizer, driven by [Dictation], the
@@ -21,12 +22,10 @@ import dev.nodeterm.protocol.model.Dictation
  * the desktop's rule for its own dictation.
  *
  * The recognizer is the phone's recognition service (Google's on most phones, which may send the audio
- * to its servers, unlike the desktop's on-device Whisper). No language is set
- * ([RecognizerIntent.EXTRA_LANGUAGE] is left out), so it uses the phone's own language: the one the
- * user chose for the phone (and for its voice input). The desktop's dictation likewise pins no language
- * by default (`auto`, Whisper's own detection). A picker would need the recognizer's own list of
- * supported languages (`checkRecognitionSupport`, Android 13 and later) rather than the desktop's
- * Whisper list, and is left for later.
+ * to its servers, unlike the desktop's on-device Whisper). System default leaves EXTRA_LANGUAGE out.
+ * An explicit Settings language is frozen at Start and sent as the documented BCP47 extra. The picker
+ * uses locale display names, not a list of supported speech models; the service can still refuse an
+ * unavailable/unsupported language and its actual error is shown without submitting the draft.
  *
  * Everything here runs on the main thread, where SpeechRecognizer must be used: the screen's
  * clicks, the permission result, and the recognizer's callbacks (delivered on the main thread). A
@@ -51,9 +50,10 @@ class DictationController(private val context: Context, private val setDraft: (S
     val active: Boolean get() = state.active
 
     private var recognizer: SpeechRecognizer? = null
+    private val preferences = DictationPreferences(context)
 
     /** The mic was tapped with the microphone permission granted. */
-    fun start(draft: String) = on(Dictation.Event.Start(draft))
+    fun start(draft: String) = on(Dictation.Event.Start(draft, preferences.languageTag))
 
     /** The mic was tapped while listening. */
     fun stop() = on(Dictation.Event.Stop)
@@ -107,6 +107,7 @@ class DictationController(private val context: Context, private val setDraft: (S
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+        state.languageTag?.let { intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, it) }
         try {
             rec.startListening(intent)
         } catch (e: Exception) {

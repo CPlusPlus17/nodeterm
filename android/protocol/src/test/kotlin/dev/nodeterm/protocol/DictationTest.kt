@@ -279,14 +279,14 @@ class DictationTest {
     }
 
     @Test
-    fun `the recognizer listens with partial results in the phone's own language`() {
+    fun `the recognizer keeps partial results and applies only an explicit utterance language`() {
         val listen = AppSourcePins.blockAfter(controller, "private fun listen()")
         AppSourcePins.assertInOrder(listen,
             "SpeechRecognizer.createSpeechRecognizer(context)", "setRecognitionListener(Listener(rec))",
             "RecognizerIntent.ACTION_RECOGNIZE_SPEECH", "RecognizerIntent.LANGUAGE_MODEL_FREE_FORM",
-            "RecognizerIntent.EXTRA_PARTIAL_RESULTS, true", "rec.startListening(intent)")
-        // No EXTRA_LANGUAGE: the system default, on purpose (see DictationController's KDoc).
-        assertFalse(Regex("""EXTRA_LANGUAGE\b(?!_)""").containsMatchIn(code(controller)), listen)
+            "RecognizerIntent.EXTRA_PARTIAL_RESULTS, true",
+            "state.languageTag?.let { intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, it) }",
+            "rec.startListening(intent)")
         assertFalse("EXTRA_PREFER_OFFLINE" in code(controller), "an offline-only request fails where no offline model is installed")
     }
 

@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.data.RoutePreference
+import dev.nodeterm.android.data.DictationPreferences
+import dev.nodeterm.protocol.model.DictationLanguage
 import dev.nodeterm.android.notify.InboxNotifier
 import dev.nodeterm.protocol.crypto.B64
 import dev.nodeterm.protocol.relay.ApiBaseSetting
@@ -63,6 +65,9 @@ fun SettingsScreen(nav: Navigator) {
     var apiBase by remember { mutableStateOf(graph.hosts.apiBase) }
     var notify by remember { mutableStateOf(graph.hosts.notificationsEnabled) }
     var notifyDetails by remember { mutableStateOf(graph.hosts.notificationDetails) }
+    val dictationPreferences = remember { DictationPreferences(context.applicationContext) }
+    var dictationLanguage by remember { mutableStateOf(dictationPreferences.languageTag) }
+    var chooseDictationLanguage by remember { mutableStateOf(false) }
     // Whether the phone will actually SHOW them, re-read whenever the screen starts (the user may
     // have come back from the system settings). The switch used to read On while nothing could
     // arrive (audit A21).
@@ -118,6 +123,18 @@ fun SettingsScreen(nav: Navigator) {
     // activity (a rotation) stores what is typed by then as well; the new screen reads it back.
     DisposableEffect(Unit) {
         onDispose { save(onRejected = {}) }
+    }
+
+    if (chooseDictationLanguage) {
+        DictationLanguageDialog(
+            selected = dictationLanguage,
+            onChoose = { tag ->
+                dictationPreferences.languageTag = tag
+                dictationLanguage = dictationPreferences.languageTag
+                chooseDictationLanguage = false
+            },
+            onDismiss = { chooseDictationLanguage = false }
+        )
     }
 
     Scaffold(
@@ -197,6 +214,12 @@ fun SettingsScreen(nav: Navigator) {
                     graph.hosts.notificationDetails = it
                 })
             }
+
+            HorizontalDivider()
+            Text("Dictation", style = MaterialTheme.typography.titleMedium)
+            Text("Language: " + DictationLanguage.label(dictationLanguage))
+            TextButton(onClick = { chooseDictationLanguage = true }) { Text("Choose language") }
+            Text("Dictation fills the terminal draft. Tap Send when it is ready.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             if (hosts.isNotEmpty()) {
                 HorizontalDivider()
