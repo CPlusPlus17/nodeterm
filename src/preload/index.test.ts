@@ -5,15 +5,20 @@
 // the exact invoke/on wiring the real contextBridge would expose.
 import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '../shared/ipc'
-import type { NodeTerminalApi, SshPassphraseRequest } from '../shared/types'
+import type { NodeTerminalApi, Project, SshPassphraseRequest } from '../shared/types'
 
-const h = vi.hoisted(() => ({
-  invoke: vi.fn(async () => undefined),
-  send: vi.fn(),
-  on: vi.fn(),
-  removeListener: vi.fn(),
-  exposed: {} as Record<string, unknown>
-}))
+const h = vi.hoisted(() => {
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+  return {
+    invoke: vi.fn(async () => undefined), send: vi.fn(),
+    on: vi.fn((channel: string, fn: (...args: unknown[]) => void) => {
+      const set = listeners.get(channel) ?? new Set(); set.add(fn); listeners.set(channel, set)
+    }),
+    removeListener: vi.fn((channel: string, fn: (...args: unknown[]) => void) => listeners.get(channel)?.delete(fn)),
+    emit: (channel: string, ...args: unknown[]) => listeners.get(channel)?.forEach(fn => fn({ sender: 'test-IPC' }, ...args)),
+    exposed: {} as Record<string, unknown>
+  }
+})
 
 vi.mock('electron', () => ({
   contextBridge: {
@@ -126,5 +131,49 @@ describe('preload sshProject passphrase wiring', () => {
     expect(got).toEqual([{ requestId: 'r7' }])
     off()
     expect(h.removeListener).toHaveBeenCalledWith(IPC.sshPassphraseDismiss, handler)
+  })
+})
+
+describe('preload same-core project updates', () => {
+  const project: Project = {
+    id: 'p1', name: 'Board', color: '#10a37f', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [],
+    kanban: { columns: [{ id: 'kcol-progress', title: 'In Progress', color: '#10a37f' }], assignments: [] }
+  }
+
+  it('delivers phone Board updates without exposing the Electron event and unsubscribes exactly', () => {
+    const seen: Project[] = []
+    const off = api.workspace.onServerChange(p => seen.push(p))
+    const [channel, handler] = h.on.mock.calls.at(-1)!
+    expect(channel).toBe(IPC.workspaceServerChange)
+    h.emit(IPC.workspaceServerChange, project)
+    expect(seen).toEqual([project])
+    off()
+    expect(h.removeListener).toHaveBeenLastCalledWith(IPC.workspaceServerChange, handler)
+    h.emit(IPC.workspaceServerChange, { ...project, name: 'After unsubscribe' })
+    expect(seen).toEqual([project])
+  })
+
+  it('keeps outside file edits separate from this core’s Board adoption channel', () => {
+    const own: Project[] = [], external: Project[] = []
+    const offOwn = api.workspace.onServerChange(p => own.push(p))
+    const offExternal = api.workspace.onExternalChange(p => external.push(p))
+    h.emit(IPC.workspaceServerChange, project)
+    expect(own).toEqual([project]); expect(external).toEqual([])
+    const pulled = { ...project, name: 'Git pull' }
+    h.emit(IPC.workspaceExternalChange, pulled)
+    expect(own).toEqual([project]); expect(external).toEqual([pulled])
+    offOwn(); offExternal()
+  })
+
+  it('removing one renderer subscription leaves the other live', () => {
+    const first: Project[] = [], second: Project[] = []
+    const offFirst = api.workspace.onServerChange(p => first.push(p))
+    const offSecond = api.workspace.onServerChange(p => second.push(p))
+    offFirst()
+    h.emit(IPC.workspaceServerChange, project)
+    expect(first).toEqual([]); expect(second).toEqual([project])
+    offSecond()
+    h.emit(IPC.workspaceServerChange, project)
+    expect(second).toEqual([project])
   })
 })

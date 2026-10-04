@@ -1816,7 +1816,7 @@ export class WorkspaceStore {
    *
    * - **local ref** (`cwd`): read the file, transform, write it atomically — exactly
    *   `appendRemoteNodeNow`'s shape, including recording the write in `lastWritten` and announcing
-   *   it on `workspaceExternalChange` rather than letting the watcher discover our own edit.
+   *   it on `workspaceServerChange` rather than letting the watcher discover our own edit.
    * - **ssh ref** (`ssh` + `cache`): the file is on ANOTHER machine and only this desktop writes
    *   it. So the write goes where the desktop's own board edits go — into `e.cache` — and is then
    *   pushed by the ordinary mirror (`mirrorSshCache`, which re-reads and rescues the server's own
@@ -1901,12 +1901,14 @@ export class WorkspaceStore {
     return { file: parsed, written: true }
   }
 
-  /** Tell the renderer about a project file THIS store just rewrote outside of `save()`. Shared by
-   *  the kanban verbs; the same payload `appendRemoteNode`/`removeRemoteNode` build by hand. */
+  /** Adopt this core's successful phone Board edit live, even while the canvas is dirty.
+   *  The outside-file channel asks the user to resolve overlapping shared changes, including
+   *  kanban, so it can leave a mounted Board stale behind its conflict strip. This is our own
+   *  write: the existing server-change consumer keeps live canvas edits and adopts the Board. */
   private announceProjectFile(e: IndexEntryV3, file: ProjectFileV1): void {
     try {
       platform().broadcast(
-        IPC.workspaceExternalChange,
+        IPC.workspaceServerChange,
         fileToProject(file, {
           id: e.id,
           cwd: e.cwd,

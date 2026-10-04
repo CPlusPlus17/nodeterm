@@ -2983,8 +2983,8 @@ export function Canvas() {
 
   // Outside edits to a project's .nodeterm file (git pull / sync / teammate / another machine /
   // the phone registering a session it started). Writes THIS core made on an agent's behalf are
-  // not in here any more: Server Edition canvas control broadcasts them on `onServerChange`
-  // (below), because they are ours and there is nothing for the user to choose between.
+  // not in here any more: phone Board edits and Server Edition canvas control broadcast them on
+  // `onServerChange` (below), because they are ours and there is nothing to choose between.
   useEffect(() => {
     return api.workspace.onExternalChange((project) => {
       const { activeProjectId: current } = useProjects.getState()
@@ -3029,8 +3029,9 @@ export function Canvas() {
     })
   }, [reloadActiveProject, adoptIncomingNodes])
 
-  // Writes this core made ITSELF: Server Edition headless canvas control (an agent ran
-  // `nodeterm open-agent`, `rename`, `close`…). Never a bar and never a reload — see
+  // Writes this core made ITSELF: phone Board moves/labels/default seeding on Desktop and Server,
+  // plus Server Edition headless canvas control (`open-agent`, `rename`, `close`…). Never a bar
+  // and never a reload — see
   // lib/serverChange.ts for why the outside-edit classifier was the wrong instrument, and
   // server/canvas-control.ts for the channel split.
   useEffect(() => {
