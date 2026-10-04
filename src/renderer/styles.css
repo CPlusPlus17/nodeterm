@@ -11655,8 +11655,7 @@ button.pull-checks__name {
 .live-chip:hover {
   background: color-mix(in srgb, var(--live-tone) 20%, transparent);
 }
-.live-chip__dot,
-.live-chip__unread {
+.live-chip__dot {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
@@ -11676,8 +11675,23 @@ button.pull-checks__name {
   --live-tone: var(--muted);
   color: var(--muted);
 }
+/* Unread chat: a COUNT (summed over the node's links), ink on an unread wash — the status-chip
+   recipe, so it reads on the default look and under Liquid Glass alike. Fits the 16px sidebar chip. */
 .live-chip__unread {
-  background: var(--state-unread);
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--state-unread) 70%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--state-unread) 28%, transparent);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 11px;
+  text-align: center;
 }
 .kanban-card__live,
 .kanban-modal__live {
@@ -11834,6 +11848,53 @@ button.pull-checks__name {
   padding: 4px 8px;
   font-size: 12px;
 }
+/* A Control link's owner controls in the popover (ControlSection): the Typing switch row, the
+   locked line with Allow control again, and the Change password field (a new one shown once). */
+.live-pop__control {
+  margin: 8px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.live-pop__locked {
+  margin-bottom: 8px;
+}
+.live-pop__locked .live-pop__btn {
+  margin-top: 6px;
+}
+.live-pop__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-pop__password {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.live-pop__password .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.live-pop p.live-pop__invalid {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+}
+/* A viewer typing right now (a Control link): the working role, never animated (Idle energy). */
+.live-pop__typing {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-working);
+}
 /* The create dialog (LiveLinkDialog): the `.confirm` shell, a little wider for the URL. */
 .confirm.live-dialog {
   width: 460px;
@@ -11905,6 +11966,41 @@ button.pull-checks__name {
   margin: 8px 0 12px;
   color: var(--muted);
   font-size: 12px;
+}
+/* A note that belongs to the control just above it (Unlimited's, a password shown once). */
+.live-dialog__note.live-dialog__note--tight {
+  margin: -4px 0 10px;
+}
+/* The role choice: "Viewer · Can watch". */
+.live-dialog__hint {
+  color: var(--muted);
+}
+/* Control on a terminal that cannot take typed input (a Zellij session): shown, disabled, with why. */
+.live-dialog__group label.live-dialog__off {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.live-dialog__reason {
+  width: 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+/* A Control link's password: the form's field with Generate, and the done step's copy of it. */
+.live-dialog__pw {
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__url.live-dialog__password {
+  margin: 4px 0 10px;
+}
+.live-dialog__password .confirm__input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.live-dialog__invalid {
+  margin: -6px 0 10px;
+  color: var(--danger);
+  font-size: 11px;
 }
 /* "Share with team" (ShareTeamDialog): the `.confirm` shell, wider for the lists, with the body as
    the scrolling region so Share / Close stay on screen however long the lists are. */

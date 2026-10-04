@@ -274,3 +274,27 @@ describe('startWatchLinkSync', () => {
     stop2()
   })
 })
+
+describe('watchLinks store — Control links', () => {
+  it('counts a Control link\'s viewer messages exactly like a Commenter link\'s', () => {
+    const s = useWatchLinks.getState()
+    s.setLinks([link('c', 'n1', { role: 'controller', control: { enabled: true, locked: false } })])
+    s.addChat('c', msg('1'))
+    s.addChat('c', msg('2', 'sharer'))
+    s.addChat('c', msg('3'))
+    expect(useWatchLinks.getState().unread.c).toBe(2)
+    const sig = liveChipSig(useWatchLinks.getState(), 'n1')
+    expect(sig.endsWith('\u00012')).toBe(true)
+    useWatchLinks.getState().markRead('c')
+    expect(useWatchLinks.getState().unread.c).toBe(0)
+  })
+
+  it('the chip signature follows who is typing', () => {
+    const s = useWatchLinks.getState()
+    const v = { viewerId: 'v', name: 'Mert', joinedAt: 0, waiting: false, controlling: true, typing: false }
+    s.setLinks([link('c', 'n1', { role: 'controller', control: { enabled: true, locked: false }, viewers: [v] })])
+    const idle = liveChipSig(useWatchLinks.getState(), 'n1')
+    s.setLinks([link('c', 'n1', { role: 'controller', control: { enabled: true, locked: false }, viewers: [{ ...v, typing: true }] })])
+    expect(liveChipSig(useWatchLinks.getState(), 'n1')).not.toBe(idle)
+  })
+})

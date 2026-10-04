@@ -28,6 +28,16 @@ describe('Canvas live-link wiring', () => {
     expect(src).toMatch(/startWatchLinkSync\(window\.nodeTerminal,[\s\S]{0,400}?\n {4}\[\]\n {2}\)/)
   })
 
+  it('notices: the strip and the OS notification come from ONE decision (liveLinkNoticeEffect)', () => {
+    const sync = src.slice(src.indexOf('startWatchLinkSync(window.nodeTerminal,'))
+    const body = sync.slice(0, 400)
+    // The consent gate, the per-link cooldown and the copy are the lib's (behaviour-tested there):
+    // Canvas hands it the LIVE settings and the clock, and does what it answers.
+    expect(body).toContain('liveLinkNoticeEffect(n, useSettings.getState().settings, Date.now(), liveNotifyAtRef.current)')
+    expect(body).toContain("if (fx.strip) setNotice({ kind: 'info', ...fx.strip })")
+    expect(body).toContain('if (fx.os) void window.nodeTerminal.notify(fx.os)')
+  })
+
   it('the dialog is shown ONLY through openLiveLink (availability, then the Pro gate)', () => {
     // The only writers of the dialog state: the opener's `show`, and close.
     expect(count('setLiveLinkDialog(')).toBe(1) // closeLiveLinkDialog → setLiveLinkDialog(null)

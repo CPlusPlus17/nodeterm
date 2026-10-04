@@ -3,9 +3,19 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CreateWatchLinkRequest, CreateWatchLinkResult } from '@shared/watch-link-types'
+import type { ControlSupport, CreateWatchLinkRequest, CreateWatchLinkResult } from '@shared/watch-link-types'
 import { LiveLinkDialog, LiveLinkDialogBody } from './LiveLinkDialog'
-import { formatClock, LIVE_LINK_WARNING, SAVE_FIRST_MESSAGE, STOP_FAILED_MESSAGE } from '../lib/liveLink'
+import {
+  CONTROL_UNSUPPORTED_REASON,
+  CONTROL_WARNING,
+  formatClock,
+  LIVE_LINK_WARNING,
+  PASSWORD_SEPARATE_NOTE,
+  PASSWORD_SHOWN_ONCE,
+  SAVE_FIRST_MESSAGE,
+  STOP_FAILED_MESSAGE,
+  UNLIMITED_NOTE
+} from '../lib/liveLink'
 import { resetDialogStack } from './dialog-stack'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -15,7 +25,7 @@ const body = (state: Parameters<typeof LiveLinkDialogBody>[0]['state'], extra: P
   renderToStaticMarkup(
     <LiveLinkDialogBody title="build" state={state} onChange={noop} onSubmit={noop} onClose={noop} onStop={noop} {...extra} />
   )
-const FORM = { phase: 'form', role: 'viewer', ttl: 3600, label: 'Ada', busy: false, error: null } as const
+const FORM = { phase: 'form', role: 'viewer', ttl: 3600, label: 'Ada', password: '', busy: false, error: null } as const
 
 describe('LiveLinkDialogBody', () => {
   it('shows the role and expiry choices with the defaults, and the warning always', () => {
@@ -23,7 +33,12 @@ describe('LiveLinkDialogBody', () => {
     expect(html).toContain('Share a live link to build')
     expect(html).toContain('Can watch')
     expect(html).toContain('Can watch and chat')
-    for (const t of ['15 min', '1 hour', '8 hours', '24 hours']) expect(html).toContain(t)
+    for (const t of ['15 min', '1 hour', '8 hours', '24 hours', 'Unlimited']) expect(html).toContain(t)
+    // Spec §2.7: Viewer / Commenter / Control.
+    for (const r of ['Viewer', 'Commenter', 'Control']) expect(html).toContain(r)
+    // Neither Control's password field nor its warning until Control is picked.
+    expect(html).not.toContain('live-dialog__password')
+    expect(html).not.toContain(CONTROL_WARNING)
     expect(html).toContain(LIVE_LINK_WARNING.replace(/'/g, '&#x27;'))
     expect(html).toContain('Create live link')
   })
@@ -95,6 +110,7 @@ const created = (url = 'https://nodeterm.dev/s/abc#1.k'): CreateWatchLinkResult 
 let api: {
   create: ReturnType<typeof vi.fn<(r: CreateWatchLinkRequest) => Promise<CreateWatchLinkResult>>>
   revoke: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>
+  controlSupport: ReturnType<typeof vi.fn<(nodeId: string) => Promise<ControlSupport>>>
 }
 /** What the local core's `tmuxStatus` reports (R63); `undefined` = the read rejects. */
 let persistence: { enabled: boolean; backend: string | null } | undefined
@@ -106,7 +122,11 @@ let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
   resetDialogStack()
-  api = { create: vi.fn(async () => created()), revoke: vi.fn(async () => {}) }
+  api = {
+    create: vi.fn(async () => created()),
+    revoke: vi.fn(async () => {}),
+    controlSupport: vi.fn(async () => 'ok' as const)
+  }
   persistence = { enabled: true, backend: 'tmux' }
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = {
     watchLink: api,
@@ -314,5 +334,246 @@ describe('LiveLinkDialog', () => {
     await flush()
     click(btn('Copy'))
     expect(window.nodeTerminal.clipboard.writeText).toHaveBeenCalledWith('https://nodeterm.dev/s/abc#1.k')
+  })
+})
+
+// ---- Control and Unlimited (spec 2026-10-03 §2.7, §3) -------------------------------------------
+
+const radio = (text: string): HTMLInputElement =>
+  [...document.querySelectorAll<HTMLLabelElement>('.live-dialog__group label')]
+    .find((l) => l.textContent?.includes(text))!
+    .querySelector('input')!
+const pick = (text: string): void => click(radio(text))
+const pwInput = (): HTMLInputElement | null => document.querySelector<HTMLInputElement>('.live-dialog__password input')
+const typeInto = (input: HTMLInputElement, v: string): void =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+const warning = (): string | null => document.querySelector('.live-dialog__warning')?.textContent ?? null
+const createWith = (over: Partial<CreateWatchLinkRequest> = {}): CreateWatchLinkResult => ({
+  ok: true,
+  link: {
+    ...(created() as { ok: true; link: import('@shared/watch-link-types').WatchLinkView }).link,
+    role: over.role ?? 'viewer',
+    expiresAt: over.ttlSeconds === 0 ? null : Date.now() + 3_600_000,
+    control: over.role === 'controller' ? { enabled: true, locked: false } : null
+  }
+})
+
+describe('LiveLinkDialog — Control', () => {
+  it('Control shows the password field with Generate, and its own warning in place of the watch warning', async () => {
+    mount()
+    await flush()
+    expect(pwInput()).toBeNull()
+    expect(warning()).toBe(LIVE_LINK_WARNING)
+    pick('Control')
+    const input = pwInput()!
+    expect(input.type).toBe('text')
+    expect(input.getAttribute('autocomplete')).toBe('off')
+    expect(input.getAttribute('spellcheck')).toBe('false')
+    expect(input.maxLength).toBe(128)
+    expect(warning()).toBe(CONTROL_WARNING)
+    expect(btn('Generate')).toBeTruthy()
+    // Back to Viewer: the watch warning again, no password field.
+    pick('Viewer')
+    expect(pwInput()).toBeNull()
+    expect(warning()).toBe(LIVE_LINK_WARNING)
+  })
+
+  it('Generate fills 16 symbols from crypto.getRandomValues', async () => {
+    const spy = vi.spyOn(crypto, 'getRandomValues')
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    expect(btn('Create live link').disabled).toBe(true)
+    click(btn('Generate'))
+    expect(spy).toHaveBeenCalled()
+    expect(pwInput()!.value).toMatch(/^[0-9abcdefghjkmnpqrstvwxyz]{16}$/)
+    expect(btn('Create live link').disabled).toBe(false)
+    spy.mockRestore()
+  })
+
+  it('Create stays disabled until the password is acceptable, and says why', async () => {
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    const create = (): HTMLButtonElement => btn('Create live link')
+    const problem = (): string | null => document.querySelector('.live-dialog__invalid')?.textContent ?? null
+    // Empty: disabled, nothing nagging yet.
+    expect(create().disabled).toBe(true)
+    expect(problem()).toBeNull()
+    typeInto(pwInput()!, 'short')
+    expect(create().disabled).toBe(true)
+    expect(problem()).toBe('Use at least 8 characters.')
+    typeInto(pwInput()!, 'long\tenough')
+    expect(create().disabled).toBe(true)
+    expect(problem()).toBe('Line breaks and control characters are not allowed.')
+    typeInto(pwInput()!, 'longenough1')
+    expect(create().disabled).toBe(false)
+    expect(problem()).toBeNull()
+  })
+
+  it('sends the password only for Control', async () => {
+    api.create.mockImplementation(async (r) => createWith(r))
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    // A password typed, then the owner switched to Commenter: nothing of it leaves the dialog.
+    pick('Commenter')
+    click(btn('Create live link'))
+    await flush()
+    expect(api.create).toHaveBeenCalledTimes(1)
+    expect(api.create.mock.calls[0][0]).toEqual({ nodeId: 'n1', role: 'commenter', ttlSeconds: 3600, label: 'Ada', title: 'build' })
+    expect('password' in api.create.mock.calls[0][0]).toBe(false)
+
+    act(() => root.unmount())
+    root = createRoot(host)
+    api.create.mockClear()
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    click(btn('Create live link'))
+    await flush()
+    expect(api.create).toHaveBeenCalledWith({
+      nodeId: 'n1',
+      role: 'controller',
+      ttlSeconds: 3600,
+      label: 'Ada',
+      title: 'build',
+      password: 'longenough1'
+    })
+  })
+
+  it("Control is disabled, with the reason, when the terminal can't take input — asked once, for this node", async () => {
+    api.controlSupport.mockResolvedValue('unsupported')
+    mount()
+    await flush()
+    expect(api.controlSupport).toHaveBeenCalledTimes(1)
+    expect(api.controlSupport).toHaveBeenCalledWith('n1')
+    expect(radio('Control').disabled).toBe(true)
+    expect(document.querySelector('.live-dialog__reason')!.textContent).toBe(CONTROL_UNSUPPORTED_REASON)
+    expect(radio('Viewer').disabled).toBe(false)
+  })
+
+  it("'unknown' (and a rejected or missing answer) keeps Control offered: the create decides", async () => {
+    for (const answer of ['unknown', 'reject', 'missing'] as const) {
+      act(() => root.unmount())
+      root = createRoot(host)
+      if (answer === 'unknown') api.controlSupport.mockResolvedValue('unknown')
+      else if (answer === 'reject') api.controlSupport.mockRejectedValue(new Error('socket'))
+      else (api as { controlSupport?: unknown }).controlSupport = undefined
+      mount()
+      await flush()
+      expect(radio('Control').disabled, answer).toBe(false)
+      expect(document.querySelector('.live-dialog__reason'), answer).toBeNull()
+    }
+  })
+
+  it('an answer that lands after Control was picked moves the choice off it', async () => {
+    let answer!: (s: ControlSupport) => void
+    api.controlSupport.mockImplementation(() => new Promise((r) => (answer = r)))
+    mount()
+    await flush()
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    await act(async () => answer('unsupported'))
+    expect(radio('Control').checked).toBe(false)
+    expect(radio('Control').disabled).toBe(true)
+    expect(pwInput()).toBeNull()
+  })
+
+  it('the done step shows the password once, with Copy password and the separate-send note', async () => {
+    api.create.mockImplementation(async (r) => createWith(r))
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    pick('Unlimited')
+    click(btn('Create live link'))
+    await flush()
+    const field = document.querySelector<HTMLInputElement>('.live-dialog__password input')!
+    expect(field.readOnly).toBe(true)
+    expect(field.value).toBe('longenough1')
+    const text = document.querySelector('.live-dialog')!.textContent!
+    expect(text).toContain(PASSWORD_SHOWN_ONCE)
+    expect(text).toContain(PASSWORD_SEPARATE_NOTE)
+    expect(text).toContain('Anyone with this link and the password can type until you stop it.')
+    click(btn('Copy password'))
+    expect(window.nodeTerminal.clipboard.writeText).toHaveBeenCalledWith('longenough1')
+    expect(btn('Copied!')).toBeTruthy()
+    // The link keeps its own Copy.
+    expect(document.querySelector<HTMLInputElement>('.live-dialog__url input')!.value).toBe('https://nodeterm.dev/s/abc#1.k')
+  })
+
+  it('closing drops the password: nothing on screen keeps it, nothing stored it', async () => {
+    api.create.mockImplementation(async (r) => createWith(r))
+    const { onClose } = mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    click(btn('Create live link'))
+    await flush()
+    expect(pwInput()!.value).toBe('longenough1')
+    click(btn('Done'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    const values = [...document.querySelectorAll('input')].map((i) => i.value)
+    expect(values).not.toContain('longenough1')
+    expect(document.body.textContent).not.toContain('longenough1')
+    for (const store of [localStorage, sessionStorage]) {
+      for (let i = 0; i < store.length; i++) expect(store.getItem(store.key(i)!)).not.toContain('longenough1')
+    }
+  })
+
+  it('a form closed before creating drops the typed password too', async () => {
+    const { onClose } = mount()
+    await flush()
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    escape()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect([...document.querySelectorAll('input')].map((i) => i.value)).not.toContain('longenough1')
+  })
+})
+
+describe('LiveLinkDialog — Unlimited', () => {
+  it('sends ttlSeconds 0 and says the link works until it is stopped', async () => {
+    mount()
+    await flush()
+    setLabel('Ada')
+    const notes = (): string[] => [...document.querySelectorAll('.live-dialog__note')].map((e) => e.textContent ?? '')
+    expect(notes()).not.toContain(UNLIMITED_NOTE)
+    pick('Unlimited')
+    expect(notes()).toContain(UNLIMITED_NOTE)
+    click(btn('Create live link'))
+    await flush()
+    expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ ttlSeconds: 0 }))
+  })
+
+  it('an older server refusing Unlimited says to pick an end time', async () => {
+    api.create.mockResolvedValue({ ok: false, error: 'ttl-unsupported' })
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Unlimited')
+    click(btn('Create live link'))
+    await flush()
+    expect(document.querySelector('.live-dialog__error')!.textContent).toBe(
+      'Unlimited links need a newer server. Pick an end time.'
+    )
+  })
+
+  it('the done step of an Unlimited watch link says until it is stopped', () => {
+    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt: null })
+    expect(html).toContain('Anyone with this link can watch until you stop it.')
+    expect(html).not.toContain('live-dialog__password')
   })
 })

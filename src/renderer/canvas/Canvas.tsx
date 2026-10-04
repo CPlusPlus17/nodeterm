@@ -246,7 +246,7 @@ import { UpgradeDialog } from '../components/UpgradeDialog'
 import { LiveLinkDialog } from '../components/LiveLinkDialog'
 import { requireProOr } from '../state/upgradeGate'
 import { startWatchLinkSync, useWatchLinks } from '../state/watchLinks'
-import { noticeText } from '../lib/liveLink'
+import { liveLinkNoticeEffect } from '../lib/liveLink'
 import {
   liveLinkCommands,
   liveLinkMenuItemsFor,
@@ -3636,19 +3636,30 @@ export function Canvas() {
   }, [api, persist])
 
   // ── Live links (Task 17) ────────────────────────────────────────────────────────────────────
-  // A read-only, expiring browser view of ONE terminal. The store (state/watchLinks) mirrors this
-  // machine's core registry — `window.nodeTerminal`, never a relay session's api: links are made on
-  // the machine that runs the terminal. Started ONCE per Canvas mount; without it the store stays
-  // empty and no LIVE chip ever appears. `not-persistent` stays on screen (it is shown after every
-  // create while links cannot be saved); the rest fade like any info strip.
+  // A browser view of ONE terminal. The store (state/watchLinks) mirrors this machine's core
+  // registry — `window.nodeTerminal`, never a relay session's api: links are made on the machine
+  // that runs the terminal. Started ONCE per Canvas mount; without it the store stays empty and no
+  // LIVE chip ever appears. What a notice does is lib/liveLink's `liveLinkNoticeEffect` (tested
+  // there): the info strip — `not-persistent` and `control-locked` stay on screen — and, for
+  // `control-taken`, an OS notification under the agent-done consent, once per link per 5 s.
+  const liveNotifyAtRef = useRef(new Map<string, number>())
   useEffect(
     () =>
       startWatchLinkSync(window.nodeTerminal, (n) => {
-        const text = noticeText(n)
-        if (text) setNotice({ kind: 'info', text, sticky: n.kind === 'not-persistent' })
+        const fx = liveLinkNoticeEffect(n, useSettings.getState().settings, Date.now(), liveNotifyAtRef.current)
+        if (fx.strip) setNotice({ kind: 'info', ...fx.strip })
+        if (fx.os) void window.nodeTerminal.notify(fx.os)
       }),
     []
   )
+  // The popover's "Open chat" (`nodeterm:live-chat`, `{ linkId }`). A STUB that opens nothing yet:
+  // Task 8 replaces it with the Live chat drawer. It exists so the event is heard
+  // (lib/nodeterm-events.test.ts pairs every dispatch with a listener).
+  useEffect(() => {
+    const on = (): void => {}
+    window.addEventListener('nodeterm:live-chat', on)
+    return () => window.removeEventListener('nodeterm:live-chat', on)
+  }, [])
   const [liveLinkDialog, setLiveLinkDialog] = useState<LiveLinkTarget | null>(null)
   const closeLiveLinkDialog = useCallback(() => setLiveLinkDialog(null), [])
   /** The facts the ONE availability rule reads, for the node's OWN project (H4): a node of a relay

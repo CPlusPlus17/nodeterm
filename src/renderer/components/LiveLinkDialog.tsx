@@ -6,25 +6,75 @@
 //
 // The URL carries the link's secret. It is shown HERE, once created, and in the chip's popover —
 // never in a notice, a log line or the Settings list (which only copies it).
+//
+// A Control link's PASSWORD is plaintext only in this component's state: typed or generated in the
+// form, shown once in the done step, and dropped on every close (`dismiss`) and with the component.
+// It is never written to localStorage, settings, a log or a notice; core keeps only its hash.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDialogStack } from './dialog-stack'
 import {
   capUnits,
+  CONTROL_UNSUPPORTED_REASON,
+  CONTROL_WARNING,
   createErrorMessage,
   DEFAULT_TTL,
   formatUntil,
   LIVE_LINK_WARNING,
+  PASSWORD_SEPARATE_NOTE,
+  PASSWORD_SHOWN_ONCE,
+  passwordProblemText,
   ROLE_LABEL,
+  ROLE_NAME,
   SAVE_FIRST_MESSAGE,
   TTL_OPTIONS,
+  UNLIMITED_NOTE,
   watchableOnlyWhileOpen,
   watchWhileOpenNote,
   type LiveLinkSurface
 } from '../lib/liveLink'
 import { stopLiveLinks } from '../lib/liveLinkEntry'
 import { loadIdentity } from '../state/presence'
-import { LABEL_MAX, stripBidiControls, type WatchLinkRole, type WatchLinkTtl } from '@shared/watch-link-types'
+import {
+  LABEL_MAX,
+  stripBidiControls,
+  UNLIMITED_TTL,
+  type CreateWatchLinkRequest,
+  type WatchLinkRole,
+  type WatchLinkTtl
+} from '@shared/watch-link-types'
+import { PASSWORD_MAX } from '@shared/watch-link/protocol'
+import { generateControlPassword } from '@shared/watch-link-password'
+
+/** Generate: 16 symbols from the platform CSPRNG (spec §2.2). */
+export function newControlPassword(): string {
+  return generateControlPassword((n) => crypto.getRandomValues(new Uint8Array(n)))
+}
+
+/** The password field shared by the form and the done step (and, read-only, the popover's change). */
+export function PasswordField(p: {
+  value: string
+  readOnly?: boolean
+  disabled?: boolean
+  onChange?: (v: string) => void
+  label?: string
+}): React.JSX.Element {
+  return (
+    <input
+      className="confirm__input"
+      type="text"
+      autoComplete="off"
+      spellCheck={false}
+      maxLength={PASSWORD_MAX}
+      aria-label={p.label ?? 'Password'}
+      value={p.value}
+      readOnly={p.readOnly}
+      disabled={p.disabled}
+      onFocus={p.readOnly ? (e) => e.currentTarget.select() : undefined}
+      onChange={p.onChange ? (e) => p.onChange?.(e.target.value) : undefined}
+    />
+  )
+}
 
 export type DialogState =
   | {
@@ -32,6 +82,9 @@ export type DialogState =
       role: WatchLinkRole
       ttl: WatchLinkTtl
       label: string
+      /** A Control link's password, as typed or generated. Kept while the owner switches roles (they
+       *  may switch back); sent only for Control. */
+      password: string
       /** A prepare or a create is in flight: the dialog cannot be dismissed (H24) — a link created
        *  behind a closed dialog would be broadcasting with a URL its owner never saw. */
       busy: boolean
@@ -46,7 +99,10 @@ export type DialogState =
       linkId: string
       /** null: an Unlimited link. */
       expiresAt: number | null
+      /** A Control link's password, shown this once (core keeps only its hash). Absent otherwise. */
+      password?: string
       copied?: boolean
+      passwordCopied?: boolean
       stopping?: boolean
       error?: string | null
     }
@@ -59,7 +115,11 @@ export function LiveLinkDialogBody(p: {
   onClose: () => void
   onStop: (linkId: string) => void
   onCopy?: (url: string) => void
+  onCopyPassword?: (password: string) => void
   onUpgrade?: () => void
+  /** `watchLink.controlSupport` said this node's terminal cannot take typed input (a Zellij session):
+   *  Control is shown disabled, with its reason. Absent / false: offered (unknown is offered too). */
+  controlUnsupported?: boolean
   /** R63: on a machine with no watcher client for this node, the link works only while the terminal
    *  is open in this app — said before the owner creates it. Absent: nothing to say (or not known). */
   whileOpenNote?: string | null
@@ -86,8 +146,22 @@ export function LiveLinkDialogBody(p: {
             {s.copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
+        {s.password !== undefined && (
+          <>
+            <div className="live-dialog__url live-dialog__password">
+              <PasswordField value={s.password} readOnly />
+              <button className="confirm__btn" onClick={() => p.onCopyPassword?.(s.password ?? '')}>
+                {s.passwordCopied ? 'Copied!' : 'Copy password'}
+              </button>
+            </div>
+            <p className="live-dialog__note live-dialog__note--tight">{PASSWORD_SHOWN_ONCE}</p>
+            <p className="live-dialog__note live-dialog__note--tight">{PASSWORD_SEPARATE_NOTE}</p>
+          </>
+        )}
         <p className="live-dialog__note">
-          Anyone with this link can watch until {formatUntil(s.expiresAt, p.now ?? Date.now())}.
+          {s.password !== undefined
+            ? `Anyone with this link and the password can type until ${formatUntil(s.expiresAt, p.now ?? Date.now())}.`
+            : `Anyone with this link can watch until ${formatUntil(s.expiresAt, p.now ?? Date.now())}.`}
         </p>
         {s.error && (
           <p className="live-dialog__error" role="alert">
@@ -105,18 +179,42 @@ export function LiveLinkDialogBody(p: {
       </div>
     )
   }
+  const control = s.role === 'controller'
+  const problem = control ? passwordProblemText(s.password) : null
   return (
     <div className="confirm live-dialog" onClick={(e) => e.stopPropagation()}>
       <p className="confirm__msg live-dialog__title">Share a live link to {title}</p>
       <fieldset className="live-dialog__group" disabled={s.busy}>
         <legend>Viewers</legend>
-        {(['viewer', 'commenter'] as const).map((r) => (
-          <label key={r}>
-            <input type="radio" name="live-role" checked={s.role === r} onChange={() => p.onChange({ ...s, role: r })} />{' '}
-            {ROLE_LABEL[r]}
-          </label>
-        ))}
+        {(['viewer', 'commenter', 'controller'] as const).map((r) => {
+          const off = r === 'controller' && !!p.controlUnsupported
+          return (
+            <label key={r} className={off ? 'live-dialog__off' : undefined} title={off ? CONTROL_UNSUPPORTED_REASON : undefined}>
+              <input
+                type="radio"
+                name="live-role"
+                checked={s.role === r}
+                disabled={off}
+                onChange={() => p.onChange({ ...s, role: r })}
+              />{' '}
+              {ROLE_NAME[r]} <span className="live-dialog__hint">· {ROLE_LABEL[r]}</span>
+            </label>
+          )
+        })}
+        {p.controlUnsupported && <p className="live-dialog__reason">{CONTROL_UNSUPPORTED_REASON}</p>}
       </fieldset>
+      {control && (
+        <div className="live-dialog__pw">
+          Password
+          <div className="live-dialog__url live-dialog__password">
+            <PasswordField value={s.password} disabled={s.busy} onChange={(v) => p.onChange({ ...s, password: v })} />
+            <button className="confirm__btn" disabled={s.busy} onClick={() => p.onChange({ ...s, password: newControlPassword() })}>
+              Generate
+            </button>
+          </div>
+          {s.password !== '' && problem && <p className="live-dialog__invalid">{problem}</p>}
+        </div>
+      )}
       <fieldset className="live-dialog__group" disabled={s.busy}>
         <legend>Ends after</legend>
         {TTL_OPTIONS.map((o) => (
@@ -126,6 +224,7 @@ export function LiveLinkDialogBody(p: {
           </label>
         ))}
       </fieldset>
+      {s.ttl === UNLIMITED_TTL && <p className="live-dialog__note live-dialog__note--tight">{UNLIMITED_NOTE}</p>}
       <label className="live-dialog__label">
         Shown to viewers as
         {/* Keyboard focus lands here when the dialog opens (D2/M3): keys stay inside the dialog
@@ -139,7 +238,7 @@ export function LiveLinkDialogBody(p: {
           onChange={(e) => p.onChange({ ...s, label: e.target.value })}
         />
       </label>
-      <p className="live-dialog__warning">{LIVE_LINK_WARNING}</p>
+      <p className="live-dialog__warning">{control ? CONTROL_WARNING : LIVE_LINK_WARNING}</p>
       {p.whileOpenNote && <p className="live-dialog__note">{p.whileOpenNote}</p>}
       {s.error && (
         <p className="live-dialog__error" role="alert">
@@ -155,7 +254,11 @@ export function LiveLinkDialogBody(p: {
         <button className="confirm__btn" disabled={s.busy} onClick={p.onClose}>
           Cancel
         </button>
-        <button className="confirm__btn primary" disabled={s.busy || !s.label.trim()} onClick={p.onSubmit}>
+        <button
+          className="confirm__btn primary"
+          disabled={s.busy || !s.label.trim() || (control && (problem !== null || !!p.controlUnsupported))}
+          onClick={p.onSubmit}
+        >
           {s.busy ? 'Creating…' : 'Create live link'}
         </button>
       </div>
@@ -194,6 +297,7 @@ export function LiveLinkDialog({
     role: 'viewer',
     ttl: DEFAULT_TTL,
     label: capUnits(loadIdentity()?.name ?? '', LABEL_MAX),
+    password: '',
     busy: false,
     error: null
   }))
@@ -221,6 +325,27 @@ export function LiveLinkDialog({
       live = false
     }
   }, [remoteNode, readPersistence])
+  // Can this node's terminal take a Control link's input? Asked ONCE, on open. Only a definite
+  // 'unsupported' (a Zellij session) disables Control; 'unknown', a rejection or an api without the
+  // call keep it offered — the create decides, and says why if it refuses.
+  const [controlUnsupported, setControlUnsupported] = useState(false)
+  useEffect(() => {
+    let live = true
+    Promise.resolve()
+      .then(() => window.nodeTerminal.watchLink.controlSupport(nodeId))
+      .then(
+        (answer) => {
+          if (!live || answer !== 'unsupported') return
+          setControlUnsupported(true)
+          // Picked before the answer landed: move off it (and drop the password with it).
+          setState((s) => (s.phase === 'form' && !s.busy && s.role === 'controller' ? { ...s, role: 'viewer', password: '' } : s))
+        },
+        () => {}
+      )
+    return () => {
+      live = false
+    }
+  }, [nodeId])
   // D2/M3: focus lands in the dialog — the label on open, Copy once created — so keys stay inside
   // it (a bare-key canvas command could otherwise fire behind the overlay).
   const panelRef = useRef<HTMLDivElement>(null)
@@ -229,10 +354,14 @@ export function LiveLinkDialog({
   }, [state.phase])
 
   const busy = state.phase === 'form' && state.busy
-  // Every dismissal goes through here: a create in flight cannot be walked away from (H24).
+  // Every dismissal goes through here: a create in flight cannot be walked away from (H24). The
+  // password goes with it, before the owner hands the dialog back — never left in state behind it.
   const dismiss = useCallback(() => {
     const s = stateRef.current
     if (s.phase === 'form' && s.busy) return
+    const dropped: DialogState = s.phase === 'form' ? { ...s, password: '' } : { ...s, password: undefined }
+    stateRef.current = dropped
+    setState(dropped)
     onClose()
   }, [onClose])
 
@@ -259,16 +388,27 @@ export function LiveLinkDialog({
       refused = SAVE_FIRST_MESSAGE
     }
     if (refused) return fail(refused)
+    const control = form.role === 'controller'
+    const req: CreateWatchLinkRequest = {
+      nodeId,
+      role: form.role,
+      ttlSeconds: form.ttl,
+      label: form.label.trim(),
+      title,
+      // Only a Control link carries a password: a viewer or commenter request never holds one.
+      ...(control ? { password: form.password } : {})
+    }
     try {
-      const r = await window.nodeTerminal.watchLink.create({
-        nodeId,
-        role: form.role,
-        ttlSeconds: form.ttl,
-        label: form.label.trim(),
-        title
-      })
-      if (r.ok) setState({ phase: 'done', url: r.link.url, linkId: r.link.linkId, expiresAt: r.link.expiresAt })
-      else fail(createErrorMessage(r.error, surface), r.error === 'not-entitled')
+      const r = await window.nodeTerminal.watchLink.create(req)
+      if (r.ok) {
+        setState({
+          phase: 'done',
+          url: r.link.url,
+          linkId: r.link.linkId,
+          expiresAt: r.link.expiresAt,
+          ...(control ? { password: form.password } : {})
+        })
+      } else fail(createErrorMessage(r.error, surface), r.error === 'not-entitled')
     } catch {
       // Desktop IPC and the ws-bridge both answer instead of rejecting; this is the belt.
       fail(createErrorMessage('network', surface))
@@ -292,6 +432,17 @@ export function LiveLinkDialog({
     clearTimeout(copiedTimer.current)
     copiedTimer.current = setTimeout(() => setState((s) => (s.phase === 'done' ? { ...s, copied: false } : s)), 1500)
   }
+  const passwordCopiedTimer = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(() => () => clearTimeout(passwordCopiedTimer.current), [])
+  const copyPassword = (password: string): void => {
+    window.nodeTerminal.clipboard.writeText(password)
+    setState((s) => (s.phase === 'done' ? { ...s, passwordCopied: true } : s))
+    clearTimeout(passwordCopiedTimer.current)
+    passwordCopiedTimer.current = setTimeout(
+      () => setState((s) => (s.phase === 'done' ? { ...s, passwordCopied: false } : s)),
+      1500
+    )
+  }
 
   return createPortal(
     <div className="confirm-overlay" ref={panelRef} onClick={dismiss}>
@@ -306,7 +457,9 @@ export function LiveLinkDialog({
         onClose={dismiss}
         onStop={(id) => void stop(id)}
         onCopy={copy}
+        onCopyPassword={copyPassword}
         onUpgrade={onUpgrade}
+        controlUnsupported={controlUnsupported}
       />
     </div>,
     document.body

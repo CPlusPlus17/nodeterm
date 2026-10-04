@@ -1,20 +1,30 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { NodeTerminalApi } from '@shared/types'
-import type { WatchLinkView } from '@shared/watch-link-types'
+import type { WatchLinkControlView, WatchLinkRole, WatchLinkView } from '@shared/watch-link-types'
 import { stripBidiControls } from '@shared/watch-link-types'
 import { CHAT_TEXT_MAX, type WatchChatMessage } from '@shared/watch-link/protocol'
 import { useDialogStack } from './dialog-stack'
+import { newControlPassword, PasswordField } from './LiveLinkDialog'
 import { useMenuFlip } from '../ui/useMenuFlip'
+import { Switch } from '../ui/Switch'
 import {
   CHAT_NOT_SENT_MESSAGE,
   commentFromChat,
+  CONTROL_CHANGE_FAILED_MESSAGE,
+  CONTROL_LOCKED_TEXT,
   formatClock,
   formatRemaining,
   KICK_FAILED_MESSAGE,
   KICK_NOT_DONE_MESSAGE,
   KICK_NOTE,
+  PASSWORD_CHANGE_FAILED_MESSAGE,
+  PASSWORD_CHANGE_NOTE,
+  PASSWORD_SEPARATE_NOTE,
+  PASSWORD_SHOWN_ONCE,
+  passwordProblemText,
   ROLE_LABEL,
+  ROLE_NAME,
   statusLine,
   STOP_FAILED_MESSAGE,
   viewerName,
@@ -88,11 +98,17 @@ function commentTarget(nodeId: string): { projectId: string; api: NodeTerminalAp
   return null
 }
 
+/** The roles whose viewers can chat: a Control link is a Commenter link plus typing (spec §2.1). */
+export function hasChat(role: WatchLinkRole): boolean {
+  return role === 'commenter' || role === 'controller'
+}
+
 /**
- * Per-link controls for one node: copy, stop, the viewer list with Kick, and — for a Commenter
- * link — the thread with a reply box and "Copy to card comments" (the owner's explicit act; nothing
- * a viewer writes is ever stored automatically, spec D2). Every string someone else wrote (label,
- * title, viewer names and chat) is rendered as React TEXT, bidi-stripped — never as HTML.
+ * Per-link controls for one node: copy, stop, the viewer list with Kick, and — for a Commenter or
+ * Control link — the thread with a reply box and "Copy to card comments" (the owner's explicit act;
+ * nothing a viewer writes is ever stored automatically, spec D2) plus Open chat. A Control link adds
+ * its owner controls (`ControlSection`). Every string someone else wrote (label, title, viewer names
+ * and chat) is rendered as React TEXT, bidi-stripped — never as HTML.
  *
  * It is a modal in the dialog stack, so Escape (and the board's keys) belong to it while it is
  * up — the card modal it can open over stands aside (`isTopDialog`).
@@ -160,7 +176,7 @@ export function LiveLinkPopover({
         tabIndex={-1}
       >
         {links.map((l) => (
-          <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} />
+          <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} onClose={onClose} />
         ))}
       </div>
     </>,
@@ -171,11 +187,13 @@ export function LiveLinkPopover({
 const LinkBlock = memo(function LinkBlock({
   link,
   now,
-  nodeId
+  nodeId,
+  onClose
 }: {
   link: WatchLinkView
   now: number
   nodeId: string
+  onClose: () => void
 }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const [copied, setCopied] = useState(false)
@@ -190,7 +208,10 @@ const LinkBlock = memo(function LinkBlock({
   return (
     <section className="live-pop__link" data-link-id={link.linkId}>
       <header className="live-pop__head">
-        <span className="live-pop__role">{ROLE_LABEL[link.role]}</span>
+        <span>
+          <span className="live-pop__role">{ROLE_NAME[link.role]}</span>{' '}
+          <span className="live-pop__muted">{ROLE_LABEL[link.role]}</span>
+        </span>
         <span className="live-pop__time">{formatRemaining(link.expiresAt, now)}</span>
       </header>
       <p className="live-pop__muted live-pop__label">
@@ -212,6 +233,19 @@ const LinkBlock = memo(function LinkBlock({
         >
           {copied ? 'Copied!' : 'Copy link'}
         </button>
+        {hasChat(link.role) && (
+          <button
+            type="button"
+            className="confirm__btn live-pop__btn"
+            onClick={() => {
+              // The Live chat drawer (Task 8) listens; the popover gives way to it.
+              window.dispatchEvent(new CustomEvent('nodeterm:live-chat', { detail: { linkId: link.linkId } }))
+              onClose()
+            }}
+          >
+            Open chat
+          </button>
+        )}
         <button
           type="button"
           className="confirm__btn danger live-pop__btn"
@@ -230,6 +264,7 @@ const LinkBlock = memo(function LinkBlock({
           {error}
         </p>
       )}
+      {link.control && <ControlSection linkId={link.linkId} control={link.control} />}
       <div className="live-pop__viewers">
         {link.viewers.length === 0 ? (
           <p className="live-pop__muted">Nobody is watching right now.</p>
@@ -238,9 +273,11 @@ const LinkBlock = memo(function LinkBlock({
             <ul>
               {link.viewers.map((v, i) => (
                 <li key={v.viewerId}>
+                  {v.typing && <span className="live-pop__typing" role="img" aria-label="Typing now" title="Typing now" />}
                   <span className="live-pop__who">{viewerName(v, i)}</span>
                   <span className="live-pop__muted">
                     since {formatClock(v.joinedAt)}
+                    {v.controlling ? ' · can type' : ''}
                     {v.waiting ? ' · waiting for the terminal' : ''}
                   </span>
                   <button
@@ -266,12 +303,160 @@ const LinkBlock = memo(function LinkBlock({
           </>
         )}
       </div>
-      {link.role === 'commenter' && <ChatThread linkId={link.linkId} nodeId={nodeId} />}
+      {hasChat(link.role) && <ChatThread linkId={link.linkId} nodeId={nodeId} />}
     </section>
   )
 })
 
-function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): React.JSX.Element {
+/**
+ * A Control link's owner controls (spec §2.6): the Typing switch, Change password (a new one is shown
+ * ONCE, then only its hash exists — core keeps no plaintext), and Allow control again while the link
+ * is locked by wrong passwords. Exported for the Live chat drawer.
+ *
+ * The switch shows core's state (the next push), never an optimistic one: a change core refused must
+ * not look applied. A typed or new password lives only in this component's state and goes with it.
+ */
+export function ControlSection({ linkId, control }: { linkId: string; control: WatchLinkControlView }): React.JSX.Element {
+  const api = window.nodeTerminal.watchLink
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [shown, setShown] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  const run = (call: () => Promise<boolean>, failed: string, done?: () => void): void => {
+    setBusy(true)
+    setError(null)
+    void Promise.resolve()
+      .then(call)
+      .then(
+        (ok) => (ok ? done?.() : setError(failed)),
+        () => setError(failed)
+      )
+      .finally(() => setBusy(false))
+  }
+  const problem = passwordProblemText(draft)
+  return (
+    <div className="live-pop__control">
+      {control.locked && (
+        <div className="live-pop__locked">
+          <p className="live-pop__status" role="status">
+            {CONTROL_LOCKED_TEXT}
+          </p>
+          <button
+            type="button"
+            className="confirm__btn live-pop__btn"
+            disabled={busy}
+            onClick={() => run(() => api.allowControl(linkId), CONTROL_CHANGE_FAILED_MESSAGE)}
+          >
+            Allow control again
+          </button>
+        </div>
+      )}
+      <div className="live-pop__toggle">
+        <span>
+          <span className="live-pop__who">Typing</span>{' '}
+          <span className="live-pop__muted">
+            {control.enabled ? 'Anyone with the password can type.' : 'Off: viewers can watch and chat.'}
+          </span>
+        </span>
+        <Switch
+          checked={control.enabled}
+          ariaLabel="Typing"
+          disabled={busy}
+          onChange={(on) => run(() => api.setControl(linkId, on), CONTROL_CHANGE_FAILED_MESSAGE)}
+        />
+      </div>
+      {shown !== null ? (
+        <>
+          <div className="live-pop__password">
+            <PasswordField value={shown} readOnly label="New password" />
+            <button
+              type="button"
+              className="confirm__btn live-pop__btn"
+              onClick={() => {
+                window.nodeTerminal.clipboard.writeText(shown)
+                setCopied(true)
+              }}
+            >
+              {copied ? 'Copied!' : 'Copy password'}
+            </button>
+          </div>
+          <p className="live-pop__muted live-pop__note">{PASSWORD_SHOWN_ONCE}</p>
+          <p className="live-pop__muted live-pop__note">{PASSWORD_SEPARATE_NOTE}</p>
+          <div className="live-pop__actions">
+            <button type="button" className="confirm__btn live-pop__btn" onClick={() => setShown(null)}>
+              Done
+            </button>
+          </div>
+        </>
+      ) : editing ? (
+        <>
+          <div className="live-pop__password">
+            <PasswordField value={draft} disabled={busy} onChange={setDraft} label="New password" />
+            <button type="button" className="confirm__btn live-pop__btn" disabled={busy} onClick={() => setDraft(newControlPassword())}>
+              Generate
+            </button>
+          </div>
+          {draft !== '' && problem && <p className="live-pop__invalid">{problem}</p>}
+          <p className="live-pop__muted live-pop__note">{PASSWORD_CHANGE_NOTE}</p>
+          <div className="live-pop__actions">
+            <button
+              type="button"
+              className="confirm__btn live-pop__btn"
+              disabled={busy}
+              onClick={() => {
+                setEditing(false)
+                setDraft('')
+                setError(null)
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="confirm__btn primary live-pop__btn"
+              disabled={busy || problem !== null}
+              onClick={() => {
+                const next = draft
+                run(
+                  () => api.setPassword(linkId, next),
+                  PASSWORD_CHANGE_FAILED_MESSAGE,
+                  () => {
+                    setShown(next)
+                    setDraft('')
+                    setEditing(false)
+                  }
+                )
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="live-pop__actions">
+          <button type="button" className="confirm__btn live-pop__btn" onClick={() => setEditing(true)}>
+            Change password…
+          </button>
+        </div>
+      )}
+      {error && (
+        <p className="live-pop__error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** A Commenter or Control link's thread with the owner's reply box. Exported for the Live chat drawer. */
+export function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const chat = useWatchLinks((s) => s.chats[linkId] ?? EMPTY_CHAT)
   const onBoard = useProjects((s) => s.projects.some((p) => p.nodes.some((n) => n.id === nodeId)))

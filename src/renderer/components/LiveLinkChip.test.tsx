@@ -11,9 +11,12 @@ import { useProjects } from '../state/projects'
 import { popDialog, pushDialog, resetDialogStack } from './dialog-stack'
 import {
   CHAT_NOT_SENT_MESSAGE,
+  CONTROL_LOCKED_TEXT,
   KICK_FAILED_MESSAGE,
   KICK_NOT_DONE_MESSAGE,
   KICK_NOTE,
+  PASSWORD_SEPARATE_NOTE,
+  PASSWORD_SHOWN_ONCE,
   STOP_FAILED_MESSAGE
 } from '../lib/liveLink'
 
@@ -57,7 +60,10 @@ const api = {
     at: 0,
     from: 'sharer'
   })),
-  chatHistory: vi.fn(async (_l: string): Promise<WatchChatMessage[]> => [])
+  chatHistory: vi.fn(async (_l: string): Promise<WatchChatMessage[]> => []),
+  setControl: vi.fn(async (_l: string, _on: boolean) => true),
+  setPassword: vi.fn(async (_l: string, _pw: string) => true),
+  allowControl: vi.fn(async (_l: string) => true)
 }
 const writeText = vi.fn()
 
@@ -70,6 +76,9 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe(): void {} unobserve(): void {} disconnect(): void {} })
   for (const f of Object.values(api)) f.mockClear()
   api.revoke.mockImplementation(async () => {})
+  api.setControl.mockImplementation(async () => true)
+  api.setPassword.mockImplementation(async () => true)
+  api.allowControl.mockImplementation(async () => true)
   writeText.mockClear()
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = { watchLink: api, clipboard: { writeText } }
   host = document.createElement('div')
@@ -521,5 +530,191 @@ describe('LiveLinkPopover — Commenter chat', () => {
     act(() => useWatchLinks.getState().addChat('L', msg('1')))
     click(chip()!)
     expect(pop()!.querySelector('.live-pop__copy')).toBeNull()
+  })
+})
+
+// ---- Control (spec 2026-10-03 §2.5, §2.6) -------------------------------------------------------
+
+const controller = (over: Partial<WatchLinkView> = {}): WatchLinkView =>
+  link({ role: 'controller', control: { enabled: true, locked: false }, ...over })
+const typist = (id: string, name: string, typing = true) => ({
+  viewerId: id,
+  name,
+  joinedAt: 0,
+  waiting: false,
+  controlling: true,
+  typing
+})
+const typeInto = (input: HTMLInputElement, v: string): void =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+describe('LiveLinkChip — typing and unread', () => {
+  it('says how many are typing, and its title names who, as claims', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([
+      controller({
+        viewers: [
+          typist('a', 'Mert'),
+          typist('b', 'Ayşe'),
+          { viewerId: 'c', name: null, joinedAt: 0, waiting: false, controlling: false, typing: false }
+        ]
+      })
+    ])
+    expect(chip()!.textContent).toBe('LIVE · 3 · 2 typing')
+    expect(chip()!.title).toBe(
+      '“Mert” and “Ayşe” are typing. This terminal is shared by a live link — 3 watching.'
+    )
+  })
+
+  it('unread is a count summed over the node\'s links, not a dot', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([link({ role: 'commenter' }), controller({ linkId: 'M' })])
+    act(() => useWatchLinks.getState().addChat('L', msg('1')))
+    expect(host.querySelector('.live-chip__unread')!.textContent).toBe('1')
+    act(() => useWatchLinks.getState().addChat('M', msg('2')))
+    act(() => useWatchLinks.getState().addChat('M', msg('3')))
+    expect(host.querySelector('.live-chip__unread')!.textContent).toBe('3')
+    expect(chip()!.getAttribute('aria-label')).toBe('LIVE, 3 unread chat messages')
+  })
+})
+
+describe('LiveLinkPopover — a Control link', () => {
+  it('names the role, the time left (none for Unlimited), and who can type', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([
+      controller({
+        expiresAt: null,
+        viewers: [
+          typist('a', 'Mert'),
+          typist('b', 'Cy', false),
+          { viewerId: 'c', name: 'Dee', joinedAt: 0, waiting: false, controlling: false, typing: false }
+        ]
+      })
+    ])
+    click(chip()!)
+    const p = pop()!
+    expect(p.querySelector('.live-pop__role')!.textContent).toBe('Control')
+    expect(p.querySelector('.live-pop__time')!.textContent).toBe('No end time')
+    const rows = [...p.querySelectorAll('.live-pop__viewers li')]
+    expect(rows[0].textContent).toContain('can type')
+    expect(rows[1].textContent).toContain('can type')
+    expect(rows[2].textContent).not.toContain('can type')
+    // The typing dot: only on the one typing now.
+    expect(rows.map((r) => r.querySelector('.live-pop__typing') !== null)).toEqual([true, false, false])
+    // The chat is a Commenter link's, and a Control link's too.
+    expect(p.querySelector('.live-pop__chat')).not.toBeNull()
+  })
+
+  it('the Typing switch turns typing off and on through setControl', async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    const sw = pop()!.querySelector<HTMLButtonElement>('[role="switch"]')!
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    click(sw)
+    await flush()
+    expect(api.setControl).toHaveBeenCalledWith('L', false)
+    setLinks([controller({ control: { enabled: false, locked: false } })])
+    const off = pop()!.querySelector<HTMLButtonElement>('[role="switch"]')!
+    expect(off.getAttribute('aria-checked')).toBe('false')
+    click(off)
+    await flush()
+    expect(api.setControl).toHaveBeenLastCalledWith('L', true)
+  })
+
+  it('a change that did not take says so', async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    api.setControl.mockImplementationOnce(async () => false)
+    click(pop()!.querySelector('[role="switch"]')!)
+    await flush()
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toMatch(/try again/)
+  })
+
+  it('Allow control again appears only while locked, and calls allowControl', async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    expect(pop()!.textContent).not.toContain(CONTROL_LOCKED_TEXT)
+    expect(button('Allow control again')).toBeUndefined()
+    setLinks([controller({ control: { enabled: true, locked: true } })])
+    expect(pop()!.textContent).toContain(CONTROL_LOCKED_TEXT)
+    click(button('Allow control again'))
+    await flush()
+    expect(api.allowControl).toHaveBeenCalledWith('L')
+  })
+
+  it('Change password validates, calls setPassword, and shows the new password once', async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    const input = pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!
+    expect(input.getAttribute('autocomplete')).toBe('off')
+    expect(input.maxLength).toBe(128)
+    expect(button('Save').disabled).toBe(true)
+    typeInto(input, 'short')
+    expect(button('Save').disabled).toBe(true)
+    expect(pop()!.querySelector('.live-pop__invalid')!.textContent).toBe('Use at least 8 characters.')
+    click(button('Generate'))
+    const generated = input.value
+    expect(generated).toMatch(/^[0-9abcdefghjkmnpqrstvwxyz]{16}$/)
+    click(button('Save'))
+    await flush()
+    expect(api.setPassword).toHaveBeenCalledWith('L', generated)
+    // Shown once, read-only, with Copy and the once-only wording.
+    const shown = pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!
+    expect(shown.readOnly).toBe(true)
+    expect(shown.value).toBe(generated)
+    expect(pop()!.textContent).toContain(PASSWORD_SHOWN_ONCE)
+    expect(pop()!.textContent).toContain(PASSWORD_SEPARATE_NOTE)
+    click(button('Copy password'))
+    expect(writeText).toHaveBeenCalledWith(generated)
+    // Done hides it; nothing in the popover still holds it.
+    click(button('Done'))
+    expect([...document.querySelectorAll('input')].map((i) => i.value)).not.toContain(generated)
+  })
+
+  it('a password core refused is not shown as set', async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    typeInto(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!, 'longenough1')
+    api.setPassword.mockImplementationOnce(async () => false)
+    click(button('Save'))
+    await flush()
+    expect(pop()!.textContent).not.toContain(PASSWORD_SHOWN_ONCE)
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toMatch(/wasn't changed/)
+    // The draft is kept to try again.
+    expect(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!.value).toBe('longenough1')
+  })
+
+  it('Open chat dispatches nodeterm:live-chat with the link id', () => {
+    const heard = vi.fn()
+    const on = (e: Event): void => heard((e as CustomEvent).detail)
+    window.addEventListener('nodeterm:live-chat', on)
+    try {
+      render(<LiveLinkChip nodeId="n1" source="local" />)
+      setLinks([controller()])
+      click(chip()!)
+      click(button('Open chat'))
+      expect(heard).toHaveBeenCalledWith({ linkId: 'L' })
+    } finally {
+      window.removeEventListener('nodeterm:live-chat', on)
+    }
+  })
+
+  it('a viewer link has no Open chat and no control section', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([link()])
+    click(chip()!)
+    expect(button('Open chat')).toBeUndefined()
+    expect(pop()!.querySelector('[role="switch"]')).toBeNull()
+    expect(button('Change password…')).toBeUndefined()
   })
 })

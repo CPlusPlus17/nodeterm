@@ -20,15 +20,21 @@ import {
   DEFAULT_WATCH_LINK_TTL,
   MAX_LINKS_PER_MACHINE,
   stripBidiControls,
-  UNLIMITED_TTL,
   WATCH_LINK_TTLS
 } from '@shared/watch-link-types'
+import { controlPasswordProblem, type ControlPasswordProblem } from '@shared/watch-link-password'
 import { otherMachines, thisMachine } from './machineName'
 
 export const ROLE_LABEL: Record<WatchLinkRole, string> = {
   viewer: 'Can watch',
   commenter: 'Can watch and chat',
   controller: 'Can watch, chat and type'
+}
+/** The role's name, as the create dialog's choice and the popover's role line say it (spec §2.1). */
+export const ROLE_NAME: Record<WatchLinkRole, string> = {
+  viewer: 'Viewer',
+  commenter: 'Commenter',
+  controller: 'Control'
 }
 
 /** A `Record` over the shared TTL list, so a TTL added there fails to compile here until it is named. */
@@ -39,15 +45,15 @@ const TTL_LABEL: Record<WatchLinkTtl, string> = {
   86400: '24 hours',
   0: 'Unlimited'
 }
-/** The create dialog's expiry choices — derived from the list core validates against (H19). Unlimited
- *  is not offered yet: the dialog does not say what a link with no end time means. */
-export const TTL_OPTIONS: { value: WatchLinkTtl; label: string }[] = WATCH_LINK_TTLS.filter(
-  (value) => value !== UNLIMITED_TTL
-).map((value) => ({
+/** The create dialog's expiry choices — derived from the list core validates against (H19), so
+ *  Unlimited (`0`) comes last, as the shared list orders it. */
+export const TTL_OPTIONS: { value: WatchLinkTtl; label: string }[] = WATCH_LINK_TTLS.map((value) => ({
   value,
   label: TTL_LABEL[value]
 }))
 export const DEFAULT_TTL: WatchLinkTtl = DEFAULT_WATCH_LINK_TTL
+/** Under the expiry choices while Unlimited is picked. */
+export const UNLIMITED_NOTE = 'This link works until you stop it.'
 
 /** Always on the create dialog. "Everything this terminal shows" is meant literally (R64/M3): the
  *  stream is the terminal CLIENT's output, so tmux's session chooser (`C-b s` / `C-b w`, a live
@@ -57,6 +63,40 @@ export const LIVE_LINK_WARNING =
   "Anyone with the link sees everything this terminal shows: what's on screen now, anything printed later (tokens, env dumps), anything you scroll back to — and, if you open tmux's session chooser or switch sessions in it, those other sessions too. They can't type or resize it."
 export const KICK_NOTE =
   'Kick ends this connection; anyone with the link can rejoin. Stop sharing to end it for everyone.'
+
+/** The create dialog's warning while Control is picked, in place of `LIVE_LINK_WARNING` — spec §2.7,
+ *  verbatim. "This machine" is the neutral noun: no brand is assumed (lib/machineName). */
+export const CONTROL_WARNING =
+  'Anyone with this link and the password can type in this terminal as you. In a shell that means running any command on this machine; in an agent session, giving the agent any instruction. Send the password separately from the link.'
+/** Beside a password shown once (the create dialog's done step, a changed password in the popover). */
+export const PASSWORD_SEPARATE_NOTE = 'Send the password separately from the link.'
+/** Core keeps only a hash (spec §2.2): there is no "show again". */
+export const PASSWORD_SHOWN_ONCE = 'This is the only time the password is shown. Change it later from the LIVE chip.'
+/** Why Control is not offered on a node — the dialog's disabled option and the create error alike. */
+export const CONTROL_UNSUPPORTED_REASON =
+  "Control isn't available for this terminal: its Zellij session's key bindings would reach every session."
+/** A Control link locked by wrong passwords (spec §2.3), beside "Allow control again". */
+export const CONTROL_LOCKED_TEXT = 'Control locked after 10 wrong passwords.'
+/** The popover's Change password form: a new password demotes every controller (Task 4 ruling). */
+export const PASSWORD_CHANGE_NOTE = 'Anyone typing now goes back to watching until they unlock with the new password.'
+/** `setControl` / `allowControl` answered false, or did not answer. */
+export const CONTROL_CHANGE_FAILED_MESSAGE = "That change didn't take — try again."
+/** `setPassword` answered false, or did not answer: the old password still works. */
+export const PASSWORD_CHANGE_FAILED_MESSAGE = "The password wasn't changed — try again. The old one still works."
+
+const PASSWORD_PROBLEM_TEXT: Record<ControlPasswordProblem, string> = {
+  // Not reachable from a text field; named so a `Record` over the shared union compiles.
+  type: 'Use at least 8 characters.',
+  short: 'Use at least 8 characters.',
+  long: 'Use at most 128 characters.',
+  control: 'Line breaks and control characters are not allowed.'
+}
+/** What is wrong with a typed Control password, in words — null when core will take it. The rule is
+ *  the shared one core checks (`controlPasswordProblem`), so the field and the create cannot differ. */
+export function passwordProblemText(pw: string): string | null {
+  const problem = controlPasswordProblem(pw)
+  return problem === null ? null : PASSWORD_PROBLEM_TEXT[problem]
+}
 
 /** The R43 sentence — the Server Edition has no license layer yet. Never paired with an Upgrade button. */
 export const SERVER_EDITION_UNSUPPORTED =
@@ -142,10 +182,31 @@ export function waitingViewers(links: readonly Pick<WatchLinkView, 'viewers'>[])
 }
 
 /**
+ * The names of the viewers typing right now, across a node's links, in list order (a controller's
+ * name is the one it unlocked with). Bidi-stripped; a nameless one is "Viewer N" like in the list.
+ */
+export function typingNames(links: readonly Pick<WatchLinkView, 'viewers'>[]): string[] {
+  const out: string[] = []
+  for (const l of links) l.viewers.forEach((v, i) => v.typing && out.push(viewerName(v, i)))
+  return out
+}
+
+/** A viewer's name is a claim it made about itself, so a sentence about the person quotes it. */
+function quoted(name: string): string {
+  return `\u201c${name}\u201d`
+}
+/** "“A” is typing." / "“A” and “B” are typing." / "“A”, “B” and “C” are typing." */
+function typingSentence(names: readonly string[]): string {
+  const q = names.map(quoted)
+  if (q.length === 1) return `${q[0]} is typing.`
+  return `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]} are typing.`
+}
+
+/**
  * What the chip says for one node's links. The WORST state wins: `refused` will not come back on
  * its own and needs the owner; `reconnecting` will; `waiting` (R63) needs the owner to open the
- * terminal. The titles send the owner to the popover, which carries the status line that explains
- * it (H9).
+ * terminal. Then someone typing (a Control link), then the plain count. The titles send the owner
+ * to the popover, which carries the status line that explains it (H9).
  */
 export function chipView(links: readonly WatchLinkView[]): { label: string; tone: LiveLinkTone; title: string } {
   const viewers = links.reduce((n, l) => n + l.viewers.length, 0)
@@ -166,10 +227,19 @@ export function chipView(links: readonly WatchLinkView[]): { label: string; tone
   }
   if (waiting > 0) return { label: `LIVE · ${waiting} waiting`, tone: 'waiting', title: VIEWERS_WAITING_MESSAGE }
   const shared = links.length > 1 ? `This terminal is shared by ${links.length} live links` : 'This terminal is shared by a live link'
+  const watching = viewers > 0 ? `${shared} — ${viewers} watching.` : `${shared}.`
+  const typing = typingNames(links)
+  if (typing.length > 0) {
+    return {
+      label: `LIVE · ${viewers} · ${typing.length} typing`,
+      tone: 'live',
+      title: `${typingSentence(typing)} ${watching}`
+    }
+  }
   return {
     label: viewers > 0 ? `LIVE · ${viewers}` : 'LIVE',
     tone: 'live',
-    title: viewers > 0 ? `${shared} — ${viewers} watching.` : `${shared}.`
+    title: watching
   }
 }
 
@@ -187,7 +257,7 @@ export function statusLine(link: Pick<WatchLinkView, 'status' | 'viewers'>): str
 /** How long a link still runs. Hours AND minutes past the hour: a floored "1 h" for 1 h 59 min
  *  understated by up to an hour the one figure that says how long a broadcast goes on. `null` is an
  *  Unlimited link. */
-export function formatRemaining(expiresAt: number | null, now: number): string {
+export function formatRemaining(expiresAt: number | null, now: number = Date.now()): string {
   if (expiresAt === null) return 'No end time'
   const ms = expiresAt - now
   if (ms <= 0) return 'ended'
@@ -210,7 +280,7 @@ export function formatClock(ms: number): string {
  * link past midnight read like today. So a different day is named — "tomorrow 15:43", or the weekday
  * and date further out. An Unlimited link (`null`) runs "until you stop it".
  */
-export function formatUntil(expiresAt: number | null, now: number): string {
+export function formatUntil(expiresAt: number | null, now: number = Date.now()): string {
   if (expiresAt === null) return 'you stop it'
   const end = new Date(expiresAt)
   const today = new Date(now)
@@ -293,7 +363,7 @@ export function createErrorMessage(e: CreateWatchLinkError, surface: LiveLinkSur
     case 'ttl-unsupported':
       return 'Unlimited links need a newer server. Pick an end time.'
     case 'control-unsupported':
-      return "Control isn't available for this terminal: its Zellij session's key bindings would reach every session."
+      return CONTROL_UNSUPPORTED_REASON
     case 'bad-password':
       return 'The password must be 8 to 128 characters, with no line breaks.'
   }
@@ -312,7 +382,21 @@ export function shareDisabledReason(o: { serverEdition: boolean; relayTab: boole
   return null
 }
 
-/** The info strip for a notice from core; null for a kind this build does not know. */
+/**
+ * "Someone using the name “Mert” can now type in api-server." The name is the one the viewer gave
+ * itself when it unlocked: a claim, quoted as one, never presented as who it is.
+ */
+export function controlTakenText(n: { name: string; title: string }): string {
+  const name = stripBidiControls(n.name).trim()
+  const title = stripBidiControls(n.title)
+  return name ? `Someone using the name ${quoted(name)} can now type in ${title}.` : `Someone can now type in ${title}.`
+}
+
+/**
+ * The info strip for a notice from core; null for a kind this build does not know (a newer core).
+ * Exhaustive over the kinds this build knows: a kind added to `WatchLinkNotice` fails to compile
+ * here until it has copy — a `default: return null` once let two kinds render nothing.
+ */
 export function noticeText(n: WatchLinkNotice): string | null {
   switch (n.kind) {
     case 'joined':
@@ -331,9 +415,53 @@ export function noticeText(n: WatchLinkNotice): string | null {
       // A server-side revoke: the service ended it. Which person or machine asked is not known here.
       return `nodeterm's service ended the live link to ${title}.`
     }
-    default:
+    case 'control-taken':
+      return controlTakenText(n)
+    case 'control-locked':
+      return `Control of ${stripBidiControls(n.title)} was locked after 10 wrong passwords. Allow it again from the LIVE chip.`
+    default: {
+      // Compile-time: every known kind is handled above. Runtime: a newer core's kind is no notice.
+      const unknown: never = n
+      void unknown
       return null
+    }
   }
+}
+
+/** One OS notification per link per this long (the agent-done notification's per-node cooldown). */
+const NOTIFY_COOLDOWN_MS = 5000
+
+export interface LiveLinkNoticeEffect {
+  /** The info strip; `sticky` = it stays until dismissed. */
+  strip: { text: string; sticky: boolean } | null
+  /** An OS notification (`window.nodeTerminal.notify`), or null. */
+  os: { title: string; body: string; nodeId: string } | null
+}
+
+/**
+ * What Canvas does with a notice from core — ONE decision, so the strip, the consent gate and the
+ * cooldown are tested here rather than inside Canvas. Sticky: `not-persistent` (shown after every
+ * create while links cannot be saved) and `control-locked` (nobody can unlock until the owner
+ * allows it again). `control-taken` — someone can now type in this terminal — also raises an OS
+ * notification, under the SAME consent the agent-done notification uses (`notifyOnClaudeDone &&
+ * notifyConsentAsked`; main shows it only while the window is unfocused) and at most once per link
+ * per 5 s. `lastOsAt` is the caller's per-link cooldown record; it is written only when a
+ * notification is raised.
+ */
+export function liveLinkNoticeEffect(
+  n: WatchLinkNotice,
+  prefs: { notifyOnClaudeDone?: boolean; notifyConsentAsked?: boolean },
+  now: number,
+  lastOsAt: Map<string, number>
+): LiveLinkNoticeEffect {
+  const text = noticeText(n)
+  if (text === null) return { strip: null, os: null }
+  const strip = { text, sticky: n.kind === 'not-persistent' || n.kind === 'control-locked' }
+  if (n.kind !== 'control-taken' || !(prefs.notifyOnClaudeDone && prefs.notifyConsentAsked)) return { strip, os: null }
+  for (const [id, at] of lastOsAt) if (now - at >= NOTIFY_COOLDOWN_MS) lastOsAt.delete(id)
+  if (lastOsAt.has(n.linkId)) return { strip, os: null }
+  lastOsAt.set(n.linkId, now)
+  return { strip, os: { title: 'Live link', body: text, nodeId: n.nodeId } }
 }
 
 /** A viewer as the popover lists them: the name they chatted under, else "Viewer N" (1-based). */
