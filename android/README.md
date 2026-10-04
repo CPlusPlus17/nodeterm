@@ -14,12 +14,33 @@ with an enabled Linux/macOS tmux backend to create and register a managed shell 
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Managed canvas End still requires the relay;
 closing the SSH viewer leaves the session running. This prepares the upstream Android contribution; no PR
-has been opened. Beta 13/code 14 release verification is in progress; beta 12 remains prepared.
+has been opened. Beta 13/code 14 is prepared and has passed the local release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
+
+**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+`ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
+along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
+with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
+60 files** and full TypeScript checking pass; the ten existing Windows/macOS runtime cases
+are explicitly skipped on Linux. The minified offline release build passes in **47.77
+seconds** with the retained private signer and R8/runtime keeps. Independent SDK 36/37
+signature, nondebuggable manifest, payload/provenance and 16-KB ZIP/native checks pass.
+The new managed-creation and input-coverage regressions catch **148 isolated behavioral mutation
+variants**, with passing controls/restored runs and per-receipt source hashes. Receipts distinguish
+assertion failures from the named runtime contract failure; earlier beta-12 proof remains separate.
+An isolated native node-pty/Electron/tmux fixture verifies host cwd/account/hooks/env/policy,
+one launch submission and uncertainty fences. It uses a fixture CLI; real Claude startup,
+macOS native creation and physical power-loss durability are unverified.
+APK SHA-256: `faf9e508fa82355f640512ec1861ba886d0e48b8aef3e724edc6435c9f8c134b`. Artifact:
+`.nodeterm/android-beta-13/nodeterm-android-0.1.0-beta.13.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-13/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone testing is paused; **10 Pass / 22 Partial / 32 Pending**
+remains the device ledger. Managed New and the other new source flows require physical checks.
+Each push requires its own exact-head green Android workflow; no PR opened, and A68 stays deferred.
 
 **New work after beta 10 (2026-10-04):** the branch adds Sessions search by name, agent and folder;
 live refresh on All computers while visible; and captured-output Copy-sheet search,
@@ -328,7 +349,7 @@ tested where the layer allows, and the numbered
 | | Android | Notes |
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
-| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: reachable by LAN/VPN, with no hosted push or relay fallback. Direct Git works on admitted local/driven folders independently of the actions service. A live selected-profile service supplies owned Board writes on Desktop/Server and delivery-only node nudges on Desktop. Canvas-registered New needs relay; phone-owned plain SSH New is separate. No password login, no Windows |
+| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: reachable by LAN/VPN, with no hosted push or relay fallback. Direct Git works on admitted local/driven folders independently of the actions service. A live selected-profile service supplies owned Board writes on Desktop/Server and delivery-only node nudges on Desktop. Current enabled local Linux/macOS tmux hosts also provide managed canvas New over SSH (A111); older hosts need the relay. Phone-owned plain SSH New is separate. No password login, no Windows |
 | Direct connection on your network (SSH + tmux) | ✓ | Host key checked against the keys the computer names at pairing, then pinned (trust on first use with a desktop that names none); the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body), also when remote access is turned on only after pairing; an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
@@ -378,8 +399,8 @@ observed CI repair. Any later push still requires its own green workflow.
    relay route this checks cellular connectivity and action/recovery behavior; the current live
    join contract already passed the controlled relay-only browse check.
 4. Keep the computer awake, nodeterm running, and the intended project/session mounted and awake.
-   For the relay route, keep remote access on. Offscreen Sleeping sessions remain a known relay gap. Background
-   notifications use Android's periodic worker and may take longer than 15 minutes; there is no FCM.
+   For the relay route, keep remote access on. Current hosts support offscreen Sleeping wake
+   (A104); its remaining physical checks are pending. Background notifications use Android's periodic worker and may take longer than 15 minutes; there is no FCM.
 5. Record these results, then finish the [64-item device checklist](../docs/android.md#device-checklist).
    A successful build or cold start alone does not verify pairing, input or connectivity on the phone.
 

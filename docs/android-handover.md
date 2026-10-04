@@ -15,12 +15,33 @@ Board writes and Desktop wake/refresh/rename. New session can now ask a current 
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). This prepares the upstream Android contribution; no PR
-has been opened. Beta 13/code 14 release verification is in progress; beta 12 remains prepared.
+has been opened. Beta 13/code 14 is prepared and has passed the local release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
+
+**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+`ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
+along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
+with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
+60 files** and full TypeScript checking pass; the ten existing Windows/macOS runtime cases
+are explicitly skipped on Linux. The minified offline release build passes in **47.77
+seconds** with the retained private signer and R8/runtime keeps. Independent SDK 36/37
+signature, nondebuggable manifest, payload/provenance and 16-KB ZIP/native checks pass.
+The new managed-creation and input-coverage regressions catch **148 isolated behavioral mutation
+variants**, with passing controls/restored runs and per-receipt source hashes. Receipts distinguish
+assertion failures from the named runtime contract failure; earlier beta-12 proof remains separate.
+An isolated native node-pty/Electron/tmux fixture verifies host cwd/account/hooks/env/policy,
+one launch submission and uncertainty fences. It uses a fixture CLI; real Claude startup,
+macOS native creation and physical power-loss durability are unverified.
+APK SHA-256: `faf9e508fa82355f640512ec1861ba886d0e48b8aef3e724edc6435c9f8c134b`. Artifact:
+`.nodeterm/android-beta-13/nodeterm-android-0.1.0-beta.13.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-13/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone testing is paused; **10 Pass / 22 Partial / 32 Pending**
+remains the device ledger. Managed New and the other new source flows require physical checks.
+Each push requires its own exact-head green Android workflow; no PR opened, and A68 stays deferred.
 
 - **Four additions are implemented after the beta-10 checkpoint (2026-10-04).** Sessions search,
   live All computers refresh, Find in captured terminal output, and recursive SSH Include anchor
@@ -281,8 +302,9 @@ read recovery, trusted project env/shell preparation, measured per-agent policy 
 have regression and isolated mutation receipts. V2 held replies add exact remembered rule scopes
 and complete question answers without guessed digits. Direct SSH Git supports the existing eight
 verbs with physical jails and honest uncertain writes. The selected-profile SSH actions service
-routes Board writes through the actual store; Desktop offers delivery-only node nudges, Server local
-Board only. Exclusive lifetime claims, monotonic retirement, bounded replies and immutable nonce
+routes Board writes through the actual store; Desktop offers delivery-only node nudges. Server
+serves local Board writes and, since A111, managed New when its local POSIX tmux backend is enabled.
+Exclusive lifetime claims, monotonic retirement, bounded replies and immutable nonce
 windows guard startup, shutdown and retries. The service's actual filesystem/FIFO, Desktop wiring
 and headless Server checks pass 33 tests; 29 native and 29 client mutation variants are caught.
 Real Node/Kotlin/generated-shell interop passes. The full merged release gates follow this source
@@ -1162,7 +1184,8 @@ Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-G
 A108 adds owned SSH Board and Desktop node nudges. Device testing remains paused. The user
 intends an upstream Android contribution but has not requested opening the PR. A25/A93 are
 maintainer backend dependencies with no source supplied; A68 stays deferred until PR preparation.
-Cold canvas New over bare SSH still needs host-owned creation, rather than registration alone.
+A111 implements host-owned managed New over SSH on current enabled local Linux/macOS tmux hosts;
+Windows/non-tmux and third-machine creation remain unsupported.
 
 The user resumed broader Pixel release checks on 2026-10-04 after the hike. Beta 10 / code 11 is
 installed with A90/A91 and A94's authoritative-empty completion fix. Item 1 paired-update passes;
@@ -1175,10 +1198,10 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-Before the new feature matrix, install the prepared beta 12/code 13 as a same-signer update
+When phone testing resumes, install prepared beta 13/code 14 as a same-signer update
 and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
-the matching beta-12 source for host-dependent features, keeping the held older paired fixture
-and its original terminal intact. Test A100–A108 and earlier A96–A99 on the intended Pixel;
+the matching beta-13 source for host-dependent features, keeping the held older paired fixture
+and its original terminal intact. Test A100–A112 and earlier A96–A99 on the intended Pixel;
 source/build results do not promote physical checklist items.
 
 **Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
@@ -1272,7 +1295,8 @@ section before starting, since the verifier corrections take precedence):
   to be linked to a device entry, which the approved-devices store does not record.
 - **Remaining parity.** Current typed SSH Git and the A108 selected-profile service support
   Board writes and Desktop delivery-only node nudges without relay. Git works on admitted
-  local/driven folders independently of the service; Server advertises Board only. A manual
+  local/driven folders independently of the service; Server advertises Board and, with an
+  enabled local POSIX tmux backend, managed New. Renderer node nudges remain Desktop-only. A manual
   SSH host has no relay fallback when a service capability is missing. The service admits only
   selected-profile ownership, including Desktop's own SSH-project metadata, never another
   desktop's driven projects. Managed canvas New is implemented in A111 for a current local
@@ -1375,7 +1399,7 @@ System account selection stays explicit; removed/pending/remote accounts and cha
 refused at spawn. Current runtime, kernel process birth and selected-profile service identity are
 required for the first attach. Non-tmux/Windows and third-machine creation remain unsupported.
 Actual isolated native-PTY/tmux creation with a fixture agent passes; live CLI and Pixel checks
-remain open. Companion interop and release gates are being completed for beta 13. iOS adoption
+remain open. Companion interop, mutation checks and beta-13 local release gates pass. iOS adoption
 of the new advertised action and receipt is owed to @eneskirca.
 
 ## What is verified, and what is not
@@ -1620,8 +1644,9 @@ commits asked for. Its ledger is 10 Pass / 22 Partial / 32 Pending; new source f
 
 Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodeterm.
 Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
-source before editing. A100–A110 close retained history, typed read recovery, project launch settings,
-agent policy, offscreen wake, held rule/question replies, SSH Git and owned Board/node actions.
+source before editing. A100–A112 close retained history, typed read recovery, project launch settings,
+agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
+host-owned managed New over SSH. Beta 13/code 14 is prepared with local release checks complete.
 The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
 paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
 
@@ -1632,8 +1657,9 @@ new flows. Test real Claude rule persistence and full-question application separ
 hook/producer tests. Preserve the held rebuilt Desktop fixture and its original terminal.
 
 Immediate FCM and fresh-different-desktop relay refusal A93 need the hosted backend maintainers;
-the user has no backend repository to supply. Cold canvas New over bare SSH needs an actual
-host-owned launch API; metadata registration alone is unsafe. Source is intended for an upstream
+the user has no backend repository to supply. A111 implements a host-owned launch API on current
+enabled local Linux/macOS tmux hosts; ordinary missing-session SSH attach remains attach-only.
+Windows/non-tmux and third-machine creation are unsupported. Source is intended for an upstream
 PR, but none was requested/opened. Apply A68 only when preparing a requested PR: push on main only,
 keep pull_request, no merge_group. Flag all new mirror/verb/SSH contracts for @eneskirca's iOS client.
 

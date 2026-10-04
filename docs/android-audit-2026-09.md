@@ -130,8 +130,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
 | [A109](#a109) | low | | small | tests/bug | ✅ source fixed in `4e2f877d` · Three-digit findings retain device coverage; source regression verified |
 | [A110](#a110) | low | | small | tests/bug | ✅ test fixtures fixed in `8c57016c`, `b2e41255` · SSH profile isolation and actual unsafe-directory mode; merged gates verified |
-| [A111](#a111) | medium | | medium | parity/gap | ✅ source fixed; release checks in progress, physical/live CLI pending · New session needs genuine host-owned create/launch/register over direct SSH |
-| [A112](#a112) | low | | small | tests/bug | ✅ source fixed; exact-head workflow pending · Managed producer imports session-host files missing from CI and incremental test inputs |
+| [A111](#a111) | medium | | medium | parity/gap | ✅ fixed in `d652b96c`–`ba64f628`; beta-13 local checks pass, physical/live CLI pending · New session needs genuine host-owned create/launch/register over direct SSH |
+| [A112](#a112) | low | | small | tests/bug | ✅ fixed in `9675c4d1`; producer/input regressions and mutations pass · Managed producer imports session-host files missing from CI and incremental test inputs |
 
 ## A01
 
@@ -954,7 +954,8 @@ Add an FCM leg to the backend's `/v1/push/notify` and `/v1/push/live-update`, sh
 **Current follow-up:** A107 serves direct Git on admitted local/driven folders independently of
 the actions service. A108 adds selected-profile SSH Board on Desktop/Server and delivery-only
 node nudges on Desktop. A manually added SSH host has no relay fallback for a missing service
-capability; cold canvas New remains relay-only. Another desktop's driven projects retain only
+capability. A111 adds host-owned managed New on current enabled local Linux/macOS tmux hosts;
+physical verification remains pending. Another desktop's driven projects retain only
 machine-local operations, including direct Git, rather than this profile's Board/node actions.
 
 **New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH**
@@ -3564,7 +3565,7 @@ The existing eight Git verbs now execute over POSIX SSH inside physically admitt
 
 Source change: `d716138c`, `585e726f`.
 
-Current Desktop/Server exposes bounded private typed request/response files under the exact selected userData profile, with fresh instance/host-time advertisement, ownership and nonce guards. Board operations use the actual WorkspaceStore save queue and change broadcasts. Desktop offers delivery-only wake/refresh/rename nudges; Server offers Board only. Duplicate requests do not execute twice inside their immutable retry window; unknown results never replay/fallback. Another desktop's unowned driven projects refuse. Canvas cold New remains unsupported until a host-owned launch API exists. Actual filesystem/FIFO, Desktop wiring and headless Server checks pass (33 tests); 29 native and 29 Android client mutation variants catch regressions. Real Node/Kotlin/generated-shell interop passes; the full merged Gradle gate verifies MINA and bundle coverage. Physical service flows remain pending.
+At the A108 checkpoint, Desktop/Server exposes bounded private typed request/response files under the exact selected userData profile, with fresh instance/host-time advertisement, ownership and nonce guards. Board operations use the actual WorkspaceStore save queue and change broadcasts. Desktop offers delivery-only wake/refresh/rename nudges; Server offers Board only. Duplicate requests do not execute twice inside their immutable retry window; unknown results never replay/fallback. Another desktop's unowned driven projects refuse. Canvas cold New was outside the A108 service scope. A111 now adds a host-owned launch API on current enabled local Linux/macOS tmux hosts, including Server; its physical checks remain pending. Actual filesystem/FIFO, Desktop wiring and headless Server checks pass (33 tests); 29 native and 29 Android client mutation variants catch regressions. Real Node/Kotlin/generated-shell interop passes; the full merged Gradle gate verifies MINA and bundle coverage. Physical service flows remain pending.
 
 ## A109
 
@@ -3616,6 +3617,27 @@ live Claude rule/question application and the new physical feature matrix remain
 Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
 remains deferred until a PR is requested.
 
+**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+`ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
+along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
+with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
+60 files** and full TypeScript checking pass; the ten existing Windows/macOS runtime cases
+are explicitly skipped on Linux. The minified offline release build passes in **47.77
+seconds** with the retained private signer and R8/runtime keeps. Independent SDK 36/37
+signature, nondebuggable manifest, payload/provenance and 16-KB ZIP/native checks pass.
+The new managed-creation and input-coverage regressions catch **148 isolated behavioral mutation
+variants**, with passing controls/restored runs and per-receipt source hashes. Receipts distinguish
+assertion failures from the named runtime contract failure; earlier beta-12 proof remains separate.
+An isolated native node-pty/Electron/tmux fixture verifies host cwd/account/hooks/env/policy,
+one launch submission and uncertainty fences. It uses a fixture CLI; real Claude startup,
+macOS native creation and physical power-loss durability are unverified.
+APK SHA-256: `faf9e508fa82355f640512ec1861ba886d0e48b8aef3e724edc6435c9f8c134b`. Artifact:
+`.nodeterm/android-beta-13/nodeterm-android-0.1.0-beta.13.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-13/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone testing is paused; **10 Pass / 22 Partial / 32 Pending**
+remains the device ledger. Managed New and the other new source flows require physical checks.
+Each push requires its own exact-head green Android workflow; no PR opened, and A68 stays deferred.
+
 ## A111
 
 **Canvas New over direct SSH needs host-owned creation, not registration metadata (2026-10-04).**
@@ -3645,7 +3667,7 @@ SSH viewer close leaves it running. The separate phone-owned plain terminal End 
 
 Actual isolated native node-pty/Electron and tmux creation with a fixture agent passes; this proves
 one submission with the host cwd/account/hooks/env/policy, not real Claude startup. Protocol,
-producer interop, mutation and minified beta-13 gates are being completed. The Pixel remains on
+producer interop, mutation and minified beta-13 local release gates pass. The Pixel remains on
 beta 10 and the 64-row ledger remains 10 Pass / 22 Partial / 32 Pending. iOS @eneskirca needs the
 new advertised action and durable attach-only receipt contract; no external message or PR opened.
 
@@ -3658,4 +3680,6 @@ found those repository inputs absent from both Android workflow path filters. Gr
 external source input directories also omitted them, so a source edit could leave local protocol
 tests up to date. Both push/pull_request filters and Gradle inputs now include the directory.
 Actual fixture graph/declared-input regressions cover this addition; removing either trigger
-filter or the Gradle input must fail. A68's PR-stage trigger restriction stays deferred.
+filter or the Gradle input fails its isolated mutation check. The actual producer/consumer
+fixture and coverage guards pass, catching nine isolated variants. A68's PR-stage trigger
+restriction stays deferred; each push still requires exact-head green Android CI.

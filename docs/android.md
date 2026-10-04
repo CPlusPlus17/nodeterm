@@ -12,7 +12,7 @@ Board writes and Desktop wake/refresh/rename. New session can now ask a current 
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). This prepares the upstream Android contribution; no PR
-has been opened. Beta 13/code 14 release verification is in progress; beta 12 remains prepared.
+has been opened. Beta 13/code 14 is prepared and has passed the local release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -356,7 +356,7 @@ describes as the future. The Android client implements what the host actually se
 | Retained terminal history search (`A100`) | `pty.historySearch {streamId, query}` searches the attached generation/exact pane, returns bounded matching lines, searched-line count and truncation; older hosts refuse without replacement | resolve the selected session's exact pane and search all retained plain tmux history on the computer, with bounded private spool/result; no copy-mode/input changes |
 | Cold relay attach (`A102`) | saved node/project/account/agent facts override create hints; prepare trust-aware project env/shell without spawning, recheck warm races, then respond/snapshot/attach synchronously; a warm join retains its launch facts | existing attach-only SSH behavior stays; cold agent creation is still refused rather than guessing its hook environment |
 | Answer complete held questions (`A106`) | `questions.answer {nodeId, pendingId, selections:number[][]}`; original live request determines exact labels for every question and preserves tool input; old hosts open session | same full-schema builder over the selected node's original pending JSON and v2 answer file; gone/unsupported tickets never become numeric keys |
-| SSH Board and node actions (`A108`) | existing `projects.ensureBoard/setCardColumn/editCardLabels` and `node.wake/refresh/rename` | same typed requests through `<selected userData>/ssh-actions`; fresh private advertisement, instance/nonce/host-time guards, actual WorkspaceStore save queue; Desktop nudges are delivery receipts; Server advertises Board only |
+| SSH Board and node actions (`A108`) | existing `projects.ensureBoard/setCardColumn/editCardLabels` and `node.wake/refresh/rename` | same typed requests through `<selected userData>/ssh-actions`; fresh private advertisement, instance/nonce/host-time guards, actual WorkspaceStore save queue; Desktop nudges are delivery receipts; for these Board/node methods, Server advertises Board only; A111 separately adds conditional managed New |
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
 the shared pty. An `OP.Resized` still shows a "sized to another screen · fit this screen" hint.
@@ -395,6 +395,27 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+`ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
+along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
+with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
+60 files** and full TypeScript checking pass; the ten existing Windows/macOS runtime cases
+are explicitly skipped on Linux. The minified offline release build passes in **47.77
+seconds** with the retained private signer and R8/runtime keeps. Independent SDK 36/37
+signature, nondebuggable manifest, payload/provenance and 16-KB ZIP/native checks pass.
+The new managed-creation and input-coverage regressions catch **148 isolated behavioral mutation
+variants**, with passing controls/restored runs and per-receipt source hashes. Receipts distinguish
+assertion failures from the named runtime contract failure; earlier beta-12 proof remains separate.
+An isolated native node-pty/Electron/tmux fixture verifies host cwd/account/hooks/env/policy,
+one launch submission and uncertainty fences. It uses a fixture CLI; real Claude startup,
+macOS native creation and physical power-loss durability are unverified.
+APK SHA-256: `faf9e508fa82355f640512ec1861ba886d0e48b8aef3e724edc6435c9f8c134b`. Artifact:
+`.nodeterm/android-beta-13/nodeterm-android-0.1.0-beta.13.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-13/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone testing is paused; **10 Pass / 22 Partial / 32 Pending**
+remains the device ledger. Managed New and the other new source flows require physical checks.
+Each push requires its own exact-head green Android workflow; no PR opened, and A68 stays deferred.
 
 **Historical prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
 `b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
