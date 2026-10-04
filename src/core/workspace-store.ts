@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs'
+import nodeFs, { promises as fs, constants } from 'fs'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'path'
 import { renameAtomic, renameAtomicSync, writeFileAtomic } from './fs-atomic'
@@ -11,7 +11,7 @@ import {
 } from '../shared/types'
 import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
-  projectToFile, resolveNodes, sameProjectContent,
+  projectToFile, resolveNodes, toPortableNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
   validKanban,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
@@ -25,7 +25,7 @@ import {
 } from '../shared/project-settings'
 import { readProjectCapabilities, type ProjectCapability } from '../shared/project-capabilities'
 import type { CapabilityAckMap } from './project-capability-consent'
-import { hoistLegacyNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
+import { applyLocalNodeExec, hoistLegacyNodeExec, localNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
 import { collisionSeed, derivedProjectId, freshProjectId } from '../shared/project-id'
 import {
   pruneLayoutViewports,
@@ -1664,6 +1664,124 @@ export class WorkspaceStore {
       )
     } catch { /* the file is written and cached; the next load/poll surfaces the node */ }
     return true
+  }
+
+  /** Host-owned creation persists the resolved local facts, never a sibling's SSH/cwd donor.
+   * Both intent and completion share the normal save queue and its final publication fence. */
+  appendManagedTerminal(projectId: string, node: CanvasNodeState, fence: WorkspaceWriteFence): Promise<boolean> {
+    return this.managedTerminalWrite(projectId, fence, (file) => {
+      if (!/^term-[a-z0-9]+-[a-z0-9]{1,16}$/.test(node.id) || node.kind !== 'terminal' ||
+          typeof node.cwd !== 'string' || !node.cwd || node.ssh || node.sshRemoteTmux ||
+          file.nodes.some((n) => n.id === node.id)) return false
+      file.nodes.push(stripSharedNodeExec(toPortableNodes([JSON.parse(JSON.stringify(node)) as CanvasNodeState], node.cwd))[0])
+      return true
+    }, node, node)
+  }
+
+  finishManagedTerminal(projectId: string, expectedNode: CanvasNodeState, fence: WorkspaceWriteFence): Promise<boolean> {
+    return this.managedTerminalWrite(projectId, fence, (file) => {
+      const entry = this.index?.entries.find((e) => e.id === projectId)
+      const resolved = applyLocalNodeExec(resolveNodes(file.nodes, entry!.cwd!), entry!.localExec)
+      const matches = resolved.filter((n) => n.id === expectedNode.id && n.kind === 'terminal')
+      if (matches.length !== 1) return false
+      const node = matches[0], pending = node.pendingLaunch
+      if (pending?.command !== expectedNode.pendingLaunch?.command ||
+          ['cwd', 'shell', 'agentId', 'accountId', 'agentSessionId', 'agentModel'].some((key) => node[key as keyof CanvasNodeState] !== expectedNode[key as keyof CanvasNodeState]) ||
+          node.ssh || node.sshRemoteTmux || pending?.executor !== 'server' ||
+          pending.attempted !== true || pending.manualOnly !== true) return false
+      delete file.nodes.find((n) => n.id === node.id)!.pendingLaunch
+      return true
+    }, undefined, expectedNode)
+  }
+
+  /** The final launch fence is synchronous: no saved-node edit may race an awaited pane probe. */
+  managedTerminalCurrent(projectId: string, expectedNode: CanvasNodeState, pending = false): boolean {
+    const entries = this.index?.entries.filter((entry) => entry.id === projectId) ?? []
+    const e = entries[0]
+    if (entries.length !== 1 || !e?.cwd || e.ssh || e.closed || e.cwd !== expectedNode.cwd) return false
+    let fd: number | undefined
+    try {
+      fd = nodeFs.openSync(projectFilePath(e.cwd), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      const stat = nodeFs.fstatSync(fd)
+      if (!stat.isFile() || stat.size > 16 * 1024 * 1024) return false
+      const file = JSON.parse(nodeFs.readFileSync(fd, 'utf8')) as ProjectFileV1
+      if (file.version !== 1 || !Array.isArray(file.nodes)) return false
+      const nodes = applyLocalNodeExec(resolveNodes(file.nodes, e.cwd), e.localExec)
+      const matches = nodes.filter((node) => node.id === expectedNode.id && node.kind === 'terminal')
+      const node = matches[0]
+      if (matches.length !== 1 || node.ssh || node.sshRemoteTmux ||
+          !['cwd', 'shell', 'agentId', 'accountId', 'agentSessionId', 'agentModel'].every((key) => node[key as keyof CanvasNodeState] === expectedNode[key as keyof CanvasNodeState])) return false
+      if (!pending) return !node.pendingLaunch
+      const intent = node.pendingLaunch
+      return intent?.command === expectedNode.pendingLaunch?.command && intent?.executor === 'server' &&
+        intent.attempted === true && intent.manualOnly === true && intent.after.length === 0
+    } catch { return false }
+    finally { if (fd !== undefined) nodeFs.closeSync(fd) }
+  }
+
+  /** Queue the observation behind ordinary saves; delivery additionally carries the sync fence. */
+  managedTerminalPresent(projectId: string, expectedNode: CanvasNodeState, current: () => boolean, pending = false): Promise<boolean> {
+    const run = this.saveChain.then(() => current() && this.managedTerminalCurrent(projectId, expectedNode, pending))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private managedTerminalWrite(projectId: string, fence: WorkspaceWriteFence, change: (file: ProjectFileV1) => boolean, appendNode?: CanvasNodeState, expectedNode?: CanvasNodeState): Promise<boolean> {
+    const run = this.saveChain.then(async () => {
+      if (!fence.current()) return false
+      const entries = this.index?.entries.filter((e) => e.id === projectId) ?? []
+      const e = entries[0]
+      if (entries.length !== 1 || !e?.cwd || e.ssh || e.closed) return false
+      const cwd = e.cwd
+      const file = projectFilePath(cwd)
+      let source: string | undefined
+      const freshOwner = (): IndexEntryV3 | undefined => {
+        const fresh = this.index?.entries.filter((entry) => entry.id === projectId) ?? []
+        if (!fence.current() || fresh.length !== 1 || fresh[0].cwd !== cwd || fresh[0].ssh || fresh[0].closed) return undefined
+        return fresh[0]
+      }
+      const owned = (): boolean => {
+        if (!freshOwner()) return false
+        if (source === undefined) return true
+        if (!appendNode && expectedNode && !this.managedTerminalCurrent(projectId, expectedNode, true)) return false
+        let fd: number | undefined
+        try {
+          fd = nodeFs.openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+          const stat = nodeFs.fstatSync(fd)
+          return stat.isFile() && stat.size <= 16 * 1024 * 1024 && nodeFs.readFileSync(fd, 'utf8') === source
+        } catch { return false }
+        finally { if (fd !== undefined) nodeFs.closeSync(fd) }
+      }
+      let parsed: ProjectFileV1
+      try {
+        source = await fs.readFile(file, 'utf8')
+        parsed = JSON.parse(source) as ProjectFileV1
+        if (!owned() || parsed.version !== 1 || !Number.isSafeInteger(parsed.rev) || !Array.isArray(parsed.nodes) || !change(parsed)) return false
+        if (appendNode) {
+          const exec = localNodeExec([appendNode])
+          if (exec) {
+            const index = JSON.parse(JSON.stringify(this.index)) as WorkspaceIndexV3
+            this.applySettingsToIndex(index)
+            const target = index.entries.find((entry) => entry.id === projectId)!
+            target.localExec = { ...target.localExec, ...exec }
+            await writeFencedAtomic(this.indexPath, JSON.stringify(index), { current: owned })
+            if (!owned()) return false
+            const fresh = this.index!.entries.find((entry) => entry.id === projectId)!
+            fresh.localExec = target.localExec
+          }
+        }
+        parsed.rev++; parsed.savedAt = new Date().toISOString()
+        const raw = JSON.stringify(parsed, null, 2)
+        await writeFencedAtomic(file, raw, { current: owned })
+        const fresh = freshOwner()
+        if (!fresh || (expectedNode && !this.managedTerminalCurrent(projectId, expectedNode, !!appendNode?.pendingLaunch))) return false
+        this.lastWritten.set(file, raw); this.revs.set(fresh.id, parsed.rev)
+        this.announceProjectFile(fresh, parsed)
+        return true
+      } catch { return false }
+    })
+    this.saveChain = run.catch(() => {})
+    return run
   }
 
   /**
