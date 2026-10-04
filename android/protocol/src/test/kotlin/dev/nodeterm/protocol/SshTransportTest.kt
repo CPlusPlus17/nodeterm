@@ -6,6 +6,10 @@ import dev.nodeterm.protocol.host.CardLabelEdit
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.HostUnansweredException
+import dev.nodeterm.protocol.host.GitVerb
+import dev.nodeterm.protocol.git.SourceControl
+import dev.nodeterm.protocol.git.GitReplies
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.ResumeOffer
 import dev.nodeterm.protocol.host.TerminalSink
@@ -32,6 +36,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import org.apache.sshd.server.Environment
 import org.apache.sshd.server.ExitCallback
 import org.apache.sshd.server.SshServer
@@ -264,6 +269,184 @@ class SshTransportTest {
 
     private fun connect(pin: HostKeyPin = MemoryPin(), factory: javax.net.SocketFactory? = null) =
         SshHostConnection.connect("127.0.0.1", port, "dev", identity, pin, socketFactory = factory)
+
+    private fun gitRepo(): File {
+        val dir = File(repo, "git-${System.nanoTime()}").apply { mkdirs() }
+        gitAt(dir, "init", "-b", "main")
+        gitAt(dir, "config", "user.name", "SSH fixture")
+        gitAt(dir, "config", "user.email", "fixture@example.invalid")
+        gitAt(dir, "config", "commit.gpgsign", "false")
+        File(dir, "base").writeText("initial\n")
+        gitAt(dir, "add", "--", "base")
+        gitAt(dir, "commit", "-m", "initial")
+        return dir
+    }
+
+    private fun gitAt(dir: File, vararg args: String): String {
+        val pb = ProcessBuilder(listOf("git") + args).directory(dir).redirectErrorStream(true)
+        pb.environment().clear(); pb.environment().putAll(childEnv())
+        val process = pb.start(); val out = process.inputStream.bufferedReader().readText()
+        assertEquals(0, process.waitFor(), out)
+        return out
+    }
+
+    @Test
+    fun `typed Git over real SSH serves status diff stage unstage commit push pull and history`() = runBlocking<Unit> {
+        val dir = gitRepo()
+        val remote = File(root, "remote-${System.nanoTime()}.git")
+        gitAt(dir, "init", "--bare", "-b", "main", remote.path)
+        gitAt(dir, "remote", "add", "origin", remote.path)
+        try {
+            connect().use { conn ->
+                assertTrue(conn.capabilities.git)
+                assertEquals(LegRouting.Leg.Primary, LegRouting.route(Capability.GIT, conn.kind, conn.capabilities, LegRouting.RelayLeg.ADDED_OVER_SSH))
+                // Git itself triggers the first authoritative browse before any jailed command.
+                val control = SourceControl(conn, File(dir, "sub").apply { mkdirs() }.path)
+                val name = "-literal ' \$(touch injected)\nß.txt"
+                File(dir, name).writeText("first\nsecond\n")
+                val file = control.status().untracked.single()
+                assertEquals(name, file.path)
+                assertTrue(control.diff(file, staged = false).lines.any { it.text == "+second" })
+                assertTrue(control.stage(listOf(name)).ok)
+                assertEquals(name, control.status().staged.single().path)
+                assertTrue(control.unstage(listOf(name)).ok)
+                assertEquals(name, control.status().untracked.single().path)
+                assertTrue(control.stage(listOf(name)).ok)
+                assertTrue(control.commit("from Android ' \$(touch injected)").ok)
+                assertFalse(File(dir, "injected").exists())
+                assertEquals(2, control.history().commits.size)
+                assertTrue(control.push().ok)
+                assertTrue(control.status().hasUpstream)
+                assertEquals("origin/main", control.history().remoteRef)
+                File(dir, "base").appendText("rejected\n")
+                gitAt(dir, "commit", "-am", "rejected")
+                val attempts = File(remote, "attempts")
+                val hook = File(remote, "hooks/pre-receive").apply {
+                    writeText("#!/bin/sh\nprintf '%s\\n' attempt >> ${SshScripts.q(attempts.path)}\nprintf '%s\\n' 'set-upstream: no upstream; rejected by fixture' >&2\nexit 1\n")
+                    setExecutable(true)
+                }
+                assertFalse(control.push().ok)
+                assertEquals(1, attempts.readText().split("attempt").size - 1, "a matching remote rejection is not a second SSH Git push")
+                hook.delete(); gitAt(dir, "reset", "--hard", "HEAD~1")
+                gitAt(dir, "reset", "--hard", "HEAD~1")
+                assertTrue(control.history().hasIncomingChanges)
+                assertTrue(control.pull().ok)
+                assertTrue(File(dir, name).exists())
+            }
+        } finally { dir.deleteRecursively(); remote.deleteRecursively() }
+    }
+
+    @Test
+    fun `Git jail never treats third-machine caches as local folders and rechecks symlinks`() = runBlocking<Unit> {
+        val dir = gitRepo()
+        val outside = File(root, "outside-${System.nanoTime()}").apply { mkdirs() }
+        gitAt(outside, "init", "-b", "main")
+        val link = File(repo, "link-${System.nanoTime()}")
+        java.nio.file.Files.createSymbolicLink(link.toPath(), outside.toPath())
+        val workspace = File(home, ".config/node-terminal/workspace.json")
+        val before = workspace.readText()
+        try {
+            val index = kotlinx.serialization.json.Json.parseToJsonElement(before) as kotlinx.serialization.json.JsonObject
+            val entries = (index["entries"] as kotlinx.serialization.json.JsonArray).map { value ->
+                val entry = value as kotlinx.serialization.json.JsonObject
+                if ((entry["id"] as? JsonPrimitive)?.content != "p2") entry else {
+                    val cache = entry["cache"] as kotlinx.serialization.json.JsonObject
+                    kotlinx.serialization.json.JsonObject(entry + ("cache" to kotlinx.serialization.json.JsonObject(cache + ("cwd" to JsonPrimitive(outside.path)))))
+                }
+            }
+            workspace.writeText(kotlinx.serialization.json.JsonObject(index + ("entries" to kotlinx.serialization.json.JsonArray(entries))).toString())
+            connect().use { conn ->
+                val third = conn.listProjects().projects.single { it.id == "p2" }
+                assertNotNull(third.sshTarget)
+                assertEquals(outside.path, third.cwd, "a real folder cached for another machine is not a local root")
+                for (cwd in listOf(outside.path, link.path, "/srv/not-a-local-project", "/")) {
+                    val refused = assertFailsWith<HostException> { conn.git(GitVerb.STATUS, cwd) }
+                    assertTrue(refused.message!!.contains("listed project") || refused.message!!.contains("cannot be opened"), refused.message)
+                }
+                assertFailsWith<HostException> { conn.git(GitVerb.STAGE, dir.path, mapOf("paths" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("../../outside"))))) }
+                assertTrue(GitReplies.status(conn.git(GitVerb.STATUS, dir.path))!!.hasRepo)
+            }
+        } finally { workspace.writeText(before); link.delete(); outside.deleteRecursively(); dir.deleteRecursively() }
+    }
+
+    @Test
+    fun `SSH-only driven projects serve Git on this machine without changing shared canvas files`() = runBlocking<Unit> {
+        try {
+            layOutDrivenHost(System.currentTimeMillis())
+            gitAt(remoteRepo, "init", "-b", "main")
+            gitAt(remoteRepo, "config", "user.name", "SSH fixture")
+            gitAt(remoteRepo, "config", "user.email", "fixture@example.invalid")
+            gitAt(remoteRepo, "config", "commit.gpgsign", "false")
+            val canvas = File(remoteRepo, ".nodeterm/project.json").readBytes()
+            withoutOwnData {
+                runBlocking {
+                    connect().use { conn ->
+                        val project = conn.listProjects().projects.single { it.id == "project-drv" }
+                        assertTrue(project.drivenRemotely); assertNull(project.sshTarget)
+                        val leg = LegRouting.forProject(Capability.GIT, project,
+                            LegRouting.route(Capability.GIT, conn.kind, conn.capabilities, LegRouting.RelayLeg.ADDED_OVER_SSH))
+                        assertEquals(LegRouting.Leg.Primary, leg)
+                        assertIs<dev.nodeterm.protocol.git.SourceControlGate.Availability.Available>(dev.nodeterm.protocol.git.SourceControlGate.of(project, leg))
+                        File(remoteRepo, "owned.txt").writeText("local driven repository\n")
+                        val control = SourceControl(conn, project.cwd!!)
+                        assertTrue(control.status().untracked.any { it.path == "owned.txt" })
+                        assertTrue(control.stage(listOf("owned.txt")).ok)
+                        assertTrue(control.commit("direct driven Git").ok)
+                        assertEquals("direct driven Git", control.history().commits.first().subject)
+                        assertTrue(canvas.contentEquals(File(remoteRepo, ".nodeterm/project.json").readBytes()))
+                    }
+                }
+            }
+        } finally { clearDrivenHost() }
+    }
+
+    @Test
+    fun `an SSH Git write without an exit receipt is uncertain once and never automatically repeated`() = runBlocking<Unit> {
+        val dir = gitRepo()
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        try {
+            connect().use { conn ->
+                conn.listProjects()
+                File(dir, "new").writeText("new\n")
+                val control = SourceControl(conn, dir.path)
+                assertTrue(control.stage(listOf("new")).ok)
+                onCommand = { command, sh ->
+                    if (command.contains("'commit'")) { writes.incrementAndGet(); sh.omitExitStatus = true }
+                }
+                val unknown = assertFailsWith<HostUnansweredException> { control.commit("unanswered-but-done") }
+                assertTrue(unknown.message!!.contains("may still be running there, or may have finished"), unknown.message)
+                assertEquals(1, writes.get())
+                assertFalse(conn.isConnected, "an unconfirmed write retires this transport before another action")
+                assertEquals("unanswered-but-done", gitAt(dir, "log", "-1", "--format=%s").trim())
+            }
+        } finally { onCommand = null; dir.deleteRecursively() }
+    }
+
+    @Test
+    fun `SSH write deadline tears down transport and retains uncertain outcome`() = runBlocking<Unit> {
+        val marker = File(root, "write-${System.nanoTime()}")
+        try {
+            connect().use { conn ->
+                assertFailsWith<HostUnansweredException> {
+                    conn.run("printf done > ${SshScripts.q(marker.path)}; sleep 3", timeoutSec = 1, uncertainWrite = true)
+                }
+                assertEquals("done", marker.readText())
+                assertFalse(conn.isConnected)
+            }
+        } finally { marker.delete() }
+    }
+
+    @Test
+    fun `SSH Git output cap retires the channel and an oversized dispatched write stays uncertain`() = runBlocking<Unit> {
+        for (write in listOf(false, true)) connect().use { conn ->
+            val error = assertFailsWith<HostException> {
+                conn.run("printf '%s' 'a bounded fixture output bigger than eight bytes'", uncertainWrite = write, outputLimit = 8)
+            }
+            if (write) assertIs<HostUnansweredException>(error) else assertFalse(error is HostUnansweredException)
+            assertTrue(error.message!!.contains("output exceeded"), error.message)
+            assertFalse(conn.isConnected)
+        }
+    }
 
     /**
      * Android's StrictMode, reproduced on the JVM (which has no BlockGuard): a socket whose streams
@@ -1127,7 +1310,7 @@ class SshTransportTest {
         // actions need nodeterm the app. They go to the relay leg opened next to it — and a caller
         // that reaches the SSH transport anyway is not told to turn on remote access (it may be on).
         connect().use { conn ->
-            for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS, Capability.GIT)) {
+            for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS)) {
                 assertEquals(LegRouting.Leg.Relay, LegRouting.route(cap, conn.kind, conn.capabilities, LegRouting.RelayLeg.AVAILABLE), "$cap")
             }
             // What SSH does itself stays on SSH.
@@ -1174,7 +1357,7 @@ class SshTransportTest {
             assertEquals(false, conn.relayAdvertised, "no relay.json: remote access is off")
             val off = LegRouting.relayLeg(relayConfigured = true, sshOnlyRoute = false, relayAdvertised = conn.relayAdvertised)
             assertEquals(LegRouting.RelayLeg.REMOTE_ACCESS_OFF, off)
-            for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS, Capability.GIT)) {
+            for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS)) {
                 val leg = assertIs<LegRouting.Leg.Unavailable>(LegRouting.route(cap, conn.kind, conn.capabilities, off), "$cap")
                 assertTrue(leg.reason.contains("remote access is off on the computer"), leg.reason)
             }

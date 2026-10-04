@@ -348,8 +348,8 @@ class SourceControlTest {
         assertIs<Availability.Unavailable>(SourceControlGate.of(project(cwd = "  "), LegRouting.Leg.Primary))
         assertIs<Availability.Unavailable>(SourceControlGate.of(null, LegRouting.Leg.Primary))
 
-        // A27: a project another desktop drives over SSH has its folder HERE, but its git bridge is that
-        // desktop's; this computer's relay would refuse the folder (or worse, answer for its own).
+        // Direct SSH operates on this computer's listed driven folder. Its relay still cannot own that project.
+        assertEquals(Availability.Available("/work/app"), SourceControlGate.of(project().copy(drivenRemotely = true), LegRouting.Leg.Primary))
         val driven = assertIs<Availability.Unavailable>(
             SourceControlGate.of(project().copy(drivenRemotely = true), LegRouting.Leg.Relay)
         )

@@ -21,9 +21,9 @@ import kotlin.test.assertTrue
 class LegRoutingTest {
     /** What the direct-SSH transport serves (SshHostConnection.capabilities). */
     private val ssh = HostCapabilities(
-        boardWrites = false, git = false, nodeActions = false, registerNode = false, answerApprovals = true
+        boardWrites = false, git = true, nodeActions = false, registerNode = false, answerApprovals = true
     )
-    private val appVerbs = listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS, Capability.GIT)
+    private val appVerbs = listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS )
 
     @Test
     fun `on SSH the app's own verbs open the relay leg next to it`() {
@@ -53,6 +53,10 @@ class LegRoutingTest {
     @Test
     fun `what SSH does itself never opens the relay`() {
         assertEquals(Leg.Primary, LegRouting.route(Capability.ANSWER_APPROVALS, TransportKind.SSH, ssh, RelayLeg.AVAILABLE))
+        for (relay in RelayLeg.entries) assertEquals(Leg.Primary, LegRouting.route(Capability.GIT, TransportKind.SSH, ssh, relay))
+        val driven = ProjectInfo("driven", "Driven", null, "/work/app", null, false, emptyList(), null, drivenRemotely = true)
+        assertEquals(Leg.Primary, LegRouting.forProject(Capability.GIT, driven, Leg.Primary))
+        assertIs<Leg.Unavailable>(LegRouting.forProject(Capability.GIT, driven, Leg.Relay))
     }
 
     @Test

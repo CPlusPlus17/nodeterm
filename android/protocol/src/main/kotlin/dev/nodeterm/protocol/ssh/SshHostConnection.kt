@@ -7,6 +7,7 @@ import dev.nodeterm.protocol.host.GitVerb
 import dev.nodeterm.protocol.host.HostCapabilities
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.HostUnansweredException
 import dev.nodeterm.protocol.host.LabelEditResult
 import dev.nodeterm.protocol.host.LegRouting
 import dev.nodeterm.protocol.host.NeedsRelayException
@@ -149,14 +150,14 @@ class NothingFoundException : HostException(SshHostConnection.NO_USER_DATA) {
 
 /**
  * [HostConnection] over direct SSH (the LAN leg a pairing installs a key for). Everything is POSIX
- * sh + tmux on the computer ([SshScripts]); what needs the DESKTOP APP rather than the machine —
- * renderer nudges, board writes, node registration, git through the app — is the relay's, and this
+ * sh + tmux and typed Git on the computer; what needs the DESKTOP APP rather than the machine —
+ * renderer nudges, board writes and node registration — is the relay's, and this
  * transport reports it as unavailable instead of guessing.
  */
 class SshHostConnection private constructor(private val client: SSHClient) : HostConnection {
     override val kind = TransportKind.SSH
     override val capabilities = HostCapabilities(
-        boardWrites = false, git = false, nodeActions = false, registerNode = false, answerApprovals = true
+        boardWrites = false, git = true, nodeActions = false, registerNode = false, answerApprovals = true
     )
 
     @Volatile private var onClosed: ((String?) -> Unit)? = null
@@ -188,24 +189,42 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * reported through `onClosed` (so the owner reconnects) and surfaces as a [HostException] —
      * never as a raw sshj exception a caller would have to know about.
      */
-    internal fun run(script: String, timeoutSec: Long = 20, stdin: String? = null): Pair<Int?, String> {
+    internal fun run(script: String, timeoutSec: Long = 20, stdin: String? = null,
+                     uncertainWrite: Boolean = false, outputLimit: Int? = null): Pair<Int?, String> {
         // A REAL deadline (audit A31): the read below waits on the channel with no timeout of its
         // own, so a peer that vanished mid-command (laptop asleep, IP or VPN change) blocked it for
         // as long as TCP took to give up — ~15 minutes. When the deadline passes, the connection is
         // treated as dead: the transport is torn down (which also wakes the blocked read) and the
         // drop is reported, so Auto falls back to the relay instead of sitting on "On your network".
-        var timedOut = false
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+        var dispatched = false
         val deadline = WATCHDOG.schedule({
-            timedOut = true
+            timedOut.set(true)
             disconnectQuietly()
         }, timeoutSec, TimeUnit.SECONDS)
         try {
             client.startSession().use { session ->
+                // A lost exec acknowledgement is uncertain too: the peer may already be running it.
+                dispatched = true
                 val cmd = session.exec("/bin/sh -c " + SshScripts.q(script))
-                if (stdin != null) cmd.outputStream.use { it.write(stdin.toByteArray(Charsets.UTF_8)) }
-                val out = cmd.inputStream.readBytes()
+                if (stdin != null) {
+                    cmd.outputStream.write(stdin.toByteArray(Charsets.UTF_8))
+                    cmd.outputStream.close()
+                }
+                val out = if (outputLimit == null) cmd.inputStream.readBytes() else {
+                    val bytes = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val n = cmd.inputStream.read(buffer)
+                        if (n < 0) break
+                        if (bytes.size() + n > outputLimit) throw java.io.IOException("Git output exceeded the 20 MiB limit")
+                        bytes.write(buffer, 0, n)
+                    }
+                    bytes.toByteArray()
+                }
                 cmd.join(5, TimeUnit.SECONDS)
-                if (timedOut) throw java.util.concurrent.TimeoutException("no answer within ${timeoutSec}s")
+                if (timedOut.get()) throw java.util.concurrent.TimeoutException("no answer within ${timeoutSec}s")
+                if (uncertainWrite && cmd.exitStatus == null) throw java.io.IOException("the computer did not confirm an exit status")
                 return cmd.exitStatus to String(out, Charsets.UTF_8)
             }
         } catch (e: HostException) {
@@ -216,7 +235,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             // drop it and report the drop, so the owner reconnects — or falls back to the relay.
             disconnectQuietly()
             fireClosed(e.message ?: e.javaClass.simpleName)
-            throw HostException("The SSH connection failed: ${e.message ?: e.javaClass.simpleName}")
+            val message = "The SSH connection failed: ${e.message ?: e.javaClass.simpleName}"
+            if (uncertainWrite && dispatched) throw HostUnansweredException(message)
+            throw HostException(message)
         } finally {
             deadline.cancel(false)
         }
@@ -382,6 +403,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     @Volatile private var ownNodes: Set<String> = emptySet()
     /** Fingerprints validated from the atomic creation tuple, pinned before each phone action. */
     @Volatile private var phoneOwners: Map<String, String> = emptyMap()
+    /** Only folders on this SSH computer. A third-machine SSH cache never authorizes local Git. */
+    @Volatile private var gitRoots: List<String> = emptyList()
 
     /** Whether a browse has answered on THIS connection ([ensureListed]). */
     @Volatile private var listed = false
@@ -394,6 +417,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         ownNodes = snapshot.projects.filter { !it.drivenRemotely && it.sshTarget == null }
             .flatMapTo(HashSet()) { p -> p.nodes.map { it.id } }
         phoneOwners = phone
+        gitRoots = snapshot.projects.filter { it.sshTarget == null }.mapNotNull { it.cwd }.distinct()
         listed = true
     }
 
@@ -639,7 +663,12 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     override suspend fun setCardColumn(projectId: String, nodeId: String, columnId: String?): Boolean = relayOnly("Editing the board")
     override suspend fun editCardLabels(projectId: String, nodeId: String, edit: CardLabelEdit): LabelEditResult? = relayOnly("Editing labels")
     override suspend fun registerNode(projectId: String, node: NewNode): Boolean = relayOnly("Starting a new session")
-    override suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement>): JsonElement? = relayOnly("Source control")
+    override suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement>): JsonElement = withContext(Dispatchers.IO) {
+        ensureListed()
+        SshGit(cwd, gitRoots) { script, write ->
+            run(script, timeoutSec = if (write) 180 else 30, uncertainWrite = write, outputLimit = SshGitScripts.MAX_OUTPUT)
+        }.request(verb, args)
+    }
 
     private fun relayOnly(what: String): Nothing =
         throw HostException(LegRouting.sshRefusal(what))

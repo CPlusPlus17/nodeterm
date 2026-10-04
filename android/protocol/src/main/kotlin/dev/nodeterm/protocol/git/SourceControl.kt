@@ -24,8 +24,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * ("git is not served on this host."); both arrive as a [HostException] carrying that sentence, for
  * the screen to show as it is.
  *
- * Over direct SSH the verbs go through the relay leg next to the SSH connection (audit A26,
- * [LegRouting]); the SSH transport has no git of its own.
+ * Direct SSH serves the same typed verbs against listed folders on that computer, including
+ * projects driven there by another desktop. A third-machine project is still refused.
  */
 class SourceControl(private val conn: HostConnection, val cwd: String) {
     suspend fun status(): GitStatus = GitReplies.status(conn.git(GitVerb.STATUS, cwd)) ?: throw unreadable()
@@ -175,8 +175,8 @@ object SourceControlGate {
      */
     fun of(project: ProjectInfo?, leg: LegRouting.Leg): Availability {
         if (project == null) return Availability.Unavailable("This project is no longer on the computer.")
-        // Its folder IS on this computer, but the git bridge is its own desktop's, elsewhere (A27).
-        if (project.drivenRemotely) return Availability.Unavailable(LegRouting.drivenElsewhere(Capability.GIT))
+        // Direct SSH can use its folder HERE; this computer's relay cannot own that canvas (A27).
+        if (project.drivenRemotely && leg != LegRouting.Leg.Primary) return Availability.Unavailable(LegRouting.drivenElsewhere(Capability.GIT))
         project.sshTarget?.let {
             return Availability.Unavailable(
                 "This project's folder is on $it, which the computer reaches over SSH. Source control from the " +

@@ -30,7 +30,7 @@ enum class Capability(val what: String) {
 /**
  * Which leg of a paired computer answers a verb (audit A26), decided in ONE place so the UI and the
  * call agree. The direct-SSH leg (the LAN one `Auto` picks first) is POSIX sh + tmux on the machine;
- * what needs nodeterm THE APP — board writes, registering a new session, node actions, git — is the
+ * what needs nodeterm THE APP — board writes, registering a new session and node actions — is the
  * relay's. Before this, a phone on SSH simply had none of it (the New-session button vanished, the
  * board was read-only), although the same computer's relay leg was one tap away.
  *
@@ -145,10 +145,11 @@ object LegRouting {
      * audit A27) is that desktop's: its sessions run on this computer, but its canvas, board and node
      * actions are nodeterm the app's on the OTHER computer, which neither leg of this one reaches —
      * this computer's relay would answer for its own canvas. So everything but what the machine does
-     * itself (answering a held approval writes a file here) is unavailable, with that reason.
+     * itself (answering a held approval, or direct-SSH Git in a listed local folder) is unavailable, with that reason.
      */
     fun forProject(cap: Capability, project: ProjectInfo?, leg: Leg): Leg =
-        if (project?.drivenRemotely == true && cap != Capability.ANSWER_APPROVALS) Leg.Unavailable(drivenElsewhere(cap)) else leg
+        if (project?.drivenRemotely == true && cap != Capability.ANSWER_APPROVALS &&
+            !(cap == Capability.GIT && leg == Leg.Primary)) Leg.Unavailable(drivenElsewhere(cap)) else leg
 
     fun drivenElsewhere(cap: Capability) =
         "${cap.what} isn't available for this project from the phone: it belongs to nodeterm on another computer, " +

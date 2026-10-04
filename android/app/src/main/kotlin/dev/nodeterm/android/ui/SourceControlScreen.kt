@@ -87,9 +87,9 @@ private sealed interface DiffTarget {
  * a commit of what is staged, push and pull, and the recent commits. The folder is the project's own, as
  * `projects.list` names it; there is no free-form git.
  *
- * Where the verbs go is the one routing decision the other app-only verbs use (audit A26): the open
- * connection when it is the relay, else the relay leg opened next to the SSH connection on the tap
- * that opens this screen. When neither can, or the project has no folder on the computer
+ * The shared capability routing uses the open connection when it serves typed Git, including
+ * direct SSH in listed local folders, else the relay leg opened on the tap that opens this screen.
+ * When neither can, or the project has no folder on the computer
  * ([SourceControlGate]), the screen says why and sends nothing. What the computer answers is shown
  * as it is: git's own message for a command that failed there, and the bridge's own sentence for a
  * request it refused.
