@@ -3,26 +3,26 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A118`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A120`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-04, A100–A118).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-04, A100–A120).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
-has been opened. Beta 15/code 16 is prepared from `aa902d0a` and has passed the local release checks, including A118's eligible legacy relay identity proof. Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
+has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the local release checks. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. The push adapter points to a separate `nodeterm-server` spec; it was not found in 39 nearby checkouts or the owner’s 22 public GitHub repositories. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
 
-**Prepared private beta 14 (2026-10-04).** `0.1.0-beta.14` / code `15`, clean built source
+**Historical prepared private beta 14 (2026-10-04).** `0.1.0-beta.14` / code `15`, clean built source
 `facbbd0384bb5b0ee91656f364793a12f8f41eb1`, adds A113 truthful revoke outcomes, A114 dictation language, A115 exact host/session
 retirement and A116 saved pairing/LAN adapter choice. Full offline protocol checks pass
 **890 tests / 92 suites**, with zero failures, errors or skips.
@@ -1206,7 +1206,8 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps;
+Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps,
+and adds explicit SSH profile selection and confirmed one-time password enrollment (A119/A120);
 A108 adds owned SSH Board and Desktop node nudges. Device testing remains paused. The user
 intends an upstream Android contribution but has not requested opening the PR. A25/A93 are
 maintainer backend dependencies with no source supplied; A68 stays deferred until PR preparation.
@@ -1224,11 +1225,11 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-When phone testing resumes, install prepared beta 15/code 16 as a same-signer update
+When phone testing resumes, install prepared beta 16/code 17 as a same-signer update
 and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
 the current branch checkpoint for host-dependent features, including the later A13 fix. The
-prepared APK includes A118's Android changes. Keep the held older paired
-fixture and its original terminal intact. Test A100–A118 and earlier A96–A99 on the intended Pixel;
+prepared APK includes A118–A120's Android changes. Keep the held older paired
+fixture and its original terminal intact. Test A100–A120 and earlier A96–A99 on the intended Pixel;
 source/build results do not promote physical checklist items.
 
 **Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
@@ -1674,12 +1675,12 @@ commits asked for. Its ledger is 10 Pass / 22 Partial / 32 Pending; new source f
 
 Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodeterm.
 Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
-source before editing. A100–A118 close retained history, typed read recovery, project launch settings,
+source before editing. A100–A120 close retained history, typed read recovery, project launch settings,
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
 host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
-Beta 15/code 16 is prepared from `aa902d0a` with local release checks complete, including
-A118's Android changes. Resume device checks only when asked, using current host source too.
+Beta 16/code 17 is prepared from `2723845e` with local release checks complete, including
+A118's identity proof, A119's SSH profile choice and A120's confirmed password enrollment. Resume device checks only when asked, using current host source too.
 The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
 paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
 
@@ -1969,8 +1970,8 @@ three actual Server/SSH methods and the complete 62-method SSH/10-method workflo
 Four compiled SSH profile mutants fail their intended assertions. Final native control/restored
 runs pass 19 cases and catch the retired-session mutation; seven earlier native variants have
 separate historical source bindings. Private receipts: `.nodeterm/android-ssh-setup-2026-10-04/`. Physical setup/profile switching remains unverified;
-phone testing is paused and the ledger stays **10 Pass / 22 Partial / 32 Pending**. Beta 15 is still
-the latest prepared APK at this checkpoint and does not contain A119. A later beta is needed.
+phone testing is paused and the ledger stays **10 Pass / 22 Partial / 32 Pending**. At this source checkpoint, beta 15 was
+the latest prepared APK and excluded A119. The beta-16 receipt below records its later packaging.
 iOS implication for @eneskirca: offer an explicit saved SSH profile choice consistently for discovery
 and managed attachment. No host verb or pairing payload changed. A25/A93 and A68 remain open;
 no PR is opened.
@@ -2003,5 +2004,38 @@ Seven isolated compiled semantic variants fail assertions, with 17 passing contr
 methods and exact integrated source hashes. Private proof: `.nodeterm/android-ssh-setup-2026-10-04/password-final/`.
 The full required gate verifies actual Gradle/JUnit method registration too. This is source/fixture proof;
 actual Android setup UX and OpenSSH/macOS runtime checks remain pending. Phone testing stays paused,
-with beta 10/code 11 last installed and **10 Pass / 22 Partial / 32 Pending**. Beta 15 excludes A119/A120;
-a new beta is needed. A25/A93 require the hosted-backend maintainers; A68 stays deferred and no PR opens.
+with beta 10/code 11 last installed and **10 Pass / 22 Partial / 32 Pending**. Beta 15 excluded A119/A120;
+the subsequent beta-16 receipt below includes both. A25/A93 require the hosted-backend maintainers; A68 stays deferred and no PR opens.
+
+## Prepared private beta 16 and verification checkpoint (2026-10-04)
+
+`0.1.0-beta.16` / code `17` is built from clean signed source
+`2723845efac75cfcf2cd0a9fdfa11d9496699641`. It includes A119's explicit saved SSH profile folder and
+A120's opt-in password enrollment, along with the earlier beta-15 changes. Missing explicit profiles
+never fall back to another profile; enrollment saves a host only after a separate pinned key login.
+Full offline protocol checks pass **944 tests / 98 suites**, with zero failures, errors or skips.
+Offline app compilation, **151 affected desktop Vitest tests / eight files** with zero skips, and
+full TypeScript checking pass. Actual JUnit inventories include the new setup tests. An obsolete
+inline UI behavior source pin was removed; actual SSH authentication regressions remain.
+All five Android jobs pass for the APK source:
+[workflow 37233114167](https://github.com/CPlusPlus17/nodeterm/actions/runs/37233114167).
+
+The minified release build passes offline in **54.87 seconds**. Packaging uses the retained private
+signer; all **56 independent artifact checks** pass, including official SDK 36/37 signatures,
+nondebuggable version/manifest, R8/runtime keeps, payload/provenance and 16-KB ZIP/native alignment.
+APK SHA-256: `9c5309c8cfb225daf59f7fac70be1760fb0abdaac36cb55005b958f2186c8ce3`.
+Private APK: `.nodeterm/android-beta-16/nodeterm-android-0.1.0-beta.16.apk`.
+Build proof: `.nodeterm/android-beta-build-16/`; behavioral/mutation proof:
+`.nodeterm/android-ssh-setup-2026-10-04/`. Earlier failed or historical runs retain their separate
+receipts; they are not counted as successful merged gates. The release receipt changes only docs.
+
+**Prepared, not installed.** Phone testing remains explicitly paused, beta 10/code 11 is last
+confirmed installed, and the device ledger stays **10 Pass / 22 Partial / 32 Pending**.
+When authorized, install beta 16 as a same-signer update and verify saved identities, profile
+selection/switching/no fallback, password/fingerprint/cancellation UX on actual OpenSSH, and the
+remaining managed-session, relay/cellular, notification and lifecycle matrix. MINA/POSIX fixtures
+and in-memory app adapters do not verify physical Android or macOS behavior. Live Claude rule and
+question application remains unverified after provider HTTP 401. A25 FCM and A93 fresh-desktop
+relay recovery require the hosted-backend maintainers. For iOS, @eneskirca should adopt the saved
+profile/enrollment UX and review the earlier host protocol changes. No PR opened; A68 remains
+deferred until a PR is requested. Every push requires its own exact-head green Android workflow.
