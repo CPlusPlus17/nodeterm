@@ -279,7 +279,8 @@ export interface PairingService {
    * and close the relay sessions it has open (A07-revoke), AND take its Pro entitlement back on the
    * relay backend. The legs are reported separately — see `DeviceRevokeResult`; this never throws,
    * because a failure the caller cannot see is exactly how the server leg went missing in the first
-   * place.
+   * place. A legacy pairing with no relay-key association reports that remote revocation remains
+   * unconfirmed; another pairing that still authorizes the key reports retained access.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
   /** Live re-probe of sshd (127.0.0.1:22), for the Remote Login warning's auto-clear. */
@@ -1018,8 +1019,17 @@ export function createPairingService(
       // The relay pin made at pairing goes with the device, and so do the relay sessions that key
       // has open — unless another pairing of the same phone (a re-pair keeps its box key) is still
       // listed: that pairing still authorizes the phone, its pin and its session.
-      if (!entry || !boxKey || devices.some((d) => d.relayBoxKey === boxKey) || !relayDeps?.revokeRelayKey) {
+      if (!entry) {
         return { local: true, relayId, found, relay: undefined }
+      }
+      // Older pairings did not record a relay identity. Do not guess from the approved-key store
+      // or call a different peer's revoker: local removal cannot confirm remote access is gone.
+      if (!boxKey) return { local: true, relayId, found, relay: 'unconfirmed' as const }
+      if (devices.some((d) => d.relayBoxKey === boxKey)) {
+        return { local: true, relayId, found, relay: 'retained' as const }
+      }
+      if (!relayDeps?.revokeRelayKey) {
+        return { local: true, relayId, found, relay: 'unconfirmed' as const }
       }
       // Unpins the key, then closes the relay sessions it has open right now (peer-revoker.ts).
       // A revoker that throws said nothing about the pin, so it counts as an unpin that failed.

@@ -148,6 +148,17 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
           `A remote session “${device.name}” had open could not be confirmed closed — quit and reopen nodeterm to be sure it has ended.`
         )
       }
+      if (result.local && (result.relay === 'unconfirmed' || result.relay === undefined)) {
+        // An older main process also omits this leg. Missing proof must not become a receipt.
+        notes.push(
+          `Removed “${device.name}”’s pairing and any SSH key it installed, but its remote access could not be confirmed revoked. It may still connect remotely.`
+        )
+      }
+      if (result.local && result.relay === 'retained') {
+        notes.push(
+          `Removed this pairing for “${device.name}”, but another pairing still allows its remote access and existing remote sessions.`
+        )
+      }
       if (result.server === 'failed') {
         // Deliberately not "pair it and remove it again": that used to be the whole advice, and it
         // is wrong twice over — a 403 will never clear however long you wait, and pairing RESTORES
@@ -166,11 +177,14 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
           notes.push('Its Pro ends when the pass it already holds expires — within 7 days.')
         }
         setRevokeNote({ text: notes.join(' '), warn: true })
-      } else if (result.server === 'ok') {
+      } else if (result.local && (result.relay === 'ok' || result.server === 'ok')) {
         // Not instant, and we say so. The phone holds a signed entitlement minted for up to seven
         // days; revoking the row stops the NEXT one, it cannot reach into the phone.
         setRevokeNote({
-          text: `Removed “${device.name}”. Its Pro ends when the pass it already holds expires — within 7 days.`,
+          text:
+            `Removed “${device.name}”.` +
+            (result.relay === 'ok' ? ' Its remote access was revoked and its open remote sessions were closed.' : '') +
+            (result.server === 'ok' ? ' Its Pro ends when the pass it already holds expires — within 7 days.' : ''),
           warn: false
         })
       }
@@ -420,7 +434,7 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
           // Both legs, and the timing of the one that is not instant. "If" rather than a flat
           // claim: a free-tier desktop has no Pro of ours on that phone to take back, and this
           // dialog cannot tell — the server leg reports that only after the fact ('skipped').
-          message={`Revoke “${pendingRevoke.name}”? Its key is removed from this machine and it will no longer be able to connect. If its Pro comes from ${thisMachine()}’s license, that is revoked too — the phone loses Pro within 7 days.`}
+          message={`Revoke “${pendingRevoke.name}”? This removes its pairing and any SSH key installed by it. Remote access may remain if another pairing allows it or this pairing’s remote identity is unknown. If its Pro comes from ${thisMachine()}’s license, that is revoked too — the phone loses Pro within 7 days.`}
           confirmLabel="Revoke"
           onConfirm={() => void revokeDevice(pendingRevoke)}
           onCancel={() => setPendingRevoke(null)}

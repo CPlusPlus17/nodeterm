@@ -486,7 +486,7 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
       const second = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
       await postSealed(second.pairPort, { token: second.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
       // Neither unpinned nor cut: the remaining pairing still authorizes this phone's relay session.
-      await service.revokeDevice(String(a.deviceId))
+      expect(await service.revokeDevice(String(a.deviceId))).toEqual({ local: true, server: 'skipped', relay: 'retained' })
       expect(revokes).toEqual([])
     } finally {
       service.stop()
@@ -584,15 +584,15 @@ describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
     }
   })
 
-  it('no relay leg to run (no key recorded, or another pairing keeps it) reports none', async () => {
+  it('distinguishes an unconfirmed legacy relay identity from access retained by another pairing', async () => {
     const service = createPairingService(relayDeps())
     try {
-      expect(await service.revokeDevice('dev-a')).toEqual({ local: true, server: 'skipped' })
+      expect(await service.revokeDevice('dev-a')).toEqual({ local: true, server: 'skipped', relay: 'unconfirmed' })
       const first = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
       const a = await postSealed(first.pairPort, { token: first.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
       const second = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
       await postSealed(second.pairPort, { token: second.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
-      expect(await service.revokeDevice(String(a.deviceId))).toEqual({ local: true, server: 'skipped' })
+      expect(await service.revokeDevice(String(a.deviceId))).toEqual({ local: true, server: 'skipped', relay: 'retained' })
       expect(revokes).toEqual([])
     } finally {
       service.stop()

@@ -3424,8 +3424,16 @@ export type DeviceRevokeServerOutcome = 'ok' | 'failed' | 'skipped'
  * 'ok' = both done; 'unpin-failed' = the pin could not be written away, so it may survive and the
  * phone would be let in again without a dialog: the device is kept LISTED and `local` is false, so
  * Revoke can be retried; 'cut-unconfirmed' = unpinned, but closing a session it had open failed.
+ * 'unconfirmed' = this pairing has no recorded relay identity, or no revoker could act on it:
+ * removing its local entry/key does NOT prove remote access was taken away. 'retained' = another
+ * listed pairing still authorizes this same relay identity, so its pin and sessions were kept.
  */
-export type DeviceRevokeRelayOutcome = 'ok' | 'unpin-failed' | 'cut-unconfirmed'
+export type DeviceRevokeRelayOutcome =
+  | 'ok'
+  | 'unpin-failed'
+  | 'cut-unconfirmed'
+  | 'unconfirmed'
+  | 'retained'
 
 /**
  * Both legs of a device revoke, reported independently so a half-finished removal can never render
@@ -3437,8 +3445,9 @@ export interface DeviceRevokeResult {
   /** Whether the phone's Pro entitlement was taken back on the relay backend. */
   server: DeviceRevokeServerOutcome
   /**
-   * Present only when the relay leg ran: the pairing recorded the phone's relay key and no other
-   * listed pairing of that phone keeps it. Absent from an older main process.
+   * Reported after a listed device was removed locally, including an unconfirmed/retained leg.
+   * Absent when no device was listed, local removal failed before the relay leg, or an older main
+   * process did not report it. Absence must never be treated as confirmed relay revocation.
    */
   relay?: DeviceRevokeRelayOutcome
 }
