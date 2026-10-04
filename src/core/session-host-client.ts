@@ -40,6 +40,7 @@ import { latestClaimSize, type SizeClaim } from './pty-size'
 import { isTerminalReport } from './terminal-reports'
 import type { PreparedAgentLaunch } from './agent-launch'
 import type { HistorySearch } from './terminal-history'
+import { retryInterruptedSessionRead } from './session-host-read-retry'
 
 export interface SessionSubscriber {
   onData(data: string): void
@@ -849,26 +850,28 @@ export class SessionHostClient {
     // here while the peer already hung up, and a frame written into that gap fails (EPIPE) for
     // work the host never saw. requestOnSocket defers the actual write by one REAL event-loop
     // turn, so a raced hangup is discovered before any bytes are committed; such a frame is the
-    // one provably-undelivered case and the only one resent here on a fresh connection. A failure
-    // discovered by the write itself stays a plain rejection: by then the frame's delivery is the
-    // transport's business and other requests may already ride on it.
-    let undelivered: SessionHostRequestNotDeliveredError | undefined
+    // provably-undelivered case can be resent. A failure discovered by the write itself leaves
+    // delivery uncertain: only typed read-only operations may retry EPIPE/ECONNRESET. Sent writes,
+    // host refusals and deadlines remain plain rejections.
+    let previousFailure: Error | undefined
     for (let attempt = 0; ; attempt++) {
       try {
         await this.ensureConnected()
       } catch (connectError) {
         // A resend that cannot even reconnect reports the transport failure the caller actually
         // hit, not the follow-up connect refusal; a cold first connect keeps its own error.
-        throw undelivered?.original ?? connectError
+        throw previousFailure ?? connectError
       }
       const socket = this.socket
       if (!socket) throw new Error('session-host: not connected')
       try {
         return await this.requestOnSocket(socket, request, onSuccess, onSent)
       } catch (error) {
-        if (!(error instanceof SessionHostRequestNotDeliveredError)) throw error
-        if (attempt + 1 >= SESSION_HOST_RESEND_ATTEMPTS) throw error.original
-        undelivered = error
+        const undelivered = error instanceof SessionHostRequestNotDeliveredError
+        if (!undelivered && !retryInterruptedSessionRead(request, error)) throw error
+        const original = undelivered ? error.original : asError(error)
+        if (attempt + 1 >= SESSION_HOST_RESEND_ATTEMPTS) throw original
+        previousFailure = original
       }
     }
   }
