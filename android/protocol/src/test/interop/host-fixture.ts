@@ -335,7 +335,8 @@ async function runRelay(): Promise<void> {
     // A74-refresh: the `lan` field beside the blob, from the desktop's own reporter (the QR's
     // `pickLanIPv4` over the interfaces, and the sealed answer's host-key reader). The interfaces are
     // the test's (FIXTURE_LAN_ADDRESS, as a Wi-Fi adapter beside loopback), never this machine's, and
-    // the host keys come from FIXTURE_SSH_HOST_KEY_DIR or a dir that does not exist, never /etc.
+    // the host keys/config Include root come from FIXTURE_SSH_HOST_KEY_DIR or a dir that does not
+    // exist, never /etc. PairingInteropTest also lays out recursive external Includes under scratch.
     // `FIXTURE_NO_LAN=1` stands for a desktop that predates the field.
     ...(process.env.FIXTURE_NO_LAN === '1'
       ? {}

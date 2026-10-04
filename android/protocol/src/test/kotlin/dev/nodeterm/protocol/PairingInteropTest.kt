@@ -186,6 +186,41 @@ class PairingInteropTest {
     }
 
     @Test
+    fun `sealed anchors discover a served SSH key through recursive external Includes (A49-anchor)`() = runBlocking<Unit> {
+        // Windows desktops advertise relay-only. This fixture models POSIX sshd paths and its
+        // /etc/ssh include root with an injected scratch directory, never the machine's config.
+        assumeTrue(!System.getProperty("os.name").startsWith("Windows"), "POSIX sshd configuration")
+        val identity = SshIdentity.generate()
+        val (sshd, serverKey) = sshServer(identity)
+        val root = hostKeyDir("fixture" to serverKey)
+        val external = Files.createTempDirectory("nt-ssh include-").toFile()
+        cleanup += AutoCloseable { external.deleteRecursively() }
+        val nested = File(external, "nested").apply { mkdir() }
+        val public = File(external, "custom-key.pub")
+        assertTrue(File(root, "ssh_host_fixture_key.pub").renameTo(public))
+        File(external, "custom-key").writeText("PRIVATE HOSTKEY SENTINEL — never read for its fingerprint\n")
+        File(root, "sshd_config").writeText("Include \"${external.path}/outer*.conf\"\n")
+        // Even an Include in an external file resolves its relative value under the original
+        // config root, not that external file's parent directory.
+        File(external, "outer.conf").writeText("Include nested/*.conf\n")
+        val correctNested = File(root, "nested").apply { mkdir() }
+        File(correctNested, "key.conf").writeText("HostKey \"${File(external, "custom-key").path}\"\n")
+        File(nested, "wrong.conf").writeText("HostKey /no-such-fixture-key\n")
+
+        val (h, _) = start(withRelay = false, env = mapOf("FIXTURE_SSH_HOST_KEY_DIR" to root.path))
+        val payload = payloadOf(h)
+        assertTrue(!h.ready["payload"]!!.jsonPrimitive.content.contains("SHA256:"), "anchors stay inside the sealed answer")
+        val paired = PairingClient().pair(payload, identity.authorizedKeysLine(), "Pixel", "android-include-device")
+        val expected = SshHostConnection.fingerprint(serverKey)
+        assertEquals(listOf(expected), paired.sshHostKeyFingerprints)
+        val host = PairedHost.from(payload, paired)
+        assertEquals(listOf(expected), assertNotNull(PairedHost.fromJson(host.toJson())).sshHostKeyAnchors)
+        val pin = Pin(host.sshHostKeyAnchors)
+        SshHostConnection.connect("127.0.0.1", sshd.port, "dev", identity, pin).close()
+        assertEquals(expected, pin.value, "the included key authenticates the phone's first SSH connect")
+    }
+
+    @Test
     fun `a plaintext answer carries no SSH host keys, whatever the computer has (A49-anchor)`() = runBlocking<Unit> {
         // No `hostKey` in the QR: the phone pairs in the clear, and a clear answer could have been
         // rewritten on the LAN, so the desktop leaves the keys out of it.
