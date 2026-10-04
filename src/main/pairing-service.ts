@@ -377,8 +377,8 @@ function probeSsh(): Promise<boolean> {
 
 /**
  * Append an already-normalized public-key line to ~/.ssh/authorized_keys with the right
- * permissions. The caller stamps the attributable `nodeterm-ios-<deviceId>` comment via
- * `rewriteKeyComment` before this point.
+ * permissions. The caller stamps the attributable `nodeterm-mobile-<deviceId>` comment via
+ * `rewriteKeyComment` before this point (revoke also matches the legacy `nodeterm-ios-<id>`).
  */
 async function appendAuthorizedKey(keyLine: string): Promise<void> {
   const sshDir = path.join(os.homedir(), '.ssh')

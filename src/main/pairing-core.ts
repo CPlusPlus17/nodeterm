@@ -100,17 +100,33 @@ export function normalizeAuthorizedKeysLine(line: string): string {
 }
 
 /**
- * The attributable comment we stamp onto each paired key. Keeping it a single deterministic
- * token (`nodeterm-ios-<deviceId>`) is what lets revocation find & delete the exact line later.
+ * The attributable comment stamped onto every key paired from now on. One deterministic token
+ * (`nodeterm-mobile-<deviceId>`) is what lets revocation find & delete the exact line later.
+ * Platform-neutral: iOS and Android phones get the same stamp.
  */
+export const DEVICE_KEY_COMMENT_PREFIX = 'nodeterm-mobile-'
+
+/**
+ * The stamp used while the companion was iOS-only. Every iPhone paired before the rename still
+ * carries it in authorized_keys, and revoke MUST keep matching it — a revoke that only knew the
+ * new prefix would report the phone removed while its SSH key stayed live. Never stamped again.
+ */
+export const LEGACY_DEVICE_KEY_COMMENT_PREFIX = 'nodeterm-ios-'
+
 export function deviceCommentFor(deviceId: string): string {
-  return `nodeterm-ios-${deviceId}`
+  return `${DEVICE_KEY_COMMENT_PREFIX}${deviceId}`
+}
+
+/** Every comment a key for `deviceId` may carry: the current stamp first, then the legacy one. */
+export function deviceCommentsFor(deviceId: string): string[] {
+  return [deviceCommentFor(deviceId), `${LEGACY_DEVICE_KEY_COMMENT_PREFIX}${deviceId}`]
 }
 
 /**
- * Rewrite an incoming public-key line so its comment is exactly `nodeterm-ios-<deviceId>`,
- * replacing whatever comment the phone sent while keeping the key type + base64 blob intact.
- * The result is already normalized (single-space separated), ready for authorized_keys.
+ * Rewrite an incoming public-key line so its comment is exactly `nodeterm-mobile-<deviceId>`,
+ * replacing whatever comment the phone sent (the iOS app sends `nodeterm-ios`) while keeping the
+ * key type + base64 blob intact. The result is already normalized (single-space separated),
+ * ready for authorized_keys.
  */
 export function rewriteKeyComment(publicKey: string, deviceId: string): string {
   const parts = normalizeAuthorizedKeysLine(publicKey).split(' ')
@@ -120,18 +136,18 @@ export function rewriteKeyComment(publicKey: string, deviceId: string): string {
 }
 
 /**
- * Remove every authorized_keys line whose comment is exactly `nodeterm-ios-<deviceId>`,
- * preserving all other lines (including blanks, other keys' comments, and the trailing
- * newline) byte-for-byte. The caller writes the result back atomically.
+ * Remove every authorized_keys line whose comment is EXACTLY one of `deviceCommentsFor(deviceId)`
+ * (current or legacy stamp), preserving all other lines (including blanks, other keys' comments,
+ * and the trailing newline) byte-for-byte. The caller writes the result back atomically.
  */
 export function filterAuthorizedKeys(content: string, deviceId: string): string {
-  const target = deviceCommentFor(deviceId)
+  const targets = new Set(deviceCommentsFor(deviceId))
   return content
     .split('\n')
     .filter((line) => {
       const parts = line.trim().split(/\s+/)
       // comment = everything after the key type + base64 blob
-      return parts.slice(2).join(' ') !== target
+      return !targets.has(parts.slice(2).join(' '))
     })
     .join('\n')
 }

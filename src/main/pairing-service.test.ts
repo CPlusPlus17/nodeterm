@@ -70,7 +70,10 @@ function assertTempHome(): void {
 assertTempHome()
 
 // Stamped exactly the way pairing minted them, so `filterAuthorizedKeys` really matches.
-const KEY_A = rewriteKeyComment('ssh-ed25519 AAAAblobAAAA phone-a@ios', 'dev-a')
+// dev-a is an iPhone paired BEFORE the rename (legacy `nodeterm-ios-` stamp, written literally);
+// dev-b was paired after it (stamped exactly the way pairing mints keys now). A revoke must find
+// both — the first is what every existing user's authorized_keys looks like.
+const KEY_A = 'ssh-ed25519 AAAAblobAAAA nodeterm-ios-dev-a'
 const KEY_B = rewriteKeyComment('ssh-ed25519 AAAAblobBBBB phone-b@ios', 'dev-b')
 // Not ours: no revoke may ever touch it (a fix that "passes" by truncating the file must fail).
 const KEY_OTHER = 'ssh-rsa AAAAlaptopblob jdub@laptop'
@@ -214,7 +217,7 @@ describe('revokeDevice', () => {
 
     const keys = authKeys()
     expect(keys).not.toContain('nodeterm-ios-dev-a')
-    expect(keys).not.toContain('nodeterm-ios-dev-b')
+    expect(keys).not.toContain('nodeterm-mobile-dev-b')
     expect(keys).toContain(KEY_OTHER) // the user's own key was never in scope
     expect(deviceIds()).toEqual([])
     expect(agentJson().hostId).toBe('host-keep-me') // fields we don't own survive the rewrite
@@ -236,7 +239,7 @@ describe('revokeDevice', () => {
     await service.revokeDevice('dev-b')
 
     const keys = authKeys()
-    expect(keys).not.toContain('nodeterm-ios-dev-b')
+    expect(keys).not.toContain('nodeterm-mobile-dev-b')
     expect(keys).toContain('nodeterm-ios-dev-a') // the failed revoke really did fail
     expect(deviceIds()).toEqual(['dev-a'])
   })
@@ -300,7 +303,7 @@ describe('pairing POST vs revoke', () => {
       const { deviceId } = JSON.parse(respText) as { deviceId: string }
       const keys = authKeys()
       expect(keys).not.toContain('nodeterm-ios-dev-a') // the revoke stuck
-      expect(keys).toContain(`nodeterm-ios-${deviceId}`) // …and so did the pairing
+      expect(keys).toContain(`nodeterm-mobile-${deviceId}`) // …and so did the pairing
       expect(keys).toContain(KEY_OTHER)
       expect(deviceIds()).toEqual(['dev-b', deviceId])
     } finally {
@@ -350,7 +353,7 @@ describe('pairing remembers the phone’s relay device id', () => {
       // The local id still stamps the key line and still identifies the entry — the new field is
       // an addition, not a rename.
       expect(deviceId).not.toBe('phone-abc')
-      expect(authKeys()).toContain(`nodeterm-ios-${deviceId}`)
+      expect(authKeys()).toContain(`nodeterm-mobile-${deviceId}`)
     } finally {
       service.stop()
     }

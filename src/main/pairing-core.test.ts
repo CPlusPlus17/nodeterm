@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { encodePairQr, PAIR_URL_PREFIX } from '@shared/pair-qr'
 import {
   buildPairingPayload,
+  DEVICE_KEY_COMMENT_PREFIX,
+  LEGACY_DEVICE_KEY_COMMENT_PREFIX,
   deviceCommentFor,
+  deviceCommentsFor,
   filterAuthorizedKeys,
   isValidEd25519PublicKey,
   normalizeAuthorizedKeysLine,
@@ -186,34 +189,52 @@ describe('normalizeAuthorizedKeysLine', () => {
 })
 
 describe('deviceCommentFor', () => {
-  it('builds the attributable comment token', () => {
-    expect(deviceCommentFor('abc-123')).toBe('nodeterm-ios-abc-123')
+  it('stamps new keys with the platform-neutral nodeterm-mobile-<id> token', () => {
+    expect(deviceCommentFor('abc-123')).toBe('nodeterm-mobile-abc-123')
+    expect(DEVICE_KEY_COMMENT_PREFIX).toBe('nodeterm-mobile-')
+  })
+})
+
+describe('deviceCommentsFor', () => {
+  it('names the current AND the legacy iOS-era comment, current first', () => {
+    // Every iPhone paired before the Android app existed carries `nodeterm-ios-<id>`; a revoke
+    // that only knew the new prefix would report "removed" and leave that phone's SSH key live.
+    expect(LEGACY_DEVICE_KEY_COMMENT_PREFIX).toBe('nodeterm-ios-')
+    expect(deviceCommentsFor('abc')).toEqual(['nodeterm-mobile-abc', 'nodeterm-ios-abc'])
   })
 })
 
 describe('rewriteKeyComment', () => {
-  it('replaces the phone-sent comment with nodeterm-ios-<deviceId>, keeping type+blob', () => {
+  it('replaces the phone-sent comment with nodeterm-mobile-<deviceId>, keeping type+blob', () => {
     expect(rewriteKeyComment('ssh-ed25519 AAAAB3 phone@my-iphone', 'dev1')).toBe(
-      'ssh-ed25519 AAAAB3 nodeterm-ios-dev1'
+      'ssh-ed25519 AAAAB3 nodeterm-mobile-dev1'
+    )
+  })
+
+  it('rewrites the iOS app’s own `nodeterm-ios` comment too (the phone does not choose it)', () => {
+    expect(rewriteKeyComment('ssh-ed25519 AAAAB3 nodeterm-ios', 'dev3')).toBe(
+      'ssh-ed25519 AAAAB3 nodeterm-mobile-dev3'
     )
   })
 
   it('adds a comment when the key had none', () => {
-    expect(rewriteKeyComment('ssh-ed25519 AAAAB3', 'dev2')).toBe('ssh-ed25519 AAAAB3 nodeterm-ios-dev2')
+    expect(rewriteKeyComment('ssh-ed25519 AAAAB3', 'dev2')).toBe(
+      'ssh-ed25519 AAAAB3 nodeterm-mobile-dev2'
+    )
   })
 
   it('collapses extra whitespace and multi-word comments', () => {
     expect(rewriteKeyComment('  ssh-ed25519   AAAAB3   some long comment\n', 'd')).toBe(
-      'ssh-ed25519 AAAAB3 nodeterm-ios-d'
+      'ssh-ed25519 AAAAB3 nodeterm-mobile-d'
     )
   })
 })
 
 describe('filterAuthorizedKeys', () => {
-  it('removes only lines whose comment is exactly nodeterm-ios-<id>', () => {
+  it('removes only lines whose comment is exactly nodeterm-mobile-<id>', () => {
     const content = [
       'ssh-ed25519 AAAAother laptop@work',
-      'ssh-ed25519 AAAAtarget nodeterm-ios-dev1',
+      'ssh-ed25519 AAAAtarget nodeterm-mobile-dev1',
       'ssh-rsa AAAArsa other-key'
     ].join('\n')
     expect(filterAuthorizedKeys(content, 'dev1')).toBe(
@@ -221,14 +242,35 @@ describe('filterAuthorizedKeys', () => {
     )
   })
 
+  it('still removes a LEGACY nodeterm-ios-<id> line (iPhones paired before the rename)', () => {
+    const content = [
+      'ssh-ed25519 AAAAother laptop@work',
+      'ssh-ed25519 AAAAlegacy nodeterm-ios-dev1',
+      'ssh-rsa AAAArsa other-key'
+    ].join('\n')
+    expect(filterAuthorizedKeys(content, 'dev1')).toBe(
+      'ssh-ed25519 AAAAother laptop@work\nssh-rsa AAAArsa other-key'
+    )
+  })
+
+  it('removes both forms in one pass when a file somehow holds both for the same id', () => {
+    const content = 'ssh-ed25519 AAAAa nodeterm-ios-x\nssh-ed25519 AAAAb nodeterm-mobile-x\nkeep k me\n'
+    expect(filterAuthorizedKeys(content, 'x')).toBe('keep k me\n')
+  })
+
   it('preserves blank lines and the trailing newline of untouched files', () => {
-    const content = 'ssh-ed25519 AAAAa keep-me\n\nssh-ed25519 AAAAb nodeterm-ios-x\n'
+    const content = 'ssh-ed25519 AAAAa keep-me\n\nssh-ed25519 AAAAb nodeterm-mobile-x\n'
     expect(filterAuthorizedKeys(content, 'x')).toBe('ssh-ed25519 AAAAa keep-me\n\n')
   })
 
-  it('does not match a different device id or a substring', () => {
-    const content = 'ssh-ed25519 AAAAb nodeterm-ios-dev10'
+  it('does not match a different device id or a substring, in either form', () => {
+    const content = 'ssh-ed25519 AAAAb nodeterm-mobile-dev10\nssh-ed25519 AAAAc nodeterm-ios-dev10'
     expect(filterAuthorizedKeys(content, 'dev1')).toBe(content)
+  })
+
+  it('does not treat the bare phone-sent `nodeterm-ios` comment as a device stamp', () => {
+    const content = 'ssh-ed25519 AAAAb nodeterm-ios'
+    expect(filterAuthorizedKeys(content, '')).toBe(content)
   })
 
   it('returns content unchanged when nothing matches', () => {
