@@ -283,7 +283,7 @@ class LegRoutingTest {
         AppSourcePins.assertInOrder(
             sessions,
             "newSessionNote?.let { NewSessionNote(it) }", // also when no project has a session yet
-            "LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {",
+            "LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 96.dp)) {",
             "if (newSessionNote != null) item(key = \"new-session-note\") { NewSessionNote(newSessionNote) }",
             "for (project in projects) {"
         )
