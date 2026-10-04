@@ -68,6 +68,15 @@ import {
   type VisibleCapture
 } from './watch-link/capture-route'
 import {
+  PANE_INPUT_DEADLINE_MS,
+  controlInputPlan,
+  remoteControlInputPlan,
+  type ControlInputChunk,
+  type WatcherInputRoute
+} from './watch-link/pane-input'
+import type { ControlSupport } from '../shared/watch-link-types'
+import { sanitizePasteText } from './paste-injection'
+import {
   localWatcherAttachArgs,
   localWindowSizeArgs,
   parseTmuxVersion,
@@ -301,6 +310,24 @@ function runWithStdin(file: string, args: readonly string[], input: string): Pro
     stdin.end(input)
   }
   return p as unknown as Promise<unknown>
+}
+
+/** `p`'s answer, or false once `ms` passed (the timer never holds the process). A rejection is false. */
+function settleWithin(p: Promise<boolean>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms)
+    timer.unref?.()
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(false)
+      }
+    )
+  })
 }
 
 // Minimal tmux config so the user's ~/.tmux.conf never interferes. The tmux server
@@ -4932,6 +4959,157 @@ export class PtyManager {
       return unavailableCapture()
     }
     return unavailableCapture()
+  }
+
+  /**
+   * How a live-link controller's input reaches this session's PANE (watch-link/pane-input.ts).
+   *
+   * Never through a tmux CLIENT: a byte written into a client's pty is that client's KEYBOARD, so
+   * the prefix would reach tmux (`C-b s` opens the session chooser) — and a watcher's own client is
+   * read-only besides. A tmux-backed session (local, or on the SSH host) is typed into with
+   * `send-keys -H` on the pane. The Windows session host, a direct Windows pane and the plain-shell
+   * fallback take PtyManager's ordinary write: there is no tmux client in between, so no key table.
+   * Zellij is refused: its key bindings are session-wide (zellij-backend.ts).
+   */
+  watcherInputRoute(sessionId: string): WatcherInputRoute {
+    const s = this.sessions.get(sessionId)
+    if (!s) return 'none'
+    if (s.zellij) return 'none' // session-wide key bindings: refused
+    if (s.sshRemote) return s.tmuxBacked ? 'ssh' : 'none'
+    if (s.sessionHost || s.nativeWindowsPane) return 'write'
+    if (s.tmuxBacked) return this.tmuxPath ? 'tmux' : 'none'
+    // A watcher's own client is read-only and always tmux-backed; were one ever not, writing into it
+    // would drop every byte, so it is refused rather than reported delivered.
+    if (s.watcherClient) return 'none'
+    return 'write' // the plain-shell fallback: the pty IS the shell
+  }
+
+  /**
+   * Deliver one chunk of a controller's input to the session's pane. Resolves whether it was
+   * delivered; never rejects. Serialized per session id: a second chunk starts only after the first
+   * settled, so keys and pastes reach the pane in the order they were typed. The Session is re-read
+   * inside each step (it can be gone by then → false), and the tmux name is resolved from it, never
+   * from the caller. A false is never retried here (a timed-out delivery may well have run).
+   *
+   * BOUNDED on every route, by a deadline PANE_INPUT_DEADLINE_MS after the chunk was HANDED OVER —
+   * the link host's own deadline, which runs from the same moment. The tmux and SSH routes are bounded
+   * already (`runWithStdin`: PROC_TIMEOUT_MS), the session host's request by its own timeout once
+   * connected — but its reconnect can wait on a host that is still starting, and a step that never
+   * settled would hold every later chunk behind it, to land long after the link host told its
+   * controller it was dropped. So a step gets only what is LEFT of its chunk's deadline (a chunk that
+   * waited 15 s behind a slow one has 5 s), answers false when it runs out (a late delivery may still
+   * land, as with any timed-out one), and a chunk with nothing left when its turn comes is dropped
+   * undelivered: whoever handed it over has given up on it.
+   *
+   * `isCurrent` (the link host's: its sender still controls, in the period it typed in) is asked right
+   * before the step runs — after any wait behind a slow step, immediately before the spawn or the
+   * write, nothing awaited in between: false (or a throw) and the chunk is never delivered (false).
+   * A chunk handed over while its sender controlled must not land after a stop or a demotion.
+   */
+  controlInput(sessionId: string, chunk: ControlInputChunk, isCurrent?: () => boolean): Promise<boolean> {
+    const handedAt = Date.now()
+    const prev = this.controlInputChains.get(sessionId) ?? Promise.resolve(true)
+    const step = prev
+      .then(() => {
+        const left = PANE_INPUT_DEADLINE_MS - (Date.now() - handedAt)
+        return left <= 0 ? false : settleWithin(this.deliverControlInput(sessionId, chunk, isCurrent), left)
+      })
+      .catch(() => false)
+    this.controlInputChains.set(sessionId, step)
+    void step.then(() => {
+      if (this.controlInputChains.get(sessionId) === step) this.controlInputChains.delete(sessionId)
+    })
+    return step
+  }
+
+  /** The tail of each session's `controlInput` chain; deleted when the tail settles. */
+  private readonly controlInputChains = new Map<string, Promise<boolean>>()
+
+  private async deliverControlInput(
+    sessionId: string,
+    chunk: ControlInputChunk,
+    isCurrent?: () => boolean
+  ): Promise<boolean> {
+    // The chunk arrives from a viewer over the network: its shape is checked, not assumed.
+    const c = chunk as { kind?: unknown; data?: unknown; text?: unknown } | null
+    const keys = c?.kind === 'keys' && typeof c.data === 'string'
+    const paste = c?.kind === 'paste' && typeof c.text === 'string'
+    if (!keys && !paste) return false
+    const s = this.sessions.get(sessionId)
+    const route = this.watcherInputRoute(sessionId)
+    if (!s || route === 'none') return false
+    // An empty key chunk is refused on every route (the tmux builder would have no bytes to type);
+    // a paste that sanitizes to nothing has nothing to do.
+    if (keys && (c.data as string).length === 0) return false
+    if (paste && sanitizePasteText(c.text as string).length === 0) return true
+    // Right before the spawn or the write (synchronous from here to it, on every route): a sender that
+    // stopped controlling while this chunk waited never gets it delivered. A throw reads as not current.
+    if (isCurrent) {
+      let current = false
+      try {
+        current = isCurrent() === true
+      } catch {
+        current = false
+      }
+      if (!current) return false
+    }
+    try {
+      switch (route) {
+        case 'tmux': {
+          const tmuxPath = this.tmuxPath
+          if (!tmuxPath || !s.persistKey) return false
+          const plan = controlInputPlan(TMUX_SOCKET, sessionName(s.persistKey), chunk)
+          if (!plan) return true
+          return await runPasteDelivery(plan, (args, input) => runWithStdin(tmuxPath, args, input))
+        }
+        case 'ssh': {
+          const ssh = findSsh()
+          if (!ssh || !s.sshRemote || !s.persistKey) return false
+          const { conn, controlPath } = s.sshRemote
+          const plan = remoteControlInputPlan(conn, controlPath, sessionName(s.persistKey), chunk)
+          if (!plan) return true
+          return await runPasteDelivery(plan, (args, input) => runWithStdin(ssh, args, input))
+        }
+        case 'write': {
+          if (chunk.kind === 'keys') {
+            this.write(null, sessionId, chunk.data)
+            return true
+          }
+          // A paste: framed only when the pane's app asked for bracketed paste, never with an Enter.
+          // The session host's and a direct Windows pane's no-Enter text path (core/settled-text.ts)
+          // writes at once — the screen-settle wait runs only before an Enter — and frames by the
+          // emulator's own `?2004h` state, which is `paste-buffer -p`'s contract.
+          if (s.nativeWindowsPane) return (await s.nativeWindowsPane.sendText(chunk.text, false)) === true
+          const name = s.persistKey ?? s.indexKey
+          if (s.sessionHost && name) return (await sessionHostSendKeys(sessionName(name), chunk.text, false)) === true
+          // A plain shell: no emulator here knows what the app asked for, so unframed (markers at an
+          // app that never asked would arrive as literal `[200~`).
+          this.write(null, sessionId, sanitizePasteText(chunk.text))
+          return true
+        }
+      }
+    } catch {
+      // A builder refusing a name it did not generate, or a pty that threw on write (it exited).
+      return false
+    }
+  }
+
+  /**
+   * Can a live link offer Control on this node? `unsupported` for a Zellij node (session-wide key
+   * bindings), or a node with no session on a machine whose new sessions are Zellij; `ok` when a
+   * session for it is live or released (its pane can be reached), or when a new node would be
+   * tmux-backed here; `unknown` otherwise (nothing to tell from yet).
+   */
+  nodeControlSupport(persistKey: string): ControlSupport {
+    const live = this.liveSessionForPersistKey(persistKey)
+    if (this.zellijKeys.has(persistKey) || live?.zellij) return 'unsupported'
+    if (live || this.released.has(persistKey)) return 'ok'
+    // No session here: a new one would be created in the SELECTED backend, and a Zellij one refuses
+    // control. (A node whose tmux session is warm but not held by this process reads the same way
+    // until it is mounted; the live branch above answers it then.)
+    if (this.zellijSelected()) return 'unsupported'
+    if (this.tmuxPath && this.getSettings().tmuxEnabled) return 'ok'
+    return 'unknown'
   }
 
   /**

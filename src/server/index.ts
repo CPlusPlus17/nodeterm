@@ -134,7 +134,7 @@ import {
 } from '../core/watch-link/service'
 import { createWatchLinkApi } from '../core/watch-link/api'
 import { WatchLinkStore } from '../core/watch-link/store'
-import { createWatchPty } from '../core/watch-link/pty-seam'
+import { createWatchPty, watchRemoteFor, watchRemoteRecords, type WatchRemote } from '../core/watch-link/pty-seam'
 
 // Same env-override + default as src/core/check.ts / license.ts / src/main/telemetry.ts — each
 // shell derives it locally rather than sharing an import (src/server must not import src/main).
@@ -1099,6 +1099,7 @@ export async function startServer(
   // license layer (a named follow-up) changes `entitlement` and drops `unsupported`, nothing else.
   // Headless, no keychain: the links file is a 0600 file in the data dir (spec D8). The workspace
   // index was read above, so there is no load to wait for.
+  const watchRemote = (nodeId: string): WatchRemote => watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, () => undefined))
   watchLinks = createWatchLinkService({
     api: createWatchLinkApi({ apiBase: API_BASE }),
     relayUrl: RELAY_URL,
@@ -1114,9 +1115,13 @@ export async function startServer(
         platform.detach(id)
       }
     },
-    // No SSH-project manager here: a node of an SSH project is joinable only while this core holds
-    // its session live (join-only never spawns), and never through the local tmux.
-    pty: createWatchPty(ptyManager, (nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) ? { requireRemote: true } : {})),
+    // The desktop's rule (core's `watchRemoteFor`), with no SSH-project manager here (no master): a node
+    // in a HOST's tmux — an SSH project's, or a remote-tmux node in a local project — is joinable only
+    // while this core holds its session live (join-only never spawns), and never through the local tmux.
+    pty: createWatchPty(ptyManager, watchRemote),
+    // The same check as the desktop (links stay unsupported here, but the member answers): a node in a
+    // host's tmux would run there, never in this core's Zellij.
+    controlSupport: (nodeId) => (watchRemote(nodeId).requireRemote ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
     emit: (channel, ...args) => sendToOwners(platform, channel, ...args),
     unsupported: true
   })

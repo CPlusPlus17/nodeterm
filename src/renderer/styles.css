@@ -11668,8 +11668,7 @@ button.pull-checks__name {
 .live-chip:hover {
   background: color-mix(in srgb, var(--live-tone) 20%, transparent);
 }
-.live-chip__dot,
-.live-chip__unread {
+.live-chip__dot {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
@@ -11689,8 +11688,23 @@ button.pull-checks__name {
   --live-tone: var(--muted);
   color: var(--muted);
 }
+/* Unread chat: a COUNT (summed over the node's links), ink on an unread wash — the status-chip
+   recipe, so it reads on the default look and under Liquid Glass alike. Fits the 16px sidebar chip. */
 .live-chip__unread {
-  background: var(--state-unread);
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--state-unread) 70%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--state-unread) 28%, transparent);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 11px;
+  text-align: center;
 }
 .kanban-card__live,
 .kanban-modal__live {
@@ -11732,7 +11746,7 @@ button.pull-checks__name {
 .live-pop:focus {
   outline: none;
 }
-.live-pop p {
+:is(.live-pop, .live-chat__body) p {
   margin: 0;
 }
 .live-pop__link + .live-pop__link {
@@ -11759,13 +11773,13 @@ button.pull-checks__name {
   margin-top: 2px;
   overflow-wrap: anywhere;
 }
-.live-pop p.live-pop__status {
+:is(.live-pop, .live-chat__body) p.live-pop__status {
   margin-top: 6px;
   padding: 6px 8px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--state-warning) 12%, transparent);
 }
-.live-pop p.live-pop__status--refused {
+:is(.live-pop, .live-chat__body) p.live-pop__status--refused {
   background: rgba(var(--tint-rgb), 0.06);
 }
 .live-pop__actions {
@@ -11773,12 +11787,12 @@ button.pull-checks__name {
   gap: 6px;
   margin: 8px 0;
 }
-.live-pop .confirm__btn.live-pop__btn {
+:is(.live-pop, .live-chat__body) .confirm__btn.live-pop__btn {
   padding: 3px 10px;
   border-radius: 6px;
   font-size: 12px;
 }
-.live-pop p.live-pop__error {
+:is(.live-pop, .live-chat__body) p.live-pop__error {
   margin: 4px 0;
   color: var(--danger);
 }
@@ -11794,10 +11808,10 @@ button.pull-checks__name {
   gap: 6px;
   padding: 2px 0;
 }
-.live-pop .live-pop__kick {
+:is(.live-pop, .live-chat__body) .live-pop__kick {
   margin-left: auto;
 }
-.live-pop p.live-pop__note {
+:is(.live-pop, .live-chat__body) p.live-pop__note {
   margin-top: 4px;
   font-size: 11px;
 }
@@ -11846,6 +11860,237 @@ button.pull-checks__name {
   margin: 0;
   padding: 4px 8px;
   font-size: 12px;
+}
+/* A Control link's owner controls in the popover (ControlSection): the Typing switch row, the
+   locked line with Allow control again, and the Change password field (a new one shown once). */
+.live-pop__control {
+  margin: 8px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.live-pop__locked {
+  margin-bottom: 8px;
+}
+.live-pop__locked .live-pop__btn {
+  margin-top: 6px;
+}
+.live-pop__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-pop__password {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.live-pop__password .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+/* A Control link's password, wherever it is typed or shown (create dialog, popover, drawer):
+   monospace, so a 0 and an o, or a 1 and an l, never read alike. One rule for every field. */
+.live-dialog__password .confirm__input,
+.live-pop__password .confirm__input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+:is(.live-pop, .live-chat__body) p.live-pop__invalid {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+}
+/* A viewer typing right now (a Control link): the working role, never animated (Idle energy). */
+.live-pop__typing {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-working);
+}
+/* The Live chat drawer (LiveChatDrawer): the Explorer drawer's shell and pin, with the popover's
+   owner controls inside it (the `:is(.live-pop, .live-chat__body)` rules above are shared). Raised
+   over the kanban card modal (scrim 55) while one is open — the card's LIVE chip opens it — whatever
+   the pin; pinned beside a pinned Explorer, docked one Explorer width (320px) and a gap to its left.
+   The `.drawer` shell is already a Liquid Glass text surface with its blur, and nothing inside paints
+   a surface token. Tokens only: the viewer-name hues come from the web page's table
+   (lib/liveChatLook) as `--live-name`, darkened toward the ink on the light theme, where the
+   page's near-black-tuned yellows and cyans would not read. */
+.drawer-overlay.drawer-overlay--raised {
+  z-index: 57;
+}
+.drawer-overlay--beside .drawer--pinned {
+  right: calc(var(--float-gap) + 320px + 8px);
+}
+.live-chat:focus {
+  outline: none;
+}
+.live-chat__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 14px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.live-chat__link {
+  flex: none;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.live-chat__body .confirm__input.live-chat__select {
+  margin: 0 0 8px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+.live-chat__linkhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-chat__goto {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.live-chat__goto:hover {
+  text-decoration: underline;
+}
+.live-chat__people {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+/* A Viewer link has no chat: People takes the drawer. */
+.live-chat__people.live-chat__people--only {
+  flex: 1 1 auto;
+  max-height: none;
+  border-bottom: 0;
+}
+.live-chat__heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.live-chat__viewers {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+.live-chat__viewers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.live-chat__chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+/* The list scrolls; the "N new messages" pill floats over its foot. */
+.live-chat__listwrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.live-chat__body p.live-chat__empty {
+  margin: 0 0 6px;
+}
+.live-chat__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+/* One dense line per message, like the viewer page: time, badge, name, text. */
+.live-chat__msg {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.live-chat__time {
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* The owner's own line, marked by the HOST's word: ink on a success wash, the status-chip recipe. */
+.live-chat__badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--state-success) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--state-success) 16%, transparent);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+.live-chat__name {
+  color: var(--live-name, var(--text));
+  font-weight: 700;
+}
+.live-chat__msg--sharer .live-chat__name {
+  --live-name: var(--success);
+}
+:root[data-theme='light'] .live-chat__name {
+  color: color-mix(in srgb, var(--live-name, var(--text)) 55%, var(--text-strong));
+}
+.live-chat__colon {
+  color: var(--muted);
+}
+.live-chat__text {
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.live-chat__body .confirm__btn.live-chat__more {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.live-chat__reply {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.live-chat__body .confirm__input.live-chat__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 12.5px;
 }
 /* The create dialog (LiveLinkDialog): the `.confirm` shell, a little wider for the URL. */
 .confirm.live-dialog {
@@ -11897,6 +12142,8 @@ button.pull-checks__name {
   color: var(--text);
   font-size: 12px;
   line-height: 1.45;
+  /* The Control warning can name a long user@host, which has no break points. */
+  overflow-wrap: anywhere;
 }
 .live-dialog__error {
   margin: 0 0 10px;
@@ -11918,6 +12165,38 @@ button.pull-checks__name {
   margin: 8px 0 12px;
   color: var(--muted);
   font-size: 12px;
+}
+/* A note that belongs to the control just above it (Unlimited's, a password shown once). */
+.live-dialog__note.live-dialog__note--tight {
+  margin: -4px 0 10px;
+}
+/* The role choice: "Viewer · Can watch". */
+.live-dialog__hint {
+  color: var(--muted);
+}
+/* Control on a terminal that cannot take typed input (a Zellij session): shown, disabled, with why. */
+.live-dialog__group label.live-dialog__off {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.live-dialog__reason {
+  width: 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+/* A Control link's password: the form's field with Generate, and the done step's copy of it. */
+.live-dialog__pw {
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__url.live-dialog__password {
+  margin: 4px 0 10px;
+}
+.live-dialog__invalid {
+  margin: -6px 0 10px;
+  color: var(--danger);
+  font-size: 11px;
 }
 /* "Share with team" (ShareTeamDialog): the `.confirm` shell, wider for the lists, with the body as
    the scrolling region so Share / Close stay on screen however long the lists are. */

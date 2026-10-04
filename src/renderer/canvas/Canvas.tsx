@@ -116,6 +116,7 @@ import { Tooltip } from '../components/Tooltip'
 import {
   IconBranch,
   IconBroadcast,
+  IconChat,
   IconCanvasView,
   IconClose,
   IconCollapse,
@@ -158,6 +159,7 @@ import {
   SettingsPage,
   SourceControlPanel,
   ExplorerPanel,
+  LiveChatDrawer,
   ShortcutsPanel,
   OnboardingFlow,
   DictationOverlay,
@@ -246,11 +248,12 @@ import { UpgradeDialog } from '../components/UpgradeDialog'
 import { LiveLinkDialog } from '../components/LiveLinkDialog'
 import { requireProOr } from '../state/upgradeGate'
 import { startWatchLinkSync, useWatchLinks } from '../state/watchLinks'
-import { noticeText } from '../lib/liveLink'
+import { liveLinkNoticeEffect } from '../lib/liveLink'
 import {
   liveLinkCommands,
   liveLinkMenuItemsFor,
   liveLinkPrepare,
+  liveLinkRemoteFacts,
   openLiveLink,
   stopAllConfirm,
   stopAllLiveLinks,
@@ -435,6 +438,15 @@ const sshDisconnect = (scopeId: string): Promise<unknown> =>
 import { opensInEditor } from '../lib/openTarget'
 import { displacedFilesPatch } from '../lib/filesNode'
 import { newEntryPath, parentDir } from '../lib/explorerCreate'
+import {
+  liveChatShown,
+  nextLiveChat,
+  readLiveChatLink,
+  readLiveChatPinned,
+  writeLiveChatLink,
+  writeLiveChatPinned,
+  type LiveChatState
+} from '../lib/liveChatPin'
 import {
   explorerIsOpen,
   nextExplorerPin,
@@ -3636,19 +3648,63 @@ export function Canvas() {
   }, [api, persist])
 
   // ── Live links (Task 17) ────────────────────────────────────────────────────────────────────
-  // A read-only, expiring browser view of ONE terminal. The store (state/watchLinks) mirrors this
-  // machine's core registry — `window.nodeTerminal`, never a relay session's api: links are made on
-  // the machine that runs the terminal. Started ONCE per Canvas mount; without it the store stays
-  // empty and no LIVE chip ever appears. `not-persistent` stays on screen (it is shown after every
-  // create while links cannot be saved); the rest fade like any info strip.
+  // A browser view of ONE terminal. The store (state/watchLinks) mirrors this machine's core
+  // registry — `window.nodeTerminal`, never a relay session's api: links are made on the machine
+  // that runs the terminal. Started ONCE per Canvas mount; without it the store stays empty and no
+  // LIVE chip ever appears. What a notice does is lib/liveLink's `liveLinkNoticeEffect` (tested
+  // there): the info strip — `not-persistent` and `control-locked` stay on screen — and, for
+  // `control-taken` (a security event), an OS notification under the notification consent alone — not
+  // the agent-done preference — once per link per 5 s.
+  const liveNotifyAtRef = useRef(new Map<string, number>())
   useEffect(
     () =>
       startWatchLinkSync(window.nodeTerminal, (n) => {
-        const text = noticeText(n)
-        if (text) setNotice({ kind: 'info', text, sticky: n.kind === 'not-persistent' })
+        const fx = liveLinkNoticeEffect(n, useSettings.getState().settings, Date.now(), liveNotifyAtRef.current)
+        if (fx.strip) setNotice({ kind: 'info', ...fx.strip })
+        if (fx.os) void window.nodeTerminal.notify(fx.os)
       }),
     []
   )
+  // The Live chat drawer (lib/liveChatPin — the Explorer's pin pattern, its own keys): which link it
+  // follows and whether it is docked are this machine's view state, in localStorage only. Opened by
+  // the popover's "Open chat" (`nodeterm:live-chat`, `{ linkId }` — this is its ONE listener, pinned
+  // in lib/nodeterm-events.test.ts) and by the palette's "Live chat".
+  const [liveChat, setLiveChat] = useState<LiveChatState>(() => ({
+    pinned: readLiveChatPinned(),
+    dismissed: false,
+    open: false,
+    linkId: readLiveChatLink()
+  }))
+  // A primitive count, not the list: a push about one link's viewers must not re-render the canvas.
+  // A pinned drawer is rendered only while a link is live (`liveChatShown`); the pin is kept.
+  const liveLinkCount = useWatchLinks((s) => s.links.length)
+  const liveChatRef = useRef(liveChat)
+  liveChatRef.current = liveChat
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const linkId = (e as CustomEvent<{ linkId?: unknown }>).detail?.linkId
+      if (typeof linkId !== 'string' || !linkId) return
+      // Open chat on a chip IS a pick: the drawer comes back to this link next time.
+      writeLiveChatLink(linkId)
+      setLiveChat((s) => nextLiveChat(s, { kind: 'open', linkId }))
+    }
+    window.addEventListener('nodeterm:live-chat', on)
+    return () => window.removeEventListener('nodeterm:live-chat', on)
+  }, [])
+  const pickLiveChatLink = useCallback((linkId: string) => {
+    writeLiveChatLink(linkId)
+    setLiveChat((s) => nextLiveChat(s, { kind: 'open', linkId }))
+  }, [])
+  const closeLiveChat = useCallback(() => setLiveChat((s) => nextLiveChat(s, { kind: 'close' })), [])
+  const toggleLiveChatPin = useCallback(() => {
+    setLiveChat((s) => {
+      const next = nextLiveChat(s, { kind: 'pin' })
+      writeLiveChatPinned(next.pinned)
+      return next
+    })
+  }, [])
+  /** True while a kanban card modal is open (either board): the drawer then sits above its scrim. */
+  const [cardModalOpen, setCardModalOpen] = useState(false)
   const [liveLinkDialog, setLiveLinkDialog] = useState<LiveLinkTarget | null>(null)
   const closeLiveLinkDialog = useCallback(() => setLiveLinkDialog(null), [])
   /** The facts the ONE availability rule reads, for the node's OWN project (H4): a node of a relay
@@ -3738,6 +3794,21 @@ export function Canvas() {
   /** R63: the create dialog's "only while open" note reads the LOCAL core's session protection — the
    *  core that hosts the link (never a relay tab's peer). Stable, so the dialog reads it once. */
   const readLocalPersistence = useCallback(() => localSession.api.pty.tmuxStatus(), [])
+  /** Where the dialog's node runs — R63 (`remoteNode`) and the machine the Control warning names
+   *  (`sshTarget`) — from the NODE's own SSH binding first, then its project's (lib/liveLinkEntry).
+   *  The node is read from the live canvas for the active project, else the stored copy. */
+  const liveLinkRemoteFor = useCallback((target: LiveLinkTarget) => {
+    const store = useProjects.getState()
+    const project = store.getProject(target.projectId)
+    return liveLinkRemoteFacts({
+      nodeId: target.nodeId,
+      projectId: target.projectId,
+      activeProjectId: store.activeProjectId,
+      live: nodesRef.current,
+      stored: project?.nodes,
+      projectSsh: project?.ssh?.server
+    })
+  }, [])
 
   /** R48: "Stop all" revokes every link of the LICENSE — other machines' included — and cannot be
    *  undone, so the palette asks first, with the same sentence and danger button as Settings. R62:
@@ -12235,6 +12306,8 @@ export function Canvas() {
   // whole board on every Canvas render.
   const setKanbanModalNode = useCallback((id: string | null) => {
     kanbanModalNodeRef.current = id
+    // The Live chat drawer opened from the card's LIVE chip must sit above the modal (`raised`).
+    setCardModalOpen(id !== null)
     // The one place the "is anyone looking at this session" predicate learns about the modal —
     // every asker (the sweep's plan, the node's fire-time re-ask, the nudge) reads it through
     // `isNodeWatched`, so the modal clause cannot go missing from one of them.
@@ -17376,6 +17449,23 @@ export function Canvas() {
     travelToNodeRef.current = travelToNode
   })
 
+  /** The Live chat drawer sits above a kanban card modal (z 57 over 55) — opened from the card's LIVE
+   *  chip — but never above Settings, which stays on top. `kanbanOpen` too: the per-project board
+   *  reports a closed modal on change, not on unmount, so a board closed with its card open would
+   *  leave the flag behind. */
+  const liveChatRaised = cardModalOpen && kanbanOpen && !settingsOpen
+
+  /** The Live chat drawer's "Go to terminal": a modal drawer gives way to the canvas first (its scrim
+   *  would cover the node); a docked one stays. The project switch, a closed project's reopen and the
+   *  board's "open the card" are `travelToNode`'s. */
+  const goToLiveChatNode = useCallback(
+    (nodeId: string) => {
+      if (!liveChatRef.current.pinned) setLiveChat((s) => nextLiveChat(s, { kind: 'close' }))
+      travelToNode(nodeId)
+    },
+    [travelToNode]
+  )
+
   // Prepare-for-update (Windows session host, issue #829). Opened from the update card or ⌘K via
   // `nodeterm:prepare-update`. `prepareUpdateAvailable` gates the ⌘K entry: the main process answers
   // `unsupported` off Windows, when the session host is not the backend, and in the Server Edition.
@@ -18123,11 +18213,13 @@ export function Canvas() {
         entitled: useEntitlement.getState().isPremium,
         serverEdition: isBrowserRuntime(),
         icon: <IconBroadcast />,
+        chatIcon: <IconChat />,
         manage: () => {
           setSettingsSection('live-links')
           setSettingsNonce((n) => n + 1)
           setSettingsOpen(true)
         },
+        openChat: () => setLiveChat((s) => nextLiveChat(s, { kind: 'open' })),
         confirmStopAll: confirmStopAllLiveLinks
       }),
       // Hidden when the canvas has no restartable agent node — the row would have nothing to act
@@ -19045,6 +19137,19 @@ export function Canvas() {
         />
       )}
 
+      {liveChatShown(liveChat, liveLinkCount) && (
+        <LiveChatDrawer
+          linkId={liveChat.linkId}
+          pinned={liveChat.pinned}
+          raised={liveChatRaised}
+          beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}
+          onPickLink={pickLiveChatLink}
+          onClose={closeLiveChat}
+          onTogglePin={toggleLiveChatPin}
+          onGoToNode={goToLiveChatNode}
+        />
+      )}
+
       <SessionsSidebar
         open={sessionsOpen}
         pinned={sessionsPinned}
@@ -19310,9 +19415,10 @@ export function Canvas() {
                 ? 'relay'
                 : 'desktop'
           }
-          // R63: an SSH project's node runs in the HOST's tmux, which gives a viewer a client of its
-          // own — the "only while open" note is about this machine's local terminals.
-          remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}
+          // R63: a node in a HOST's tmux gets a viewer client of its own (the "only while open" note
+          // is about this machine's local terminals); the Control warning names where a
+          // controller's commands run. Both from where the NODE runs, not only its project.
+          {...liveLinkRemoteFor(liveLinkDialog)}
           readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
           // No license layer in the Server Edition (R43): never an Upgrade button there.

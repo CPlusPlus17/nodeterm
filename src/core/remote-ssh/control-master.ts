@@ -20,7 +20,7 @@ import {
 import { sanitizePasteText } from '../paste-injection'
 import { canControlCanvas } from '../../shared/agents/config'
 import { COMBINED_PANE_MARKER, PANE_OWNER_FMT, PS_FOREGROUND_FLAGS } from '../agents/pane-owner'
-import { VISIBLE_CAPTURE_FORMAT, exactPaneTarget } from '../watch-link/capture-route'
+import { VISIBLE_CAPTURE_FORMAT, capturePaneTarget } from '../watch-link/capture-route'
 import { WATCHER_CLIENT_FLAGS, WINDOW_SIZE_FORMAT } from '../watch-link/watcher-client'
 // Dependency-free (no node-pty): safe to import from these pure builders.
 
@@ -33,8 +33,10 @@ export const RMT_TMUX_SOCKET = 'nodeterm-rmt'
  * `command not found` on any host whose ssh exec-channel PATH misses the install dir — most
  * visibly macOS with Homebrew's tmux in `/opt/homebrew/bin`. The prologue is one assignment, so
  * the command's own exit code (what `probeSaysAbsent` and every caller reads) is unchanged.
+ * Exported for the live link's pane-input builders (`watch-link/pane-input.ts`), which build their
+ * remote commands beside their local twins rather than here.
  */
-function tmuxCmd(body: string): string {
+export function tmuxCmd(body: string): string {
   return `${remoteTmuxPathPrologue()}${body}`
 }
 
@@ -529,7 +531,7 @@ export function remoteCapturePaneArgs(conn: SshConnection, controlPath: string, 
  * `=name:` target and the `#{…}` format. Proven under a real /bin/sh in capture-visible.realsh.test.ts.
  */
 export function remoteCaptureVisibleArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
-  const target = posixQuote(exactPaneTarget(sessionId))
+  const target = posixQuote(capturePaneTarget(sessionId))
   return childArgs(
     conn,
     controlPath,
@@ -558,7 +560,7 @@ export function remoteTmuxWatcherArgs(conn: SshConnection, controlPath: string, 
       controlPath,
       tmuxCmd(
         `tmux -L ${RMT_TMUX_SOCKET} attach-session -E -f ${posixQuote(WATCHER_CLIENT_FLAGS)} ` +
-          `-t ${posixQuote(exactPaneTarget(sessionId))}`
+          `-t ${posixQuote(capturePaneTarget(sessionId))}`
       )
     )
   ]
@@ -570,7 +572,7 @@ export function remoteWindowSizeArgs(conn: SshConnection, controlPath: string, s
     conn,
     controlPath,
     tmuxCmd(
-      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(exactPaneTarget(sessionId))} ` +
+      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(capturePaneTarget(sessionId))} ` +
         posixQuote(WINDOW_SIZE_FORMAT)
     )
   )
