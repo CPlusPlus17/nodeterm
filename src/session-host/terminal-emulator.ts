@@ -74,6 +74,23 @@ export class TerminalEmulator {
     return out
   }
 
+  /** Plain retained normal history plus the current alternate screen, joining soft wraps. */
+  historyText(): string {
+    const lines: string[] = []
+    const append = (buffer: typeof this.term.buffer.normal): void => {
+      for (let i = 0; i < buffer.length; i++) {
+        const row = buffer.getLine(i)
+        if (!row) continue
+        const text = row.translateToString(true)
+        if (row.isWrapped && lines.length) lines[lines.length - 1] += text
+        else lines.push(text)
+      }
+    }
+    append(this.term.buffer.normal)
+    if (this.term.buffer.active.type === 'alternate') append(this.term.buffer.alternate)
+    return lines.join('\n')
+  }
+
   /**
    * Has the app running in this session REQUESTED bracketed paste (`CSI ?2004h`)?
    *

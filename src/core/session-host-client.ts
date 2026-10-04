@@ -39,6 +39,7 @@ import { resolveSessionHostScript, spawnSessionHost } from './session-host-launc
 import { latestClaimSize, type SizeClaim } from './pty-size'
 import { isTerminalReport } from './terminal-reports'
 import type { PreparedAgentLaunch } from './agent-launch'
+import type { HistorySearch } from './terminal-history'
 
 export interface SessionSubscriber {
   onData(data: string): void
@@ -1544,6 +1545,14 @@ export class SessionHostClient {
   async capture(name: string, full: boolean): Promise<string> {
     const result = await this.request<CaptureResult>({ cmd: 'capture', name, full })
     return result.text
+  }
+
+  /** Additive extension; an older live host refuses it and is never restarted to enable search. */
+  async historySearch(name: string, query: string): Promise<HistorySearch> {
+    await this.ensureConnected()
+    const generation = this.sessions.get(name)?.generation ?? this.sessionGenerations.get(name)
+    if (!generation) throw new Error(`No confirmed retained terminal generation for '${name}'.`)
+    return this.request<HistorySearch>({ cmd: 'historySearchV1', name, generation, query })
   }
 
   /** Execute already-rendered trusted input through the persistent generation's exactly-once

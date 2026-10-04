@@ -32,6 +32,7 @@ import {
   type RemoteSessionEnv,
   remotePasteDelivery,
   remoteCapturePaneArgs,
+  remoteHistoryCaptureArgs,
   remoteCaptureScreenArgs,
   remoteTmuxSendKeysArgs,
   remotePaneCommandArgs,
@@ -53,6 +54,7 @@ import type { SshConnection } from '../shared/ssh'
 import { recordPendingRemoteKill, type PendingRemoteKill } from './pending-remote-kills'
 import { probeAgentSockToPin } from './remote-ssh/agent-probe'
 import { parsePaneCursor } from './pane-cursor'
+import { HISTORY_MAX_BYTES, searchTerminalHistory, type HistorySearch } from './terminal-history'
 import { classifyPaneCwd } from './pane-cwd'
 import {
   recordFreshSpawnOwner,
@@ -134,6 +136,7 @@ import {
   attachExistingSessionHostPty,
   createSessionHostPty,
   sessionHostCapture,
+  sessionHostHistorySearch,
   sessionHostHasSession,
   sessionHostKillSession,
   sessionHostListSessions,
@@ -4339,6 +4342,34 @@ export class PtyManager {
     } catch {
       return ''
     }
+  }
+
+  /** Search the actual attached generation, never an untrusted caller-selected pane/path. */
+  async historySearch(sessionId: string, query: string): Promise<HistorySearch> {
+    const live = this.sessions.get(sessionId)
+    if (!live || (!live.persistKey && !live.nativeWindowsPane)) throw new Error('This terminal is no longer attached.')
+    const key = live.persistKey ?? live.nodeId!
+    let text: string
+    if (live.nativeWindowsPane) text = await live.nativeWindowsPane.historyText()
+    else if (live.sshRemote) {
+      const ssh = findSsh()
+      if (!ssh) throw new Error('SSH is unavailable on this host.')
+      text = (await runAsync(ssh, remoteHistoryCaptureArgs(live.sshRemote.conn, live.sshRemote.controlPath, sessionName(key)),
+        { encoding: 'utf8', maxBuffer: HISTORY_MAX_BYTES, timeout: 20_000 })).stdout
+    } else if (live.sessionHost || !this.tmuxPath) {
+      const result = await sessionHostHistorySearch(sessionName(key), query)
+      if (this.sessions.get(sessionId) !== live) throw new Error('The terminal changed while its history was captured.')
+      return result
+    } else {
+      const args = ['-L', TMUX_SOCKET]
+      const pane = (await runAsync(this.tmuxPath, [...args, 'display-message', '-p', '-t', `=${sessionName(key)}:`, '#{pane_id}'],
+        { encoding: 'utf8', timeout: 6_000 })).stdout.trim()
+      if (!/^%[0-9]+$/.test(pane)) throw new Error('The terminal pane could not be resolved.')
+      text = (await runAsync(this.tmuxPath, [...args, 'capture-pane', '-p', '-J', '-t', pane, '-S', '-'],
+        { encoding: 'utf8', maxBuffer: HISTORY_MAX_BYTES, timeout: 20_000 })).stdout
+    }
+    if (this.sessions.get(sessionId) !== live) throw new Error('The terminal changed while its history was captured.')
+    return searchTerminalHistory(text, query)
   }
 
   /**

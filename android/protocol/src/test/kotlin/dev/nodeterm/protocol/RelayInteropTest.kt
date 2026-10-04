@@ -384,6 +384,25 @@ class RelayInteropTest {
     }
 
     @Test
+    fun `history search reaches the attached desktop session and returns older retained output`() = runBlocking<Unit> {
+        val h = start()
+        connect(h).connection.use { conn ->
+            val sink = RecordingSink()
+            val stream = conn.attach("term-abc-1", 80, 24, sink)
+            sink.awaitText("hello")
+            val result = stream.searchHistory(".* Ω 😀")
+            assertEquals(501, result.searchedLines)
+            assertFalse(result.truncated)
+            assertEquals(listOf(dev.nodeterm.protocol.model.TerminalHistory.Row(0, "old.* Ω 😀")), result.rows)
+            val request = h.awaitEvent("historySearch")
+            assertEquals("sess-1", request.str("sessionId"))
+            assertEquals(".* Ω 😀", request.str("query"))
+            stream.detach()
+            assertFailsWith<HostException> { stream.searchHistory("old") }
+        }
+    }
+
+    @Test
     fun `board verbs carry null as the Ungrouped column`() = runBlocking<Unit> {
         val h = start()
         connect(h).connection.use { conn ->

@@ -34,6 +34,7 @@ import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.NeedsRelayException
+import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RendererRecovery
 import dev.nodeterm.protocol.host.ResumeOffer
@@ -154,6 +155,8 @@ class TerminalController(
 
     /** The Copy sheet's snapshot of the page's buffer (audit A32), or null while the sheet is closed. */
     var copySheet by mutableStateOf<TerminalCopy.Snapshot?>(null)
+        private set
+    var historyOpen by mutableStateOf(false)
         private set
 
     /**
@@ -407,6 +410,24 @@ class TerminalController(
 
     fun closeCopySheet() {
         copySheet = null
+    }
+
+    fun openHistory() { historyOpen = true }
+    fun closeHistory() { historyOpen = false }
+
+    suspend fun searchHistory(query: String): dev.nodeterm.protocol.model.TerminalHistory.Result {
+        val expected = stream ?: throw HostException("Wait for the terminal to connect, then try again.")
+        val result = expected.searchHistory(query)
+        if (stream !== expected || disposed || stopped) throw HostException("The terminal changed while its history was searched. Try again.")
+        return result
+    }
+
+    fun copyHistory(ctx: Context, lines: List<String>, selection: TerminalCopy.Selection) {
+        when (val t = TerminalCopy.text(lines, selection)) {
+            is TerminalCopy.Text.Copy -> writeClipboard(t.text, ctx)
+            TerminalCopy.Text.TooLarge -> toast(COPY_TOO_LARGE, Toast.LENGTH_LONG, ctx)
+            TerminalCopy.Text.Empty -> toast(NOTHING_SELECTED, Toast.LENGTH_SHORT, ctx)
+        }
     }
 
     /** Copy the selected lines of the open sheet, within the OSC 52 copy's cap (audit A53). */
@@ -949,6 +970,7 @@ class TerminalController(
     fun onStop() {
         if (disposed || stopped) return
         stopped = true
+        closeHistory()
         js("nt.suspendScroll()")
         retireActions()
         // Stops a connect or an approval wait; an attach already sent still lands, and is let go of
@@ -972,6 +994,7 @@ class TerminalController(
 
     fun dispose() {
         disposed = true
+        closeHistory()
         retireActions()
         // Detaches the stream (after a launch that still holds it, A40), and refuses every attach
         // still on its way. attachJob is deliberately not cancelled: an attach that lands now is

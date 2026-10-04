@@ -94,9 +94,9 @@ class TerminalSearchTest {
     }
 
     @Test
-    fun `the Find chip opens the local captured output sheet without typing`() {
+    fun `the Find chip opens host history search without typing`() {
         val chip = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalScreen.kt"), "KeyChip(\"Find\")")
-        AppSourcePins.assertInOrder(chip, "focusManager.clearFocus()", "controller.openCopySheet()")
+        AppSourcePins.assertInOrder(chip, "focusManager.clearFocus()", "controller.openHistory()")
         assertFalse("controller.raw(" in chip || "controller.key(" in chip)
     }
 }

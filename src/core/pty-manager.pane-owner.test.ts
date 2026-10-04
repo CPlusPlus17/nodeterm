@@ -85,11 +85,62 @@ async function manager(opts: { tmux?: string | null; sshRemote?: unknown } = {})
     tmuxPath: string | null
     sessions: Map<string, unknown>
     paneOwner(k: string): Promise<unknown>
+    historySearch(k: string, query: string): Promise<import('./terminal-history').HistorySearch>
   }
   mgr.tmuxPath = opts.tmux === undefined ? '/usr/bin/tmux' : opts.tmux
   mgr.sessions.set('sess-1', { persistKey: NODE, sshRemote: opts.sshRemote })
   return mgr
 }
+
+describe('PtyManager.historySearch attached-generation capture', () => {
+  beforeEach(() => { calls.length = 0; ssh.path = '/usr/bin/ssh'; vi.resetModules(); initPlatform(fakePlatform()) })
+  afterEach(() => { resetPlatformForTests() })
+  it('pins the exact local pane and captures all plain joined history', async () => {
+    script.answer = (_file, args) => ({ stdout: args.includes('display-message') ? '%42\n' : 'old needle\n' + 'recent\n'.repeat(500) })
+    const mgr = await manager()
+    expect((await mgr.historySearch('sess-1', 'needle')).rows).toEqual([{ line: 0, text: 'old needle' }])
+    expect(calls.map((c) => c.args)).toEqual([
+      ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', '=nt-node-1:', '#{pane_id}'],
+      ['-L', TMUX_SOCKET, 'capture-pane', '-p', '-J', '-t', '%42', '-S', '-']
+    ])
+  })
+  it('routes remote history through the actual master even without a local tmux', async () => {
+    script.answer = () => ({ stdout: 'remote needle\n' })
+    const mgr = await manager({ tmux: null, sshRemote: { conn: { host: 'remote', user: 'u' }, controlPath: '/tmp/owned-master' } })
+    expect((await mgr.historySearch('sess-1', 'needle')).rows[0].text).toBe('remote needle')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].file).toBe('/usr/bin/ssh')
+    expect(calls[0].args).toContain('ControlPath=/tmp/owned-master')
+    expect(calls[0].args.at(-1)).toContain("'=nt-node-1:'")
+    expect(calls[0].args.at(-1)).toContain('capture-pane -p -J -t "$nt_history_pane" -S -')
+  })
+  it('refuses missing/invalid panes and propagates capture failures', async () => {
+    const mgr = await manager()
+    await expect(mgr.historySearch('foreign', 'x')).rejects.toThrow(/no longer attached/)
+    expect(calls).toHaveLength(0)
+    script.answer = () => ({ stdout: 'not a pane' })
+    await expect(mgr.historySearch('sess-1', 'x')).rejects.toThrow(/could not be resolved/)
+    expect(calls).toHaveLength(1)
+    script.answer = (_f, args) => { if (args.includes('capture-pane')) throw new Error('capture failed'); return { stdout: '%42' } }
+    await expect(mgr.historySearch('sess-1', 'x')).rejects.toThrow('capture failed')
+  })
+  it('rejects a generation replaced during capture', async () => {
+    const mgr = await manager()
+    script.answer = (_f, args) => {
+      if (args.includes('capture-pane')) { mgr.sessions.set('sess-1', { persistKey: NODE }); return { stdout: 'needle' } }
+      return { stdout: '%42' }
+    }
+    await expect(mgr.historySearch('sess-1', 'needle')).rejects.toThrow(/terminal changed/)
+  })
+  it('uses the real native retained screen even when tmux persistence is off', async () => {
+    const mgr = await manager({ tmux: null })
+    const historyText = vi.fn(async () => 'native needle')
+    mgr.sessions.set('sess-1', { nodeId: NODE, nativeWindowsPane: { historyText } })
+    expect((await mgr.historySearch('sess-1', 'needle')).rows).toEqual([{ line: 0, text: 'native needle' }])
+    expect(historyText).toHaveBeenCalledOnce()
+    expect(calls).toHaveLength(0)
+  })
+})
 
 /**
  * The default healthy answers. Local: tmux answers the format, `ps` answers the tty listing.

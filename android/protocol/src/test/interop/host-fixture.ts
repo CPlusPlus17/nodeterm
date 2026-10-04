@@ -66,6 +66,7 @@ import {
   registerClaudeAccountsSource
 } from '../../../../../src/core/claude-config-dir'
 import { GitService } from '../../../../../src/core/git-service'
+import { searchTerminalHistory } from '../../../../../src/core/terminal-history'
 import { buildProjectsListBlob } from '../../../../../src/core/projects-list-blob'
 import { WorkspaceStore } from '../../../../../src/core/workspace-store'
 import { normalizeFor } from '../../../../../src/shared/agents/normalize'
@@ -263,6 +264,10 @@ async function runRelay(): Promise<void> {
   let sessionCounter = 0
 
   const pty: HostPtyManager = {
+    async historySearch(sessionId, query) {
+      emit({ event: 'historySearch', sessionId, query })
+      return searchTerminalHistory('old.* Ω 😀\n' + 'recent\n'.repeat(500), query)
+    },
     createDetached() {
       throw new Error('not used')
     },

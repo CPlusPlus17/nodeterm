@@ -28,6 +28,7 @@ import path from 'path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { IPC } from '../../shared/ipc'
 import { REF_MAX_LEN } from '../../shared/presence'
+import { validHistoryQuery, type HistorySearch } from '../../core/terminal-history'
 import type { CanvasMutation, CanvasState, DirEntry, KanbanColumn, KanbanLabel, PtyCreateOptions } from '../../shared/types'
 import type { AgentId } from '../../shared/agents/config'
 import { PtyManager, type DetachedSinks } from '../../core/pty-manager'
@@ -64,6 +65,8 @@ const FRESH_PROBE_BUDGET_MS = 750
 
 // The slice of pty-manager the host needs. PtyManager satisfies this; tests pass a fake.
 export interface HostPtyManager {
+  /** Search all retained output of this attached generation. Absent on older hosts. */
+  historySearch?(sessionId: string, query: string): Promise<HistorySearch>
   createDetached(options: PtyCreateOptions, sinks: DetachedSinks): string
   /** Attach a relay-served PTY to the EXISTING tmux session for a node id (create if absent). */
   attachDetached(
@@ -631,6 +634,19 @@ export function createHostHandlers(
     socket.respond(req.id, true, {})
   }
 
+  function handleHistorySearch(req: RpcRequest): void {
+    const p = asRecord(req.params)
+    const streamId = num(p.streamId, -1)
+    const stream = streams.get(streamId)
+    if (!stream?.sessionId) { socket.respond(req.id, false, { message: 'This terminal is no longer attached.' }); return }
+    if (!pty.historySearch) { socket.respond(req.id, false, { message: 'History search is not served on this host. Update nodeterm on the computer.' }); return }
+    if (!validHistoryQuery(p.query)) { socket.respond(req.id, false, { message: 'Enter a single-line search of 1–256 characters.' }); return }
+    void pty.historySearch(stream.sessionId, p.query).then((result) => {
+      if (streams.get(streamId) !== stream) throw new Error('The terminal detached while its history was searched.')
+      socket.respond(req.id, true, result)
+    }).catch((error: unknown) => socket.respond(req.id, false, { message: error instanceof Error ? error.message : 'History search failed.' }))
+  }
+
   // Serve a typed `git.*` verb against the injected GitService slice, jailed to the shared roots
   // like `fs.*`. Unlike fs (silent empty degrade — the Explorer just shows nothing), a denied or
   // failed git op answers with an EXPLICIT error: the source-control sheet must say why.
@@ -1057,6 +1073,9 @@ export function createHostHandlers(
           break
         case 'pty.scroll':
           handleScroll(req)
+          break
+        case 'pty.historySearch':
+          handleHistorySearch(req)
           break
         case 'fs.list':
         case 'fs.read':

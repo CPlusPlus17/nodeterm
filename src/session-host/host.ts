@@ -15,6 +15,7 @@
 import fs from 'fs'
 import net from 'net'
 import { hostMessagePane } from './message-pane'
+import { searchRetainedGeneration } from './history-search'
 import path from 'path'
 import crypto from 'crypto'
 import { sessionHostPaths, currentProtocolVersion, type SessionHostState } from './paths'
@@ -901,6 +902,8 @@ async function main(): Promise<void> {
         }
         return { ok: true, result: { text } satisfies CaptureResult }
       }
+      case 'historySearchV1':
+        return { ok: true, result: await searchRetainedGeneration(() => sessions.get(req.name), req.generation, req.query) }
       case 'executeLaunch': {
         if (clientProtocolVersion === 1) {
           return { ok: false, error: 'opaque launch requires session-host protocol v2' }

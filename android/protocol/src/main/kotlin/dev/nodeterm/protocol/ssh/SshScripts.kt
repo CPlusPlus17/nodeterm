@@ -2,6 +2,7 @@ package dev.nodeterm.protocol.ssh
 
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.TmuxNames
+import dev.nodeterm.protocol.model.TerminalHistory
 
 /**
  * The POSIX sh the direct-SSH transport runs on the paired computer. Generated shell, so every
@@ -367,6 +368,40 @@ object SshScripts {
             ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(target(nodeId))} || exit 2" else ""}
             ${phonePin(socket, phoneCreation)}
             "${'$'}NT_TMUX" -L ${socket(socket)} display-message -p -t $pane '#{pane_current_command}'
+        """.trimIndent()
+    }
+
+    /** Search on the computer, never transfer its full history to the phone. No copy-mode change. */
+    fun searchHistory(nodeId: String, query: String, socket: String, phoneCreation: String? = null): String {
+        require(TerminalHistory.validQuery(query)) { "invalid history query" }
+        val target = q("=" + target(nodeId) + ":")
+        val s = socket(socket)
+        return """
+            $PRELUDE
+            $PHONE_GUARD
+            [ -n "${'$'}NT_TMUX" ] || exit 127
+            ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(target(nodeId))} || exit 2" else ""}
+            ${phonePin(socket, phoneCreation)}
+            NT_PANE=${'$'}("${'$'}NT_TMUX" -L $s display-message -p -t $target '#{pane_id}') || exit ${'$'}?
+            case "${'$'}NT_PANE" in %*) case "${'$'}{NT_PANE#%}" in ''|*[!0-9]*) exit 2;; esac;; *) exit 2;; esac
+            umask 077
+            NT_HISTORY_FILE=${'$'}(mktemp "${'$'}{TMPDIR:-/tmp}/nodeterm-history.XXXXXXXX") || exit 2
+            trap 'rm -f "${'$'}NT_HISTORY_FILE"' EXIT HUP INT TERM
+            # Bound the spool even before wc: POSIX shells use 512- or 1024-byte file blocks.
+            (ulimit -f 102400; "${'$'}NT_TMUX" -L $s capture-pane -p -J -t "${'$'}NT_PANE" -S - > "${'$'}NT_HISTORY_FILE") || exit 3
+            NT_HISTORY_SIZE=${'$'}(wc -c < "${'$'}NT_HISTORY_FILE") || exit 3
+            [ "${'$'}NT_HISTORY_SIZE" -le ${TerminalHistory.CAPTURE_BYTES} ] || exit 4
+            LC_ALL=C NT_HISTORY_QUERY=${q(query)} awk '
+              BEGIN { query=ENVIRON["NT_HISTORY_QUERY"]; count=0; bytes=0; truncated=0; output="" }
+              { sub(/\r${'$'}/, ""); if (index(${'$'}0, query)) {
+                  value=(NR-1) "\t" ${'$'}0 "\n";
+                  if (count < ${TerminalHistory.MAX_ROWS} && bytes+length(value) <= ${TerminalHistory.MAX_BYTES}) {
+                    output=output value; bytes+=length(value); count++
+                  } else truncated=1
+                }
+              }
+              END { printf "NT-HISTORY-1\t%d\t%d\n%s", NR, truncated, output }
+            ' "${'$'}NT_HISTORY_FILE"
         """.trimIndent()
     }
 

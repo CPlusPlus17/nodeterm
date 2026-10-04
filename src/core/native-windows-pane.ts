@@ -41,6 +41,12 @@ export class NativeWindowsPane {
     return this.alive ? this.screen.serialize(full ? undefined : 200) : ''
   }
 
+  async historyText(): Promise<string> {
+    await this.tail
+    if (!this.alive) throw new Error('This terminal has exited.')
+    return this.screen.historyText()
+  }
+
   async owner(): Promise<PaneOwner | null> {
     if (!this.alive) return null
     const owner = await this.probe(this.proc.pid, this.generation)

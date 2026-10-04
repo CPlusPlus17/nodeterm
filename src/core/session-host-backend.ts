@@ -102,6 +102,10 @@ export async function sessionHostCapture(name: string, full: boolean): Promise<s
   return getClient().capture(name, full)
 }
 
+export async function sessionHostHistorySearch(name: string, query: string): Promise<import('./terminal-history').HistorySearch> {
+  return getClient().historySearch(name, query)
+}
+
 /** Execute already-rendered trusted input through the persistent generation's exactly-once
  * launch ledger. The plan never crosses preload/renderer/relay boundaries. */
 export async function sessionHostExecuteLaunch(

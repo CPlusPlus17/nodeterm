@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.model.KanbanColumn
 import dev.nodeterm.protocol.model.KanbanLabel
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.model.TerminalHistory
 import dev.nodeterm.protocol.relay.Frame
 import dev.nodeterm.protocol.relay.Framing
 import dev.nodeterm.protocol.relay.Op
@@ -90,6 +91,14 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
                 put("dir", if (up) "up" else "down")
                 put("lines", lines)
             })
+        }
+
+        override suspend fun searchHistory(query: String): TerminalHistory.Result {
+            if (!TerminalHistory.validQuery(query)) throw HostException("Enter a single-line search of 1–256 characters.")
+            if (streams[id] !== this) throw HostException("This terminal is no longer attached.")
+            val body = call("pty.historySearch", buildJsonObject { put("streamId", id); put("query", query) })
+            if (streams[id] !== this) throw HostException("This terminal detached while its history was searched.")
+            return TerminalHistory.parseRelay(body, query) ?: throw HostException("The host returned an invalid history search result.")
         }
 
         override suspend fun detach() {

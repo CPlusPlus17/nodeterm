@@ -196,6 +196,25 @@ afterEach(async () => {
 })
 
 describe('SessionHostClient handshake transition', () => {
+  it('binds history search to a confirmed generation and leaves an old refusing host usable', async () => {
+    const { userDataDir, paths } = createUserData('old-host-history-refusal')
+    const commands: string[] = []
+    let historyRequest: SessionHostRequest | undefined
+    await serve(paths.endpoint, (request, socket) => {
+      commands.push(request.cmd)
+      if (request.cmd === 'hello') socket.write(acceptedHello(request.id))
+      else if (request.cmd === 'hasSession') socket.write(encodeFrame({ id: request.id, ok: true, result: { exists: true, generation: 'kept-generation' } }))
+      else { historyRequest = request; socket.write(encodeFrame({ id: request.id, ok: false, error: 'unknown command' })) }
+    })
+    const client = new SessionHostClient({ userDataDir, repoRoot: userDataDir })
+    await expect(within(client.historySearch('nt-existing', 'needle'))).rejects.toThrow(/No confirmed/)
+    expect(commands).toEqual(['hello'])
+    expect(await within(client.hasSession('nt-existing'))).toBe(true)
+    await expect(within(client.historySearch('nt-existing', 'needle'))).rejects.toThrow('unknown command')
+    expect(historyRequest).toMatchObject({ cmd: 'historySearchV1', name: 'nt-existing', generation: 'kept-generation', query: 'needle' })
+    expect(await within(client.hasSession('nt-existing'))).toBe(true)
+    expect(commands).toEqual(['hello', 'hasSession', 'historySearchV1', 'hasSession'])
+  })
   it('keeps an old live host usable when it refuses the additive messaging extension', async () => {
     const { userDataDir, paths } = createUserData('old-host-message-refusal')
     const commands: string[] = []

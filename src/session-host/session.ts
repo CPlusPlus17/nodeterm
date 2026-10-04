@@ -286,6 +286,12 @@ export class HostSession {
     return this.term.serialize(scrollback)
   }
 
+  async historyText(): Promise<string> {
+    await this.outputTail
+    if (this.exited || this.retiring) throw new Error('This retained terminal has exited.')
+    return this.term.historyText()
+  }
+
   /**
    * Has the app in this pane requested bracketed paste? Behind `outputTail` for the same reason
    * `serialize` is: xterm applies writes asynchronously, so a mode set by output we have already

@@ -30,6 +30,9 @@ interface TerminalStream {
     fun resize(cols: Int, rows: Int)
     /** Scroll tmux's own history (its mouse is on): `lines` wheel notches, clamped host-side. */
     suspend fun scroll(up: Boolean, lines: Int)
+    /** Search all history retained by this terminal's host; a legacy host says unsupported. */
+    suspend fun searchHistory(query: String): dev.nodeterm.protocol.model.TerminalHistory.Result =
+        throw HostException("History search is unavailable on this host. Update nodeterm on the computer.")
     /** Stop viewing. The session keeps running. */
     suspend fun detach()
     /** Permanently end the session and take the node off its canvas (the desktop ×). */

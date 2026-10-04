@@ -515,6 +515,15 @@ export function remoteCapturePaneArgs(conn: SshConnection, controlPath: string, 
     tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -e -t ${sessionId} -S ${full ? '-' : '-200'}`)
   )
 }
+/** Full plain history of an exact session's pinned pane; capture failures propagate. */
+export function remoteHistoryCaptureArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  assertPasteTarget(sessionId)
+  return childArgs(conn, controlPath, tmuxCmd(
+    `nt_history_pane=$(tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(`=${sessionId}:`)} '#{pane_id}') || exit $?; ` +
+    `case "$nt_history_pane" in %*) case "${'$'}{nt_history_pane#%}" in ''|*[!0-9]*) exit 2;; esac;; *) exit 2;; esac; ` +
+    `tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -J -t "$nt_history_pane" -S -`
+  ))
+}
 /** The VISIBLE pane of a remote session, with colours — the relay attach snapshot (no history:
  *  the client paints it as the current screen before live output). */
 export function remoteCaptureScreenArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {

@@ -570,6 +570,16 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             write(seq.repeat(lines.coerceIn(1, 20)))
         }
 
+        override suspend fun searchHistory(query: String): dev.nodeterm.protocol.model.TerminalHistory.Result = withContext(Dispatchers.IO) {
+            if (ended) throw HostException("This terminal is no longer attached.")
+            if (!dev.nodeterm.protocol.model.TerminalHistory.validQuery(query)) throw HostException("Enter a single-line search of 1–256 characters.")
+            val creation = if (PhoneTerminals.validId(nodeId)) ownedPhoneCreation(nodeId) else null
+            val (code, out) = run(SshScripts.searchHistory(nodeId, query, socket, creation))
+            if (ended) throw HostException("This terminal detached while its history was searched.")
+            if (code != 0) throw HostException(if (code == 4) "Retained history exceeds the 50 MiB search limit." else "The computer could not capture this terminal's history.")
+            dev.nodeterm.protocol.model.TerminalHistory.parseSsh(out, query) ?: throw HostException("The computer returned an invalid history search result.")
+        }
+
         override suspend fun detach() {
             // Close BEHIND the writes already queued, so a keystroke typed just before leaving lands.
             val done = CompletableDeferred<Unit>()

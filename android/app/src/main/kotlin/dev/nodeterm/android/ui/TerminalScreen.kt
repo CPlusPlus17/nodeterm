@@ -294,6 +294,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
             // Over the whole body, key row and input bar included: they have nothing to do while copying,
             // and a touch on the sheet's text stays on the sheet (blockTouchesBelow, the A32 review).
             controller.copySheet?.let { snapshot -> CopySheet(controller, snapshot) }
+            if (controller.historyOpen) HistorySheet(controller)
         }
     }
 }
@@ -512,7 +513,7 @@ private fun KeyRow(controller: TerminalController) {
         }
         KeyChip("Find") {
             focusManager.clearFocus()
-            controller.openCopySheet()
+            controller.openHistory()
         }
         FilterChip(selected = controller.ctrlArmed, onClick = { controller.ctrlArmed = !controller.ctrlArmed }, label = { Text("Ctrl") })
         KeyChip("Esc", on) { controller.key("esc") }
