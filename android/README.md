@@ -6,22 +6,22 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Current source checkpoint (2026-10-04, A100–A112).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-04, A100–A116).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
-Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Managed canvas End still requires the relay;
+Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). Managed canvas End still requires the relay;
 closing the SSH viewer leaves the session running. This prepares the upstream Android contribution; no PR
-has been opened. Beta 13/code 14 is prepared and has passed the local release checks.
+has been opened. Beta 14/code 15 release checks are being prepared; beta 13 remains a historical prepared artifact.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
 
-**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+**Historical prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
 `ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
 along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
 with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
@@ -356,7 +356,7 @@ tested where the layer allows, and the numbered
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
 | Terminal (co-attach to the live tmux session) | ✓ | xterm.js renderer, native input bar, special keys, swipe = tmux scroll. Tap a link (also one wrapped over several rows, or an OSC 8 link): the phone names its host and opens it only when you confirm, and only an http(s) one. The Copy chip opens a sheet of the screen's lines and links to select and copy or share. A copy the pane sends itself (OSC 52, e.g. vim's `"+y`) reaches the clipboard too, but tmux's copy-mode is out of easy reach on a touch screen |
 | Retained terminal history search | both | Find searches all retained host output on the exact stream/pane, literal case-sensitive matches with line numbers and explicit caps; captured Copy search stays local |
-| Dictation into the input bar | ✓ | A mic beside Send: Android's speech recognizer, in the phone's language, writes into the draft and never sends it. The microphone permission is asked on the first tap; no mic shows on a phone without a recognizer. Not the on-device Whisper of iOS and the desktop (see [Known gaps](../docs/android.md#known-gaps)); the keyboard's own voice typing works too |
+| Dictation into the input bar | ✓ | A mic beside Send: Android's speech recognizer writes into the draft and never sends it. Settings → Dictation offers searchable languages/regions and System default; availability depends on the phone's speech service/models. The microphone permission is asked on the first tap; no mic shows on a phone without a recognizer. Not the on-device Whisper of iOS and the desktop (see [Known gaps](../docs/android.md#known-gaps)); the keyboard's own voice typing works too |
 | Sleeping (Eco) session opened | ✓ | Relay wakes an eligible owned offscreen/closed-project node without switching tabs. Direct SSH offers an explicit wake tap. Both apply the agent's measured policy and preserve Pause/owner/process guards |
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay when it is the computer's own; a session another computer's nodeterm runs there, or one no listing names, is not offered the relay |
 | Terminal access to the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Direct terminal access through this computer needs relay; a current Desktop's SSH actions service can separately handle its owned SSH-project Board metadata and node nudges |
@@ -802,9 +802,7 @@ iOS app does receive the detail, in the push the desktop sends.
 
   A computer without Pro cannot revoke the old relay device token at the relay (that request is
   signed with the Pro entitlement), so whoever took it may still reach that computer through the
-  relay with the old box key. The revoke unpinned that key, so the computer refuses it without a
-  dialog until nodeterm there restarts, and after that shows its approval dialog with a code before it
-  lets it in: approve a phone there only while your own phone is showing the same code.
+  relay with the old box key. For a confirmed recorded last-key revoke, the computer unpins that key and refuses it until restart, then requires approval again. Missing key association/revoker is unconfirmed; another pairing authorizing the same key is retained (A113). Read the Settings outcome before assuming remote access ended. Approve only while your own phone shows the same code.
 - Dictation (the terminal input bar's mic) goes through the phone's speech recognition service,
   which on most phones is Google's and may send what you say to its servers; it is not the on-device
   Whisper of the desktop and iOS. The microphone is used only after a tap on the mic, until the
@@ -847,3 +845,91 @@ iOS app does receive the detail, in the push the desktop sends.
   key from the QR. Its answer is read as untrusted: at most 64 KiB, within 45 seconds.
 
 Design notes, the protocol mapping and known gaps: [`docs/android.md`](../docs/android.md).
+
+## A113
+
+**A legacy pairing can report a successful revoke without proof that relay access was removed (2026-10-04).**
+
+Fixed in `349b791a`. Desktop revocation now reports `unconfirmed` for a saved pairing with no
+recorded relay key or no available revoker, and `retained` when another saved pairing still
+authorizes that exact key. Settings shows these outcomes separately from local SSH-key removal
+and Pro expiry. An absent relay outcome from an older main process also remains unconfirmed;
+the confirmation dialog no longer promises removal of every connection. Confirmed last-key
+unpin/session closure remains required for the clean relay receipt. Seven affected main/renderer
+suites pass 111 tests; eleven isolated assertion mutants are caught with passing control/restored
+runs. The source-bound mutation fixture uses a temporary-home service boundary and mounted React.
+These additive local Desktop IPC outcomes do not change the phone wire contract. Full legacy
+identity association/migration and physical relay revocation remain open; no unrelated approved
+key is guessed or removed.
+
+## A114
+
+**Android dictation has no language choice (A59 follow-up, 2026-10-04).**
+
+Fixed in `6b989e59`. Settings offers a searchable language/region picker using human-readable
+locale names and an explicit System default. The phone-wide preference is separate from host
+identities and is frozen when a dictation starts. System default omits the native language extra;
+a chosen language sends its canonical BCP47 tag. Partial/final results still fill only the draft,
+and microphone, cancellation and lifecycle rules remain unchanged. The bounded catalogue lists
+locales, not installed speech models: native unsupported/unavailable errors stay visible.
+Three focused protocol classes pass 39 methods, offline app compilation passes, and eighteen
+isolated compiled mutants fail assertions with passing control/restored runs. Native intent/UI
+wiring is covered by source guards; the cached Kotlin/Compose compilation is separate evidence,
+not a recognizer/device pass. Physical language availability, recognition and layout checks remain
+pending. No host wire contract changes.
+
+## A115
+
+**Re-pairing leaves local host preferences and lets retired connections publish late (2026-10-04).**
+
+Fixed in `0a71c028`. Replacing a paired record retires its route, relay approval,
+managed-creation checkpoint and old token while preserving unrelated computers and same-ID preference
+updates. Forget and re-pair retire the exact old connection objects; a shared session-admission
+barrier covers local record/token publication, including incoming IDs with no previous key match.
+No network await runs under that barrier. A failed local secret write retains the record, while its
+old socket remains retired. This is a local monitor fence, not a crash-safe Keystore/preferences
+transaction.
+
+Owner-bound lifetime leases cancel pending dials and prevent late pin, LAN, relay-token, approval,
+notification or checkpoint publication into a successor, even when it reuses the ID and key.
+Normal disconnect still permits reconnect and retains an uncertain creation receipt; permanent
+retirement never reconnects. Both primary and side relay results are retained before cancellable
+handoff and closed on cancellation. Quiet notification reach uses the exact session without a
+reverse manager lookup. Closing local polling does not revoke an existing Desktop SAS consent.
+
+Private controls/restored runs execute 177 repository methods and 29 actual
+production HostStore adapter cases against in-memory Android interfaces. 73 isolated variants
+fail assertions. One additional redundant retired-guard experiment survives equivalently because
+retirement also invalidates every admitted generation; it is recorded separately and is not counted
+as caught. Native wiring remains source-guard evidence, with app compilation checked separately.
+No phone, live transport, physical durability or full legacy Desktop identity migration pass is
+claimed. No host wire contract changes.
+
+## A116
+
+**Pairing can advertise a Docker/VPN address the phone cannot reach (A49/A74 follow-up, 2026-10-04).**
+
+Fixed in `a6b3e88b`. Desktop Settings → Phone lists current IPv4 adapters and an Automatic choice.
+The saved selection is an adapter name, so each new QR and authenticated relay LAN report follows
+its current address across DHCP. An unavailable explicit adapter prevents a new QR and omits the
+report's dial address; it never silently substitutes another adapter. Automatic prefers a physical
+adapter on POSIX, retains Windows' validated current route hint, and permits a virtual-only fallback.
+The list describes current local addresses, not proof that the phone can reach them. Windows remains
+relay-only; browser Server pairing/network controls deliberately remain unsupported.
+
+Both Settings and quick pairing acknowledge pending settings writes before starting. Changing the
+choice hides/stops the old QR first, offers an explicit failed-save retry, and cannot restart after
+its visible row is hidden. Real global-search rows work too; hiding that row retires only its own
+listener, including while its parent hook remains mounted. Old replies/events cannot stop or update
+a newer pairing view. The legacy exported picker helpers also use the shared policy.
+
+Isolated Desktop controls/restored runs pass 156 methods; one unrelated pre-existing worker-spawn
+guard is explicitly filtered in that private sandbox and remains part of the full merged gate.
+Root's actual local HTTP-listener controls/restored pass all six methods. Five producer→Android
+methods call the real policy, QR builder and LAN reporter with a fake OS table/public-key directory,
+then the existing Android parser and LAN-refresh policy. They prove paired-host identity/pin
+preservation, not Keystore or approval publication. The three final proof groups catch 56 assertion
+mutants (32 Desktop, six real HTTP, eighteen interop); preliminary receipts remain separate.
+The existing wire shape is unchanged and the Android client needs no parser change. iOS @eneskirca
+should adopt the existing authenticated `lan` field; it now reflects the saved Desktop adapter.
+Physical QR/VPN/DHCP, search UI and multiadapter checks remain pending. No external message sent.

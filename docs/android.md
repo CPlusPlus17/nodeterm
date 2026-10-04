@@ -5,14 +5,14 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Current source checkpoint (2026-10-04, A100–A112).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-04, A100–A116).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
-Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). This prepares the upstream Android contribution; no PR
-has been opened. Beta 13/code 14 is prepared and has passed the local release checks.
+Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
+has been opened. Beta 14/code 15 release checks are being prepared; beta 13 remains a historical prepared artifact.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -178,8 +178,7 @@ answering "Awaiting host approval.", which a background check reads as an approv
 answered once the host has approved the phone or raised its dialog (`PEER_DECISION_HOLD_MS`, 5 s at
 most). No new file is involved: the key is the one
 the scan already authorized, and someone who could edit `agent.json` has a shell as the user, which
-could edit the pin store just as well. Revoking the device drops the pin and closes any relay session
-the phone has open at that moment. The phone then redials (about 1.5 s after a drop while its screen
+could edit the pin store just as well. A confirmed revoke of a recorded last key drops its pin and closes the phone's relay sessions. A113 reports missing association/revoker as unconfirmed and a key authorized by another pairing as retained; removing a local entry alone proves neither cut. The phone then redials (about 1.5 s after a drop while its screen
 is open), and for the rest of that desktop run such a handshake raises no SAS dialog: the standing
 host leaves it unapproved, so the phone hears "Awaiting host approval.", and closes it a few seconds
 later (`REVOKED_PHONE_DENY_MS`), which the phone reads as a refusal and stops dialing on its own, as
@@ -396,7 +395,7 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
-**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+**Historical prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
 `ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
 along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
 with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
@@ -1679,11 +1678,12 @@ and is skipped where that jar is not in the Gradle cache (CI). The microphone pe
 how to allow it, and the manifest does not require a microphone. The button is hidden when
 `SpeechRecognizer.isRecognitionAvailable` is false, which on Android 11 and later needs the
 manifest's `<queries>` entry for `android.speech.RecognitionService`. The screen cancels a dictation
-when it stops (nothing listens in the background) and releases the recognizer when it goes. No
-language is set (`RecognizerIntent.EXTRA_LANGUAGE` is left out), so the recognizer uses the phone's
-own language: the one the user chose for the phone and its voice input. The desktop's dictation
-likewise pins no language by default (`auto`, Whisper's own detection). A picker would have to come from the recognizer's own supported list
-(`checkRecognitionSupport`, Android 13 and later), not the desktop's Whisper list. The recognizer is
+when it stops (nothing listens in the background) and releases the recognizer when it goes.
+Settings now offers a searchable language/region picker (A114). System default omits
+`RecognizerIntent.EXTRA_LANGUAGE`; an explicit choice sends its canonical BCP47 tag, frozen for
+that utterance. The locale catalogue describes language names, not installed-model support.
+Native unsupported/unavailable errors remain visible. The desktop defaults to `auto`, Whisper's
+own detection. The recognizer is
 the phone's recognition service (Google's on most phones), which may send the audio to its servers,
 unlike Whisper. The machine and the error codes are unit-tested; the recognizer's wiring, the
 permission request and the manifest are pinned in the source; how the dictation sounds and behaves
@@ -2093,7 +2093,10 @@ later fix left to a device.
     airplane mode, on a phone without offline speech recognition, one line says it could not reach
     the network. Send the app to the background while it listens: the microphone indicator (Android
     12 and later) goes off. On a phone with no speech recognition service (no Google app, say) the mic
-    is not shown, and the keyboard's own voice typing still fills the field. *(A59)*
+    is not shown, and the keyboard's own voice typing still fills the field. In Settings → Dictation,
+    choose a language/region, return to the terminal and check its recognition and draft-only behavior.
+    Test System default and a service-unavailable language, and cancel/background during dictation.
+    These A114 variants are Pending and inherit no older recognizer pass. *(A59, A114)*
 
 ### A computer a desktop drives over SSH
 
@@ -2297,9 +2300,11 @@ the wider relay action matrix remain device checks.
   (`A74-refresh`) does not take the reader's answer as the truth about the pin: it drops one only for a
   key the SSH leg was refused that the reader also names, so a pin that works (one trusted on first use
   with an older desktop, on a computer whose sshd serves a key the reader misses) is kept. The
-  refreshed address is the QR's `pickLanIPv4`, the first non-internal IPv4 adapter: on a computer
-  with several (Ethernet and Wi-Fi, a VPN), it is whichever the OS lists first, which may not be the
-  one the phone can reach; the relay then still serves. The refresh needs a relay connection, so a phone that only ever uses
+  refreshed address now follows the same saved Desktop Settings → Phone adapter as the QR (A116).
+  Automatic prefers a physical LAN adapter on POSIX; select a VPN or another adapter when needed.
+  DHCP follows that adapter's current IPv4. A missing selected adapter supplies no replacement
+  dial address; current address enumeration does not prove phone reachability. The refresh needs
+  a relay connection, so a phone that only ever uses
   "Only on my network" keeps the pairing's address and keys, and the iOS app does not read `lan` yet.
 - **Private beta device validation pending** (audit `A50`). AGP marks every debug build
   debuggable: anyone with adb access to the unlocked phone while USB
@@ -2338,7 +2343,97 @@ the wider relay action matrix remain device checks.
   Whisper; running whisper.cpp on the phone would be a native build and model downloads of its own.
   The Cloud engine iOS and the desktop share (`/v1/transcribe`, multipart WAV and a locale) does not
   exist on the backend yet (`src/core/speech/cloud-speech.ts` maps its 404 to "not available yet"),
-  so there is nothing for Android to send that request to either. The language is the phone's own,
-  with no picker (the desktop's list is Whisper's; iOS keeps its own, issue #591). The phone
+  so there is nothing for Android to send that request to either. Settings → Dictation now offers
+  a searchable language/region choice (A114); System default leaves the recognizer's language unset.
+  The locale catalogue does not prove the phone's speech service has that model installed, and
+  unavailable/unsupported errors stay visible. Physical language checks remain pending. The phone
   keyboard's own voice typing (Gboard's mic, say) also works in the input bar, mic button or not.
 - **Instrumented UI tests** and a store listing do not exist yet.
+
+## A113
+
+**A legacy pairing can report a successful revoke without proof that relay access was removed (2026-10-04).**
+
+Fixed in `349b791a`. Desktop revocation now reports `unconfirmed` for a saved pairing with no
+recorded relay key or no available revoker, and `retained` when another saved pairing still
+authorizes that exact key. Settings shows these outcomes separately from local SSH-key removal
+and Pro expiry. An absent relay outcome from an older main process also remains unconfirmed;
+the confirmation dialog no longer promises removal of every connection. Confirmed last-key
+unpin/session closure remains required for the clean relay receipt. Seven affected main/renderer
+suites pass 111 tests; eleven isolated assertion mutants are caught with passing control/restored
+runs. The source-bound mutation fixture uses a temporary-home service boundary and mounted React.
+These additive local Desktop IPC outcomes do not change the phone wire contract. Full legacy
+identity association/migration and physical relay revocation remain open; no unrelated approved
+key is guessed or removed.
+
+## A114
+
+**Android dictation has no language choice (A59 follow-up, 2026-10-04).**
+
+Fixed in `6b989e59`. Settings offers a searchable language/region picker using human-readable
+locale names and an explicit System default. The phone-wide preference is separate from host
+identities and is frozen when a dictation starts. System default omits the native language extra;
+a chosen language sends its canonical BCP47 tag. Partial/final results still fill only the draft,
+and microphone, cancellation and lifecycle rules remain unchanged. The bounded catalogue lists
+locales, not installed speech models: native unsupported/unavailable errors stay visible.
+Three focused protocol classes pass 39 methods, offline app compilation passes, and eighteen
+isolated compiled mutants fail assertions with passing control/restored runs. Native intent/UI
+wiring is covered by source guards; the cached Kotlin/Compose compilation is separate evidence,
+not a recognizer/device pass. Physical language availability, recognition and layout checks remain
+pending. No host wire contract changes.
+
+## A115
+
+**Re-pairing leaves local host preferences and lets retired connections publish late (2026-10-04).**
+
+Fixed in `0a71c028`. Replacing a paired record retires its route, relay approval,
+managed-creation checkpoint and old token while preserving unrelated computers and same-ID preference
+updates. Forget and re-pair retire the exact old connection objects; a shared session-admission
+barrier covers local record/token publication, including incoming IDs with no previous key match.
+No network await runs under that barrier. A failed local secret write retains the record, while its
+old socket remains retired. This is a local monitor fence, not a crash-safe Keystore/preferences
+transaction.
+
+Owner-bound lifetime leases cancel pending dials and prevent late pin, LAN, relay-token, approval,
+notification or checkpoint publication into a successor, even when it reuses the ID and key.
+Normal disconnect still permits reconnect and retains an uncertain creation receipt; permanent
+retirement never reconnects. Both primary and side relay results are retained before cancellable
+handoff and closed on cancellation. Quiet notification reach uses the exact session without a
+reverse manager lookup. Closing local polling does not revoke an existing Desktop SAS consent.
+
+Private controls/restored runs execute 177 repository methods and 29 actual
+production HostStore adapter cases against in-memory Android interfaces. 73 isolated variants
+fail assertions. One additional redundant retired-guard experiment survives equivalently because
+retirement also invalidates every admitted generation; it is recorded separately and is not counted
+as caught. Native wiring remains source-guard evidence, with app compilation checked separately.
+No phone, live transport, physical durability or full legacy Desktop identity migration pass is
+claimed. No host wire contract changes.
+
+## A116
+
+**Pairing can advertise a Docker/VPN address the phone cannot reach (A49/A74 follow-up, 2026-10-04).**
+
+Fixed in `a6b3e88b`. Desktop Settings → Phone lists current IPv4 adapters and an Automatic choice.
+The saved selection is an adapter name, so each new QR and authenticated relay LAN report follows
+its current address across DHCP. An unavailable explicit adapter prevents a new QR and omits the
+report's dial address; it never silently substitutes another adapter. Automatic prefers a physical
+adapter on POSIX, retains Windows' validated current route hint, and permits a virtual-only fallback.
+The list describes current local addresses, not proof that the phone can reach them. Windows remains
+relay-only; browser Server pairing/network controls deliberately remain unsupported.
+
+Both Settings and quick pairing acknowledge pending settings writes before starting. Changing the
+choice hides/stops the old QR first, offers an explicit failed-save retry, and cannot restart after
+its visible row is hidden. Real global-search rows work too; hiding that row retires only its own
+listener, including while its parent hook remains mounted. Old replies/events cannot stop or update
+a newer pairing view. The legacy exported picker helpers also use the shared policy.
+
+Isolated Desktop controls/restored runs pass 156 methods; one unrelated pre-existing worker-spawn
+guard is explicitly filtered in that private sandbox and remains part of the full merged gate.
+Root's actual local HTTP-listener controls/restored pass all six methods. Five producer→Android
+methods call the real policy, QR builder and LAN reporter with a fake OS table/public-key directory,
+then the existing Android parser and LAN-refresh policy. They prove paired-host identity/pin
+preservation, not Keystore or approval publication. The three final proof groups catch 56 assertion
+mutants (32 Desktop, six real HTTP, eighteen interop); preliminary receipts remain separate.
+The existing wire shape is unchanged and the Android client needs no parser change. iOS @eneskirca
+should adopt the existing authenticated `lan` field; it now reflects the saved Desktop adapter.
+Physical QR/VPN/DHCP, search UI and multiadapter checks remain pending. No external message sent.

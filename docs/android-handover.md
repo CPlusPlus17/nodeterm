@@ -3,26 +3,26 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A112`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A116`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-04, A100–A112).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-04, A100–A116).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
-Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). This prepares the upstream Android contribution; no PR
-has been opened. Beta 13/code 14 is prepared and has passed the local release checks.
+Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
+has been opened. Beta 14/code 15 release checks are being prepared; beta 13 remains a historical prepared artifact.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
 
-**Prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
+**Historical prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
 `ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
 along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,
 with zero failures, errors or skips. Offline app compilation, **1433 affected Vitest tests /
@@ -1198,10 +1198,10 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-When phone testing resumes, install prepared beta 13/code 14 as a same-signer update
+When phone testing resumes, install the newest prepared private beta as a same-signer update
 and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
-the matching beta-13 source for host-dependent features, keeping the held older paired fixture
-and its original terminal intact. Test A100–A112 and earlier A96–A99 on the intended Pixel;
+the matching APK source for host-dependent features, keeping the held older paired fixture
+and its original terminal intact. Test A100–A116 and earlier A96–A99 on the intended Pixel;
 source/build results do not promote physical checklist items.
 
 **Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
@@ -1275,9 +1275,10 @@ section before starting, since the verifier corrections take precedence):
   still opens the session. iOS adoption is owed to @eneskirca; see `hook-reply-approvals.md`.
 - **A49 / A74 residuals.** Phones paired before batch E have no anchors and stay on
   trust-on-first-use until they pair again or get a relay listing. Recursive Includes are source-fixed in A99. A relative `HostKey` path remains unread, so SSH is refused for
-  it (Auto falls back to the relay). `pickLanIPv4` reports the first non-internal adapter, which
-  may not be the one the phone can reach. A phone that only uses "Only on my network" never gets a
-  refresh.
+  it (Auto falls back to the relay). A116 adds a Desktop network selector shared by the QR and
+  authenticated relay address refresh; an unavailable chosen adapter never silently falls back.
+  Actual multiadapter/VPN checks remain pending. A phone that only uses "Only on my network"
+  never gets a relay address refresh.
 - **A72 follow-up is source-fixed (A102/A103).** Trusted project env/shell is prepared before
   cold relay input; saved owner/account/agent wins. Per-agent launch/resume/wake policy uses actual
   host capabilities. Physical/live agent policy combinations remain open.
@@ -1291,8 +1292,9 @@ section before starting, since the verifier corrections take precedence):
   still starts phone sessions in the home folder until it is updated.
 - **A07 for older pairings.** A device paired without a recorded `relayBoxKey` (before A07, or
   any phone that does not send `boxPublicKey`, which includes current iOS builds) has nothing to
-  unpin or cut on revoke and is not approved on a late adoption. Fixing it needs a SAS-approval pin
-  to be linked to a device entry, which the approved-devices store does not record.
+  unpin or cut on revoke and is not approved on a late adoption. A113 now reports that relay
+  revocation is unconfirmed, rather than promising remote access is gone. Full repair still needs
+  a SAS-approval pin linked to a device entry, which the approved-devices store does not record.
 - **Remaining parity.** Current typed SSH Git and the A108 selected-profile service support
   Board writes and Desktop delivery-only node nudges without relay. Git works on admitted
   local/driven folders independently of the service; Server advertises Board and, with an
@@ -1303,8 +1305,9 @@ section before starting, since the verifier corrections take precedence):
   POSIX tmux profile; Windows/non-tmux and another desktop's driven projects remain unsupported.
   Phone-owned plain SSH New remains separate, with historical focused Pixel proof.
   No immediate FCM or Live-Activity equivalent (A25); A93 needs the hosted relay maintainers.
-  All-computers lifecycle/notifications and new source flows need physical verification. Dictation
-  has no language picker (A59); SSH setup has no password bootstrap/install one-liner (A27).
+  All-computers lifecycle/notifications and new source flows need physical verification. A114 adds
+  a searchable dictation language picker; native language/model checks remain pending. SSH setup
+  offers public-key Copy/Share and an idempotent authorized_keys install command (A27). One-time password bootstrap and the separate Server installer remain unsupported.
 - **Desktop file-link follow-up (`A92`) is fixed in `127b6b28`.** `paragraphContaining` now reserves
   the hovered row within the 32-row window. Focused/affected Vitest suites, full TypeScript check
   and three isolated mutants pass; interactive desktop hover is pending.
@@ -1315,8 +1318,7 @@ section before starting, since the verifier corrections take precedence):
   key is retained in ignored local state; the first actual private beta is built, signed and
   updated on the intended Pixel with manual SSH registration/key/pin and notification grant
   preserved. The full phone pass remains open; the wrong-MI8 test install was removed.
-- **HostStore leftovers.** `HostStore.upsert` leaves a replaced record's `route.<id>` /
-  `relayApproved.<id>` prefs behind (pre-existing).
+- **Host record retirement is source-fixed (A115).** Replacement retires route/approval/creation preferences and tokens. Session admission and local record publication share a barrier; stale dials and callbacks cannot overwrite a new pairing. Physical replacement/background checks remain pending.
 - **Earlier restricted-sandbox limits:** server-e2e and native-module vitest suites could not run there (`npm ci
   --ignore-scripts` skips the native builds, and there is no `ssh` client); the same 14 tests and 31
   files fail identically on the pre-session commit. Desktop CI does not run on branch pushes here,
@@ -1644,9 +1646,9 @@ commits asked for. Its ledger is 10 Pass / 22 Partial / 32 Pending; new source f
 
 Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodeterm.
 Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
-source before editing. A100–A112 close retained history, typed read recovery, project launch settings,
+source before editing. A100–A116 close retained history, typed read recovery, project launch settings,
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
-host-owned managed New over SSH. Beta 13/code 14 is prepared with local release checks complete.
+host-owned managed New over SSH, revoke reporting, dictation language, host retirement and pairing adapter choice. Beta 14/code 15 release checks are being prepared.
 The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
 paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
 
@@ -1668,3 +1670,91 @@ protocol `gradle test --offline`, offline app `gradle compileKotlin --offline`, 
 `npm run typecheck` for desktop changes. Confirm the exact-head Android workflow green afterwards.
 Local offline APK builds are authorized; keep the retained signer, APKs and private proofs out of Git.
 Google Maven is blocked: use existing cached local tools or the real CI build, never try to reach it.
+
+## A113
+
+**A legacy pairing can report a successful revoke without proof that relay access was removed (2026-10-04).**
+
+Fixed in `349b791a`. Desktop revocation now reports `unconfirmed` for a saved pairing with no
+recorded relay key or no available revoker, and `retained` when another saved pairing still
+authorizes that exact key. Settings shows these outcomes separately from local SSH-key removal
+and Pro expiry. An absent relay outcome from an older main process also remains unconfirmed;
+the confirmation dialog no longer promises removal of every connection. Confirmed last-key
+unpin/session closure remains required for the clean relay receipt. Seven affected main/renderer
+suites pass 111 tests; eleven isolated assertion mutants are caught with passing control/restored
+runs. The source-bound mutation fixture uses a temporary-home service boundary and mounted React.
+These additive local Desktop IPC outcomes do not change the phone wire contract. Full legacy
+identity association/migration and physical relay revocation remain open; no unrelated approved
+key is guessed or removed.
+
+## A114
+
+**Android dictation has no language choice (A59 follow-up, 2026-10-04).**
+
+Fixed in `6b989e59`. Settings offers a searchable language/region picker using human-readable
+locale names and an explicit System default. The phone-wide preference is separate from host
+identities and is frozen when a dictation starts. System default omits the native language extra;
+a chosen language sends its canonical BCP47 tag. Partial/final results still fill only the draft,
+and microphone, cancellation and lifecycle rules remain unchanged. The bounded catalogue lists
+locales, not installed speech models: native unsupported/unavailable errors stay visible.
+Three focused protocol classes pass 39 methods, offline app compilation passes, and eighteen
+isolated compiled mutants fail assertions with passing control/restored runs. Native intent/UI
+wiring is covered by source guards; the cached Kotlin/Compose compilation is separate evidence,
+not a recognizer/device pass. Physical language availability, recognition and layout checks remain
+pending. No host wire contract changes.
+
+## A115
+
+**Re-pairing leaves local host preferences and lets retired connections publish late (2026-10-04).**
+
+Fixed in `0a71c028`. Replacing a paired record retires its route, relay approval,
+managed-creation checkpoint and old token while preserving unrelated computers and same-ID preference
+updates. Forget and re-pair retire the exact old connection objects; a shared session-admission
+barrier covers local record/token publication, including incoming IDs with no previous key match.
+No network await runs under that barrier. A failed local secret write retains the record, while its
+old socket remains retired. This is a local monitor fence, not a crash-safe Keystore/preferences
+transaction.
+
+Owner-bound lifetime leases cancel pending dials and prevent late pin, LAN, relay-token, approval,
+notification or checkpoint publication into a successor, even when it reuses the ID and key.
+Normal disconnect still permits reconnect and retains an uncertain creation receipt; permanent
+retirement never reconnects. Both primary and side relay results are retained before cancellable
+handoff and closed on cancellation. Quiet notification reach uses the exact session without a
+reverse manager lookup. Closing local polling does not revoke an existing Desktop SAS consent.
+
+Private controls/restored runs execute 177 repository methods and 29 actual
+production HostStore adapter cases against in-memory Android interfaces. 73 isolated variants
+fail assertions. One additional redundant retired-guard experiment survives equivalently because
+retirement also invalidates every admitted generation; it is recorded separately and is not counted
+as caught. Native wiring remains source-guard evidence, with app compilation checked separately.
+No phone, live transport, physical durability or full legacy Desktop identity migration pass is
+claimed. No host wire contract changes.
+
+## A116
+
+**Pairing can advertise a Docker/VPN address the phone cannot reach (A49/A74 follow-up, 2026-10-04).**
+
+Fixed in `a6b3e88b`. Desktop Settings → Phone lists current IPv4 adapters and an Automatic choice.
+The saved selection is an adapter name, so each new QR and authenticated relay LAN report follows
+its current address across DHCP. An unavailable explicit adapter prevents a new QR and omits the
+report's dial address; it never silently substitutes another adapter. Automatic prefers a physical
+adapter on POSIX, retains Windows' validated current route hint, and permits a virtual-only fallback.
+The list describes current local addresses, not proof that the phone can reach them. Windows remains
+relay-only; browser Server pairing/network controls deliberately remain unsupported.
+
+Both Settings and quick pairing acknowledge pending settings writes before starting. Changing the
+choice hides/stops the old QR first, offers an explicit failed-save retry, and cannot restart after
+its visible row is hidden. Real global-search rows work too; hiding that row retires only its own
+listener, including while its parent hook remains mounted. Old replies/events cannot stop or update
+a newer pairing view. The legacy exported picker helpers also use the shared policy.
+
+Isolated Desktop controls/restored runs pass 156 methods; one unrelated pre-existing worker-spawn
+guard is explicitly filtered in that private sandbox and remains part of the full merged gate.
+Root's actual local HTTP-listener controls/restored pass all six methods. Five producer→Android
+methods call the real policy, QR builder and LAN reporter with a fake OS table/public-key directory,
+then the existing Android parser and LAN-refresh policy. They prove paired-host identity/pin
+preservation, not Keystore or approval publication. The three final proof groups catch 56 assertion
+mutants (32 Desktop, six real HTTP, eighteen interop); preliminary receipts remain separate.
+The existing wire shape is unchanged and the Android client needs no parser change. iOS @eneskirca
+should adopt the existing authenticated `lan` field; it now reflects the saved Desktop adapter.
+Physical QR/VPN/DHCP, search UI and multiadapter checks remain pending. No external message sent.
