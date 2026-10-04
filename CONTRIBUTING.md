@@ -120,10 +120,12 @@ applicable here":
 
 1. **Desktop** (Electron)
 2. **Server Edition** (Linux, browser)
-3. **Mobile companion** — *nodeterm mobile*, a **private** repo (`nodeterm-ios`, SwiftUI). You
-   cannot open a PR against it, so this is normally a follow-up note rather than same-PR
-   work: say in your PR what the mobile side would need, and **mention @eneskirca** so it
-   gets picked up there. "Not applicable" is a fine answer — just make it a stated one.
+3. **Mobile companion** — *nodeterm mobile*, two **private** repos: `nodeterm-ios` (SwiftUI) and
+   `eneskirca/nodeterm-android` (Kotlin, in development). You cannot open a PR against either, so
+   this is normally a follow-up note rather than same-PR work: say in your PR what the mobile side
+   would need, and **mention @eneskirca** so it gets picked up there. "Not applicable" is a fine
+   answer — just make it a stated one. Never assume the phone is an iPhone in desktop copy or
+   defaults.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
@@ -490,6 +492,12 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   "fix" this by installing the key into `administrators_authorized_keys`. The phone tries SSH before
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
+
+- **Phone keys and store links are platform-neutral.** New paired keys are stamped
+  `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
+  existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
+  `mobileStoreLinks()` in `src/renderer/lib/links.ts` — the Play link stays hidden behind
+  `ANDROID_APP_PUBLISHED` until the listing exists, and a guard test refuses direct store URLs.
 
 - **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
   in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —

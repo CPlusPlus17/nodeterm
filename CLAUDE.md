@@ -8313,6 +8313,19 @@ unix-socket forward over it. POSIX keeps OpenSSH untouched.
   Phone "Remove" (`pairing-service.revokeDevice`) revokes ALL phone pins and cuts ALL phone relay
   sessions, before the SSH key and the device entry go — all-phones because no box key maps to a
   device; a failure reports `local:false` and keeps the device listed to retry.
+- **Phone pairing is platform-neutral, and revoke still speaks the iOS-era stamp.** New keys are
+  stamped `nodeterm-mobile-<deviceId>` (`pairing-core.deviceCommentFor`); `filterAuthorizedKeys`
+  matches BOTH that and the legacy `nodeterm-ios-<deviceId>` (`deviceCommentsFor`), because every
+  iPhone paired before Android existed carries the old stamp — drop the legacy leg and "Remove"
+  reports a phone removed while its SSH key stays live. The device name is what the phone sends
+  (Android sends one), sanitized to one ≤64-code-point line; with none it is `'Phone'`, EXCEPT the
+  iOS app — which has never sent a name — is recognised by its fixed key comment `nodeterm-ios` and
+  keeps `'iPhone'`. Store links go through `renderer/lib/links.ts` `mobileStoreLinks()`; the Play
+  link is hidden by the single `ANDROID_APP_PUBLISHED` flag until the listing exists, and
+  `mobileStore.guard.test.ts` refuses a direct store URL anywhere else. `LicenseSource` includes
+  `'google'` (a Play purchase bridged from the phone, `google:<orderId>`), with its own
+  `licenseCopy` sentence. `settings.mobileLiveActivities` keeps its key; the UI says "Live updates
+  on phone".
 - **A Windows desktop pairs relay-only — no SSH key, and do not "fix" that by writing one.** The
   phone's direct-SSH path is POSIX sh + tmux end to end (nodeterm-ios `HostCommands`, `TmuxBinary`,
   the typed `tmux new-session -A` attach, workspace paths with no `%APPDATA%` candidate). Windows
@@ -9301,11 +9314,13 @@ For every OTHER test dir, two layers, both needed:
   1. **Desktop** (Electron) — the primary app (`src/main` + `src/renderer` via the preload).
   2. **Server Edition** (Linux, browser) — `src/server` + the `src/renderer/bridge` shim (see
      the `src/server/` bullet above and docs/SERVER.md).
-  3. **Mobile companion** — *nodeterm mobile*, a **separate PRIVATE repo** (`nodeterm-ios`)
-     — outside contributors cannot see or PR it, so a mobile implication is raised in the
-     desktop PR and **@eneskirca** is mentioned to carry it over
-     (SwiftUI + SwiftTerm/Citadel, tmux-integrated, talks the `TerminalTransport`/RemoteTransport
-     protocol).
+  3. **Mobile companion** — *nodeterm mobile*, two **separate PRIVATE repos**: `nodeterm-ios`
+     (SwiftUI + SwiftTerm/Citadel) and `eneskirca/nodeterm-android` (Kotlin/Compose, in
+     development) — outside contributors cannot see or PR either, so a mobile implication is
+     raised in the desktop PR and **@eneskirca** is mentioned to carry it over. Both are
+     tmux-integrated, talk the same `TerminalTransport`/RemoteTransport protocol and the same
+     pairing/relay/mirror wire contracts, so a desktop change must not assume the phone is an
+     iPhone (copy, defaults, store links — see **Phone pairing is platform-neutral**).
 
   **The canvas and the kanban board are TWO VIEWS of the same nodes — treat the board as a
   first-class surface, not an afterthought.** Every session/node feature you add to a canvas node
