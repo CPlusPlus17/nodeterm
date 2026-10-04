@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
+import path from 'node:path'
 import { fakePlatform } from './platform-fake'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { DEFAULT_SETTINGS, type PtyCreateOptions } from '../shared/types'
@@ -16,6 +17,11 @@ const native = vi.hoisted(() => ({ spawn: vi.fn((_file: string, _args: string[],
 vi.mock('node-pty', () => native)
 vi.mock('./exec-path', async (original) => ({
   ...(await original<typeof import('./exec-path')>()), shellPathNow: () => '/usr/bin:/bin', resolveShellPath: async () => '/usr/bin:/bin'
+}))
+vi.mock('./codex-accounts-core', async (original) => ({
+  ...(await original<typeof import('./codex-accounts-core')>()),
+  resolveCodexSessionScope: () => ({ CODEX_HOME: '/fixture-managed-codex', NODETERM_CODEX_ACCOUNT_ID: 'personal' }),
+  codexSessionEnv: () => ({ CODEX_HOME: '/fixture-managed-codex', NODETERM_CODEX_ACCOUNT_ID: 'personal' })
 }))
 
 let root: string
@@ -87,6 +93,48 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     expect(native.spawn).not.toHaveBeenCalled()
     expect(paneOwnerProject(receipt.nodeId)).toBeUndefined()
   })
+  it('refuses a folder removed or replaced during preparation instead of opening Home', async () => {
+    for (const replace of [false, true]) {
+      const m = await manager(); const cwd = path.join(root, 'project-' + replace)
+      fs.mkdirSync(cwd); m.tmuxSessionExists = async () => false
+      m.projectSpawnOverrides = async () => {
+        fs.renameSync(cwd, cwd + '-original')
+        if (replace) fs.mkdirSync(cwd)
+        return null
+      }
+      await expect(m.createManagedHeadless({ ...options(), cwd }, receipt.creationId, () => true)).rejects.toThrow(/folder changed/)
+      expect(native.spawn).not.toHaveBeenCalled()
+      expect(paneOwnerProject(receipt.nodeId)).toBeUndefined()
+    }
+  })
+  it('refuses an account removed or made pending during preparation even if its old directory remains', async () => {
+    const accountDir = path.join(root, 'claude-accounts', 'personal'); fs.mkdirSync(accountDir, { recursive: true })
+    for (const pending of [false, true]) {
+      const m = await manager(); m.tmuxSessionExists = async () => false
+      let accounts: any[] = [{ id: 'personal', label: 'Personal' }]
+      m.getSettings = () => ({ ...DEFAULT_SETTINGS, tmuxEnabled: true, claudeAccounts: accounts })
+      m.projectSpawnOverrides = async () => { accounts = pending ? [{ ...accounts[0], pending: true }] : []; return null }
+      await expect(m.createManagedHeadless({ ...options(), agentId: 'claude', accountId: 'personal' }, receipt.creationId, () => true)).rejects.toThrow(/account.*available/)
+      expect(native.spawn).not.toHaveBeenCalled()
+    }
+  })
+  it('keeps the ordinary stale-folder fallback for historical renderer attaches', async () => {
+    const m = await manager()
+    m.spawnSession({ ...options(), cwd: path.join(root, 'missing') }, 0, undefined, undefined, null)
+    expect(native.spawn).toHaveBeenCalledOnce()
+    expect(native.spawn.mock.calls[0][1]).toContain((await import('node:os')).homedir())
+  })
+  it('scopes managed Codex through its own account without demanding a Claude directory', async () => {
+    const m = await manager()
+    m.getSettings = () => ({ ...DEFAULT_SETTINGS, tmuxEnabled: true, codexAccounts: [{ id: 'personal', label: 'Personal' }] })
+    let id: string | undefined
+    expect(() => { id = m.spawnSession({ ...options(), agentId: 'codex', accountId: 'personal' }, 0, undefined, undefined, null, receipt.creationId) }).not.toThrow()
+    expect(native.spawn).toHaveBeenCalledOnce()
+    expect(m.sessions.get(id).accountFallback).toBe(false)
+    const env = (native.spawn.mock.calls[0][2] as { env: Record<string, string> }).env
+    expect(env.CODEX_HOME).toBe('/fixture-managed-codex')
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
+  })
   it('refuses occupied names without spawning or acquiring ownership', async () => {
     const m = await manager(); m.spawnNew = vi.fn()
     m.sessions.set('warm', { nodeId: receipt.nodeId }); m.byPersistKey.set(receipt.nodeId, 'warm')
@@ -122,6 +170,13 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     m.forget('fresh', session)
     expect(m.managedPanes.size).toBe(0)
     expect(await m.verifyManagedPane(receipt, () => true)).toBe(false)
+  })
+  it('drops all managed launch proof at manager shutdown', async () => {
+    const m = await manager()
+    m.managedPanes.set(receipt.creationId, { receipt, sessionId: 'fresh', session: {}, attempted: false })
+    await m.killAll()
+    expect(m.managedPanes.size).toBe(0)
+    expect(await m.deliverManagedLaunch(receipt, 'claude', () => true)).toBe(false)
   })
   it('rechecks the service fence and runtime after final proof, before typing', async () => {
     const m = await manager(); const session = { nodeId: receipt.nodeId }; let current = true

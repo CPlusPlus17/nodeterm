@@ -95,7 +95,8 @@ import { findExecutableSync, findInPathString, resolveShellPath, shellPathNow } 
 import {
   AUTH_ENV_STRIP,
   accountTmuxEnvArgs,
-  isReservedSpawnEnvKey
+  isReservedSpawnEnvKey,
+  normalizeLinkedConfigDir
 } from './claude-accounts-core'
 import {
   AUTH_ENV_STRIP as CODEX_AUTH_ENV_STRIP,
@@ -2137,12 +2138,13 @@ export class PtyManager {
   /** A host-owned New operation may only create. It cannot adopt a raced warm generation. */
   async createManagedHeadless(options: PtyCreateOptions, creationId: string, current: () => boolean): Promise<ManagedPaneReceipt> {
     const key = options.persistKey
+    const cwdIdentity = options.cwd ? fs.statSync(options.cwd) : undefined
     if (!current() || !this.supportsManagedCreation() || !MANAGED_CREATION_UUID.test(creationId) ||
         !key || !/^term-[a-z0-9]+-[a-z0-9]{1,16}$/.test(key) || !options.ownerProjectId ||
-        !options.cwd || !fs.statSync(options.cwd).isDirectory() || options.sshRemote || options.requireRemote ||
+        !options.cwd || !cwdIdentity?.isDirectory() || options.sshRemote || options.requireRemote ||
         this.liveSessionForPersistKey(key) || this.inflight.has(key) || this.managedPanes.has(creationId))
       throw new Error('This host cannot create that managed terminal')
-    const spawn = this.spawnNew(0, options, { creationId, current })
+    const spawn = this.spawnNew(0, options, { creationId, current, cwdIdentity })
     this.inflight.set(key, spawn)
     let sessionId: string | undefined
     let createdSession: Session | undefined
@@ -2435,7 +2437,7 @@ export class PtyManager {
   }
 
   /** Spawn a brand-new session for this client (the non-co-attach path). */
-  private async spawnNew(clientId: ClientId, options: PtyCreateOptions, exclusive?: { creationId: string; current: () => boolean }): Promise<PtyCreateResult> {
+  private async spawnNew(clientId: ClientId, options: PtyCreateOptions, exclusive?: { creationId: string; current: () => boolean; cwdIdentity?: Pick<fs.Stats, 'dev' | 'ino'> }): Promise<PtyCreateResult> {
     // This node runs on a remote host and we cannot reach it: spawn NOTHING. Everything below
     // (and `spawnSession`'s program resolution) falls through to the LOCAL tmux/plain branches
     // when `sshRemote` is absent or `ssh` is missing — a silent local shell wearing a remote
@@ -2561,7 +2563,7 @@ export class PtyManager {
     try {
       if (exclusive && (!exclusive.current() || !this.supportsManagedCreation() || this.liveSessionForPersistKey(options.persistKey as string)))
         throw new Error('Managed terminal creation is no longer current')
-      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides, exclusive?.creationId)
+      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides, exclusive?.creationId, exclusive?.cwdIdentity)
     } catch (err) {
       // A spawn that never happened must not hold a slot until the settle deadline — the next node
       // in the queue is waiting on it.
@@ -3169,7 +3171,8 @@ export class PtyManager {
     /** What the OWNING project contributes (see `projectSpawnOverrides`) — already resolved,
      *  because this function is synchronous. Null on every path with no proven project owner. */
     overrides?: ProjectSpawnOverrides | null,
-    managedCreationId?: string
+    managedCreationId?: string,
+    managedCwdIdentity?: Pick<fs.Stats, 'dev' | 'ino'>
   ): string {
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
@@ -3258,8 +3261,12 @@ export class PtyManager {
     // directory actually exists and fall back to home if not, so a dead folder never kills the node.
     if (!options.sshRemote) {
       try {
-        if (!fs.statSync(cwd).isDirectory()) cwd = os.homedir()
+        const stat = fs.statSync(cwd)
+        if (!stat.isDirectory() || (managedCwdIdentity &&
+            (stat.dev !== managedCwdIdentity.dev || stat.ino !== managedCwdIdentity.ino)))
+          throw new Error('The project folder changed before managed creation')
       } catch {
+        if (managedCreationId) throw new Error('The project folder changed before managed creation')
         cwd = os.homedir()
       }
     }
@@ -3340,8 +3347,30 @@ export class PtyManager {
     // Remote (ssh) sessions get their account env via the remote tmux `-e` list instead
     // (the local ssh client process doesn't need it).
     let accountFallback = false
+    if (managedCreationId && options.accountId) {
+      const settings = this.getSettings()
+      const accounts = options.agentId === 'claude' ? settings.claudeAccounts :
+        options.agentId === 'codex' ? settings.codexAccounts : []
+      const matching = accounts.filter((account) => account.id === options.accountId)
+      const account = matching[0]
+      if (matching.length !== 1 || account.host || account.pending)
+        throw new Error('The selected managed account is no longer available')
+      if (options.agentId === 'claude' && 'configDir' in account && account.configDir !== undefined) {
+        const linked = normalizeLinkedConfigDir(account.configDir)
+        if (!linked || claudeConfigDirFor(options.accountId) !== linked)
+          throw new Error('The selected linked account is no longer available')
+      }
+      if (options.agentId === 'codex' && isCodexScopeRefusal(resolveCodexSessionScope(platform().userDataDir, options.accountId)))
+        throw new Error('The selected managed account is no longer available')
+    }
     let accountDir =
-      options.accountId && !options.sshRemote ? claudeConfigDirFor(options.accountId) : null
+      options.accountId && !options.sshRemote && (!managedCreationId || options.agentId === 'claude')
+        ? claudeConfigDirFor(options.accountId) : null
+    if (managedCreationId && accountDir) {
+      try {
+        if (!fs.statSync(accountDir).isDirectory()) throw new Error('Not a directory')
+      } catch { throw new Error('The selected managed account is no longer available') }
+    }
     // Missing/deleted account dir (spec: error handling) → fall back to system default
     // instead of pointing claude at a dead dir; the node then behaves like an unbound one.
     // `accountFallback` is surfaced to the renderer (warning chip) via the create() result.
@@ -5844,6 +5873,7 @@ export class PtyManager {
     this.released.clear()
     this.sessions.clear()
     this.byPersistKey.clear()
+    this.managedPanes.clear()
     // Pending recycle notices die with the sessions they were waiting on (their timers would
     // otherwise fire into a manager that has released everything).
     for (const entry of this.pendingRecycle.values()) {
