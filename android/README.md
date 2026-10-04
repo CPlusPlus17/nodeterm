@@ -14,7 +14,7 @@ with an enabled Linux/macOS tmux backend to create and register a managed shell 
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). Managed canvas End still requires the relay;
 closing the SSH viewer leaves the session running. This prepares the upstream Android contribution; no PR
-has been opened. Beta 14/code 15 is prepared and has passed the local release checks.
+has been opened. Beta 14/code 15 is prepared and has passed the local release checks. Later host source also fixes direct-SSH coattachment (A13); the prepared Android client is unchanged.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -43,8 +43,9 @@ proof remains historical. APK SHA-256: `3c75912a5b7bb561fa9a0720be5cb11be75e1672
 `.nodeterm/android-beta-build-14/`. **Prepared, not installed:** beta 10/code 11 remains the last
 confirmed Pixel installation. Phone testing is paused; the ledger stays **10 Pass / 22 Partial /
 32 Pending**. No PR opened; A68 stays deferred. Each push requires its own exact-head green
-Android workflow. A13 direct-SSH Desktop detachment, full legacy identity association and the
-A25/A93 hosted backend dependencies remain open.
+Android workflow. At this APK source checkpoint A13 direct-SSH Desktop detachment, full legacy
+identity association and A25/A93 hosted backend dependencies remained open. The later A13 host
+follow-up below closes the coattachment source gap; its physical checks remain pending.
 
 **Historical prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
 `ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
@@ -958,3 +959,28 @@ mutants (32 Desktop, six real HTTP, eighteen interop); preliminary receipts rema
 The existing wire shape is unchanged and the Android client needs no parser change. iOS @eneskirca
 should adopt the existing authenticated `lan` field; it now reflects the saved Desktop adapter.
 Physical QR/VPN/DHCP, search UI and multiadapter checks remain pending. No external message sent.
+
+## Direct SSH coattachment follow-up (A13, 2026-10-04)
+
+Fixed in `ed2965be` after the beta-14 APK checkpoint. A current Desktop app attaches beside
+external SSH/relay clients, then replaces only a live app painter attested by an exact PID/birth
+receipt in the same private userData profile and tmux socket/session. Both old and incoming client
+identities are rechecked in the tmux command queue before an exact-client detach. A failed or
+departed new attach cannot evict the old viewer. Unknown, legacy unmarked and other-profile clients
+survive; missing process attestation preserves viewers. Existing per-manager joins and grid policy
+remain. Exit/quit releases the exact receipt; only proven stale receipts are pruned within bounds.
+
+Private controls/restored pass 122 focused tests and full TypeScript checking. Twenty-four distinct
+isolated mutations fail assertions; three critical variants are additionally caught against the
+actual tmux server. Seven real private-socket tmux control-client methods pass without skips on
+tmux 3.7c: both phone/app attachment orders, unequal native pane grids, remounts, foreign/legacy
+clients and stale-client races. Control-client height formatting is empty on this host, so grid
+evidence reads the native pane and checks phone-only restoration. This is no native node-pty, SSH
+handshake, Pixel, macOS or Windows runtime pass.
+
+The private painter receipts are internal app state, outside the phone's named workspace/status/
+project files; no host-service verb, payload, mirror or client wire shape changes. Android keeps
+its exit-zero reattach fallback for older hosts. The same host policy preserves iOS SSH clients;
+@eneskirca should verify physical coattachment. Prepared beta 14/code 15's Android client remains
+unchanged and uninstalled; host-side verification uses the later source. The device ledger stays
+10 Pass / 22 Partial / 32 Pending, and phone testing remains paused.
