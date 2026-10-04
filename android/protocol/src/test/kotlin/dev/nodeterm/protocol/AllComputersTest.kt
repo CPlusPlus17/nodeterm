@@ -304,8 +304,13 @@ class AllComputersTest {
         // its code, but a computer whose approval was refused or unanswered keeps its hold.
         assertTrue(screen.contains("fun refreshAll() = hostIds.forEach { graph.connections.session(it).refresh(Trigger.AUTO) }"))
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(screen, "LifecycleStartEffect(hostIds) {\n        uiScope.launch"),
-            "refreshAll()"
+            AppSourcePins.blockAfter(screen, "LifecycleStartEffect(hostId)"),
+            "val starting = uiScope.launch",
+            "yield()",
+            "session.startWatching(Trigger.AUTO)",
+            "onStopOrDispose",
+            "starting.cancel()",
+            "session.stopWatching(closeWhenUnused = true)"
         )
         val connections = AppSourcePins.app("conn/ConnectionManager.kt")
         assertTrue(connections.contains("fun refresh(trigger: Trigger = Trigger.USER) {\n        scope.launch { refreshNow(trigger) }"))
@@ -318,8 +323,8 @@ class AllComputersTest {
             "relayApproval?.let"
         )
         assertFalse(screen.contains("refresh()"), "a refresh on this screen with no trigger says nothing about who asked")
-        // Not polled: the merged screen does not watch the computers (the live 8 s refresh stays theirs).
-        assertFalse(screen.contains("startWatching"), "the merged screen polls every computer")
+        // Each visible host now shares the same lifecycle-bound 8 s loop as its own screen.
+        assertTrue(screen.contains("for (hostId in hostIds) key(hostId)"))
     }
 
     @Test

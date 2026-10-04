@@ -146,7 +146,7 @@ fun SettingsScreen(nav: Navigator) {
                 Column(Modifier.weight(1f)) {
                     Text("Notifications")
                     Text(
-                        "Checked about every 15 minutes in the background, and live for the computer whose screen is open.",
+                        "Checked about every 15 minutes in the background, and live while this computer or All computers is on screen.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

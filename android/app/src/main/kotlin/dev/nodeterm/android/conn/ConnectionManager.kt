@@ -5,6 +5,7 @@ import dev.nodeterm.android.data.RoutePreference
 import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.ConnectionUsers
+import dev.nodeterm.protocol.host.ForegroundRefresh
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.InboxNotificationActions
@@ -33,12 +34,10 @@ import dev.nodeterm.protocol.ssh.SshTerminalCreationRefusedException
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -88,10 +87,14 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 
     private val mutex = Mutex()
     @Volatile private var conn: HostConnection? = null
-    private var pollJob: Job? = null
 
     /** The screens that show this computer and the background jobs on its connection (review of A25). */
     private val users = ConnectionUsers()
+    private val foreground = ForegroundRefresh(
+        scope, users, { disconnect() },
+        refresh = { trigger -> refreshNow(trigger) },
+        pause = { delay(POLL_MS) },
+    )
 
     val connection: HostConnection? get() = conn
 
@@ -398,9 +401,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             if (conn === c) {
                 conn = null
                 _state.value = ConnState.Failed("Disconnected" + (reason?.let { " ($it)" } ?: "") + ".")
-                if (isWatched) scope.launch {
+                if (isWatched) foreground.changed(stillCurrent = { conn == null }) {
                     delay(1_500)
-                    refreshNow()
                 }
             }
         }
@@ -409,7 +411,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         // (until it drops or the background check closes it), and its pushes used to go on announcing
         // live for a computer the user had left, which the Settings text does not promise. What such a
         // push carried is not recorded as seen, so the background check announces it.
-        c.setOnChanged { if (isWatched) scope.launch { refreshNow() } }
+        c.setOnChanged { if (conn === c && isWatched) foreground.changed(stillCurrent = { conn === c }) }
     }
 
     private fun pinFor(host: PairedHost) = object : HostKeyPin {
@@ -512,44 +514,46 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      *
      * A listing that arrives announces its new Inbox events, minus what [onScreen] shows (audit A73):
      * the 8 s poll of the computer on screen, a change that computer pushed, and the background check
-     * all come through here, so notifications are live for the computer whose screen is open. Other
-     * computers are not re-listed, not even on a push over a connection still open from a screen the
-     * user left ([adopt]), so theirs wait for the background check.
+     * all come through here. All computers watches every paired host while visible; an individual
+     * computer or terminal watches only its own host. Unwatched computers are not re-listed on a
+     * push over a connection retained for a quick return ([adopt]).
      */
     suspend fun refreshNow(trigger: Trigger = Trigger.AUTO) {
-        val listed = try {
-            val c = ensureConnected(trigger)
-            val ssh = c as? SshHostConnection
-            val advertisedBefore = ssh?.relayAdvertised
-            c.listProjects().also {
-                // A listing over SSH says whether the computer advertises its relay right now. A
-                // phone without a relay leg adopts it on the user's refresh, or as soon as remote
-                // access is turned on while this connection watches (audit A26: the reason on a
-                // disabled control promises that pickup).
-                if (ssh != null && LegRouting.adoptAfterListing(relayLeg(), advertisedBefore, ssh.relayAdvertised, userAsked = trigger == Trigger.USER)) {
-                    adoptInBackground(ssh)
+        foreground.serial {
+            val listed = try {
+                val c = ensureConnected(trigger)
+                val ssh = c as? SshHostConnection
+                val advertisedBefore = ssh?.relayAdvertised
+                c.listProjects().also {
+                    // A listing over SSH says whether the computer advertises its relay right now. A
+                    // phone without a relay leg adopts it on the user's refresh, or as soon as remote
+                    // access is turned on while this connection watches (audit A26: the reason on a
+                    // disabled control promises that pickup).
+                    if (ssh != null && LegRouting.adoptAfterListing(relayLeg(), advertisedBefore, ssh.relayAdvertised, userAsked = trigger == Trigger.USER)) {
+                        adoptInBackground(ssh)
+                    }
+                    // A listing over the relay says where the computer is on the LAN now (A74-refresh).
+                    refreshLanLeg(c, it)
+                    _snapshot.value = it
+                    _lastError.value = null
                 }
-                // A listing over the relay says where the computer is on the LAN now (A74-refresh).
-                refreshLanLeg(c, it)
-                _snapshot.value = it
-                _lastError.value = null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _snapshot.value = ListingFailure.snapshot(_snapshot.value, e)
+                // Never null: an exception without a message must still say that the listing failed.
+                // "Nothing found" offers the relay only when this phone has one to offer (review of A27b).
+                _lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message ?: e.javaClass.simpleName
+                // A HostException is an ANSWER (the host refused, or the connection already reported its
+                // own drop). Anything else is an unexpected transport failure: drop the connection so the
+                // next refresh dials a fresh one instead of reusing a dead socket.
+                if (e !is HostException) disconnect()
+                return@serial
             }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _snapshot.value = ListingFailure.snapshot(_snapshot.value, e)
-            // Never null: an exception without a message must still say that the listing failed.
-            // "Nothing found" offers the relay only when this phone has one to offer (review of A27b).
-            _lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message ?: e.javaClass.simpleName
-            // A HostException is an ANSWER (the host refused, or the connection already reported its
-            // own drop). Anything else is an unexpected transport failure: drop the connection so the
-            // next refresh dials a fresh one instead of reusing a dead socket.
-            if (e !is HostException) disconnect()
-            return
+            // Outside the try: a notification the system refused is not a failed listing, and must not
+            // drop a working connection. No network here — the listing just arrived.
+            runCatching { graph.announce(hostId, listed, onScreen.now()) }
         }
-        // Outside the try: a notification the system refused is not a failed listing, and must not
-        // drop a working connection. No network here — the listing just arrived.
-        runCatching { graph.announce(hostId, listed, onScreen.now()) }
     }
 
     /**
@@ -578,28 +582,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * While a screen shows this computer, re-list every 8 s (the iOS foreground cadence); each listing
      * announces what is new and not on screen ([refreshNow]).
      */
-    @Synchronized
-    fun startWatching() {
-        users.watch()
-        if (pollJob == null) {
-            pollJob = scope.launch {
-                // Opening the computer is the user asking; the polls after it are the app's own.
-                var trigger = Trigger.USER
-                while (isActive) {
-                    refreshNow(trigger)
-                    trigger = Trigger.AUTO
-                    delay(POLL_MS)
-                }
-            }
-        }
+    fun startWatching(initialTrigger: Trigger = Trigger.USER) {
+        foreground.start(initialTrigger)
     }
 
-    @Synchronized
-    fun stopWatching() {
-        if (users.unwatch()) {
-            pollJob?.cancel()
-            pollJob = null
-        }
+    fun stopWatching(closeWhenUnused: Boolean = false) {
+        foreground.stop(closeWhenUnused)
     }
 
     /**

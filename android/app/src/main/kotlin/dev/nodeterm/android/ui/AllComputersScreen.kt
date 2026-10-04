@@ -56,6 +56,7 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 
 /**
  * Every paired computer's Inbox and Usage on one screen (audit A55), like iOS's Agents and Usages tabs
@@ -64,9 +65,9 @@ import kotlinx.coroutines.launch
  * go to that computer's own session ([InboxFeedList]). The rules (merge, order, labels, sections) are
  * [AllComputers], pure and tested; this only draws them.
  *
- * Opening the screen re-lists every paired computer once, through each one's normal connect path. It
- * is not polled after that: Refresh re-lists them all, a computer's Try again re-lists it, and an
- * answer re-lists its own computer. The live 8 s refresh stays the computer's own screen's.
+ * While visible, every paired computer is watched through its normal connect path and re-listed
+ * every 8 seconds. Leaving or backgrounding the screen cancels its watchers; other visible screens
+ * and in-flight background actions keep their own connection ownership.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,9 +93,21 @@ fun AllComputersScreen(nav: Navigator) {
     // On ON_START, like a computer's own screen starts watching: opening the screen, coming back to the
     // app, and coming back from a terminal re-list. Launched on the UI dispatcher, i.e. after this
     // frame's effects: the Inbox tab registers what it shows (A73) before the first listing is asked for.
-    LifecycleStartEffect(hostIds) {
-        uiScope.launch { refreshAll() }
-        onStopOrDispose { }
+    // Key each watcher separately: changing the paired host set leaves the unaffected loops alone.
+    for (hostId in hostIds) key(hostId) {
+        LifecycleStartEffect(hostId) {
+            val session = graph.connections.session(hostId)
+            var watching = false
+            val starting = uiScope.launch {
+                yield() // let this STARTED frame register every visible Inbox first (A73)
+                session.startWatching(Trigger.AUTO)
+                watching = true
+            }
+            onStopOrDispose {
+                starting.cancel()
+                if (watching) session.stopWatching(closeWhenUnused = true)
+            }
+        }
     }
 
     val feed = AllComputers.feed(listings)

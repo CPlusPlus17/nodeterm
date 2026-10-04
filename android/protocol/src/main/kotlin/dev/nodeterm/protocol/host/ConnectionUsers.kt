@@ -11,13 +11,14 @@ package dev.nodeterm.protocol.host
  * two answers to one computer a few seconds apart, or an answer and the background check, and the
  * first to finish cut the other off, which then reported its answer unconfirmed (or never sent it).
  *
- * A screen that leaves does not close the connection: it stays for a quick return, until it drops or
- * the last background job ends. The app's HostSession owns one of these per computer; this is the
+ * A computer's own screen leaves the connection for a quick return. All computers instead requests
+ * closure when its last watcher leaves, after any in-flight listing or background job finishes. The app's HostSession owns one of these per computer; this is the
  * counting, kept pure so the JVM tests it.
  */
 class ConnectionUsers {
     private var watchers = 0
     private var holders = 0
+    private var closeWhenIdle: (() -> Unit)? = null
 
     /** A screen shows the computer now. */
     val watched: Boolean
@@ -25,30 +26,50 @@ class ConnectionUsers {
 
     /** A screen started showing the computer. True when it is the first (start re-listing). */
     @Synchronized
-    fun watch(): Boolean = ++watchers == 1
+    fun watch(): Boolean {
+        // A new screen supersedes a stopped screen's deferred close, even if its cancelled listing
+        // has not returned yet. That old listing must never close the new screen's connection.
+        closeWhenIdle = null
+        return ++watchers == 1
+    }
 
     /** A screen stopped showing the computer. True when none is left (stop re-listing). */
     @Synchronized
-    fun unwatch(): Boolean {
+    fun unwatch(close: (() -> Unit)? = null): Boolean {
         watchers = (watchers - 1).coerceAtLeast(0)
+        if (watchers == 0 && close != null) {
+            closeWhenIdle = close
+            closeIfIdle()
+        }
         return watchers == 0
+    }
+
+    /** Called under this object's lock; closure detaches the old socket without suspending. */
+    private fun closeIfIdle() {
+        if (holders == 0 && watchers == 0) {
+            val closing = closeWhenIdle
+            closeWhenIdle = null
+            closing?.invoke()
+        }
     }
 
     /**
      * Runs [block] as a background user of the connection. When it ends (normally, by an error or by
      * cancellation), [close] runs if nothing else uses the connection: no other background user and
-     * no screen. [close] runs under this object's lock and must not block or suspend: a user that
+     * no screen. A null [close] protects a foreground listing without changing quick-return policy;
+     * it still delivers a close requested by a stopped All computers screen or a background job. [close] runs under this object's lock and must not block or suspend: a user that
      * arrives meanwhile is either counted before the decision, or finds the connection already closed
      * and dials its own, never one closed under it.
      */
-    suspend fun <T> hold(close: () -> Unit, block: suspend () -> T): T {
+    suspend fun <T> hold(close: (() -> Unit)?, block: suspend () -> T): T {
         synchronized(this) { holders++ }
         try {
             return block()
         } finally {
             synchronized(this) {
                 holders--
-                if (holders == 0 && watchers == 0) close()
+                if (watchers == 0 && close != null) closeWhenIdle = close
+                closeIfIdle()
             }
         }
     }

@@ -680,8 +680,9 @@ class NotificationActionsTest {
             session.contains("suspend fun <T> inBackground(block: suspend () -> T): T = users.hold({ disconnect() }, block)"),
             "HostSession.inBackground is not ConnectionUsers.hold"
         )
-        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(session, "fun startWatching()"), "users.watch()")
-        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(session, "fun stopWatching()"), "if (users.unwatch()) {", "pollJob?.cancel()")
+        assertTrue(session.contains("scope, users, { disconnect() },"), "polling and background jobs must share ConnectionUsers")
+        assertTrue(AppSourcePins.blockAfter(session, "fun startWatching(").contains("foreground.start(initialTrigger)"))
+        assertTrue(AppSourcePins.blockAfter(session, "fun stopWatching(").contains("foreground.stop(closeWhenUnused)"))
         val check = AppSourcePins.blockAfter(notifier, "override suspend fun doWork()")
         AppSourcePins.assertInOrder(check, "session.inBackground {", "session.refreshNow(RelayApprovalGate.Trigger.BACKGROUND)")
         for ((name, src) in listOf("the answer" to actions, "the background check" to check)) {

@@ -330,7 +330,10 @@ class LiveNotificationsTest {
             "runCatching { graph.announce(hostId, listed, onScreen.now()) }"
         )
         // The 8 s poll re-lists through it.
-        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(connections, "fun startWatching()"), "refreshNow(trigger)", "delay(POLL_MS)")
+        assertTrue(connections.contains("private val foreground = ForegroundRefresh("))
+        assertTrue(connections.contains("refresh = { trigger -> refreshNow(trigger) }"))
+        assertTrue(connections.contains("pause = { delay(POLL_MS) }"))
+        assertTrue(AppSourcePins.blockAfter(connections, "fun startWatching(").contains("foreground.start(initialTrigger)"))
         val graph = AppSourcePins.app("NodetermApp.kt")
         AppSourcePins.assertInOrder(
             AppSourcePins.blockAfter(graph, "fun announce(hostId: String, snapshot: ProjectsSnapshot, onScreen: OnScreen)"),
@@ -344,8 +347,8 @@ class LiveNotificationsTest {
         // announcing live through its pushes until the connection dropped or the worker ran, while the
         // copy promises live notifications only for the computer on screen. Like the reconnect.
         val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection)")
-        AppSourcePins.assertInOrder(adopt, "if (isWatched) scope.launch {", "delay(1_500)", "refreshNow()")
-        assertTrue(adopt.contains("c.setOnChanged { if (isWatched) scope.launch { refreshNow() } }"), adopt)
+        AppSourcePins.assertInOrder(adopt, "if (isWatched) foreground.changed(stillCurrent = { conn == null })", "delay(1_500)")
+        assertTrue(adopt.contains("c.setOnChanged { if (conn === c && isWatched) foreground.changed(stillCurrent = { conn === c }) }"), adopt)
         assertEquals(1, Regex("""\.setOnChanged\b""").findAll(connections).count(), "another connection re-lists on its pushes")
     }
 
@@ -410,16 +413,16 @@ class LiveNotificationsTest {
     }
 
     @Test
-    fun `the copy promises live notifications only for the computer on screen`() {
-        val promise = "Checked about every 15 minutes in the background, and live for the computer whose screen is open"
+    fun `the copy promises background checks and live listings for visible computers`() {
+        val promise = "Checked about every 15 minutes in the background, and live while this computer or All computers is on screen"
         val settings = AppSourcePins.ui("SettingsScreen.kt")
         assertTrue(settings.contains("\"$promise.\""), "Settings does not say what is live")
         assertFalse(settings.contains("live while a computer is open"))
         val kdoc = notifier.replace(Regex("\\s*\\n\\s*\\*\\s*"), " ")
-        assertTrue(kdoc.contains("checked about every 15 minutes in the background, and live for the computer whose screen is open"))
+        assertTrue(kdoc.contains("checked about every 15 minutes in the background, and live while the computer or All computers is on screen"))
         val readme = File(InteropHarness.repoRoot, "android/README.md").readText().replace(Regex("\\s+"), " ")
-        assertTrue(readme.contains("checked about every 15 minutes in the background (WorkManager's floor), and live for the computer whose screen is open"))
+        assertTrue(readme.contains("checked about every 15 minutes in the background (WorkManager's floor), and live while the computer or All computers is on screen"))
         assertFalse(readme.contains("live every 8 seconds while a computer is open"))
-        assertTrue(readme.contains("Other paired computers are not polled"))
+        assertTrue(AppSourcePins.ui("AllComputersScreen.kt").contains("session.startWatching(Trigger.AUTO)"))
     }
 }
