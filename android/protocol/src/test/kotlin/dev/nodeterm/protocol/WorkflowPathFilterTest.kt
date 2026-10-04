@@ -45,7 +45,7 @@ class WorkflowPathFilterTest {
      *   they stand in for every node_modules input of the bundle;
      * - the workflow file itself.
      */
-    private val unbundledInputs = listOf("tsconfig.json", "package.json", "package-lock.json", workflowPath)
+    private val unbundledInputs = listOf("tsconfig.json", "package.json", "package-lock.json", "src/server/index.ts", workflowPath)
 
     /**
      * Test files that read a repo file through a computed path, which [repoReads] cannot resolve, with
@@ -86,6 +86,17 @@ class WorkflowPathFilterTest {
         assertTrue("src/core/ack-sweep.ts" in inputs, "the fixture does not run the actual ack consumer")
         val required = inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet()
         assertCovered(required, "bundled into ack-fixture-runner.ts")
+    }
+
+    @Test
+    fun `every actual SSH actions producer file runs the workflow`() {
+        assumeTrue(InteropHarness.available("ssh-actions"), "node + esbuild are needed for SSH actions interop")
+        val meta = Json.parseToJsonElement(InteropHarness.sshActionsBundleMeta.readText()).jsonObject
+        val inputs = meta.getValue("inputs").jsonObject.keys
+        assertTrue("src/core/ssh-actions.ts" in inputs, "fixture must run the actual selected-profile service")
+        assertTrue("src/core/workspace-store.ts" in inputs, "fixture must run the actual save queue")
+        val required = inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet()
+        assertCovered(required, "bundled into ssh-actions-fixture.ts")
     }
 
     @Test

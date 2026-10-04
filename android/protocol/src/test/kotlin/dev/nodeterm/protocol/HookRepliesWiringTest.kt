@@ -25,7 +25,7 @@ class HookRepliesWiringTest {
         val source = File(InteropHarness.repoRoot, "android/protocol/src/main/kotlin/dev/nodeterm/protocol/ssh/SshHostConnection.kt").readText()
         assertTrue("HookReplies.belongsToNode(event.nodeId, ticket)" in source)
         assertTrue("SshScripts.readHookRequest(event.nodeId, ticket)" in source)
-        assertTrue("SshScripts.answerHook(event.nodeId, ticket, checksum), stdin = reply" in source)
+        assertTrue("SshScripts.answerHook(event.nodeId, ticket, checksum), stdin = reply, uncertainWrite = true, outputLimit = 1024" in source)
         assertTrue("cmd.outputStream.use" in source)
         assertTrue("writeCode != 0" in source)
     }

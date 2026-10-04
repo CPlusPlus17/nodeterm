@@ -24,6 +24,7 @@ import dev.nodeterm.protocol.model.J.b
 import dev.nodeterm.protocol.model.J.o
 import dev.nodeterm.protocol.model.J.objects
 import dev.nodeterm.protocol.model.J.s
+import dev.nodeterm.protocol.model.KanbanLabel
 import dev.nodeterm.protocol.model.KanbanColumn
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsParser
@@ -37,7 +38,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.*
 import net.schmizz.keepalive.KeepAliveProvider
 import net.schmizz.keepalive.KeepAliveRunner
 import net.schmizz.sshj.DefaultConfig
@@ -150,15 +151,18 @@ class NothingFoundException : HostException(SshHostConnection.NO_USER_DATA) {
 
 /**
  * [HostConnection] over direct SSH (the LAN leg a pairing installs a key for). Everything is POSIX
- * sh + tmux and typed Git on the computer; what needs the DESKTOP APP rather than the machine —
- * renderer nudges, board writes and node registration — is the relay's, and this
- * transport reports it as unavailable instead of guessing.
+ * sh + tmux and typed Git on the computer. A live service advertised by the selected profile owns
+ * Board writes and renderer nudges. Cold canvas registration still needs the desktop managed
+ * launch path through the relay, never a guessed shell environment.
  */
 class SshHostConnection private constructor(private val client: SSHClient) : HostConnection {
     override val kind = TransportKind.SSH
-    override val capabilities = HostCapabilities(
-        boardWrites = false, git = true, nodeActions = false, registerNode = false, answerApprovals = true
-    )
+    private val actions = SshActions { script, timeout, stdin, write, limit ->
+        run(script, timeout, stdin, uncertainWrite = write, outputLimit = limit)
+    }
+    override val capabilities: HostCapabilities get() = actions.capabilities.copy(git = true)
+    private data class ActionListing(val userData: String?, val projects: List<ProjectInfo>)
+    @Volatile private var actionListing = ActionListing(null, emptyList())
 
     @Volatile private var onClosed: ((String?) -> Unit)? = null
     @Volatile private var userData: String? = null
@@ -176,6 +180,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     @Volatile private var closedFired = false
 
     private fun fireClosed(reason: String?) {
+        actions.clear()
         if (closedFired) return
         closedFired = true
         onClosed?.invoke(reason)
@@ -208,8 +213,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 dispatched = true
                 val cmd = session.exec("/bin/sh -c " + SshScripts.q(script))
                 if (stdin != null) {
-                    cmd.outputStream.write(stdin.toByteArray(Charsets.UTF_8))
-                    cmd.outputStream.close()
+                    cmd.outputStream.use { it.write(stdin.toByteArray(Charsets.UTF_8)) }
                 }
                 val out = if (outputLimit == null) cmd.inputStream.readBytes() else {
                     val bytes = java.io.ByteArrayOutputStream()
@@ -217,7 +221,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                     while (true) {
                         val n = cmd.inputStream.read(buffer)
                         if (n < 0) break
-                        if (bytes.size() + n > outputLimit) throw java.io.IOException("Git output exceeded the 20 MiB limit")
+                        if (bytes.size() + n > outputLimit) throw java.io.IOException("SSH output exceeded the $outputLimit byte limit")
                         bytes.write(buffer, 0, n)
                     }
                     bytes.toByteArray()
@@ -258,6 +262,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         if (out.nothingFound(now)) {
             // Still an answer about the nodes: none here is anyone's (no index, nothing driven).
             remember(ProjectsSnapshot.EMPTY)
+            userData = null; actionListing = ActionListing(null, emptyList()); actions.clear()
             throw NothingFoundException()
         }
         userData = ud
@@ -270,6 +275,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             base
         }
         // What a desktop that drives this computer over SSH left here, next to the host's own (A27).
+        actionListing = ActionListing(ud, own.projects.filterNot { it.drivenRemotely })
+        actions.probe(ud)
         val snapshot = HostBrowse.assemble(own, out, now)
         remember(snapshot, out.phoneTerminals.associate { it.id to it.creation })
         return snapshot
@@ -654,14 +661,49 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         runCatching { client.socket?.close() }
     }
 
-    // The app routes these to the relay leg itself ([LegRouting.route], audit A26); a caller that
-    // reaches them here skipped that routing, and is told where they go.
-    override suspend fun wake(nodeId: String) { relayOnly("Waking a sleeping session") }
-    override suspend fun refresh(nodeId: String) { relayOnly("Refreshing a terminal view") }
-    override suspend fun rename(nodeId: String, title: String) { relayOnly("Renaming a session") }
-    override suspend fun ensureBoard(projectId: String): List<KanbanColumn>? = relayOnly("Editing the board")
-    override suspend fun setCardColumn(projectId: String, nodeId: String, columnId: String?): Boolean = relayOnly("Editing the board")
-    override suspend fun editCardLabels(projectId: String, nodeId: String, edit: CardLabelEdit): LabelEditResult? = relayOnly("Editing labels")
+    private suspend fun action(method: String, projectId: String? = null, nodeId: String? = null, params: JsonObject): JsonObject =
+        withContext(Dispatchers.IO) {
+            ensureListed()
+            val listing = actionListing
+            val result = actions.call(listing.userData, method, params, nodeId ?: projectId ?: "") { SshActions.owns(listing.projects, projectId, nodeId, it) }
+            result as? JsonObject ?: SshActions.uncertain()
+        }
+    private fun JsonObject.flag(name: String): Boolean =
+        b(name) ?: SshActions.uncertain()
+    private suspend fun nudge(method: String, nodeId: String, title: String? = null) {
+        val result = action(method, nodeId = nodeId, params = buildJsonObject {
+            put("nodeId", nodeId); title?.let { put("title", it) }
+        })
+        if (!result.flag("delivered")) throw HostException("The desktop did not deliver this action to the session.")
+    }
+    override suspend fun wake(nodeId: String) { nudge("node.wake", nodeId) }
+    override suspend fun refresh(nodeId: String) { nudge("node.refresh", nodeId) }
+    override suspend fun rename(nodeId: String, title: String) { nudge("node.rename", nodeId, title) }
+    override suspend fun ensureBoard(projectId: String): List<KanbanColumn> {
+        val result = action("projects.ensureBoard", projectId, params = buildJsonObject { put("projectId", projectId) })
+        val columns = result["columns"] as? JsonArray ?: SshActions.uncertain()
+        return columns.map { entry ->
+            val c = entry as? JsonObject ?: SshActions.uncertain()
+            KanbanColumn(c.s("id") ?: SshActions.uncertain(), c.s("title") ?: SshActions.uncertain(), c.s("color"))
+        }
+    }
+    override suspend fun setCardColumn(projectId: String, nodeId: String, columnId: String?): Boolean =
+        action("projects.setCardColumn", projectId, nodeId, buildJsonObject {
+            put("projectId", projectId); put("nodeId", nodeId); put("columnId", columnId?.let(::JsonPrimitive) ?: JsonNull)
+        }).flag("moved")
+    override suspend fun editCardLabels(projectId: String, nodeId: String, edit: CardLabelEdit): LabelEditResult {
+        val result = action("projects.editCardLabels", projectId, nodeId, buildJsonObject {
+            put("projectId", projectId); put("nodeId", nodeId)
+            put("add", JsonArray(edit.add.map(::JsonPrimitive))); put("remove", JsonArray(edit.remove.map(::JsonPrimitive)))
+            put("create", JsonArray(edit.create.map { (name, color) -> buildJsonObject { put("name", name); put("color", color) } }))
+        })
+        val labels = result["labels"] as? JsonArray ?: SshActions.uncertain()
+        val card = result["cardLabelIds"] as? JsonArray ?: SshActions.uncertain()
+        return LabelEditResult(result.flag("edited"), labels.map { entry ->
+            val l = entry as? JsonObject ?: SshActions.uncertain()
+            KanbanLabel(l.s("id") ?: SshActions.uncertain(), l.s("name") ?: SshActions.uncertain(), l.s("color") ?: SshActions.uncertain())
+        }, card.map { (it as? JsonPrimitive)?.takeIf { it.isString }?.content ?: SshActions.uncertain() })
+    }
     override suspend fun registerNode(projectId: String, node: NewNode): Boolean = relayOnly("Starting a new session")
     override suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement>): JsonElement = withContext(Dispatchers.IO) {
         ensureListed()
@@ -706,7 +748,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             throw HostException("The held request exceeds the supported limit.")
         val request = J.obj(J.parse(raw)) ?: throw HostException("The computer sent an invalid held request.")
         val reply = build(request) ?: return@withContext ApprovalOutcome.UNSUPPORTED
-        val (writeCode, result) = run(SshScripts.answerHook(event.nodeId, ticket, checksum), stdin = reply)
+        val (writeCode, result) = run(SshScripts.answerHook(event.nodeId, ticket, checksum), stdin = reply, uncertainWrite = true, outputLimit = 1024)
         if (writeCode != 0) throw HostException("Couldn't write the answer on the computer.")
         when (result.trim()) {
             "sent" -> ApprovalOutcome.SENT

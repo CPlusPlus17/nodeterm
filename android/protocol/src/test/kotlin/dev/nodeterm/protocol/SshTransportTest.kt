@@ -33,6 +33,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.runBlocking
@@ -89,6 +92,67 @@ class SshTransportTest {
     private val paneShell = arrayOf("/usr/bin/env", "ENV=", "BASH_ENV=", "INPUTRC=/dev/null", "/bin/sh")
     /** Every public key the server was asked to accept, ours or not. */
     private val authAttempts = java.util.concurrent.atomic.AtomicInteger()
+
+    private fun actionsFixture() = InteropHarness.start("ssh-actions", InteropHarness.scratchHomeEnv(home) +
+        mapOf("FIXTURE_USERDATA" to File(home, ".config/node-terminal").path))
+
+    @Test fun `actual selected-profile SSH service edits the board and delivers node actions without relay`() = runBlocking {
+        actionsFixture().use { fixture ->
+            connect().use { conn ->
+                val snapshot = conn.listProjects()
+                assertEquals(listOf("ssh-actions-project"), snapshot.projects.map { it.id })
+                assertTrue(conn.capabilities.boardWrites); assertTrue(conn.capabilities.nodeActions); assertTrue(conn.capabilities.git)
+                assertFalse(conn.capabilities.registerNode)
+                val columns = assertNotNull(conn.ensureBoard("ssh-actions-project"))
+                assertEquals(3, columns.size)
+                assertTrue(conn.setCardColumn("ssh-actions-project", "term-ssh-actions", columns[1].id))
+                val labels = assertNotNull(conn.editCardLabels("ssh-actions-project", "term-ssh-actions",
+                    CardLabelEdit(create = listOf("SSH α ' quoted" to "blue"))))
+                assertTrue(labels.edited); assertEquals(listOf("SSH α ' quoted"), labels.labels.map { it.name })
+                assertEquals(labels.labels.map { it.id }, labels.cardLabelIds)
+                conn.wake("term-ssh-actions"); conn.refresh("term-ssh-actions"); conn.rename("term-ssh-actions", "Typed α ' title")
+                fixture.command("snapshot")
+                val proof = fixture.awaitEvent("snapshot")
+                val board = proof.getValue("file").jsonObject.getValue("kanban").jsonObject
+                assertEquals(columns[1].id, board.getValue("assignments").jsonArray.single().jsonObject.getValue("columnId").jsonPrimitive.content)
+                assertEquals(labels.cardLabelIds, board.getValue("meta").jsonArray.single().jsonObject.getValue("labels").jsonArray.map { it.jsonPrimitive.content })
+                assertEquals(listOf("wake", "refresh", "rename"), proof.getValue("nudges").jsonArray.map { it.jsonObject.getValue("method").jsonPrimitive.content })
+                assertEquals("Typed α ' title", proof.getValue("nudges").jsonArray.last().jsonObject.getValue("title").jsonPrimitive.content)
+                assertFailsWith<HostException> { conn.registerNode("ssh-actions-project", NewNode("new-node", null, null, null)) }
+                assertFailsWith<NeedsRelayException> { conn.setCardColumn("another-profile", "term-ssh-actions", null) }
+                assertFailsWith<NeedsRelayException> { conn.wake("term-another-profile") }
+            }
+        }
+    }
+
+    @Test fun `stopped SSH actions producer clears cached capability before any request is published`() = runBlocking {
+        actionsFixture().use { fixture ->
+            connect().use { conn ->
+                conn.listProjects(); assertTrue(conn.capabilities.boardWrites)
+                fixture.command("stop"); fixture.awaitEvent("stopped")
+                assertFailsWith<NeedsRelayException> { conn.ensureBoard("ssh-actions-project") }
+                assertFalse(conn.capabilities.boardWrites); assertTrue(conn.capabilities.git)
+                fixture.command("snapshot")
+                val file = fixture.awaitEvent("snapshot").getValue("file").jsonObject
+                assertNull(file["kanban"])
+            }
+        }
+    }
+
+    @Test fun `an SSH action with a lost exit acknowledgement is uncertain even when the save happened`() = runBlocking {
+        actionsFixture().use { fixture ->
+            connect().use { conn ->
+                conn.listProjects()
+                var submissions = 0
+                onCommand = { command, channel -> if (command.contains("NT-ACTIONS-REPLY")) { submissions++; channel.omitExitStatus = true } }
+                assertFailsWith<HostUnansweredException> { conn.ensureBoard("ssh-actions-project") }
+                assertEquals(1, submissions)
+                fixture.command("snapshot")
+                assertEquals(3, fixture.awaitEvent("snapshot").getValue("file").jsonObject.getValue("kanban").jsonObject.getValue("columns").jsonArray.size)
+                assertFalse(conn.capabilities.boardWrites)
+            }
+        }
+    }
 
     private fun tmuxAvailable() = runCatching { ProcessBuilder("tmux", "-V").start().waitFor() == 0 }.getOrDefault(false)
 
@@ -1305,9 +1369,9 @@ class SshTransportTest {
     }
 
     @Test
-    fun `on the LAN the app's own verbs route to the relay leg, and SSH says where they go`() = runBlocking<Unit> {
-        // A26: Auto keeps the SSH leg when it works, and board writes, a new session and node
-        // actions need nodeterm the app. They go to the relay leg opened next to it — and a caller
+    fun `without a live SSH actions advertisement app verbs route to relay with an honest refusal`() = runBlocking<Unit> {
+        // A26: An older host with no file service routes Board, new session and node actions to relay.
+        // Auto keeps its working SSH terminal leg; a caller
         // that reaches the SSH transport anyway is not told to turn on remote access (it may be on).
         connect().use { conn ->
             for (cap in listOf(Capability.BOARD_WRITES, Capability.REGISTER_NODE, Capability.NODE_ACTIONS)) {
@@ -1457,6 +1521,36 @@ class SshTransportTest {
             assertEquals(ApprovalOutcome.GONE, conn.answerQuestions(question, listOf(listOf(0))))
         }
         pending.deleteRecursively()
+    }
+
+    @Test fun `a structured hook write with lost exit acknowledgement stays uncertain without replay`() = runBlocking<Unit> {
+        val pending = File(home, ".nodeterm/pending").apply { mkdirs() }
+        val id = "term-a-1-1700000000000-102"
+        val permission = """{"hook_event_name":"PermissionRequest","tool_name":"Bash","permission_suggestions":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"npm test"}]}]}"""
+        val question = """{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","header":"Pick","multiSelect":true,"options":[{"label":"α","description":""},{"label":"β","description":""}]}]}}"""
+        val event = InboxEvent("lost-structured", 1, "term-a-1", "claude", null, InboxKind.APPROVAL, "Approve", null, false, false, emptyList(), false, id)
+        try {
+            for (approval in listOf(true, false)) {
+                File(pending, "$id.answer").delete()
+                File(pending, "$id.json").writeText(if (approval) permission else question)
+                connect().use { conn ->
+                    conn.listProjects()
+                    var writes = 0
+                    onCommand = { command, channel -> if (command.contains("cat >")) { writes++; channel.omitExitStatus = true } }
+                    assertFailsWith<HostUnansweredException> {
+                        if (approval) conn.rememberApproval(event, 0)
+                        else conn.answerQuestions(event.copy(kind = InboxKind.QUESTION, pendingId = null, questionPendingId = id), listOf(listOf(0, 1)))
+                    }
+                    assertEquals(1, writes, "no automatic replay of an unanswered answer")
+                    val answer = File(pending, "$id.answer").readText()
+                    assertTrue(answer.startsWith(dev.nodeterm.protocol.model.HookReplies.MARKER + "\n"))
+                    val output = kotlinx.serialization.json.Json.parseToJsonElement(answer.substringAfter('\n')).jsonObject.getValue("hookSpecificOutput").jsonObject
+                    if (approval) assertNotNull(output["decision"])
+                    else assertEquals("α, β", output.getValue("updatedInput").jsonObject.getValue("answers").jsonObject.getValue("Which?").jsonPrimitive.content)
+                    onCommand = null
+                }
+            }
+        } finally { onCommand = null; pending.deleteRecursively() }
     }
 
     @Test

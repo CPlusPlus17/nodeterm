@@ -58,6 +58,10 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         }
     }
 
+    internal fun command(line: String) {
+        process.outputStream.write((line + "\n").toByteArray(Charsets.UTF_8)); process.outputStream.flush()
+    }
+
     fun awaitEvent(name: String, timeoutMs: Long = 10_000): JsonObject =
         await(timeoutMs) { it["event"]?.toString() == "\"$name\"" }
 
@@ -113,6 +117,18 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             out
         }
 
+        /** Actual selected-profile SSH file service and WorkspaceStore; no relay sockets. */
+        internal val sshActionsBundle: File by lazy {
+            val out = File(repoRoot, "android/protocol/build/interop/ssh-actions-fixture.cjs")
+            File(out.path + ".meta.json").delete()
+            val proc = ProcessBuilder(bundleCommand(out) + "android/protocol/src/test/interop/ssh-actions-fixture.ts")
+                .directory(repoRoot).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "esbuild failed: $log" }
+            out
+        }
+        internal val sshActionsBundleMeta: File by lazy { File(sshActionsBundle.path + ".meta.json") }
+
         /**
          * esbuild's metafile for [bundle], which the bundler writes beside it: its `inputs` are the files
          * the bundle was built from, repo-relative and `/`-separated (audit A63, [WorkflowPathFilterTest]).
@@ -135,7 +151,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
             // The esbuild PACKAGE (its JS API), not the .bin shim the harness no longer runs.
             return node && File(repoRoot, "node_modules/esbuild/package.json").exists() &&
-                (mode == "ack-sweep" || (File(repoRoot, "node_modules/ws").exists() &&
+                (mode == "ack-sweep" || mode == "ssh-actions" || (File(repoRoot, "node_modules/ws").exists() &&
                     File(repoRoot, "node_modules/tweetnacl").exists()))
         }
 
@@ -154,6 +170,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             val fixture = when (mode) {
                 "ack-sweep" -> ackBundle
                 "project-launch" -> projectLaunchBundle
+                "ssh-actions" -> sshActionsBundle
                 else -> bundle
             }
             val pb = ProcessBuilder("node", fixture.path, mode).directory(repoRoot)
