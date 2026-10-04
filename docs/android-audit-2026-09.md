@@ -109,8 +109,11 @@ the audit's proposal, the handover's progress log says how and why.
 | [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
-| [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect and exact UI End pass; item 32 Partial, relay/managed/cellular and A91 empty-host variants pending · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
-| [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; physical empty-host verification pending · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
+| [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect and exact UI End pass; item 32 Partial, relay/managed/cellular pending; beta-9 Oct4 A91 empty-host flow passes · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
+| [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; beta-9 Oct4 physical empty-host first Home/exact last-End/row-group removal/connected SSH/second Home flow pass; A94 label fix delivery pending · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
+| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; interactive desktop hover remains unverified |
+| [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; same-desktop recovery policy unverified |
+| [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants pass, full Gradle and APK/physical delivery pending · Authoritative empty SSH listing remains labelled Loading sessions |
 
 ## A01
 
@@ -2902,8 +2905,8 @@ cellular hosted relay remains untested.
 
 - Severity: **medium**; effort: medium; area: parity; kind: gap
 - Status: **implemented and host-verified** in `bcc92367` / `b88d1415`; beta 9/code 10 installed.
-  Focused physical plain-SSH flow passes; item 32 Partial, remaining relay/managed/cellular and
-  A91 otherwise-empty-host variants pending.
+  Focused physical plain-SSH flow passes; item 32 Partial, relay/managed/cellular pending.
+  The separate A91 otherwise-empty-host flow passes on beta 9 Oct4.
 - Locations: Android Host screen/new-terminal choice, SSH scripts/connection and host listing
 
 The user can browse and open existing sessions on their Linux host over manual SSH/WireGuard,
@@ -2978,9 +2981,9 @@ are unchanged. Owned shells, empty fixture folders and UI dumps are removed; the
 to regular host Sessions. Proof:
 `.nodeterm/android-beta-build-8/a90-pixel-check-20261003/final-focused-results.json` and
 `beta9-exact-ui-end.json`. Only item 32 is promoted to Partial: current **7 Pass /21 Partial /36 Pending**.
-This does not verify relay canvas/managed or cellular creation, A91's otherwise-empty-host
-last-End variant or the full checklist. No new A92 is recorded: the isolated bare-Esc/paste
-contamination was a QA input artifact, and clean native input passed.
+The Oct3 proof does not verify relay canvas/managed or cellular creation or the full checklist.
+The separate A91 otherwise-empty-host last-End variant passes on beta 9 Oct4 below. The isolated bare-Esc/paste contamination was a QA input
+artifact, and clean native input passed; it did not produce a paste finding.
 
 ## A91
 
@@ -2988,7 +2991,7 @@ contamination was a QA input artifact, and clean native input passed.
 
 - Severity: **medium**; effort: small; area: runtime; kind: bug
 - Status: **fixed in `4d33a5b5`, delivered in installed beta 9/code 10**.
-  Physical otherwise-empty-host verification remains pending.
+  The physical otherwise-empty-host flow passes on beta 9 Oct4; A94 label-fix delivery remains pending.
 - Locations: `android/app/src/main/kotlin/dev/nodeterm/android/conn/ConnectionManager.kt`
   (`HostSession.refreshNow`), `android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/ListingFailure.kt`
 
@@ -3010,8 +3013,18 @@ last-row removal, generic-error retention, cancellation identity and native erro
 wiring. Full real Gradle protocol passes **688 tests / 67 suites**, zero failures/errors/skips,
 in 52 seconds; offline app `compileKotlin` passes in 6 seconds. All six isolated Kotlin 2.2/JDK 21
 mutants are caught, and independent review finds no blocker. Ignored XML/mutation proof is in
-`.nodeterm/android-beta-build-9/`. These are host checks; the intended Pixel's otherwise-empty-host
-last-shell End/empty-list/New-terminal variant remains pending.
+`.nodeterm/android-beta-build-9/`.
+
+**Physical otherwise-empty-host pass (2026-10-04):** installed beta 9/code 10 creates and opens
+its first Home shell through New terminal. Native End removes the exact row and Phone terminals
+group while SSH stays connected. New terminal remains usable and creates/opens a second Home
+shell. That second shell is retained for the later higher-code update check; final fixture cleanup
+is not claimed. Proof:
+`.nodeterm/android-beta-build-9/checklist-20261004/a91-beta9-focused-results.json` plus UI receipts.
+This closes A91's focused empty-host physical variant. Item 32 stays Partial and the ledger stays
+7 Pass /21 Partial /36 Pending because relay/managed and cellular creation remain open.
+A94's separate false Loading label was observed; its committed correction still awaits APK delivery
+and installed physical verification.
 
 Private beta `0.1.0-beta.9` / code `10`, clean source
 `4d33a5b5366c99479b648086649205350c7752b1`, built in 43 seconds and updated the exact intended
@@ -3032,3 +3045,85 @@ installation preserves install identity, notification grant and app data; pairin
 survival is not proved. Receipts: `.nodeterm/android-beta-build-9/artifact-review.json` and
 `.nodeterm/android-beta-build-9/device-install-20261003/receipt.json`; private APK:
 `.nodeterm/android-beta-9/nodeterm-android-0.1.0-beta.9.apk`.
+
+## A92
+
+**Desktop/Server link lookup can exclude the hovered row after a long wrapped run (2026-10-04).**
+
+- Severity: **low**; effort: small; area: desktop renderer; kind: bug
+- Status: **fixed in `127b6b28`**. Interactive desktop hover has not been exercised.
+- Locations: `src/renderer/terminal/file-links.ts` (`paragraphContaining`) and `file-links.test.ts`
+
+This was the desktop follow-up recorded while fixing Android `A32`. The exported helper walks up
+as many as 32 continuing rows, then joins at most 32 rows downward. Hovering row 32 or later in
+a full-width run can therefore return a paragraph ending before the requested row. URL lookup
+on a tail row can offer only `https://x` instead of the complete `https://x.io/a`.
+
+**Fix:** reserve the requested row by limiting the upward walk to `MAX_JOIN_ROWS - 1`, retaining
+the 32-row total budget. This affects the shared Desktop/Server renderer only. Android's
+`terminal.js` already has the corresponding `A32` fix; no Android APK change, host-service verb,
+projects blob, pairing payload, mirror or SSH-visible file change is involved, and no iOS
+adoption is owed.
+
+**Verification:** the 24-test focused Vitest file passes, including exhaustive containment/text
+checks for every row in 80-row hard/soft wrapped runs and actual URL-provider range/activation on
+a tail row beyond the cap. All 54 tests across the three affected link/dialect files and the full
+`npm run typecheck` pass. Three isolated production-copy mutants are caught: restore the old
+upward bound, expand the total budget, or omit the hovered tail from the downward window.
+Control and restored copies pass. Private evidence: `/tmp/nodeterm-file-link-fix-verify/results.json`
+and per-variant logs. No active source was changed for mutation runs; desktop `out/` remains the
+previous `071735d6` build while the isolated production pairing fixture runs. Android's installed
+beta 9 and the 7 Pass / 21 Partial / 36 Pending ledger are unchanged; no new phone results are claimed.
+
+## A93
+
+**Fresh-desktop remote-on pairing succeeds without relay credentials (2026-10-04).**
+
+- Severity: **medium**; effort: medium; area: pairing/hosted relay; kind: interop/backend
+- Status: **open**. A backend refusal is confirmed; its recovery policy and a repair are unverified.
+- Locations: src/main/pairing-service.ts (mintRelayDevice and the direct-SSH pairing branch),
+  android/app/src/main/kotlin/dev/nodeterm/android/ui/PairScreen.kt (previous token lookup),
+  and the external hosted /v1/relay/device endpoint.
+
+**Observed:** the intended Pixel, still on private beta 9/code 10, accepted genuine pairing JSON
+from a fresh isolated production desktop with remote access on. Local pairing succeeded, but
+the saved host received no relay credential. A bounded retry using the same request body as production
+mint returned HTTP 403 with error reauth_required. No backend repository was read or changed.
+
+**Relevant state:** the previous owned fixture had been forgotten on the phone, removing its
+saved relay token while preserving the global phone identity. The fresh desktop has a different
+device/host-key identity. Android looks for a prior token by the pairing's host key; production
+desktop code forwards it when supplied, and carries its own normal device id. These facts
+suggest a backend re-registration/C2 constraint, but do not establish the backend's exact rule.
+
+For a direct-SSH desktop, production pairing deliberately retains its working SSH registration
+when relay mint fails. That explains local success; it does not establish working “from anywhere”
+access or complete checklist items 8/12/17. Historical beta-6 hosted-relay proof remains valid.
+No phone identity reset, individual desktop identity/token copying or user-secret import was
+performed. Ordinary restart/re-pairing of the complete original owned fixture profile is being
+assessed as a legitimate same-desktop recovery test; its result is not yet claimed.
+New private evidence belongs in .nodeterm/android-beta-build-9/checklist-20261004/.
+The 64-row tally remains 7 Pass /21 Partial /36 Pending.
+
+## A94
+
+**Completed empty SSH listings still show “Loading sessions…” (2026-10-04).**
+
+- Severity: **medium**; effort: small; area: native Sessions state; kind: runtime bug
+- Status: **fixed in 3c217cba; delivery pending**. Five actual Kotlin regression methods and
+  eight isolated mutants pass; full Gradle checks and installed physical verification remain pending.
+- Locations: android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/ListingFailure.kt,
+  ListingFailureTest.kt and android/app/src/main/kotlin/dev/nodeterm/android/ui/SessionsTab.kt.
+
+**Physical failure:** the intended Pixel's beta 9 finishes listing the otherwise-empty private
+OpenSSH fixture and shows the completed error banner, Over SSH and an available New terminal.
+Its Sessions content nevertheless keeps “Loading sessions…”. Private before-fix proof:
+.nodeterm/android-beta-build-9/checklist-20261004/a91-initial-empty.json and .png.
+
+A91 correctly replaces stale rows after NothingFoundException, but used ProjectsSnapshot.EMPTY
+with fetchedAt=0, the marker for a first listing still pending. SessionsTab chooses its loading
+label from that timestamp. The fix stamps this authoritative empty answer with its completion
+time, retaining cancellation and the prior uncertain-failure cache/route/error behavior.
+No external host-service, pairing, mirror or SSH-file contract changed; no iOS adoption is owed.
+This source fix is not yet delivered to the phone, and does not claim the last-shell End/recreate
+matrix or promote item 32. The ledger remains 7 Pass /21 Partial /36 Pending.

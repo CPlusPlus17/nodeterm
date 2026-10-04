@@ -6,8 +6,10 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-> **Status (2026-10-03): beta 9/code 10 is installed; focused plain-SSH creation/history/reconnect and exact End pass on the Pixel (item 32 Partial).** CI builds the debug APK, and the release blockers
-> and medium bugs an audit found are fixed on this branch and tested where the code allows. The
+> **Status (2026-10-04): beta 9/code 10 is installed; release checks have resumed.** Focused
+> plain-SSH creation/history/reconnect and exact End pass on the Pixel (item 32 Partial).
+> Fresh-desktop pairing received no relay credential after an observed backend refusal (A93);
+> the empty-host loading correction (A94) is committed but awaits delivery. CI builds the debug APK. The
 > private minified beta is installed on the Pixel 10 Pro (Android 17 / API 37); manual SSH lists real
 > projects after the update. Historical proof retained through beta 6 covers basic terminal input,
 > the code-3 viewport/history correction (`A85`), user-confirmed terminal access with Wi-Fi off over
@@ -16,6 +18,30 @@ it is talking to.
 > actual outage/answer behavior and the full device pass remain unverified. The plan and what is still open are in
 > [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
 > [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
+
+**Desktop continuation (`A92`, 2026-10-04):** the shared Desktop/Server renderer now keeps the
+hovered row inside its capped wrapped-link paragraph. The focused 24-test Vitest file, all 54
+affected link/dialect tests, full TypeScript check and three isolated mutants pass. Fixed in
+`127b6b28`; interactive desktop hover remains pending. Android already fixed this in `A32`; no APK or host
+contract change, iOS adoption or new phone result follows. Installed beta 9 and the checklist
+tally remain unchanged.
+
+**Fresh-desktop relay pairing refusal (A93, open; 2026-10-04).** The same Pixel identity
+paired with a fresh isolated production desktop whose remote access was on, but the saved
+pairing had no relay credential. A bounded retry using the exact unchanged production request body
+returned HTTP 403 reauth_required. Forgetting the old fixture removed its phone-side relay
+token; the new desktop has a different identity. The refusal is measured. A backend
+same-desktop C2 recovery allowance is an inference until an actual recovery succeeds; no backend
+repository was reviewed, phone identity reset or user credentials copied. Ordinary restart
+and re-pairing of the complete original owned fixture profile is under assessment. Historical
+beta-6 relay proof remains valid; the checklist is unchanged.
+
+**Empty-host loading follow-up (A94, fixed in 3c217cba; delivery pending).** On beta 9,
+the otherwise-empty SSH fixture completes its listing and shows the error banner, Over SSH and
+New terminal, but still says “Loading sessions…”. The initial empty snapshot's zero fetch
+timestamp causes that label. The correction stamps the completed empty answer; five actual
+Kotlin regression methods and eight isolated mutants pass. Full Gradle checks, a new APK and
+physical verification of the installed correction remain pending. No host contract changed.
 
 **Beta 6 verifies continuous dragging, coast, Esc and new-touch stopping (`A86`, `A89`).** SSH
 reopened on the intended Pixel with its retained key/pin at 56×48. `c4b1f6cf` targets the stable
@@ -56,7 +82,7 @@ item 20 stays Partial and the full 64-item pass remains open. No runtime change 
 was needed. The 50/1-second protocol/offline app tasks at that stage are historical; current A90
 checks are recorded below. Each subsequent push still requires green CI.
 
-The user defers remaining Pixel release checks until after the hike. The requirement review adds
+The user resumed remaining Pixel release checks on 2026-10-04 after the hike. The requirement review adds
 item 18's Pass without new phone work; viewport/Fit remains item 23's open scope. Item 1 requires
 desktop-issued pairing/relay credentials through a higher-code update, using JSON or QR. Full
 release readiness, hosted cellular relay and live-Claude checks remain unverified.
@@ -91,8 +117,8 @@ the final Phone terminals group. Eleven desktop sessions/PIDs and nine project/w
 are unchanged; owned shells/folders/UI dumps are removed and the phone returns to regular Sessions.
 Proof: `.nodeterm/android-beta-build-8/a90-pixel-check-20261003/final-focused-results.json` and
 `beta9-exact-ui-end.json`. **Item 32 is Partial; current tally 7 Pass / 21 Partial / 36 Pending.**
-Relay canvas/managed creation, cellular creation and A91's otherwise-empty-host variant remain
-pending. Broader release checks stay deferred.
+Relay canvas/managed and cellular creation remain pending. The separate A91 otherwise-empty-host
+variant passes on beta 9 on 2026-10-04. Broader release checks resumed on 2026-10-04; new outcomes are recorded separately.
 
 **Empty-host refresh fix (`A91`) is delivered in beta 9/code 10.** Ending the last phone shell
 on an otherwise empty SSH host returns an authoritative "nothing found" answer. Beta 8
@@ -101,7 +127,13 @@ connected SSH route. Other failed refreshes keep the last listing, and cancellat
 The full real Gradle suite passes **688 tests / 67 suites**, zero failures/errors/skips (52 seconds),
 offline app `compileKotlin` passes (6 seconds), and six isolated Kotlin 2.2/JDK 21 mutants are caught.
 Proof is in `.nodeterm/android-beta-build-9/`. No shared host contract changes.
-Actual empty-host End/refresh/New-terminal proof remains pending.
+**Physical empty-host variant passes (2026-10-04).** On installed beta 9, the otherwise-empty
+private SSH fixture creates and opens a first Home shell. Native End removes its exact row and
+Phone terminals group while SSH stays connected. New terminal then creates and opens a second
+Home shell, retained for the later higher-code update check. This is not final fixture cleanup.
+Proof: `.nodeterm/android-beta-build-9/checklist-20261004/a91-beta9-focused-results.json`.
+A94's loading-label correction still awaits APK delivery and installed verification. Item 32
+stays Partial and the tally stays 7 Pass / 21 Partial / 36 Pending.
 
 **Current installed private beta:** `0.1.0-beta.9` / code `10`, clean source
 `4d33a5b5366c99479b648086649205350c7752b1`, built in 43 seconds and updated the exact intended
@@ -166,7 +198,7 @@ tested where the layer allows, and the numbered
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay when it is the computer's own; a session another computer's nodeterm runs there, or one no listing names, is not offered the relay |
 | Sessions of the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Over direct SSH the phone offers the relay instead |
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches. On your network the phone opens the relay leg next to SSH for it; with no relay leg (remote access off) the button is disabled and says why |
-| New plain terminal on an SSH host | ✓ (`A90`, installed beta 9/code 10) | Focused Pixel Home/project/custom cwd/input/history, restart/update/reconnect and exact End pass. Independent Phone terminals group; no desktop canvas/agent registration. Item 32 Partial: relay/managed, cellular creation and A91 empty-host variant pending |
+| New plain terminal on an SSH host | ✓ (`A90`, installed beta 9/code 10) | Focused Pixel Home/project/custom cwd/input/history, restart/update/reconnect and exact End pass. Independent Phone terminals group; no desktop canvas/agent registration. Item 32 Partial: relay/managed and cellular creation pending; A91 empty-host variant passes |
 | Wake / refresh / rename / end session | relay (end: both) | `node.*` verbs, through the relay leg next to SSH when on your network; over SSH "end" stops the tmux session only |
 | Kanban board, move cards, labels | relay (reads: both) | `projects.ensureBoard/setCardColumn/editCardLabels`; on your network the writes go through the relay leg next to SSH, and are disabled with the reason when there is none |
 | Source control: status, diffs, stage/unstage, commit, push/pull, recent commits | relay | The desktop's typed `git.*` bridge on the project's folder (no free-form git). On your network it goes through the relay leg next to SSH; not for the computer's SSH projects or a project with no folder, which say why. Merge conflicts are listed and their diff shown; resolve them on the computer or in a terminal |

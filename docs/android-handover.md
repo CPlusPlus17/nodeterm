@@ -1,13 +1,31 @@
-# Android companion: handover (updated 2026-10-03)
+# Android companion: handover (updated 2026-10-04)
 
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A91`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A94`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
+- **Checks resumed on 2026-10-04; A93 is an open relay-pairing finding.** Remote-on pairing to
+  a fresh isolated desktop succeeds locally but receives no relay credential. A bounded
+  retry using the exact unchanged production mint request body returns HTTP 403 reauth_required. The old fixture was
+  forgotten, removing its phone-side relay token; the fresh desktop identity differs. Backend
+  same-desktop C2 recovery is inferred until tested, with the whole original owned profile
+  under assessment and no copied user credentials or phone-identity reset.
+- **A94 is fixed in 3c217cba; delivery pending.** The otherwise-empty SSH host remains labelled
+  “Loading sessions…” on beta 9 despite a completed empty answer, connected SSH and New terminal.
+  The fix stamps that answer's fetch time. Five actual Kotlin methods and eight isolated mutants
+  pass; full Gradle checks, APK delivery and the installed physical fix remain pending.
+  The ledger stays **7 Pass /21 Partial /36 Pending**.
+
+- **`A92`: the recorded desktop file-link gap is fixed in `127b6b28`.** The
+  capped paragraph now contains the hovered row after long hard/soft wrapped runs. Focused
+  Vitest 24/24, affected link/dialect suites 54/54, full TypeScript check and three isolated
+  mutants pass. Interactive desktop hover is still unverified. This is Desktop/Server renderer
+  work only: Android already fixed `A32`, no host contract changes or iOS adoption are owed,
+  and no APK rebuild or phone-check promotion follows from it.
 - **`A91`: empty-host stale rows are fixed in `4d33a5b5` and delivered in beta 9/code 10.** The last phone-shell
   End on an otherwise empty SSH host returns `NothingFoundException`; native refresh now clears
   that authoritative empty listing while retaining cached rows on other errors and propagating
@@ -15,7 +33,10 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   Kotlin 2.2/JDK 21 mutants pass; full protocol **688/67**, zero failures/errors/skips (52 seconds),
   and offline app compile (6 seconds). Source `4d33a5b5` built in 43 seconds and updated the
   intended Pixel with the retained signer in 6.46 seconds; its installed APK hash matches.
-  Three owned beta-8 shells survive the update. Physical otherwise-empty-host proof is pending.
+  Three owned beta-8 shells survived the update and later verified cleanup. On Oct4, the
+  otherwise-empty-host first Home creation/exact last-End/row-and-group removal/connected SSH
+  and second Home creation pass. The second shell is retained for a later update check; no
+  final fixture cleanup is claimed.
 - **`A90`: explicit plain SSH-terminal creation is implemented and host-verified.** Protocol
   `bcc92367` and UI/model `b88d1415` add the path. The manual
   SSH/WireGuard host has driven projects but no own desktop workspace. Create a shell in a
@@ -24,7 +45,7 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   agent identity; desktop/Server Edition scans remain on their own two sockets. Cold-agent
   `A08` refusals and relay canvas New session stay unchanged. Installed beta 9 / code 10 contains
   it; focused Pixel Home/project/custom creation, history/restart/update/reconnect and exact UI
-  End pass. Item 32 is Partial; relay/managed, cellular and A91 empty-host variants stay open.
+  End pass. Item 32 is Partial; relay/managed and cellular creation stay open. A91 empty-host flow passes on Oct4.
   Beta-6 physical proof is historical,
   and beta 7 / code 8 remains a prepared, unused candidate.
 - The private minified beta 9 is installed on the intended Pixel 10 Pro (Android 17 /
@@ -57,7 +78,7 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   [run `37140762345`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37140762345), including A90.
   Source run `37144282865` failed the documentation checklist mapping; debug/release APK and
   CodeQL jobs passed, private packaging was skipped. The next push needs its own green workflow.
-- The user defers remaining Pixel release checks until after the hike. Item 18's Pass comes from
+- The user resumed remaining Pixel release checks on 2026-10-04 after the hike. Item 18's Pass comes from
   reviewing existing proof against its written requirement, with no new phone work. Item 1 needs
   desktop-issued pairing/relay credentials through a higher-code update; JSON or QR is acceptable.
 - Historical private `0.1.0-beta.8` / code `9`, clean `b88d1415`, was **installed on the exact intended Pixel**
@@ -126,6 +147,45 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Pixel checks resumed: relay mint refusal and completed-empty loading label (2026-10-04)
+
+Genuine production pairing JSON was entered through the native Pair screen without reading or
+changing either clipboard. This verifies code-text entry and parsing, not scanner or clipboard
+mechanics. Pairing to a fresh isolated desktop with remote access on succeeds locally, but no
+relay credential arrives. A bounded retry using the exact production mint request body confirms HTTP 403 reauth_required
+(A93). The Pixel keeps its global identity; forgetting the prior fixture removed its saved
+relay token, and the fresh desktop identity differs. Backend C2 policy is not proven by that
+refusal. The complete original owned profile is under assessment for ordinary encrypted-keyring
+restart and re-pairing; no identity/token fields or user credentials are transplanted.
+
+The separate otherwise-empty OpenSSH fixture shows a completed error banner, Over SSH and
+New terminal while “Loading sessions…” persists on installed beta 9. Source tracing identifies
+the initial empty snapshot's zero fetch time (A94). Commit 3c217cba stamps authoritative empty
+answers; five actual Kotlin regression methods and eight isolated mutants pass. Full Gradle
+checks, a new APK and installed-fix verification remain pending. Before-fix proof is in
+.nodeterm/android-beta-build-9/checklist-20261004/a91-initial-empty.json and .png.
+The subsequent focused A91 flow passes on installed beta 9: New terminal creates/opens a first
+Home shell, native End removes its exact row and Phone terminals group, SSH stays connected,
+and New terminal creates/opens a second Home shell. That second shell is retained for the later
+higher-code update check; no final cleanup is claimed. Proof:
+.nodeterm/android-beta-build-9/checklist-20261004/a91-beta9-focused-results.json.
+A94's label correction still awaits delivery. No full checklist promotion is claimed; the tally
+remains 7 Pass /21 Partial /36 Pending.
+
+### Desktop wrapped-link follow-up fixed in `127b6b28` (`A92`, 2026-10-04)
+
+Re-read the recorded desktop gap and reproduced the actual exported `paragraphContaining`
+behavior: below 32 continuing rows its downward window could omit the hovered row. Reserving
+one row in the upward budget fixes containment and complete URL matching while preserving the
+32-row cap. Three meaningful regressions cover all 80 requested hard/soft rows and the actual
+URL provider's tail-row text/range/activation. Focused Vitest 24/24, all three affected link/dialect
+files 54/54 and full `npm run typecheck` pass. Three isolated mutants are caught; control/restored
+copies pass. Evidence is `/tmp/nodeterm-file-link-fix-verify/results.json` and per-variant logs.
+Fixed in `127b6b28`; interactive desktop hover remains pending. The live isolated fixture retains
+the unchanged `071735d6` desktop build; `out/` was not rebuilt. Android already has the `A32`
+correction, so no Android/client contract or iOS adoption is owed. Installed beta 9/code 10 and
+the 7 Pass / 21 Partial / 36 Pending ledger remain unchanged; no new phone evidence is recorded.
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
@@ -861,17 +921,22 @@ are listed with it.
 
 ### What is still open
 
-The user authorizes focused A90 checks; broader Pixel release checks remain deferred until after
-the hike. Beta 9 / code 10 is installed with A90 and the A91 authoritative-empty refresh fix.
+The user resumed broader Pixel release checks on 2026-10-04 after the hike. Beta 9 / code 10 is
+installed with A90 and the A91 authoritative-empty refresh fix; A93 is open and A94 awaits delivery.
 Focused A90 create/cwd/input/history/restart/reconnect/update/exact-End proof makes item 32 Partial,
 giving 7 Pass / 21 Partial / 36 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
-variant, relay/managed and cellular creation remain pending. Broader device work stays deferred.
+variant passes on beta 9 Oct4; relay/managed and cellular creation remain pending. The ledger stays unchanged while checks run.
 
-**Next work after the hike, in order** (item lists were written for this session's workflows; re-read each audit
+**Resumed next work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
-1. **Check paired-update survival, then the remaining 64-item QR, cellular relay/SAS, worker/notification and outage/answer gates.** After the hike,
-   pair on current beta 9 / code 10 with actual desktop-issued JSON or QR, then use a later
+1. **Finish empty-host verification and resolve pairing recovery, then the remaining matrix.**
+   Verify A94 on a later installed beta. A91 first Home/exact last-End/empty-list/New-terminal
+   passes on beta 9; its second Home shell is retained for the higher-code update check.
+   Investigate A93 through ordinary restart/re-pairing of the complete original owned desktop
+   profile, without transplanting identity/token fields, resetting the phone or inferring approval.
+   Pair on current beta 9 / code 10 with actual desktop-issued JSON or QR, confirming genuine
+   relay credentials, then use a later
    same-signer higher-code update and verify pairing/relay credentials survive (item 1), without
    downgrading or uninstalling the working app. Debug migration stays conditional SKIP. Beta 9 is
    installed on the intended Pixel; earlier betas verify manual SSH authentication, project listing,
@@ -955,10 +1020,10 @@ section before starting, since the verifier corrections take precedence):
   computers screen is not polled; it refreshes on open, on Refresh and after an answer (`A55`).
   Dictation uses the phone's own language with no picker (`A59`). "Add SSH server" has no one-time
   password bootstrap and does not offer the Server Edition install one-liner (`A27`).
-- **Desktop file links, found during A32.** `src/renderer/terminal/file-links.ts`
-  `paragraphContaining` has the same walk-up limit A32 fixed in terminal.js: below a run of more than
-  32 continuing full-width rows the paragraph it returns does not contain the row, so a link there is
-  missed. One-character fix (`MAX_JOIN_ROWS - 1`), owed with its own vitest.
+- **Desktop file-link follow-up (`A92`) is fixed in `127b6b28`.** `paragraphContaining` now reserves
+  the hovered row within the 32-row window. Focused/affected Vitest suites, full TypeScript check
+  and three isolated mutants pass; interactive desktop hover is pending.
+  Android already fixed this in `A32`; the desktop fixture's built bundles remain unchanged.
 - **A10/A50 trade-off.** The debug key is public by the user's decision. The private-beta packager
   rejects it; a private signer is supplied locally and must be retained for updates. Moving from
   debug to private beta requires a deliberate uninstall/re-pair once. The first retained private
@@ -1045,7 +1110,9 @@ Verified:
 - `A91` clears only an authoritative empty SSH listing, retaining uncertain cached listings and
   propagating cancellation without changing route/error/connection policy. Four new regressions,
   full protocol 688/67, offline app compile and six new isolated mutants pass. Beta 9 / code 10 is
-  installed; physical otherwise-empty-host verification remains pending.
+  installed; its Oct4 physical otherwise-empty-host first Home/exact last-End/row-and-group
+  removal/connected SSH/second Home creation passes. The second shell is retained for update;
+  A94 label correction delivery and final fixture cleanup remain pending.
 - `A90` plain SSH shells are implemented in `bcc92367` / `b88d1415` and host-verified by the full
   684-test/66-suite protocol run, offline app compile and 32 new behavioral/wiring mutations.
   Atomic interrupted-creation rediscovery, frozen retry, fingerprint guards, dedicated sockets,
@@ -1053,7 +1120,7 @@ Verified:
   its AGP/R8/signing/alignment/provenance and independent SDK 36/37 review pass. Focused real
   Pixel Home/project/custom creation/history/restart/update/reconnect and exact End promote
   only item 32 to Partial, giving 7 Pass / 21 Partial / 36 Pending. Relay/managed, cellular creation
-  and the A91 otherwise-empty-host variant remain pending.
+  remain pending; the A91 otherwise-empty-host variant passes on Oct4.
 - The protocol against the desktop's real code: the relay handshake, SAS, approval wait (and the
   host's decision hold), `projects.list` with its `lan` report, attach/snapshot/input/resize/exit,
   scroll, node actions (quick answers into SSH-project nodes through a fake remote writer), board
@@ -1088,7 +1155,7 @@ Verified:
   installed. Recorded prior all-green branch `19da35a2` passed all five CI jobs in run `37140762345`;
   installed APK source `4d33a5b5` failed its documentation checklist mapping in run `37144282865`.
   Pairing/relay credential survival still requires pairing on
-  current code 10 then a later higher-code update after the hike. Each later push still requires
+  current code 10 then a later higher-code update. A93 recovery and A94 delivery remain open. Each later push still requires
   its own green workflow.
 - Encrypted paste pairing and forced relay-only browse on the real Pixel succeed against the
   actual hosted backend and production desktop source `58a202be` in an isolated private home.
@@ -1112,7 +1179,7 @@ Verified:
   install identity, notification permission, manual-host configuration/reconnect/browse and visible/
   enabled New terminal are verified. Desktop-issued pairing/relay survival across a future update
   remain pending. Focused A90 Home/project/custom creation/history/restart/update/reconnect and
-  exact End pass; relay/managed, cellular creation and the A91 empty-host variant remain pending.
+  exact End pass; relay/managed and cellular creation remain pending. A91 empty-host flow passes on Oct4.
   Historical code-7 controlled continuous drag/coast/Esc are verified. Earlier pre-attach history and Wi-Fi-off
   mobile-data WireGuard access are verified. Historical beta-6 real SSH background/detach recovery and
   process-kill restoration, paste pairing, hosted relay browse/input and the synthetic shipped-hook
@@ -1312,7 +1379,9 @@ actual outage/notification/answer behavior and the full device checklist remain 
    Beta 9/code 10/source 4d33a5b5 built in 43s and updated the intended Pixel with the retained
    signer in 6.46s; installed SHA 719cfeea1dcf27900dd35692a59004ca07e8261b3f14bd43922f0706b6b4ab54 matches.
    Install identity/notification grant/app data and three phone shells survive. Verify last-shell
-   End on an otherwise empty SSH host removes the row and keeps New terminal available; pending.
+   End on an otherwise empty SSH host removes the row/group, preserves SSH and permits a
+   second Home creation: physical beta-9 Oct4 pass. The second shell is retained for later update,
+   and A94 label correction delivery remains pending.
    A90 is implemented in protocol bcc92367 and UI/model b88d1415: 684 tests / 66 suites / zero
    failures/errors/skips (48s), offline app compile (1s) and 32 new protocol/helper/wiring mutants pass.
    Clean b88d1415 built beta 8 / code 9 in 49s; R8, retained-signer packaging and independent SDK 36/37
