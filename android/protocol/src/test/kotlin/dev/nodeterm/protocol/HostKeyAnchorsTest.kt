@@ -123,23 +123,26 @@ class HostKeyAnchorsTest {
     fun `the app's pin hands the verifier the keys its record keeps, and every SSH dial uses that pin`() {
         val connections = AppSourcePins.app("conn/ConnectionManager.kt")
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(connections, "private fun pinFor(host: PairedHost)"),
-            "override fun pinned(): String? = graph.hosts.get(host.id)?.sshHostKeyFingerprint",
-            "override fun pin(fingerprint: String) = graph.hosts.update(host.id) { it.copy(sshHostKeyFingerprint = fingerprint) }",
-            "override fun anchors(): List<String> = graph.hosts.get(host.id)?.sshHostKeyAnchors.orEmpty()"
+            AppSourcePins.blockAfter(connections, "private fun pinFor(host: PairedHost, lease: HostLifetime.Lease)"),
+            "graph.hosts.currentHost(host.id, host.hostKeyB64) { lifetime.isCurrent(lease) }",
+            "override fun pinned(): String? = current().sshHostKeyFingerprint",
+            "graph.hosts.updateCurrent(host.id, host.hostKeyB64, { lifetime.isCurrent(lease) }) { it.copy(sshHostKeyFingerprint = fingerprint) }",
+            "override fun anchors(): List<String> = current().sshHostKeyAnchors"
         )
         // The paired computer's SSH dial goes through that pin, read fresh from the record each time.
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(connections, "private suspend fun connectLocked(trigger: Trigger)"),
+            AppSourcePins.blockAfter(connections, "private suspend fun connectLocked(trigger: Trigger, lease: HostLifetime.Lease)"),
             "SshHostConnection.connect(",
-            "host.host, host.port, host.user, graph.sshIdentity, pinFor(host),"
+            "host.host, host.port, host.user, graph.sshIdentity, pinFor(host, lease),"
         )
         assertEquals(1, Regex("""SshHostConnection\.connect\(""").findAll(connections).count(), "one SSH dial, the pinned one")
         // And the record carries what the sealed answer named: pairing stores PairedHost.from's record
         // as it is (a `.copy(...)` on that line could drop the anchors again).
         val pair = AppSourcePins.ui("PairScreen.kt")
         assertTrue(pair.lines().any { it.trim() == "val host = PairedHost.from(p, result)" }, "PairScreen keeps PairedHost.from's record")
-        AppSourcePins.assertInOrder(pair, "val host = PairedHost.from(p, result)", "graph.hosts.upsert(host)")
+        AppSourcePins.assertInOrder(pair, "val host = PairedHost.from(p, result)", "graph.hosts.publishPairing(host, previous")
+        val store = AppSourcePins.app("data/HostStore.kt")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(store, "fun publishPairing("), "saveToken()", "upsert(host)")
     }
 
     @Test

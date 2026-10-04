@@ -48,9 +48,9 @@ class AppGraph(context: Context) {
      * minus what [onScreen] shows (audit A73). One path for the 8 s refresh of the computer on screen
      * and the background check alike.
      */
-    fun announce(hostId: String, snapshot: ProjectsSnapshot, onScreen: OnScreen) {
+    fun announce(hostId: String, snapshot: ProjectsSnapshot, onScreen: OnScreen, quiet: Boolean) {
         val host = hosts.get(hostId) ?: return
-        InboxNotifier.announce(appContext, host, snapshot, onScreen)
+        InboxNotifier.announce(appContext, host, snapshot, onScreen, quiet)
     }
 }
 

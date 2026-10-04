@@ -571,17 +571,18 @@ class NotificationActionsTest {
         val build = AppSourcePins.blockAfter(notifier, "private fun build(")
         AppSourcePins.assertInOrder(
             build,
-            "val quiet = NodetermApp.graph(context).connections.session(host.id).reachableQuietly()",
             "for (action in InboxNotificationActions.plan(ev, showDetails, quiet))",
             "if (action.answers) answerIntent(context,",
             "else open",
             "builder.addAction(",
             ".setAuthenticationRequired(action.answers)"
         )
+        assertFalse(build.contains("connections.session("), "Notification publication must not take ConnectionManager's monitor")
+        assertTrue(notifier.contains("showDetails: Boolean,\n        quiet: Boolean"))
         // The id the receiver and the worker update is the one the notification was posted under.
         AppSourcePins.assertInOrder(
             AppSourcePins.blockAfter(notifier, "fun announce("),
-            "nm.notify(InboxNotificationActions.notificationId(host.id, ev.id), build(context, host, snapshot, ev, showDetails))"
+            "nm.notify(InboxNotificationActions.notificationId(host.id, ev.id), build(context, host, snapshot, ev, showDetails, quiet))"
         )
         val session = AppSourcePins.blockAfter(AppSourcePins.app("conn/ConnectionManager.kt"), "fun reachableQuietly()")
         AppSourcePins.assertInOrder(

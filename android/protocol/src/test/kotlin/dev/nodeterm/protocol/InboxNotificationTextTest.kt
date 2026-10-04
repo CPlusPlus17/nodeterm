@@ -162,7 +162,7 @@ class InboxNotificationTextTest {
         AppSourcePins.assertInOrder(
             announce,
             "val showDetails = graph.hosts.notificationDetails",
-            "build(context, host, snapshot, ev, showDetails)"
+            "build(context, host, snapshot, ev, showDetails, quiet)"
         )
     }
 

@@ -420,11 +420,11 @@ class ForegroundRefreshTest {
         assertTrue(connections.contains("refresh = { trigger -> refreshNow(trigger) }"))
         assertTrue(connections.contains("pause = { delay(POLL_MS) }"))
         assertTrue(connections.contains("const val POLL_MS = 8_000L"))
-        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(connections, "suspend fun refreshNow("), "foreground.serial {", "ensureConnected(trigger)", "c.listProjects()", "_snapshot.value = it", "graph.announce(hostId, listed, onScreen.now())")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(connections, "suspend fun refreshNow("), "foreground.serial {", "ensureConnected(trigger)", "c.listProjects()", "_snapshot.value = it", "graph.announce(hostId, listed, onScreen.now(), quiet = reachableQuietly())")
         assertTrue(AppSourcePins.blockAfter(connections, "fun startWatching(").contains("foreground.start(initialTrigger)"))
         assertTrue(AppSourcePins.blockAfter(connections, "fun stopWatching(").contains("foreground.stop(closeWhenUnused)"))
-        val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection)")
-        assertTrue(adopt.contains("foreground.changed(stillCurrent = { conn == null })"))
-        assertTrue(adopt.contains("c.setOnChanged { if (conn === c && isWatched) foreground.changed(stillCurrent = { conn === c }) }"))
+        val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection, lease: HostLifetime.Lease)")
+        assertTrue(adopt.contains("foreground.changed(stillCurrent = { lifetime.isCurrent(lease) && conn == null })"))
+        assertTrue(adopt.contains("c.setOnChanged { if (lifetime.isCurrent(lease) && conn === c && isWatched) foreground.changed(stillCurrent = { lifetime.isCurrent(lease) && conn === c }) }"))
     }
 }

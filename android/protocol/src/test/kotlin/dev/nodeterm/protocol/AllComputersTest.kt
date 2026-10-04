@@ -345,8 +345,10 @@ class AllComputersTest {
             "_lastError.value = (e as? NothingFoundException)?.said(relayLeg()) ?: e.message ?: e.javaClass.simpleName",
             "if (e !is HostException) disconnect()"
         )
+        assertTrue(connections.contains("fun disconnect() = lifetime.disconnect { disconnectOwned() }"))
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(connections, "fun disconnect() {"),
+            AppSourcePins.blockAfter(connections, "private fun disconnectOwned()"),
+            "conn = null", "scope.launch(Dispatchers.IO)", "runCatching { c?.close() }",
             "_state.value = ConnState.Idle"
         )
         // One rule for which states leave a failed listing to the screen: Connected AND Idle.

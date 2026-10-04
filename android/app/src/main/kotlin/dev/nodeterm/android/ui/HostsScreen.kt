@@ -203,9 +203,9 @@ fun HostsScreen(nav: Navigator) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    graph.connections.forget(host.id)
-                    graph.secure.remove(SecureStore.relayTokenKey(host.id))
-                    graph.hosts.remove(host.id)
+                    graph.connections.retireAndPublish(listOf(host.id)) {
+                        graph.hosts.remove(host.id) { graph.secure.remove(SecureStore.relayTokenKey(host.id)) }
+                    }
                     removing = null
                 }) { Text("Forget") }
             },

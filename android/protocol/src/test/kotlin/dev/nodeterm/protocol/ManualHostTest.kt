@@ -499,7 +499,7 @@ class ManualHostTest {
         val hosts = AppSourcePins.ui("HostsScreen.kt")
         assertTrue(hosts.split("nav.push(Route.AddSshHost)").size - 1 >= 2, "both the empty list and the list offer it")
         val forget = AppSourcePins.blockAfter(hosts, "removing?.let { host ->")
-        AppSourcePins.assertInOrder(forget, "if (host.manual)", "ManualHost.revokeHint(host.user)", "graph.connections.forget(host.id)", "graph.hosts.remove(host.id)")
+        AppSourcePins.assertInOrder(forget, "if (host.manual)", "ManualHost.revokeHint(host.user)", "graph.connections.retireAndPublish(listOf(host.id))", "graph.hosts.remove(host.id)")
         val main = AppSourcePins.app("MainActivity.kt")
         AppSourcePins.assertInOrder(main, "Route.AddSshHost -> listOf(\"addssh\")", "\"addssh\" -> Route.AddSshHost", "Route.AddSshHost -> AddSshHostScreen(nav)")
         val screen = AppSourcePins.ui("AddSshHostScreen.kt")

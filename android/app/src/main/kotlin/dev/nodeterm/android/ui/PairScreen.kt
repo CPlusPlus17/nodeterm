@@ -46,6 +46,7 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.model.PairedHostReplacement
 import dev.nodeterm.protocol.pairing.PairingClient
 import dev.nodeterm.protocol.pairing.PairingException
 import dev.nodeterm.protocol.pairing.PairingPayload
@@ -162,14 +163,14 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                     boxPublicKeyB64 = graph.boxKeys.publicKeyB64
                                 )
                                 val host = PairedHost.from(p, result)
-                                result.relayDeviceToken?.let { graph.secure.putString(SecureStore.relayTokenKey(host.id), it) }
-                                previous?.let {
-                                    graph.connections.forget(it.id)
-                                    if (it.id != host.id) graph.secure.remove(SecureStore.relayTokenKey(it.id))
-                                    // The same computer, paired again: what this phone saw of it carries over.
-                                    graph.hosts.remove(it.id, successor = host.id)
+                                // Block factory admission until retirement and local publication
+                                // finish. Always retire the incoming id, including a changed box key.
+                                val retiredIds = PairedHostReplacement.retired(graph.hosts.hosts.value, host, previous).map { it.id } + host.id
+                                graph.connections.retireAndPublish(retiredIds) {
+                                    graph.hosts.publishPairing(host, previous,
+                                        saveToken = { result.relayDeviceToken?.let { graph.secure.putString(SecureStore.relayTokenKey(host.id), it) } },
+                                        removeToken = { id -> graph.secure.remove(SecureStore.relayTokenKey(id)) })
                                 }
-                                graph.hosts.upsert(host)
                                 // Also with no relay leg yet (A07-late): the computer approves this phone's
                                 // key on its first relay connect, so once a late adoption gives it a leg the
                                 // background check may use it without raising a dialog.

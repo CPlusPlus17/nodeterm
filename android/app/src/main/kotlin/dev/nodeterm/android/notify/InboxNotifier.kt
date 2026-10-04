@@ -106,7 +106,7 @@ object InboxNotifier {
      * says the user is looking at: those are recorded as seen (audit A73). Returns how many were
      * posted.
      */
-    fun announce(context: Context, host: PairedHost, snapshot: ProjectsSnapshot, onScreen: OnScreen): Int {
+    fun announce(context: Context, host: PairedHost, snapshot: ProjectsSnapshot, onScreen: OnScreen, quiet: Boolean): Int {
         val graph = NodetermApp.graph(context)
         // The switch, and whether the system will show it (A21): with either off nothing is claimed,
         // but what is on screen is still recorded as seen, so turning them on later does not
@@ -124,7 +124,7 @@ object InboxNotifier {
         val nm = NotificationManagerCompat.from(context)
         val showDetails = graph.hosts.notificationDetails
         for (ev in fresh.takeLast(5)) {
-            nm.notify(InboxNotificationActions.notificationId(host.id, ev.id), build(context, host, snapshot, ev, showDetails))
+            nm.notify(InboxNotificationActions.notificationId(host.id, ev.id), build(context, host, snapshot, ev, showDetails, quiet))
         }
         return fresh.size
     }
@@ -143,7 +143,8 @@ object InboxNotifier {
         host: PairedHost,
         snapshot: ProjectsSnapshot,
         ev: InboxEvent,
-        showDetails: Boolean
+        showDetails: Boolean,
+        quiet: Boolean
     ): android.app.Notification {
         val node = snapshot.findNode(ev.nodeId)?.second
         val session = snapshot.statusOf(ev.nodeId)?.name?.takeIf { it.isNotBlank() } ?: node?.title
@@ -174,7 +175,8 @@ object InboxNotifier {
         words.bigText?.let { builder.setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
         // An answer from here never makes a first relay handshake (nobody is at the app to compare the
         // desktop's code): a computer reachable only that way gets Open instead of answers.
-        val quiet = NodetermApp.graph(context).connections.session(host.id).reachableQuietly()
+        // The listing's exact HostSession supplies this fact; a manager lookup here would invert
+        // ConnectionManager.forget's lock order while lifetime-gated notifications publish.
         for (action in InboxNotificationActions.plan(ev, showDetails, quiet)) {
             val intent = if (action.answers) answerIntent(context, Request(host.id, host.name, id, words.title, title, action, ev))
                 else open

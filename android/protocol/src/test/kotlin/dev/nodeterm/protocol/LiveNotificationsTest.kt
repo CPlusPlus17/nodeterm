@@ -327,7 +327,7 @@ class LiveNotificationsTest {
             "} catch (e: Exception) {",
             "if (e !is HostException) disconnect()",
             "return",
-            "runCatching { graph.announce(hostId, listed, onScreen.now()) }"
+            "runCatching { lifetime.whenCurrent(operation) { graph.announce(hostId, listed, onScreen.now(), quiet = reachableQuietly()) } }"
         )
         // The 8 s poll re-lists through it.
         assertTrue(connections.contains("private val foreground = ForegroundRefresh("))
@@ -336,8 +336,8 @@ class LiveNotificationsTest {
         assertTrue(AppSourcePins.blockAfter(connections, "fun startWatching(").contains("foreground.start(initialTrigger)"))
         val graph = AppSourcePins.app("NodetermApp.kt")
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(graph, "fun announce(hostId: String, snapshot: ProjectsSnapshot, onScreen: OnScreen)"),
-            "InboxNotifier.announce(appContext, host, snapshot, onScreen)"
+            AppSourcePins.blockAfter(graph, "fun announce(hostId: String, snapshot: ProjectsSnapshot, onScreen: OnScreen, quiet: Boolean)"),
+            "InboxNotifier.announce(appContext, host, snapshot, onScreen, quiet)"
         )
     }
 
@@ -346,9 +346,9 @@ class LiveNotificationsTest {
         // The connection outlives the screen (the review of A73): a computer the user left kept
         // announcing live through its pushes until the connection dropped or the worker ran, while the
         // copy promises live notifications only for the computer on screen. Like the reconnect.
-        val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection)")
-        AppSourcePins.assertInOrder(adopt, "if (isWatched) foreground.changed(stillCurrent = { conn == null })", "delay(1_500)")
-        assertTrue(adopt.contains("c.setOnChanged { if (conn === c && isWatched) foreground.changed(stillCurrent = { conn === c }) }"), adopt)
+        val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection, lease: HostLifetime.Lease)")
+        AppSourcePins.assertInOrder(adopt, "if (reconnect && isWatched) foreground.changed(stillCurrent = { lifetime.isCurrent(lease) && conn == null })", "delay(1_500)")
+        assertTrue(adopt.contains("c.setOnChanged { if (lifetime.isCurrent(lease) && conn === c && isWatched) foreground.changed(stillCurrent = { lifetime.isCurrent(lease) && conn === c }) }"), adopt)
         assertEquals(1, Regex("""\.setOnChanged\b""").findAll(connections).count(), "another connection re-lists on its pushes")
     }
 

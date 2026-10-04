@@ -213,11 +213,11 @@ class LanRefreshTest {
     fun `the app refreshes the record after a primary relay listing, and only through the kind check`() {
         val conn = AppSourcePins.app("conn/ConnectionManager.kt")
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(conn, "private suspend fun connectLocked(trigger: Trigger): HostConnection"),
+            AppSourcePins.blockAfter(conn, "private suspend fun connectLocked(trigger: Trigger, lease: HostLifetime.Lease): HostConnection"),
             "_snapshot.value = connected.first",
             "_sshWarning.value = sshWarning",
-            "refreshLanLeg(connected.connection, connected.first)",
-            "adopt(connected.connection)"
+            "adopt(connected.connection, lease)",
+            "refreshLanLeg(connected.connection, connected.first)"
         )
         AppSourcePins.assertInOrder(
             AppSourcePins.blockAfter(conn, "suspend fun refreshNow(trigger: Trigger = Trigger.AUTO)"),
@@ -229,13 +229,13 @@ class LanRefreshTest {
         assertFalse(viaRelay.contains("refreshLanLeg"), viaRelay)
         val body = AppSourcePins.blockAfter(conn, "private fun refreshLanLeg(c: HostConnection, listed: ProjectsSnapshot)")
         assertTrue(body.contains("LanRefresh.afterListing(before, c.kind, listed, refused)"), body)
-        assertTrue(body.contains("graph.hosts.update(hostId) { current -> LanRefresh.afterListing(current, c.kind, listed, refused)?.host ?: current }"), body)
+        assertTrue(body.contains("graph.hosts.updateCurrent(hostId, before.hostKeyB64, { lifetime.isCurrent(lease) && conn === c }) { current -> LanRefresh.afterListing(current, c.kind, listed, refused)?.host ?: current }"), body)
         assertFalse(body.contains("LanRefresh.apply("), "the kind check must not be skipped")
         // The refused key is this connection's own (review of A74-refresh): the one the SSH leg of the
         // connect that opened it was refused, as SshFallback handed it on, never another connection's.
         assertTrue(body.contains("val refused = sshRefusal?.takeIf { it.connection === c }?.hostKey"), body)
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(conn, "private suspend fun connectLocked(trigger: Trigger): HostConnection"),
+            AppSourcePins.blockAfter(conn, "private suspend fun connectLocked(trigger: Trigger, lease: HostLifetime.Lease): HostConnection"),
             "refusedHostKey = next.refusedHostKey",
             "_sshWarning.value = sshWarning",
             "sshRefusal = refusedHostKey?.let { SshRefusal(connected.connection, it) }",

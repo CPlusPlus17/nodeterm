@@ -6,6 +6,8 @@ import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.ConnectionUsers
 import dev.nodeterm.protocol.host.ForegroundRefresh
+import dev.nodeterm.protocol.host.HostLifetime
+import dev.nodeterm.protocol.host.HostSessionRegistry
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.InboxNotificationActions
@@ -87,6 +89,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      */
     val sshWarning: StateFlow<String?> = _sshWarning.asStateFlow()
 
+    private val lifetime = HostLifetime()
+    @Volatile private var connectionLease: HostLifetime.Lease? = null
     private val mutex = Mutex()
     @Volatile private var conn: HostConnection? = null
 
@@ -105,7 +109,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         createAndRefreshSshTerminal(request.nodeId, request.cwd)
     }, definitiveFailure = { it is IllegalArgumentException || it is SshTerminalCreationRefusedException })
 
-    val managedSessionCreation = ManagedSessionCreation(graph.scope, graph.hosts.managedCreationStorage(hostId),
+    val managedSessionCreation = ManagedSessionCreation(graph.scope, graph.hosts.managedCreationStorage(hostId) { lifetime.active },
         prepare = { choice -> inBackground {
             val ssh = ensureConnected(Trigger.USER) as? SshHostConnection
                 ?: throw ManagedSessionRefusedException("Connect over SSH to create this managed session.")
@@ -152,11 +156,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     val onScreen = OnScreenTracker()
 
     suspend fun ensureConnected(trigger: Trigger = Trigger.AUTO): HostConnection {
+        val lease = lifetime.capture()
         conn?.let { return it }
-        return mutex.withLock { conn ?: connectLocked(trigger) }
+        return mutex.withLock {
+            lifetime.requireCurrent(lease)
+            conn ?: connectLocked(trigger, lease)
+        }
     }
 
-    private suspend fun connectLocked(trigger: Trigger): HostConnection {
+    private suspend fun connectLocked(trigger: Trigger, lease: HostLifetime.Lease): HostConnection {
         val host = graph.hosts.get(hostId) ?: throw HostException("This computer is no longer paired.")
         val route = graph.hosts.route(hostId)
         val errors = ArrayList<String>()
@@ -170,22 +178,25 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             // or it stays open, keep-alive and all, for the life of the process (audit A20).
             var dialed: SshHostConnection? = null
             try {
-                val ssh = withContext(Dispatchers.IO) {
+                val ssh = lifetime.dial(lease) { withContext(Dispatchers.IO) {
                     SshHostConnection.connect(
-                        host.host, host.port, host.user, graph.sshIdentity, pinFor(host),
+                        host.host, host.port, host.user, graph.sshIdentity, pinFor(host, lease),
                         connectTimeoutMs = if (route == RoutePreference.AUTO) 4_000 else 10_000
                     ).also { dialed = it }
+                } }
+                lifetime.publish(lease) {
+                    _sshWarning.value = null
+                    sshRefusal = null
                 }
-                _sshWarning.value = null
-                sshRefusal = null
-                adopt(ssh)
+                adopt(ssh, lease)
                 adoptInBackground(ssh)
                 return ssh
             } catch (e: kotlinx.coroutines.CancellationException) {
                 dialed?.let { c -> scope.launch(Dispatchers.IO) { runCatching { c.close() } } }
-                _state.value = ConnState.Idle
+                lifetime.whenCurrent(lease) { _state.value = ConnState.Idle }
                 throw e
             } catch (e: Exception) {
+                lifetime.requireCurrent(lease)
                 // A changed host key is refused for SSH and said out loud, but in Auto it does not
                 // stop the relay leg, which authenticates the computer on its own (audit A49/A74):
                 // most often another machine simply has the paired address now. "Only on my
@@ -210,33 +221,40 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             val relay = host.relay
             val token = graph.secure.getString(SecureStore.relayTokenKey(host.id))
             val hostKey = host.relayHostKeyB64
-            val decision = if (relay != null && token != null && hostKey != null) graph.relayGate.decide(hostId, trigger) else null
+            val decision = if (relay != null && token != null && hostKey != null) lifetime.publish(lease) { graph.relayGate.decide(hostId, trigger) } else null
             if (decision is RelayApprovalGate.Decision.Skip) {
                 errors += "Through the relay: ${decision.reason}"
             } else if (relay != null && token != null && hostKey != null) {
                 val requireApproved = (decision as? RelayApprovalGate.Decision.Dial)?.requireApproved == true
                 _state.value = ConnState.Connecting("Connecting through the relay…")
                 try {
-                    val connected = dialRelay(relay, token, hostKey, requireApproved) { st ->
-                        when (st) {
+                    val connected = dialRelay(relay, token, hostKey, requireApproved, lease) { st ->
+                        lifetime.whenCurrent(lease) { when (st) {
                             is RelayConnectStatus.AwaitingApproval -> _state.value = ConnState.AwaitingApproval(st.sas)
                             RelayConnectStatus.Handshaking -> _state.value = ConnState.Connecting("Verifying your computer…")
                             RelayConnectStatus.MintingToken -> Unit
-                        }
+                        } }
                     }
-                    graph.relayGate.onConnected(hostId)
-                    _snapshot.value = connected.first
-                    _sshWarning.value = sshWarning
-                    sshRefusal = refusedHostKey?.let { SshRefusal(connected.connection, it) }
-                    refreshLanLeg(connected.connection, connected.first)
-                    adopt(connected.connection)
+                    try {
+                        lifetime.publish(lease) {
+                            graph.relayGate.onConnected(hostId)
+                                    _snapshot.value = connected.first
+                            _sshWarning.value = sshWarning
+                            sshRefusal = refusedHostKey?.let { SshRefusal(connected.connection, it) }
+                        }
+                        adopt(connected.connection, lease)
+                        refreshLanLeg(connected.connection, connected.first)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        scope.launch(Dispatchers.IO) { runCatching { connected.connection.close() } }
+                        throw e
+                    }
                     return connected.connection
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // A cancelled dial is not a failed one: no "offline", no error text (A20).
-                    _state.value = ConnState.Idle
+                    lifetime.whenCurrent(lease) { _state.value = ConnState.Idle }
                     throw e
                 } catch (e: Exception) {
-                    graph.relayGate.onFailed(hostId, e)
+                    lifetime.publish(lease) { graph.relayGate.onFailed(hostId, e) }
                     errors += "Through the relay: ${e.message ?: e.javaClass.simpleName}"
                 }
             } else if (route == RoutePreference.RELAY_ONLY || !host.sshAvailable) {
@@ -246,8 +264,10 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         }
 
         val msg = errors.joinToString("\n").ifEmpty { "Couldn't connect." }
-        _sshWarning.value = null // the failure message already carries it
-        _state.value = ConnState.Failed(msg)
+        lifetime.publish(lease) {
+            _sshWarning.value = null // the failure message already carries it
+            _state.value = ConnState.Failed(msg)
+        }
         throw HostException(msg)
     }
 
@@ -269,17 +289,30 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         token: String,
         hostKey: String,
         requireApproved: Boolean,
+        lease: HostLifetime.Lease,
         onStatus: (RelayConnectStatus) -> Unit
     ): RelayConnector.Connected {
-        val join = RelayApi(graph.hosts.apiBase).join(token, relay.hostId)
-        return RelayConnector.connect(
-            relayUrl = relay.relayEndpoint,
-            token = join.pairingToken,
-            deviceKeys = graph.boxKeys,
-            hostPublicKeyB64 = hostKey,
-            requireApproved = requireApproved,
-            onStatus = onStatus
-        )
+        // Keep the produced resource before the cancellable async handoff: cancellation may
+        // discard a successful result before the caller has a reference it can close.
+        var dialed: RelayConnector.Connected? = null
+        try {
+            return lifetime.dial(lease) {
+                lifetime.requireCurrent(lease)
+                val join = RelayApi(graph.hosts.apiBase).join(token, relay.hostId)
+                lifetime.requireCurrent(lease)
+                RelayConnector.connect(
+                    relayUrl = relay.relayEndpoint,
+                    token = join.pairingToken,
+                    deviceKeys = graph.boxKeys,
+                    hostPublicKeyB64 = hostKey,
+                    requireApproved = requireApproved,
+                    onStatus = onStatus
+                ).also { dialed = it }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            dialed?.let { connected -> scope.launch(Dispatchers.IO) { runCatching { connected.connection.close() } } }
+            throw e
+        }
     }
 
     /** A relay connection held NEXT TO a direct-SSH one, for what SSH must not do (see [viaRelay]). */
@@ -372,9 +405,11 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * dialog (only one with a computer whose pairing answered `relayApproved`, audit A07-late).
      */
     suspend fun viaRelay(trigger: Trigger = Trigger.USER, onStatus: (RelayConnectStatus) -> Unit = {}): HostConnection {
+        val lease = lifetime.capture()
         conn?.takeIf { it.kind == TransportKind.RELAY }?.let { return it }
         sideRelay?.let { return it }
         return sideMutex.withLock {
+            lifetime.requireCurrent(lease)
             sideRelay ?: run {
                 val host = graph.hosts.get(hostId) ?: throw HostException("This computer is no longer paired.")
                 val relay = host.relay
@@ -383,43 +418,59 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 if (relay == null || token == null || hostKey == null || graph.hosts.route(hostId) == RoutePreference.SSH_ONLY) {
                     throw HostException("Remote access isn't set up for this computer. Open the session in nodeterm on the computer instead.")
                 }
-                val requireApproved = when (val d = graph.relayGate.decide(hostId, trigger)) {
+                val requireApproved = when (val d = lifetime.publish(lease) { graph.relayGate.decide(hostId, trigger) }) {
                     is RelayApprovalGate.Decision.Skip -> throw HostException(d.reason)
                     is RelayApprovalGate.Decision.Dial -> d.requireApproved
                 }
                 val connected = try {
-                    dialRelay(relay, token, hostKey, requireApproved = requireApproved) { st ->
-                        _relayApproval.value = (st as? RelayConnectStatus.AwaitingApproval)?.sas
-                        onStatus(st)
+                    dialRelay(relay, token, hostKey, requireApproved = requireApproved, lease = lease) { st ->
+                        lifetime.whenCurrent(lease) {
+                            _relayApproval.value = (st as? RelayConnectStatus.AwaitingApproval)?.sas
+                            onStatus(st)
+                        }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    graph.relayGate.onFailed(hostId, e)
+                    lifetime.publish(lease) { graph.relayGate.onFailed(hostId, e) }
                     throw e
                 } finally {
-                    _relayApproval.value = null
+                    lifetime.whenCurrent(lease) { _relayApproval.value = null }
                 }
-                graph.relayGate.onConnected(hostId)
                 val c = connected.connection
-                c.setOnClosed { if (sideRelay === c) sideRelay = null }
-                sideRelay = c
+                try {
+                    lifetime.publish(lease) {
+                        graph.relayGate.onConnected(hostId)
+                        c.setOnClosed { lifetime.whenCurrent(lease) { if (sideRelay === c) sideRelay = null } }
+                        sideRelay = c
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    scope.launch(Dispatchers.IO) { runCatching { c.close() } }
+                    throw e
+                }
                 c
             }
         }
     }
 
-    private fun adopt(c: HostConnection) {
-        conn = c
-        _lastError.value = null
-        _state.value = ConnState.Connected(c.kind)
+    private fun adopt(c: HostConnection, lease: HostLifetime.Lease) {
+        lifetime.publish(lease) {
+            connectionLease = lease
+            conn = c
+            _lastError.value = null
+            _state.value = ConnState.Connected(c.kind)
+        }
         c.setOnClosed { reason ->
-            if (conn === c) {
+            var reconnect = false
+            lifetime.whenCurrent(lease) { if (conn === c) {
                 conn = null
                 _state.value = ConnState.Failed("Disconnected" + (reason?.let { " ($it)" } ?: "") + ".")
-                if (isWatched) foreground.changed(stillCurrent = { conn == null }) {
-                    delay(1_500)
-                }
+                reconnect = true
+            } }
+            // ForegroundRefresh/ConnectionUsers can close us under their own monitors. Never
+            // acquire those monitors while holding the lifetime publication monitor in reverse.
+            if (reconnect && isWatched) foreground.changed(stillCurrent = { lifetime.isCurrent(lease) && conn == null }) {
+                delay(1_500)
             }
         }
         // A change the computer pushes is re-listed, and so announced, only while a screen shows this
@@ -427,14 +478,20 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         // (until it drops or the background check closes it), and its pushes used to go on announcing
         // live for a computer the user had left, which the Settings text does not promise. What such a
         // push carried is not recorded as seen, so the background check announces it.
-        c.setOnChanged { if (conn === c && isWatched) foreground.changed(stillCurrent = { conn === c }) }
+        c.setOnChanged { if (lifetime.isCurrent(lease) && conn === c && isWatched) foreground.changed(stillCurrent = { lifetime.isCurrent(lease) && conn === c }) }
     }
 
-    private fun pinFor(host: PairedHost) = object : HostKeyPin {
-        override fun pinned(): String? = graph.hosts.get(host.id)?.sshHostKeyFingerprint
-        override fun pin(fingerprint: String) = graph.hosts.update(host.id) { it.copy(sshHostKeyFingerprint = fingerprint) }
-        // The keys the computer named at pairing (A49-anchor): the first connect must present one.
-        override fun anchors(): List<String> = graph.hosts.get(host.id)?.sshHostKeyAnchors.orEmpty()
+    private fun pinFor(host: PairedHost, lease: HostLifetime.Lease) = object : HostKeyPin {
+        private fun current(): PairedHost = graph.hosts.currentHost(host.id, host.hostKeyB64) { lifetime.isCurrent(lease) }
+            ?: throw kotlinx.coroutines.CancellationException("This computer connection changed.")
+        override fun pinned(): String? = current().sshHostKeyFingerprint
+        override fun pin(fingerprint: String) {
+            lifetime.publish(lease) {
+                graph.hosts.updateCurrent(host.id, host.hostKeyB64, { lifetime.isCurrent(lease) }) { it.copy(sshHostKeyFingerprint = fingerprint) }
+            }
+        }
+        // A handshake keeps the exact pairing it began with, never a same-id successor's anchors.
+        override fun anchors(): List<String> = current().sshHostKeyAnchors
     }
 
     /** The host key the SSH leg was refused in the connect that opened [connection] (review of A74-refresh). */
@@ -463,15 +520,17 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * computer with two adapters may report the other one).
      */
     private fun refreshLanLeg(c: HostConnection, listed: ProjectsSnapshot) {
-        runCatching {
-            val before = graph.hosts.get(hostId) ?: return
+        val lease = connectionLease ?: return
+        runCatching { lifetime.whenCurrent(lease) {
+            if (conn !== c) return@whenCurrent
+            val before = graph.hosts.get(hostId) ?: return@whenCurrent
             val refused = sshRefusal?.takeIf { it.connection === c }?.hostKey
-            val result = LanRefresh.afterListing(before, c.kind, listed, refused) ?: return
-            graph.hosts.update(hostId) { current -> LanRefresh.afterListing(current, c.kind, listed, refused)?.host ?: current }
+            val result = LanRefresh.afterListing(before, c.kind, listed, refused) ?: return@whenCurrent
+            graph.hosts.updateCurrent(hostId, before.hostKeyB64, { lifetime.isCurrent(lease) && conn === c }) { current -> LanRefresh.afterListing(current, c.kind, listed, refused)?.host ?: current }
             val warning = _sshWarning.value
             val note = LanRefresh.note(result)
             if (warning != null && note != null && !warning.contains(note)) _sshWarning.value = "$warning $note"
-        }
+        } }
     }
 
     /** One late adoption at a time: a connect and a listing may both ask for it. */
@@ -479,11 +538,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 
     /** [adoptRelayIfAdvertised] over [ssh], in the background, unless one is already running. */
     private fun adoptInBackground(ssh: SshHostConnection) {
+        val lease = connectionLease?.takeIf { lifetime.isCurrent(it) && conn === ssh } ?: return
         val host = graph.hosts.get(hostId) ?: return
         if (!adopting.compareAndSet(false, true)) return
         scope.launch {
             try {
-                runCatching { adoptRelayIfAdvertised(ssh, host) }
+                runCatching { adoptRelayIfAdvertised(ssh, host, lease) }
             } finally {
                 adopting.set(false)
             }
@@ -496,13 +556,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * `~/.nodeterm/relay.json`; read it over this TOFU-verified SSH connection and mint our own device
      * token, so the phone can reach the computer from anywhere without re-pairing.
      */
-    private suspend fun adoptRelayIfAdvertised(ssh: SshHostConnection, host: PairedHost) {
+    private suspend fun adoptRelayIfAdvertised(ssh: SshHostConnection, host: PairedHost, lease: HostLifetime.Lease) {
         // A computer added by its SSH address never gets a relay leg (audit A27): no pairing anchors
         // the relay key such a file names, and its relay would not be one this phone was paired with.
         if (host.manual) return
+        lifetime.requireCurrent(lease)
         val tokenKey = SecureStore.relayTokenKey(host.id)
         if (host.relay != null && graph.secure.getString(tokenKey) != null) return
         val ad = ssh.readRelayAdvertisement() ?: return
+        lifetime.requireCurrent(lease)
         val hostIdAd = J.str(ad["hostId"]) ?: return
         val pub = J.str(ad["hostPublicKeyB64"]) ?: return
         val endpoint = J.str(ad["relayEndpoint"])?.takeIf(PairingPayload::isAllowedRelayEndpoint) ?: return
@@ -517,10 +579,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             label = graph.hosts.deviceName,
             priorDeviceToken = graph.secure.getString(tokenKey)
         )
-        graph.secure.putString(tokenKey, minted.deviceToken)
-        graph.hosts.update(host.id) {
-            it.copy(relay = RelayBlock(minted.hostId.ifEmpty { hostIdAd }, pub, endpoint))
-        }
+        // A mint may finish after Forget/re-pair/disconnect. Publish neither its token nor its
+        // relay to a retired connection/identity; the store fences both writes with retirement.
+        graph.hosts.adoptRelay(host.id, host.hostKeyB64,
+            RelayBlock(minted.hostId.ifEmpty { hostIdAd }, pub, endpoint),
+            currentConnection = { lifetime.isCurrent(lease) && conn === ssh },
+            saveToken = { graph.secure.putString(tokenKey, minted.deviceToken) })
     }
 
     /**
@@ -535,12 +599,16 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * push over a connection retained for a quick return ([adopt]).
      */
     suspend fun refreshNow(trigger: Trigger = Trigger.AUTO) {
+        val operation = lifetime.capture()
         foreground.serial {
+            lifetime.requireCurrent(operation)
             val listed = try {
                 val c = ensureConnected(trigger)
+                val lease = connectionLease ?: throw kotlinx.coroutines.CancellationException("This computer connection changed.")
                 val ssh = c as? SshHostConnection
                 val advertisedBefore = ssh?.relayAdvertised
-                c.listProjects().also {
+                c.listProjects().also { lifetime.publish(lease) {
+                    if (conn !== c) throw kotlinx.coroutines.CancellationException("This computer connection changed.")
                     // A listing over SSH says whether the computer advertises its relay right now. A
                     // phone without a relay leg adopts it on the user's refresh, or as soon as remote
                     // access is turned on while this connection watches (audit A26: the reason on a
@@ -552,10 +620,11 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     refreshLanLeg(c, it)
                     _snapshot.value = it
                     _lastError.value = null
-                }
+                } }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                lifetime.whenCurrent(operation) {
                 _snapshot.value = ListingFailure.snapshot(_snapshot.value, e)
                 // Never null: an exception without a message must still say that the listing failed.
                 // "Nothing found" offers the relay only when this phone has one to offer (review of A27b).
@@ -564,11 +633,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 // own drop). Anything else is an unexpected transport failure: drop the connection so the
                 // next refresh dials a fresh one instead of reusing a dead socket.
                 if (e !is HostException) disconnect()
+                }
                 return@serial
             }
             // Outside the try: a notification the system refused is not a failed listing, and must not
             // drop a working connection. No network here — the listing just arrived.
-            runCatching { graph.announce(hostId, listed, onScreen.now()) }
+            runCatching { lifetime.whenCurrent(operation) { graph.announce(hostId, listed, onScreen.now(), quiet = reachableQuietly()) } }
         }
     }
 
@@ -581,7 +651,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      */
     fun notePaneShown(nodeId: String) {
         val events = _snapshot.value.status?.inbox?.events ?: return
-        runCatching { graph.hosts.claimLive(hostId, events, OnScreen(nodes = setOf(nodeId)), notify = false) }
+        val lease = connectionLease ?: return
+        runCatching { lifetime.whenCurrent(lease) { graph.hosts.claimLive(hostId, events, OnScreen(nodes = setOf(nodeId)), notify = false) } }
     }
 
     /**
@@ -599,6 +670,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * announces what is new and not on screen ([refreshNow]).
      */
     fun startWatching(initialTrigger: Trigger = Trigger.USER) {
+        lifetime.capture()
         foreground.start(initialTrigger)
     }
 
@@ -611,9 +683,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * re-pairing), so the close itself runs on [Dispatchers.IO]: a socket write there throws
      * `NetworkOnMainThreadException` and would leak the socket (audit A01).
      */
-    fun disconnect() {
+    fun disconnect() = lifetime.disconnect { disconnectOwned() }
+
+    /** Removed from ConnectionManager permanently; a new pairing gets a new HostSession object. */
+    fun retire() = lifetime.retire { disconnectOwned() }
+
+    private fun disconnectOwned() {
         val c = conn
         conn = null
+        connectionLease = null
         val side = sideRelay
         sideRelay = null
         if (c != null || side != null) scope.launch(Dispatchers.IO) {
@@ -629,17 +707,25 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 }
 
 class ConnectionManager(private val graph: AppGraph) {
-    private val sessions = HashMap<String, HostSession>()
+    private val sessions = HostSessionRegistry(
+        create = { hostId: String -> HostSession(hostId, graph) },
+        retire = { hostId, session ->
+            session?.retire()
+            graph.relayGate.forget(hostId)
+        },
+    )
 
     @Synchronized
-    fun session(hostId: String): HostSession = sessions.getOrPut(hostId) { HostSession(hostId, graph) }
+    fun session(hostId: String): HostSession = sessions.session(hostId)
 
     @Synchronized
-    fun forget(hostId: String) {
-        graph.relayGate.forget(hostId)
-        sessions.remove(hostId)?.disconnect()
-    }
+    fun forget(hostId: String) = sessions.forget(hostId)
+
+    /** Local store/secret publication only; connection closes are dispatched by retire(). */
+    @Synchronized
+    fun <T> retireAndPublish(hostIds: Collection<String>, publish: () -> T): T =
+        sessions.retireAndPublish(hostIds, publish)
 
     @Synchronized
-    fun all(): List<HostSession> = sessions.values.toList()
+    fun all(): List<HostSession> = sessions.all()
 }

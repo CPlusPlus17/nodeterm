@@ -484,8 +484,10 @@ class SeenLogTest {
 
     @Test
     fun `forgetting a computer drops its log, and pairing it again carries it over`() {
+        val removeSignature = "fun remove(id: String, successor: String? = null, removeToken: () -> Unit = {})"
+        assertTrue(store.contains(removeSignature))
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(store, "fun remove(id: String, successor: String? = null)"),
+            AppSourcePins.blockAfter(store.substringAfter(removeSignature), ""),
             "null -> seenLog.forgetHost(id)",
             "id -> Unit",
             "else -> seenLog.moveHost(id, successor)"
@@ -493,8 +495,10 @@ class SeenLogTest {
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(store, "fun upsert(host: PairedHost)"), "for (old in replaced) seenLog.moveHost(old.id, host.id)")
         // Forget (the computers list) passes no successor; pairing the same computer again does.
         val hosts = AppSourcePins.ui("HostsScreen.kt")
-        assertTrue(hosts.contains("graph.hosts.remove(host.id)\n"), "Forget no longer drops the computer's seen log")
-        assertTrue(AppSourcePins.ui("PairScreen.kt").contains("graph.hosts.remove(it.id, successor = host.id)"))
+        assertTrue(hosts.contains("graph.hosts.remove(host.id) { graph.secure.remove(SecureStore.relayTokenKey(host.id)) }"), "Forget no longer drops the computer's seen log")
+        val pair = AppSourcePins.ui("PairScreen.kt")
+        AppSourcePins.assertInOrder(pair, "PairedHostReplacement.retired(graph.hosts.hosts.value, host, previous)",
+            "graph.hosts.publishPairing(host, previous")
         // The current log is v3; both older formats are read once and removed by the same edit.
         AppSourcePins.assertInOrder(
             AppSourcePins.blockAfter(store, "private val seenLog: SeenLog = SeenLog(object : SeenLog.Storage"),
