@@ -13,13 +13,11 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
  *  - [Kind.RESUME] (audit A15): the attach had to CREATE the tmux session, because the computer
  *    rebooted. The conversation is on disk and the pane is a new shell (in `$HOME` when the relay
  *    created it), so the line is built like the desktop's cold restore: `cd` into the node's folder,
- *    the node's managed Claude account, and for Claude the permission mode ([Launch.resumeLine]).
+ *    the node's managed Claude account, and its agent's approval policy ([Launch.resumeLine]).
  *  - [Kind.WAKE] (audit A76): the session is Sleeping. Eco (or a shallow "Pause session") exited the
  *    CLI and left the pane's shell behind. That shell already sits in the node's folder, and its tmux
  *    env already carries the account's CLAUDE_CONFIG_DIR / CODEX_HOME, so the line is the desktop's
- *    own wake line: the bare resume, plus the permission mode for Claude only ([Launch.wakeLine]; the
- *    desktop also adds each other agent's own approval flag, which the phone cannot build, so those
- *    wake in their CLI's default policy: docs/android.md "Known gaps"). It is typed after a kill-line
+ *    own wake line: the resume plus its measured approval policy ([Launch.wakeLine]). It is typed after a kill-line
  *    so a half-typed line left at that prompt is not spliced into it. A `cd` or an account prefix
  *    could only be wrong there: the pane's shell and env are the authority, not project.json.
  *

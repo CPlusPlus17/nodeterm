@@ -131,7 +131,7 @@ class ModelTest {
         assertEquals("claude --permission-mode plan", Launch.launchCommand(Agent.CLAUDE, acctSettings, null, null, "plan"))
         // manual in the project = the bare command, even when the global is looser.
         assertEquals("claude", Launch.launchCommand(Agent.CLAUDE, acctSettings, null, null, "manual"))
-        assertEquals("codex", Launch.launchCommand(Agent.CODEX, acctSettings, null, null, "plan"), "only claude gets the flag")
+        assertEquals("codex", Launch.launchCommand(Agent.CODEX, acctSettings, null, null, "plan"), "Codex cannot express plan")
     }
 
     @Test

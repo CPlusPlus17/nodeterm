@@ -40,7 +40,7 @@ object Launch {
     }
 
     /**
-     * The permission mode a Claude session starts in on this host: the project's own override when
+     * The permission mode an agent session starts in on this host: the project's own override when
      * it names a valid mode, else the global setting — the desktop's `resolvePermissionMode(project,
      * settings)` (audit A16). Both values come from hand-editable files, so both are re-validated.
      * No mirror settings at all = `manual` (no flag): the phone never invents one.
@@ -61,13 +61,9 @@ object Launch {
     }
 
     /**
-     * A first launch of [agent] on a host whose mirror advertised [settings]. Only CLAUDE gets a
-     * permission-mode flag, and only as the desktop would emit it: `manual` = no flag, `auto` only
-     * when the HOST's claude supports it (`autoSupported` answers for claude alone), and an unknown
-     * value = no flag (the value came from a file; re-validated here like `permissionModeFlag`).
-     * [projectMode] is the project's own override (see [permissionMode]). Every other agent
-     * launches bare — its own default — because the phone does not have the per-agent approval
-     * table's host facts (codex's vocabulary moved between releases, #785).
+     * A first launch using each agent's measured approval dialect. Claude's `auto` flag requires
+     * this host's own capability; Codex's version-dependent values require its advertised
+     * vocabulary. Unsupported modes keep the CLI's default rather than substituting a looser one.
      */
     fun launchCommand(
         agent: Agent,
@@ -79,8 +75,8 @@ object Launch {
 
     /**
      * The resume line for a cold attach, built like the desktop's cold restore (audit A15): in the
-     * node's own directory, under the node's managed Claude account, with the permission mode (for
-     * Claude only, as in [launchCommand]). A
+     * node's own directory, under the node's managed Claude account, with the same approval policy as
+     * [launchCommand]. A
      * bare `claude --resume <id>` typed into a relay-created pane in `$HOME`, under the default
      * config dir, finds no transcript for a managed account (and, by the transcript path's encoded
      * cwd, likely none at all). Null when the agent or id cannot be resumed.
@@ -96,10 +92,8 @@ object Launch {
 
     /**
      * The line that wakes a Sleeping (Eco-hibernated) session, after the desktop's own wake
-     * (TerminalNode's wake closure: the resume with the permission mode re-resolved, audit A76). Only
-     * CLAUDE gets that mode, as in [launchCommand]: the desktop also appends each other agent's own
-     * approval flag, which the phone does not build, so they wake bare, in their CLI's default
-     * policy. It carries no `cd` and no account: the pane's shell is the one the CLI exited back to,
+     * (TerminalNode's wake closure: the resume with the approval policy re-resolved, audit A76).
+     * It carries no `cd` and no account: the pane's shell is the one the CLI exited back to,
      * so it already sits in the node's directory and its tmux env already names the account's config
      * dir. Null when the agent or id cannot be resumed.
      */
@@ -125,16 +119,41 @@ object Launch {
             parts += "CLAUDE_CONFIG_DIR='${account.dir}'"
         }
         parts += command
-        if (agent == Agent.CLAUDE) {
-            val mode = permissionMode(settings, projectMode)
-            val emit = when (mode) {
-                "manual" -> false
-                "auto" -> settings?.autoSupported == true
-                else -> true
-            }
-            if (emit) parts += "--permission-mode $mode"
-        }
+        approvalFlags(agent, permissionMode(settings, projectMode), settings)
+            .takeIf { it.isNotEmpty() }?.let { parts += it.joinToString(" ") }
         return parts.joinToString(" ")
+    }
+
+    /** The desktop's measured approval dialects; mirror values only select known literal flags. */
+    internal fun approvalFlags(agent: Agent, mode: String, settings: MirrorSettings?): List<String> {
+        if (mode !in PERMISSION_MODES) return emptyList()
+        return when (agent) {
+            Agent.CLAUDE, Agent.GROK -> when {
+                mode == "manual" -> emptyList()
+                agent == Agent.CLAUDE && mode == "auto" && settings?.autoSupported != true -> emptyList()
+                else -> listOf("--permission-mode", mode)
+            }
+            Agent.GEMINI -> when (mode) {
+                "plan" -> listOf("--approval-mode", "plan")
+                "acceptEdits" -> listOf("--approval-mode", "auto_edit")
+                "bypassPermissions" -> listOf("--approval-mode", "yolo")
+                else -> emptyList()
+            }
+            Agent.CODEX -> {
+                val wanted = when (mode) {
+                    "manual" -> "untrusted"
+                    "auto" -> "on-request"
+                    "bypassPermissions" -> "never"
+                    else -> return emptyList()
+                }
+                // Unknown hosts use the desktop's measured stable baseline; manual's removed
+                // `untrusted` value is emitted only when this host actually advertised it.
+                val vocabulary = settings?.codexApprovalValues?.takeIf { it.isNotEmpty() }
+                    ?: listOf("on-request", "never")
+                if (wanted in vocabulary) listOf("--ask-for-approval", wanted) else emptyList()
+            }
+            Agent.OPENCODE, Agent.COPILOT -> emptyList()
+        }
     }
 
     /** A node id in the desktop's shape (`term-<base36 ms>-<token>`, project-node-append.ts

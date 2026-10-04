@@ -267,10 +267,9 @@ class ResumeOfferTest {
         assertEquals("claude --resume abc", Launch.wakeLine(Agent.CLAUDE, "abc", s), "auto on an old claude degrades to no flag")
         assertEquals("claude --resume abc --permission-mode auto", Launch.wakeLine(Agent.CLAUDE, "abc", s.copy(autoSupported = true)))
         assertEquals("claude --resume abc --permission-mode plan", Launch.wakeLine(Agent.CLAUDE, "abc", s, "plan"))
-        // The desktop's wake appends each capable agent's own approval flag; the phone builds claude's
-        // alone (docs/android.md "Known gaps"), so codex/gemini/grok wake in their CLI's default policy.
-        assertEquals("codex resume abc", Launch.wakeLine(Agent.CODEX, "abc", s, "plan"), "only claude gets the flag")
-        assertEquals("gemini --resume abc", Launch.wakeLine(Agent.GEMINI, "abc", s, "plan"))
+        // Unsupported modes stay at the CLI's default; supported modes use its own dialect.
+        assertEquals("codex resume abc", Launch.wakeLine(Agent.CODEX, "abc", s, "plan"), "Codex cannot express plan")
+        assertEquals("gemini --resume abc --approval-mode plan", Launch.wakeLine(Agent.GEMINI, "abc", s, "plan"))
         assertNull(Launch.wakeLine(Agent.CLAUDE, "-flag", s))
     }
 }

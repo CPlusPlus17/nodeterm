@@ -23,6 +23,7 @@
 //                 after revoking every device.
 //   mode "ack-sweep": the real shared-file consumers (also bundled independently by
 //                 ack-fixture-runner.ts), receiving ownership and a scratch home from the caller.
+//   mode "launch-parity": real mirror host facts and shared desktop approval command assembly.
 //   mode "never-ready": prints nothing and stays alive, so InteropHarnessTest can check that a
 //                 harness whose ready wait fails still kills the process.
 //
@@ -57,7 +58,8 @@ import {
   recordAgentEvent,
   recordRawToolEvent,
   setMirrorSettingsProvider,
-  setNodeSessionName
+  setNodeSessionName,
+  type MirrorSettings
 } from '../../../../../src/core/agent-status-mirror'
 import {
   claudeAccountsSnapshot,
@@ -69,6 +71,9 @@ import { GitService } from '../../../../../src/core/git-service'
 import { searchTerminalHistory } from '../../../../../src/core/terminal-history'
 import { buildProjectsListBlob } from '../../../../../src/core/projects-list-blob'
 import { WorkspaceStore } from '../../../../../src/core/workspace-store'
+import { codexApprovalValuesFrom } from '../../../../../src/shared/agents/codex-approval-values'
+import { assembleLaunchCommand, assembleResumeCommand } from '../../../../../src/shared/agents/launch'
+import { AGENT_CONFIG, ALL_PERMISSION_MODES, gatePermissionMode } from '../../../../../src/shared/agents/config'
 import { normalizeFor } from '../../../../../src/shared/agents/normalize'
 import { createPairingService } from '../../../../../src/main/pairing-service'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
@@ -147,7 +152,7 @@ export function startBroker(): Promise<number> {
  * `nodeterm_pending_id` the hook server merges in from its form field), the session name the
  * name sweep would publish, and the tmux session list (there is no tmux).
  */
-async function seedDesktopState(): Promise<WorkspaceStore> {
+async function seedDesktopState(settings: Partial<MirrorSettings> = {}): Promise<WorkspaceStore> {
   const userData = platform().userDataDir
   const workspace: Workspace = {
     version: 2,
@@ -181,6 +186,7 @@ async function seedDesktopState(): Promise<WorkspaceStore> {
   setMirrorSettingsProvider(() => ({
     claudePermissionMode: 'manual',
     autoSupported: false,
+    ...settings,
     claudeAccounts: claudeAccountsSnapshot()
       .filter((a) => !a.host && !a.pending)
       .map((a) => mirrorClaudeAccount(a, claudeConfigDirFor(a.id)))
@@ -519,11 +525,29 @@ async function runPair(): Promise<void> {
   emit({ ready: true, payload: started.payload, hostPublicKeyB64: publicKeyToB64(keys.publicKey), relayPlan: started.relayPlan })
 }
 
+/** No sockets: real mirror producer and desktop command assembler checked by the Kotlin client. */
+async function runLaunchParity(): Promise<void> {
+  const codexApprovalValues = codexApprovalValuesFrom(process.env.FIXTURE_CODEX_HELP)
+  const autoSupported = process.env.FIXTURE_CLAUDE_AUTO === 'true'
+  const store = await seedDesktopState({ autoSupported, ...(codexApprovalValues ? { codexApprovalValues } : {}) })
+  const blob = await buildProjectsListBlob({ workspace: store, userDataDir: platform().userDataDir, listSessions: async () => [] })
+  const commands = Object.entries(AGENT_CONFIG).flatMap(([agentId]) => ALL_PERMISSION_MODES.map((mode) => {
+    const permissionMode = agentId === 'claude' ? gatePermissionMode(mode, autoSupported) : mode
+    const facts = { agentId, permissionMode, approvalCaps: { codexApprovalValues }, sharedIdentity: false }
+    return {
+      agent: agentId, mode,
+      launch: assembleLaunchCommand(facts, {}).command,
+      resume: assembleResumeCommand({ ...facts, sessionId: 'interop-session' }, {}).command
+    }
+  }))
+  emit({ ready: true, blob, commands })
+}
+
 const mode = process.argv[2]
 if (mode === 'never-ready') {
   setInterval(() => {}, 60_000)
 } else if (mode !== 'project-launch') {
-  ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : runRelay()).catch((err) => {
+  ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : mode === 'launch-parity' ? runLaunchParity() : runRelay()).catch((err) => {
     emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
     process.exit(1)
   })
