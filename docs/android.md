@@ -13,9 +13,25 @@ output Copy sheet: literal case-insensitive matches, UTF-16 highlighting and wra
 navigation preserve the original rows and copy selection. It searches the captured output, not the
 remote tmux history. SSH anchor discovery follows bounded recursive configuration Includes, including
 quoted paths, multiple patterns and relative paths rooted under `/etc/ssh`; relative HostKey paths
-remain unsupported. These are source additions for the next private beta; the installed beta 10
+remain unsupported. These are included in prepared private beta 11; the installed beta 10
 and its 10 Pass / 22 Partial / 32 Pending device ledger are unchanged while phone checks are paused.
 Additional physical checks belong beside items 10/11/50/56/60; they do not inherit earlier Pass results.
+
+**Prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
+`314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
+A95 desktop Board fix. Full offline protocol checks pass **730 tests / 70 suites**, with zero
+failures, errors or skips; the offline app compile, **297 affected Vitest tests / 17 files** and
+full TypeScript checking pass. The four feature regressions catch **81 isolated mutants**.
+The actual offline minified release build passes in **51.78 seconds**, retains the private signer,
+and passes the R8/runtime keep and packaging checks. Independent SDK 36/37 signature,
+nondebuggable-manifest, payload/provenance and 16-KB ZIP/native checks also pass. The existing
+New-session-note layout check passes its control/restored run and catches four additional mutants. APK SHA-256:
+`ae052a8a02567c42576012309c5de059827d8b9ff28a9972673af0440d977341`. Artifact:
+`.nodeterm/android-beta-11/nodeterm-android-0.1.0-beta.11.apk`; build/regression proof:
+`.nodeterm/android-beta-build-11/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed phone installation. Phone checks and final fixture/rotation cleanup stay paused;
+10 Pass / 22 Partial / 32 Pending remains the device ledger. These source/build checks do not
+verify the new touch/keyboard, multi-host freshness or included-key pairing flows on the Pixel.
 
 ## The two transports
 

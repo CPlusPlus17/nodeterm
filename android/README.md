@@ -9,8 +9,24 @@ it is talking to.
 **New work after beta 10 (2026-10-04):** the branch adds Sessions search by name, agent and folder;
 live refresh on All computers while visible; and Find in the terminal's captured-output Copy sheet,
 with highlighted matches and Previous/Next. The computer now discovers SSH host-key anchors through
-recursive configuration Includes. These additions are being prepared for beta 11/code 12; the Pixel
-still runs beta 10/code 11. Phone checks remain paused, so none of these additions has a physical pass.
+recursive configuration Includes. Beta 11/code 12 is prepared locally; the Pixel still runs
+beta 10/code 11. Phone checks remain paused, so none of these additions has a physical pass.
+
+**Prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
+`314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
+A95 desktop Board fix. Full offline protocol checks pass **730 tests / 70 suites**, with zero
+failures, errors or skips; the offline app compile, **297 affected Vitest tests / 17 files** and
+full TypeScript checking pass. The four feature regressions catch **81 isolated mutants**.
+The actual offline minified release build passes in **51.78 seconds**, retains the private signer,
+and passes the R8/runtime keep and packaging checks. Independent SDK 36/37 signature,
+nondebuggable-manifest, payload/provenance and 16-KB ZIP/native checks also pass. The existing
+New-session-note layout check passes its control/restored run and catches four additional mutants. APK SHA-256:
+`ae052a8a02567c42576012309c5de059827d8b9ff28a9972673af0440d977341`. Artifact:
+`.nodeterm/android-beta-11/nodeterm-android-0.1.0-beta.11.apk`; build/regression proof:
+`.nodeterm/android-beta-build-11/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed phone installation. Phone checks and final fixture/rotation cleanup stay paused;
+10 Pass / 22 Partial / 32 Pending remains the device ledger. These source/build checks do not
+verify the new touch/keyboard, multi-host freshness or included-key pairing flows on the Pixel.
 
 > **Status (2026-10-04): beta 10/code 11 is installed; paired update passes.** Focused
 > plain-SSH creation/history/reconnect and exact End pass on the Pixel (item 32 Partial).

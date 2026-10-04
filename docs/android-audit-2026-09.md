@@ -115,10 +115,10 @@ the audit's proposal, the handover's progress log says how and why.
 | [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; original same-desktop recovery succeeds; fresh-different-desktop failure remains open |
 | [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants and full689/67 pass, beta 10 delivered; full physical completed-empty End/recreate/open/End flow passes · Authoritative empty SSH listing remains labelled Loading sessions |
 | [A95](#a95) | medium | | small | desktop/interop | ✅ fixed in `ec12ea9a`; actual beta 10 phone move/remove/re-add/create-label updates reach rebuilt production desktop Board with unchanged page time origin and matching persisted state; item 36 Pass; nine suites/133 tests, full TypeScript and four mutants pass · Held desktop Board remained stale after phone moves/labels |
-| [A96](#a96) | low | | small | phone/UX | ✅ fixed in `f73633fb`; 12 bounded JVM checks / 21 isolated mutants and actual focused Gradle/app checks pass; final full checks and physical follow-up pending · Sessions have no local search |
-| [A97](#a97) | low | | small | parity/gap | ✅ fixed in `8443e71e`; isolated control/restored 25-method runs pass and 31 non-equivalent mutants are caught; final full checks and physical follow-up pending · All computers does not refresh live while visible (A55 residual) |
-| [A98](#a98) | low | | small | terminal/UX | ✅ fixed in `1b1872f1`; 9 bounded JVM checks / 13 isolated mutants and actual focused Gradle/app checks pass; final full checks and physical follow-up pending · Captured terminal output cannot be searched |
-| [A99](#a99) | low | | small | security/risk | ✅ fixed in `e07071e9`; actual Linux control/restored 19 tests / 16 isolated mutants and focused Android interop/app checks pass; final full checks and physical follow-up pending · SSH host-key discovery ignores recursive external Includes (A49 residual) |
+| [A96](#a96) | low | | small | phone/UX | ✅ fixed in `f73633fb`; 12 bounded JVM checks / 21 isolated mutants, protocol730/70 and app checks pass; beta 11 prepared, physical follow-up pending · Sessions have no local search |
+| [A97](#a97) | low | | small | parity/gap | ✅ fixed in `8443e71e`; isolated control/restored 25-method runs / 31 mutants and protocol730/70/app checks pass; beta 11 prepared, physical follow-up pending · All computers does not refresh live while visible (A55 residual) |
+| [A98](#a98) | low | | small | terminal/UX | ✅ fixed in `1b1872f1`; 9 bounded JVM checks / 13 isolated mutants, protocol730/70 and app checks pass; beta 11 prepared, physical follow-up pending · Captured terminal output cannot be searched |
+| [A99](#a99) | low | | small | security/risk | ✅ fixed in `e07071e9`; actual Linux control/restored 19 tests / 16 isolated mutants and protocol730/70/app/desktop checks pass; physical included-key pairing pending · SSH host-key discovery ignores recursive external Includes (A49 residual) |
 
 ## A01
 
@@ -1588,8 +1588,8 @@ Store (id, ts) pairs and trim by age, make markSeen @Synchronized, and use commi
 
 **Continuation status (2026-10-04):** the original authentication/pairing-anchor fix remains
 in place. The later key-discovery residual is tracked as [A99](#a99): recursive external
-`Include` discovery is fixed in `e07071e9`, with actual desktop/focused Android checks passing;
-final full checks and physical included-key pairing remain pending.
+`Include` discovery is fixed in `e07071e9`, with actual desktop and full beta 11 source checks
+passing; physical included-key pairing remains pending.
 Relative `HostKey` values, inaccessible configuration and a key without a readable public
 counterpart remain outside discovery. Relative `Include` values are a different case: they are
 resolved under the sshd configuration root. No first-use trust or mismatched-key override is added.
@@ -1897,8 +1897,8 @@ Add a top-level Inbox/Usage screen that merges every paired computer's snapshot,
 `71b592a`/`0772cbf`; the original evidence above describes the pre-fix screen. A remaining
 freshness gap persisted in the beta 10 source: opening All computers requested one refresh, but
 only individual host/terminal screens owned the live eight-second watcher. [A97](#a97) now adds
-STARTED-only per-host watching and serialized listing/publication in `8443e71e`. Final full
-checks and new physical multi-computer results are pending. The existing item 60
+STARTED-only per-host watching and serialized listing/publication in `8443e71e`. Full beta 11
+source checks pass; new physical multi-computer results are pending. The existing item 60
 ledger is unchanged.
 
 ## A56
@@ -3302,7 +3302,7 @@ The remaining phone cleanup and notification checks can continue when the correc
 **Sessions have no local search (2026-10-04).**
 
 - Severity: **low**; effort: small; area: phone UX; kind: feature gap
-- Status: **fixed in `f73633fb`; final shared checks and physical follow-up pending**.
+- Status: **fixed in `f73633fb`; full candidate-source checks pass, physical follow-up pending**.
 - Locations: `SessionsTab.kt`, protocol `model/SessionSearch.kt` and `SessionSearchTest.kt`.
 
 **Before:** the installed beta 10 source `e3ce041c` lists every open project's sessions in status
@@ -3321,8 +3321,8 @@ unchanged. This is not a Gradle/Compose runtime or physical search result.
 Private proof: `/tmp/nodeterm-session-search-verify/results.json`.
 The subsequently coordinated actual eight-class focused Gradle run passes
 (`precommit-focused-protocol-2.log`), and the final callback-aware offline app compile passes
-(`precommit-app-compile-final.log`). The final full protocol/app gates against the completed
-feature set remain pending.
+(`precommit-app-compile-final.log`). Full candidate-source protocol/app gates subsequently pass
+at `314105a4`, as recorded in the delivery receipt below. Physical search is not verified.
 
 **Follow-up:** add search/restoration checks alongside existing item 10's session-grouping checks,
 without replacing that item's required route/status evidence. New phone touch/keyboard proof is
@@ -3333,7 +3333,7 @@ pending. No desktop/server host contract changes; the iOS search UI is separate 
 **All computers does not refresh live while visible (A55 residual, 2026-10-04).**
 
 - Severity: **low**; effort: small; area: parity; kind: freshness gap
-- Status: **fixed in `8443e71e`; bounded regression/mutation checks pass; final full checks and physical results pending**.
+- Status: **fixed in `8443e71e`; full candidate-source and mutation checks pass, physical results pending**.
 - Locations: `AllComputersScreen.kt`, `conn/ConnectionManager.kt`, protocol
   `host/ForegroundRefresh.kt`, `host/ConnectionUsers.kt` and `ForegroundRefreshTest.kt`.
 
@@ -3362,10 +3362,9 @@ and 14 native-wiring mutants. Ten source hashes remain unchanged and bind the re
 `8443e71ee872db46da68380a9db1ab05748818d2`; an equivalent redundant-guard mutation is excluded.
 Private proof: `/tmp/nodeterm-all-computers-refresh-verify/results.json`. The earlier
 eight-class focused Gradle run passes 134 methods with zero failures, errors or skips; that run
-preceded final assertion-cleanup additions. The final offline app compile passes. Final full
-Gradle/app checks remain pending.
-Physical item 60 multi-computer
-freshness, notification suppression and lifecycle
+preceded final assertion-cleanup additions. Full candidate-source protocol/app checks
+subsequently pass at `314105a4`, including these final assertions.
+Physical item 60 multi-computer freshness, notification suppression and lifecycle
 checks remain pending; no device-ledger promotion follows the source implementation.
 
 ## A98
@@ -3373,7 +3372,7 @@ checks remain pending; no device-ledger promotion follows the source implementat
 **Captured terminal output cannot be searched (2026-10-04).**
 
 - Severity: **low**; effort: small; area: terminal UX; kind: feature gap
-- Status: **fixed in `1b1872f1`; final shared checks and physical follow-up pending**.
+- Status: **fixed in `1b1872f1`; full candidate-source checks pass, physical follow-up pending**.
 - Locations: `TerminalScreen.kt` (`CopySheet`/Find chip), protocol `model/TerminalCopy.kt` and
   `TerminalSearchTest.kt`.
 
@@ -3387,12 +3386,13 @@ truncation reported only when another match exists. Whitespace in a nonblank que
 This searches the existing captured snapshot, including joined soft wraps; it does not fetch or
 search all remote tmux history, and no query is typed into the pane.
 
-**Bounded verification:** all nine actual `TerminalSearchTest` JVM methods and 13 isolated-copy
-mutants pass/catch as reported by the local verification run. Tests cover literal punctuation,
+**Bounded verification:** all nine actual `TerminalSearchTest` JVM methods pass and 13
+isolated-copy mutants are caught. Tests cover literal punctuation,
 Unicode offsets, empty/long queries, navigation, the exact cap, original copy order and native
 wiring. The coordinated actual eight-class focused Gradle run and final callback-aware offline
 app compile pass (`precommit-focused-protocol-2.log`, `precommit-app-compile-final.log`).
-Final full protocol/app checks and physical results remain pending.
+Full candidate-source protocol/app checks subsequently pass at `314105a4`; physical results
+remain pending.
 
 **Follow-up:** record the extra Find/query/selection checks beside existing Copy-sheet item 56,
 and keyboard-open layout/closing checks beside item 50. Preserve all of those items' original
@@ -3404,7 +3404,7 @@ separately by @eneskirca.
 **SSH host-key discovery ignores recursive external Includes (A49 residual, 2026-10-04).**
 
 - Severity: **low**; effort: small; area: security; kind: discovery gap
-- Status: **fixed in `e07071e9`; final full shared checks and physical results pending**.
+- Status: **fixed in `e07071e9`; full candidate-source checks pass, physical included-key pairing pending**.
 - Locations: `src/main/ssh-host-keys.ts`/`.test.ts`,
   `android/protocol/src/test/interop/host-fixture.ts` and `PairingInteropTest.kt`.
 
@@ -3433,14 +3433,34 @@ boundaries. The Android fixture and new `PairingInteropTest` case use
 scratch configuration/public keys with the actual production pairing service: the returned
 sealed anchors are stored and used for an actual fixture SSH authentication. The actual
 eight-class focused Android Gradle run and final offline app compile pass
-(`precommit-focused-protocol-2.log`, `precommit-app-compile-final.log`). The final full shared
-checks remain pending.
+(`precommit-focused-protocol-2.log`, `precommit-app-compile-final.log`). Full candidate-source
+protocol/app and desktop checks subsequently pass at `314105a4`.
 Physical included-key pairing is an item 11 follow-up, with the existing 64-item ledger unchanged.
 The pairing field and SSH-visible contracts are unchanged; @eneskirca should check that iOS uses
 the supplied anchors and presents the existing refusal/recovery messages consistently.
 
 **Current delivery boundary:** installed beta 10 / code 11 and its 10 Pass / 22 Partial /
 32 Pending ledger remain the device checkpoint. These four source additions are not yet
-physically verified. A proposed private beta 11 / code 12 has not yet been built or installed;
-required final checks, signed artifact and phone evidence must be recorded as
-separate results. No new device PASS or CI result is claimed by this draft.
+physically verified. Private beta 11 / code 12 is now **prepared, not installed**, from clean
+source `314105a435d18e719f53d49bb292d0f3e965ad4a`. The local AGP release completes in 51.78
+seconds, with R8 keeps passing. Candidate-source required gates report **730 protocol tests in
+70 suites**, zero failures/errors/skips, offline app compile, **17 affected Vitest suites /
+297 tests** and full desktop TypeScript passing. Proof:
+`.nodeterm/android-beta-build-11/build-source-3/required-gates.json`. The existing layout source
+pin in `LegRoutingTest` is corrected in `314105a4` to reflect the weighted list below Search;
+that follow-up changes the test assertion, not product behavior. Across A96–A99, **81
+non-equivalent isolated mutants** are caught (21 + 31 + 13 + 16).
+
+**Independent artifact review passes:** candidate APK SHA-256
+`ae052a8a02567c42576012309c5de059827d8b9ff28a9972673af0440d977341` is verified against its
+metadata and build/R8 provenance. Official SDK 36 and 37 both verify v2/v3 signatures, one
+expected retained signer, package/version, minSdk 26/targetSdk 35, nondebuggable metadata and
+16 KB ZIP alignment; all four native libraries satisfy 16 KB ELF alignment. Signing preserves
+all 149 unsigned ZIP payloads and adds only the three v1 signature entries. Terminal assets
+and native libraries are byte-identical to beta 10; DEX, version/signature/optimization metadata
+and an R8-mapped service-loader descriptor change as expected. Service-loader entries match
+the actual R8 mapping. Receipt: `.nodeterm/android-beta-build-11/artifact-review.json`;
+private APK: `.nodeterm/android-beta-11/nodeterm-android-0.1.0-beta.11.apk`.
+No installation, new physical PASS or new CI result is claimed by this preparation. Each
+requested push still requires green exact-head workflow verification; current phone cleanup,
+rotation restoration and background watcher checks remain pending.

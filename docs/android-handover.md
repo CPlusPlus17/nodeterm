@@ -10,10 +10,26 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 - **Four additions are implemented after the beta-10 checkpoint (2026-10-04).** Sessions search,
   live All computers refresh, Find in captured terminal output, and recursive SSH Include anchor
-  discovery are being prepared for beta 11/code 12. Full shared checks/build are in progress;
+  discovery are prepared in beta 11/code 12; full shared checks and the local release build pass;
   the Pixel still runs beta 10/code 11. Phone testing remains paused, including final rotation
   restoration/fixture Forget and background notification checks. The current device ledger stays
   10 Pass / 22 Partial / 32 Pending; new search/refresh/Include flows need physical verification.
+
+**Prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
+`314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
+A95 desktop Board fix. Full offline protocol checks pass **730 tests / 70 suites**, with zero
+failures, errors or skips; the offline app compile, **297 affected Vitest tests / 17 files** and
+full TypeScript checking pass. The four feature regressions catch **81 isolated mutants**.
+The actual offline minified release build passes in **51.78 seconds**, retains the private signer,
+and passes the R8/runtime keep and packaging checks. Independent SDK 36/37 signature,
+nondebuggable-manifest, payload/provenance and 16-KB ZIP/native checks also pass. The existing
+New-session-note layout check passes its control/restored run and catches four additional mutants. APK SHA-256:
+`ae052a8a02567c42576012309c5de059827d8b9ff28a9972673af0440d977341`. Artifact:
+`.nodeterm/android-beta-11/nodeterm-android-0.1.0-beta.11.apk`; build/regression proof:
+`.nodeterm/android-beta-build-11/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed phone installation. Phone checks and final fixture/rotation cleanup stay paused;
+10 Pass / 22 Partial / 32 Pending remains the device ledger. These source/build checks do not
+verify the new touch/keyboard, multi-host freshness or included-key pairing flows on the Pixel.
 
 - **Beta 10/code 11 is installed; item 1 paired update passes (2026-10-04).** `0.1.0-beta.10` / code `11`,
   clean snapshot `e3ce041c752bdef11b378cf301c719a6e62f70ab`, is installed on the intended Pixel with the
@@ -1065,13 +1081,14 @@ The user resumed broader Pixel release checks on 2026-10-04 after the hike. Beta
 installed with A90/A91 and A94's authoritative-empty completion fix. Item 1 paired-update passes;
 A93 fresh-different-desktop refusal is open; A95 is fixed in `ec12ea9a` with actual phone-to-rebuilt
 production desktop verification, completing item 36. Phone checks resumed after the earlier
-other-app focus pause; final rotation restoration and phone cleanup now await the correct Pixel’s new endpoint.
+other-app focus pause, then the user paused them explicitly. Final rotation restoration, phone cleanup
+and the beta-11 search/live-refresh/Include checks wait until phone testing resumes.
 A91/A94 full installed End/recreate/open/End
 empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
-variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. The ledger stays unchanged while checks run.
+variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-**Resumed next work, in order** (item lists were written for this session's workflows; re-read each audit
+**Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
 1. **Finish the remaining relay/session, notification and inset checks.**
