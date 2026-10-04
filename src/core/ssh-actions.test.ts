@@ -352,6 +352,8 @@ describe('selected-profile SSH actions filesystem service', () => {
     await fs.symlink(elsewhere, service.root)
     await expect(new SshActionsService(root, store).start()).rejects.toThrow(/Unsafe/)
     await fs.unlink(service.root); await fs.mkdir(service.root, { mode: 0o755 })
+    // Set the unsafe fixture's actual mode even when the runner inherits umask 0077.
+    await fs.chmod(service.root, 0o755)
     await expect(new SshActionsService(root, store).start()).rejects.toThrow(/Unsafe/)
   })
   it('fences a queued local write after stop, without publishing a success or changing the file', async () => {
