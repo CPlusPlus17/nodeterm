@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.ssh.SshScripts
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -33,14 +34,29 @@ class ListingFailureTest {
         val previous = phoneListing()
         assertTrue(previous.isLive(id))
         assertTrue(previous.findNode(id) != null)
-        val current = ListingFailure.snapshot(previous, NothingFoundException())
-        assertSame(ProjectsSnapshot.EMPTY, current)
+        val current = ListingFailure.snapshot(previous, NothingFoundException(), now = 456)
+        assertEquals(456L, current.fetchedAt, "an authoritative empty answer completed the listing")
         assertTrue(current.projects.isEmpty())
         assertTrue(current.liveSessions.isEmpty())
         assertTrue(current.sockets.isEmpty())
         assertNull(current.findNode(id))
         assertNull(current.status)
         assertTrue(previous.isLive(id), "replacing the current listing must not mutate another cached snapshot")
+    }
+
+    @Test fun `the initial empty sentinel stays unlisted until an authoritative answer completes`() {
+        val initial = ProjectsSnapshot.EMPTY
+        assertEquals(0L, initial.fetchedAt)
+        for (error in listOf(HostException("The command was refused."), IOException("The reply was lost."))) {
+            assertSame(initial, ListingFailure.snapshot(initial, error, now = 456))
+        }
+        val listed = ListingFailure.snapshot(initial, NothingFoundException(), now = 789)
+        assertEquals(789L, listed.fetchedAt)
+        assertTrue(listed.projects.isEmpty())
+        assertTrue(listed.liveSessions.isEmpty())
+        assertEquals(0L, initial.fetchedAt, "the shared initial sentinel must not be mutated")
+        assertTrue(ListingFailure.snapshot(initial, NothingFoundException()).fetchedAt > 0,
+            "native refresh uses the default clock and must leave the initial loading state")
     }
 
     @Test fun `a host refusal or lost transport retains the complete last phone listing`() {
