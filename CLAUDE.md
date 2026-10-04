@@ -5695,4 +5695,8 @@ and lifecycle cleanup before parking; a parked Terminal can be adopted by anothe
 Status/presence release stays synchronous. Behavioral tests cover cancellation and ownership;
 eight native Linux Desktop cases pass at `01b4a2f5`, with the immediate-blur and old-cap
 mutants caught and restored control passing. Synthetic SGR, DOM rendering and explicit disposable
-fixture exit do not verify real tmux/SSH, Server, GPU, macOS, ordinary app quit or Android.
+fixture exit do not verify real tmux/SSH, GPU, macOS, ordinary app quit or Android. Separate
+eight-case Linux Server control/restored runs at `dcdf664a` also catch both native mutants through
+the shipped Node entry and authenticated HTTP/WebSocket bridge. Chromium has no Desktop preload
+or injected API; passive observation verifies real PTY create/reply/output, and owned child cleanup
+passes. This remains DOM/synthetic-TUI verification, with no physical checklist promotion.

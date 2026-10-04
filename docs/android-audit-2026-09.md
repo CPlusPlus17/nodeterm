@@ -111,7 +111,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
 | [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect/exact End pass; beta 10 relay plain-shell creation/input/exact End also pass; item 32 Partial for managed/cellular variants; beta-9 Oct4 A91 empty-host flow passes · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
 | [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; beta-9 Oct4 physical empty-host first Home/exact last-End/row-group removal/connected SSH/second Home flow pass; A94 delivered full installed End/recreate/open/End flow passes · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
-| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5` with A121's leave fix; Server/GPU/macOS pending |
+| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5` with A121's leave fix; eight Linux Server cases also pass at `dcdf664a`; GPU/macOS pending |
 | [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; original same-desktop recovery succeeds; fresh-different-desktop failure remains open |
 | [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants and full689/67 pass, beta 10 delivered; full physical completed-empty End/recreate/open/End flow passes · Authoritative empty SSH listing remains labelled Loading sessions |
 | [A95](#a95) | medium | | small | desktop/interop | ✅ fixed in `ec12ea9a`; actual beta 10 phone move/remove/re-add/create-label updates reach rebuilt production desktop Board with unchanged page time origin and matching persisted state; item 36 Pass; nine suites/133 tests, full TypeScript and four mutants pass · Held desktop Board remained stale after phone moves/labels |
@@ -140,7 +140,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 | [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
 | [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods, seven assertion mutants and 28 native OpenSSH checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
-| [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; Server/GPU/macOS pending |
+| [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU/macOS pending |
 
 ## A01
 
@@ -3170,7 +3170,7 @@ survival is not proved. Receipts: `.nodeterm/android-beta-build-9/artifact-revie
 **Desktop/Server link lookup can exclude the hovered row after a long wrapped run (2026-10-04).**
 
 - Severity: **low**; effort: small; area: desktop renderer; kind: bug
-- Status: **fixed in `127b6b28`; native Linux Desktop UI verified at `01b4a2f5` with A121's leave fix**. Server/GPU/macOS remain unverified.
+- Status: **fixed in `127b6b28`; native Linux Desktop UI verified at `01b4a2f5` with A121's leave fix**. Separate Linux Server checks pass at `dcdf664a`; GPU/macOS remain unverified.
 - Locations: `src/renderer/terminal/file-links.ts` (`paragraphContaining`) and `file-links.test.ts`
 
 This was the desktop follow-up recorded while fixing Android `A32`. The exported helper walks up
@@ -4111,7 +4111,7 @@ deferred until a requested PR. No PR opened.
 **Canvas terminal blur can leave a stale link pointer (2026-10-05).**
 
 - Severity: **low**; effort: small; area: desktop renderer; kind: bug
-- Status: **fixed in `01b4a2f5`; native Linux Desktop UI verified**. Server/GPU/macOS remain unverified.
+- Status: **fixed in `01b4a2f5`; native Linux Desktop UI verified**. Separate Linux Server checks pass at `dcdf664a`; GPU/macOS remain unverified.
 
 **Observed:** the isolated full Linux Electron Desktop UI at `c0accdfcb0642dc2d643e1794640065f61906f34` rendered a wrapped URL through the real plain NodePTY and bundled xterm DOM renderer. Tail hover, complete URL activation by Ctrl-click, and native non-drag movement outside the terminal were delivered. In the SGR mouse case, moving to the canvas left xterm's active link and pointer state set (`A92_HOVER_CLEAR_FAILED`). No pointer capture was active. The normal mouse case completed the same leave successfully.
 
@@ -4119,7 +4119,7 @@ deferred until a requested PR. No PR opened.
 
 **Source repair:** `terminal/deferred-blur.ts` defers only the captured terminal's blur with `setTimeout(0)`. Re-entry, intentional focus and lifecycle cleanup cancel it; generation and exact current-terminal identity reject stale callbacks, including same-object park/adopt. The controller remains reusable after cleanup. Status/presence release stays synchronous. Nine behavioral methods pass, all 63 tests in four affected terminal files and the full TypeScript check pass, and five isolated production mutations fail on assertions (immediate blur, microtask, ignored cancel, missing generation, missing owner). The control/restored copies pass. Private proof: `.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/a121-unit/`. Fresh full control and restored builds at `01b4a2f5` each pass all eight actual native Linux Desktop cases; the synchronous-blur mutant fails on named hover-clear after trusted delivery. See the final receipt below.
 
-**Scope:** Desktop and Server share the Canvas `TerminalNode` handler. The observed execution is Linux Desktop only; Server behavior remains a shared-source implication until executed. Modal terminal leave does not use this handler. Android's terminal is unaffected, and this repair changes no external protocol or iOS contract. The Android APK source, installed phone version and 64-item physical ledger stay unchanged.
+**Scope:** Desktop and Server share the Canvas `TerminalNode` handler. The original diagnosis is Linux Desktop; separate genuine Linux Server execution at `dcdf664a` now verifies the shared handler through its authenticated HTTP/WebSocket bridge. Modal terminal leave does not use this handler. Android's terminal is unaffected, and this repair changes no external protocol or iOS contract. The Android APK source, installed phone version and 64-item physical ledger stay unchanged.
 
 **Separate A92 evidence:** the old upward-bound link mutant already fails with the named `A92_TAIL_HOVER_MISSING` in a real native tail hover. That established sensitivity to A92's lookup cap defect while the initial control was incomplete. The final current-source eight-case controls and both full-app mutants now pass; preserve the original preliminary receipt separately.
 
@@ -4153,3 +4153,30 @@ controls. The final disposable fixture uses explicit exit after recording the ch
 app quit is outside this proof. Synthetic SGR reporting does not verify a real TUI/tmux/SSH path,
 Server Edition, GPU, macOS or Android. No APK, host/client contract, iOS adoption or physical
 checklist promotion follows. Phone testing remains paused at **10 Pass / 22 Partial / 32 Pending**.
+
+## Native Server wrapped-link and leave verification (A92/A121, 2026-10-05)
+
+Signed source `dcdf664a4ffa0cf752350c29fc21843f74c93ae1` passes separate genuine Linux Server
+control and restored runs, each with all eight Canvas/Board-modal, hard/soft-wrap and normal/SGR
+cases. Four fresh full builds use 2,462 raw Git blobs; each separate `server:build` adds only
+`server/main.cjs` to the unchanged 136 artifacts. Actual Node 26 runs the shipped Server entry.
+Chromium loads its real login form and HTTP renderer with no Desktop preload, Node integration
+or injected API. Passive observation confirms authenticated `/ws` handshakes, actual PTY create
+requests/replies and binary output. Native trusted hover, full underline, plain/Ctrl click and
+non-drag leave assertions pass. Both the old-cap and synchronous-blur mutants fail their named
+assertions after calibrated native input; restored source passes again.
+
+Private proof: `.nodeterm/android-beta-build-16/server-links-receipt/a92/results.json` and its
+105-file manifest bind source, builds, recipes and runtime. Three earlier browser-bootstrap
+failures remain separate infrastructure evidence, with no terminal assertions or product finding.
+Loading the actual login document before enabling debugger network observation resolves the
+runner stall. Final owned Node children close on SIGTERM; disposable Chromium exits explicitly
+after the report. This verifies Linux Server DOM rendering with a synthetic reporting-mode TUI;
+real tmux/SSH, GPU, macOS, ordinary quit and Android UI remain outside its scope.
+
+No runtime or external contract changes follow from this verification. Beta 16/code 17 remains
+prepared from `2723845e`, uninstalled; beta 10/code 11 is last installed. Phone testing stays
+paused at **10 Pass / 22 Partial / 32 Pending**. Next: resume the Pixel update/checklist when
+authorized; live A105/A106 needs a usable provider account after HTTP 401; A25/A93 need hosted
+backend maintainers. The Android contribution is in this repository. No PR is opened; A68 waits
+for requested PR preparation.

@@ -8,7 +8,7 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-04, A100–A120).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-05, A100–A121).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
@@ -17,6 +17,8 @@ open local folder project (A111); the host resolves its command, account, enviro
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
 has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the local release checks. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
 A120 also passes a controlled native OpenSSH enrollment/key-login run; see the later verification receipt.
+A92/A121 also pass separate eight-case native Linux Desktop and genuine Server UI checks;
+the later receipts preserve both assertion mutants and their source bindings.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -1209,8 +1211,9 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-A92/A121 now pass eight native Linux Desktop UI cases and both full-app mutants; this local
-follow-up is finished. Server/GPU/macOS and ordinary app quit have no new execution proof.
+A92/A121 now pass eight native Linux Desktop UI cases at `01b4a2f5` and eight genuine Linux
+Server UI cases at `dcdf664a`, with both native mutants caught on each shell. This local
+follow-up is finished. GPU/macOS and ordinary app quit have no new execution proof.
 
 Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps,
 and adds explicit SSH profile selection and confirmed one-time password enrollment (A119/A120);
@@ -2105,7 +2108,8 @@ owned blur to the next timer task and cancels it on re-entry, focus and cleanup 
 Nine behavioral methods, all 63 affected terminal tests, full TypeScript and five assertion
 mutants pass. Fresh full Linux Desktop control and restored builds each pass all eight native
 UI cases at `01b4a2f5`; the old-bound A92 and synchronous-blur A121 mutants fail on their named
-hover/leave assertions after trusted mouse delivery. Server/GPU/native macOS remain unverified. No Android runtime, APK, external contract
+hover/leave assertions after trusted mouse delivery. Separate Linux Server execution now passes at
+`dcdf664a`; GPU/native macOS remain unverified. No Android runtime, APK, external contract
 or iOS change is involved. Phone testing remains paused: beta 10/code 11 is last installed,
 beta 16/code 17 is prepared, and the physical ledger stays **10 Pass / 22 Partial / 32 Pending**.
 
@@ -2135,3 +2139,30 @@ controls. The final disposable fixture uses explicit exit after recording the ch
 app quit is outside this proof. Synthetic SGR reporting does not verify a real TUI/tmux/SSH path,
 Server Edition, GPU, macOS or Android. No APK, host/client contract, iOS adoption or physical
 checklist promotion follows. Phone testing remains paused at **10 Pass / 22 Partial / 32 Pending**.
+
+## Native Server wrapped-link and leave verification (A92/A121, 2026-10-05)
+
+Signed source `dcdf664a4ffa0cf752350c29fc21843f74c93ae1` passes separate genuine Linux Server
+control and restored runs, each with all eight Canvas/Board-modal, hard/soft-wrap and normal/SGR
+cases. Four fresh full builds use 2,462 raw Git blobs; each separate `server:build` adds only
+`server/main.cjs` to the unchanged 136 artifacts. Actual Node 26 runs the shipped Server entry.
+Chromium loads its real login form and HTTP renderer with no Desktop preload, Node integration
+or injected API. Passive observation confirms authenticated `/ws` handshakes, actual PTY create
+requests/replies and binary output. Native trusted hover, full underline, plain/Ctrl click and
+non-drag leave assertions pass. Both the old-cap and synchronous-blur mutants fail their named
+assertions after calibrated native input; restored source passes again.
+
+Private proof: `.nodeterm/android-beta-build-16/server-links-receipt/a92/results.json` and its
+105-file manifest bind source, builds, recipes and runtime. Three earlier browser-bootstrap
+failures remain separate infrastructure evidence, with no terminal assertions or product finding.
+Loading the actual login document before enabling debugger network observation resolves the
+runner stall. Final owned Node children close on SIGTERM; disposable Chromium exits explicitly
+after the report. This verifies Linux Server DOM rendering with a synthetic reporting-mode TUI;
+real tmux/SSH, GPU, macOS, ordinary quit and Android UI remain outside its scope.
+
+No runtime or external contract changes follow from this verification. Beta 16/code 17 remains
+prepared from `2723845e`, uninstalled; beta 10/code 11 is last installed. Phone testing stays
+paused at **10 Pass / 22 Partial / 32 Pending**. Next: resume the Pixel update/checklist when
+authorized; live A105/A106 needs a usable provider account after HTTP 401; A25/A93 need hosted
+backend maintainers. The Android contribution is in this repository. No PR is opened; A68 waits
+for requested PR preparation.
