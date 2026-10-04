@@ -1323,10 +1323,13 @@ The final review's fixes:
 92. **The brake holds on a failing disk:** make `watch-links.json`'s directory read-only (or the disk
     full), then, with a controller connected, turn Typing off and Change password…. Expect: the
     controller drops back to watching at once, the old password is refused and the new one opens, and
-    both the popover and the drawer show "Applied, but couldn't be saved — it will undo when nodeterm
-    restarts. Stop the link to end it for good." with a Stop sharing button that stops the link. Make
-    the directory writable again and change anything (another link): the notice goes with the next
-    saved change, and a restart keeps typing off and the new password.
+    the surface where the change was made (the popover, or the drawer) shows "Applied, but couldn't be
+    saved — it will undo when nodeterm restarts. Stop the link to end it for good." with a Stop sharing
+    button that stops the link. (The notice belongs to that one surface: closing it, or opening the
+    other surface, does not show it again — a known gap, see the PR's follow-ups.) Make the directory
+    writable again and save any change (on any link): that write carries the narrowed state, so a
+    restart now keeps typing off and the new password. The notice itself clears on the next
+    successful change made from the same surface.
 93. **The count survives a restart:** from a viewer, 3 wrong passwords, reconnect, 3 more, reconnect, 3
     more (9), quit nodeterm and start it again. Expect: the 10th wrong attempt locks the link.
 94. **A remote-tmux node in a local project:** in a LOCAL project attach a terminal to an SSH host
