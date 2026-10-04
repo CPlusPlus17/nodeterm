@@ -42,11 +42,13 @@ internal fun HistorySheet(controller: TerminalController) {
     fun submit() { if (TerminalHistory.validQuery(query)) { submitted = query; request++; focus.clearFocus() } }
     LaunchedEffect(request) {
         if (request == 0) return@LaunchedEffect
+        val ticket = request
+        val literal = submitted
         searching = true; error = null; result = null; selection = TerminalCopy.Selection(); cursor = 0
-        try { result = controller.searchHistory(submitted) }
+        try { val answer = controller.searchHistory(literal); if (request == ticket) result = answer }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (failed: Exception) { error = failed.message ?: "History search failed. Try again." }
-        finally { searching = false }
+        catch (failed: Exception) { if (request == ticket) error = failed.message ?: "History search failed. Try again." }
+        finally { if (request == ticket) searching = false }
     }
     LaunchedEffect(result, cursor) { if (!result?.rows.isNullOrEmpty()) list.scrollToItem(cursor) }
     BackHandler { controller.closeHistory() }
