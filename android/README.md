@@ -1243,3 +1243,15 @@ Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**, with beta 10/
 Actual Pixel setup/lifecycle, ordinary PAM accounts, macOS and live Claude checks remain open;
 A25/A93 still need hosted-backend maintainers, iOS follow-up stays with @eneskirca, and A68 remains
 deferred until a requested PR. No PR opened.
+
+### Relay-advertisement producer/SSH coverage (`A64`, 2026-10-05)
+
+Two actual private-SSH regression methods now check every public field from the desktop's
+account-level `relay.json` writer, replacement, removal and profile isolation. A third method
+checks the actual writer/remover and `fs-atomic` bundle inputs against Android CI path coverage.
+All 75 affected protocol methods pass with zero failures/errors/skips. Four isolated behavior
+mutants fail assertions, and control/restored runs pass. Private proof: `.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/a64/`.
+The producer uses a temporary OS-home adapter during module initialization, restored before its
+operations; no standing relay host, token mint, adoption, SAS, revoke or phone result is claimed.
+No production contract or APK changes. Beta 16/code 17 remains prepared, beta 10/code 11 remains
+installed, and phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**.

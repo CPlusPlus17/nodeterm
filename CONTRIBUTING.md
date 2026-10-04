@@ -114,13 +114,16 @@ applicable here":
    bridges behind the verbs are fakes, while `git.*` runs the real `GitService` over a temp
    repository), pairing (`createPairingService`), and the `projects.list`
    blob as the desktop builds it (`buildProjectsListBlob` in `src/core/projects-list-blob.ts` over
-   a real `WorkspaceStore` and an `agent-status.json` written by the real mirror). The SSH leg is
-   **hand-copied**: `SshTransportTest` writes the v3 `workspace.json` index, the project files,
-   `agent-status.json`, the status slices and the held request in `~/.nodeterm/pending` itself, and
-   checks the `.answer` and `acks/<node>.seen` files the phone writes against names copied from
-   `pending-approvals.ts` and `ack-sweep.ts`; `relay.json` is tested only by its presence (the phone
-   reads its absence as "remote access is off"), not its content. A change to one of those
-   needs the matching hand edit in the Android tests. `AckSweepInteropTest` additionally runs
+   a real `WorkspaceStore` and an `agent-status.json` written by the real mirror). Legacy/adversarial
+   SSH browse and held-file cases still use hand-written fixtures. Newer `SshTransportTest`
+   Server-profile cases read actual Server config/platform, workspace and mirror publications over
+   private SSH; this component fixture does not run full Server boot, installed hooks or account
+   probes. `SshActionsInteropTest` and `ManagedSessionInteropTest` also run selected-profile services
+   and Kotlin writers, with the managed fixture naming its native process/CLI recorder boundary.
+   Two relay-advertisement cases run the actual account-level file writer/remover and SSH parser
+   with a fixture-only OS-home adapter. They check every field, replacement, removal and profile
+   isolation; they do not mint a token or establish adoption, SAS approval or revoke. Driven status
+   slices and legacy/malformed cases still need their matching hand-maintained fixtures. `AckSweepInteropTest` additionally runs
    the actual Android `.seen` producer against the desktop's local/remote consumers: each consumer
    requires positive ownership before reading/deleting a file, and remote ownership is the union
    of all projects on that host. Keep this behavior compatible with iOS.

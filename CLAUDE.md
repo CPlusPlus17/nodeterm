@@ -5503,15 +5503,15 @@ the same change and flag the additive SSH method/receipt for @eneskirca in iOS.
      (`src/core/projects-list-blob.ts`, the one assembly `listProjectsOutput` also calls) over a real
      `WorkspaceStore` and an `agent-status.json` the real mirror wrote from hook payloads
      (`android-interop-fixture.guard.test.ts` refuses a hand-written blob or mirror there). The SSH
-     leg is HAND-COPIED: `SshTransportTest` writes the v3 index, the project files,
-     `agent-status.json`, the status slices and the held `~/.nodeterm/pending` request itself
-     (`HostBrowseTest` reads only the slices' heartbeat and file name, the Server Edition's data
-     dir and the socket names from the desktop's sources) and checks the phone's
-     `.answer` / `acks/<node>.seen` against names copied from `pending-approvals.ts` /
-     `ack-sweep.ts`, and `relay.json` only by its presence (the phone reads its absence as "remote
-     access is off", audit A26; `HostBrowseTest` reads its path and its removal on stop from
-     `relay-advertise.ts` / `standing-host.ts`), never its content — a change to those owes a hand
-     edit of the Android tests. `AckSweepInteropTest` additionally runs the actual Android `.seen`
+     leg retains hand-written legacy/adversarial browse and held-file cases. Newer `SshTransportTest`
+     Server-profile cases read actual Server config/platform, workspace and mirror publications over
+     private SSH; this component fixture does not run full Server boot, installed hooks or account
+     probes. `SshActionsInteropTest` and `ManagedSessionInteropTest` also run selected-profile services
+     and Kotlin writers, with the managed fixture naming its native process/CLI recorder boundary.
+     Two relay-advertisement cases run the actual account-level file writer/remover and SSH parser
+     with a fixture-only OS-home adapter. They check every field, replacement, removal and profile
+     isolation; they do not mint a token or establish adoption, SAS approval or revoke. Driven status
+     slices and legacy/malformed cases still need their matching hand-maintained fixtures. `AckSweepInteropTest` additionally runs the actual Android `.seen`
      producer against the desktop's local/remote consumers. Those consumers require positive
      ownership before reading/deleting files; remote ownership aggregates all projects on a host.
      The ack-only fixture shares its implementation with `host-fixture.ts` and needs no relay

@@ -141,6 +141,18 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         }
         internal val serverProfileBundleMeta: File by lazy { File(serverProfileBundle.path + ".meta.json") }
 
+        /** Actual public relay-advertisement writer/remover, with a fixture-only OS-home adapter. */
+        internal val relayAdvertisementBundle: File by lazy {
+            val out = File(repoRoot, "android/protocol/build/interop/relay-advertisement-fixture.cjs")
+            File(out.path + ".meta.json").delete()
+            val proc = ProcessBuilder(bundleCommand(out) + "android/protocol/src/test/interop/relay-advertisement-fixture.ts")
+                .directory(repoRoot).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "esbuild failed: $log" }
+            out
+        }
+        internal val relayAdvertisementBundleMeta: File by lazy { File(relayAdvertisementBundle.path + ".meta.json") }
+
         /** Actual managed host transaction with an explicit native-process recorder boundary. */
         internal val managedSessionBundle: File by lazy {
             val out = File(repoRoot, "android/protocol/build/interop/managed-session-fixture.cjs")
@@ -175,7 +187,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
             // The esbuild PACKAGE (its JS API), not the .bin shim the harness no longer runs.
             return node && File(repoRoot, "node_modules/esbuild/package.json").exists() &&
-                (mode == "ack-sweep" || mode == "ssh-actions" || mode == "managed-session" || mode == "server-profile" || (File(repoRoot, "node_modules/ws").exists() &&
+                (mode == "ack-sweep" || mode == "ssh-actions" || mode == "managed-session" || mode == "server-profile" || mode == "relay-advertisement" || (File(repoRoot, "node_modules/ws").exists() &&
                     File(repoRoot, "node_modules/tweetnacl").exists()))
         }
 
@@ -197,6 +209,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
                 "ssh-actions" -> sshActionsBundle
                 "managed-session" -> managedSessionBundle
                 "server-profile" -> serverProfileBundle
+                "relay-advertisement" -> relayAdvertisementBundle
                 else -> bundle
             }
             val pb = ProcessBuilder("node", fixture.path, mode).directory(repoRoot)

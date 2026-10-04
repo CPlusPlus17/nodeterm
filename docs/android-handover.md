@@ -1,4 +1,4 @@
-# Android companion: handover (updated 2026-10-04)
+# Android companion: handover (updated 2026-10-05)
 
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
@@ -1528,13 +1528,15 @@ Verified:
   `tools/check-r8-output.sh`). The first private minified APK is signed and installed on the intended
   Pixel; direct-SSH crypto/browse/basic input and code-3 `A85` sizing/history work. Remaining
   relay action/cellular/SAS variants and worker behavior stay open.
-- **Caveat on the tests:** since `A64` the relay leg's `projects.list` blob comes from the
-  desktop's own assembly (`src/core/projects-list-blob.ts`, shared with `src/main/index.ts`) and its
-  mirror entries from the real mirror writer; the session list inside the blob and the mirror's
-  `settings` provider are still fixture-authored. The SSH leg's shapes (the v3 index, project files,
-  `agent-status.json`, the status slices, the pending/acks files, `relay.json`) are still hand-copied in
-  `SshTransportTest`; `docs/android.md` names them. That hand-copying is how `A02` passed its test
-  while being wrong on every real desktop.
+- **Interop coverage:** relay `projects.list` and mirror use actual producers; session-list and
+  settings-provider inputs remain fixture data. Server-profile SSH
+  cases also read actual config/platform, workspace and mirror publications through private SSH;
+  they do not boot a full Server or install hooks/account probes. SSH actions/managed creation and
+  Android `.seen` files have producer/consumer interop too, with their fixture boundaries named.
+  Two new relay-advertisement methods exercise the actual account-level writer/remover and Kotlin
+  SSH parser through a private fixture-only OS-home adapter. Legacy/adversarial browse, held files
+  and driven-status-slice cases remain hand-maintained. Advertisement shape coverage does not prove
+  standing-host publication, token mint, adoption, SAS approval or revoke.
 
 ## Environment notes for a cloud session
 
@@ -2074,3 +2076,15 @@ Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**, with beta 10/
 Actual Pixel setup/lifecycle, ordinary PAM accounts, macOS and live Claude checks remain open;
 A25/A93 still need hosted-backend maintainers, iOS follow-up stays with @eneskirca, and A68 remains
 deferred until a requested PR. No PR opened.
+
+### Relay-advertisement producer/SSH coverage (`A64`, 2026-10-05)
+
+Two actual private-SSH regression methods now check every public field from the desktop's
+account-level `relay.json` writer, replacement, removal and profile isolation. A third method
+checks the actual writer/remover and `fs-atomic` bundle inputs against Android CI path coverage.
+All 75 affected protocol methods pass with zero failures/errors/skips. Four isolated behavior
+mutants fail assertions, and control/restored runs pass. Private proof: `.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/a64/`.
+The producer uses a temporary OS-home adapter during module initialization, restored before its
+operations; no standing relay host, token mint, adoption, SAS, revoke or phone result is claimed.
+No production contract or APK changes. Beta 16/code 17 remains prepared, beta 10/code 11 remains
+installed, and phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**.

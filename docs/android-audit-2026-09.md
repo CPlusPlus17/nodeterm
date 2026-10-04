@@ -83,7 +83,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A61](#a61) | low |  | small | ci-docs/bug | ✅ fixed in `39e7995` · Following CONTRIBUTING / android/README (`npm ci --ignore-scripts`) wipes a desktop developer's patched node_modules |
 | [A62](#a62) | low |  | small | ci-docs/bug | ✅ fixed in `77c760d` · SSH transport tests fail, not skip, on macOS: the gate checks only that /usr/bin/script exists, then runs util-linux-only flags |
 | [A63](#a63) | low |  | small | ci-docs/gap | ✅ fixed in `b3d4c6e` · Android workflow path filters miss files that change the tested wire behavior, contrary to CLAUDE.md |
-| [A64](#a64) | low |  | small | ci-docs/gap | ✅ fixed in `f9782da` · Docs say the protocol tests check the mirror, the projects.list blob and the ~/.nodeterm files against desktop code, but those shapes are hand-copied in the tests |
+| [A64](#a64) | low |  | small | ci-docs/gap | ✅ fixed in `f9782da`; actual relay-file round trip verified 2026-10-05 · Docs say the protocol tests check the mirror, the projects.list blob and the ~/.nodeterm files against desktop code, but those shapes are hand-copied in the tests |
 | [A65](#a65) | low |  | small | ci-docs/gap | ✅ fixed in `33af5e7` · User-facing docs and desktop UI present the Android app as working, but it has never been built by AGP or run on a device, and no device checklist exists |
 | [A66](#a66) | low |  | small | ci-docs/gap | ✅ fixed in `61e218b` · ANDROID_APP_URL points at a folder that exists on neither upstream nor fork main yet, and it points at source code rather than an installable |
 | [A67](#a67) | low |  | small | ci-docs/gap | ✅ fixed in `696fd10` · The interop fixture is excluded from every tsconfig, so `npm run typecheck` never checks it against the desktop interfaces it implements |
@@ -2188,6 +2188,18 @@ Either narrow the docs to what is actually exercised (relay framing/handshake an
 > The CONTRIBUTING.md:107-111 overclaim is real, and the fixture and test citations are correct (host-fixture.ts:129-165, :182, :183-205; SshTransportTest.kt:152-189 and :283-296). One part of the finding is wrong: CLAUDE.md:5388-5390 does not overclaim test coverage. It accurately names connectHostSession, createPairingService and the SSH server, and it tells contributors to update the hand-maintained fixture. CLAUDE.md's false statement is at :5395-5396, "the Android workflow ... runs on those paths". android.yml:5-17 only filters on android/**, src/main/remote/** and src/main/pairing-*.ts. So changes to src/main/index.ts (listProjectsOutput), src/core/agent-status-mirror.ts, src/core/ack-sweep.ts and src/core/agents/pending-approvals.ts do not trigger Android CI at all. docs/android.md:69-70, which lists `projects.list` as verified against the real host, is also overstated. Better fix, either or both of:
 > (a) Narrow CONTRIBUTING.md, CLAUDE.md and docs/android.md to what is real: relay framing, handshake and host-service verb routing/validation, pairing, crypto, and the SSH scripts against real tmux. Name the hand-copied contracts (blob, mirror, v3 index, pending/acks, relay.json) and add the missing source paths to android.yml's `paths` filter.
 > (b) Generate the fixture's mirror with the real AgentStatusMirror. Export the split markers and the blob assembly from a core module so the fixture and index.ts share one definition. In the SSH test, drive ack-sweep and pending-approvals against the files the Kotlin client writes.
+
+**Current coverage update (2026-10-05):** actual producers now cover relay projects/mirror,
+selected Server-profile publications, SSH action/managed writers and local/remote acknowledgement
+consumers (A108/A111/A119). The newer relay-advertisement tests additionally run the actual
+account-level writer/remover and Kotlin parser through private SSH, with every field, replacement,
+removal and profile isolation checked. All 75 affected methods pass; four behavior mutants are
+assertion-caught, with passing control/restored runs. The producer has a temporary OS-home adapter
+during initialization; full Server boot/hooks/account probes, driven-slice producer parity and
+standing-host/token/adoption/SAS/revoke behavior remain outside this proof. Legacy/adversarial
+fixtures remain deliberately hand-written. Private evidence:
+`.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/a64/`.
+No production contract/APK or physical-ledger change follows.
 
 ## A65
 

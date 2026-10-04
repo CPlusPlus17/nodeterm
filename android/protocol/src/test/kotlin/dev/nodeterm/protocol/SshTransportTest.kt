@@ -104,6 +104,29 @@ class SshTransportTest {
     private fun actionsFixture(host: SshTestHost) = InteropHarness.start("ssh-actions", InteropHarness.scratchHomeEnv(host.home) +
         mapOf("FIXTURE_USERDATA" to File(host.home, ".config/node-terminal").path))
 
+    private fun relayAdvertisementFixture(host: SshTestHost): InteropHarness {
+        val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
+        java.nio.file.Files.setPosixFilePermissions(host.home.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
+        val marker = File(host.home, ".relay-advertisement-fixture").apply { writeText(nonce) }
+        java.nio.file.Files.setPosixFilePermissions(marker.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))
+        val fixture = InteropHarness.start("relay-advertisement", mapOf("FIXTURE_HOME" to host.home.path, "FIXTURE_NONCE" to nonce))
+        try {
+            assertEquals(true, fixture.ready.getValue("homeRestored").jsonPrimitive.boolean)
+            return fixture
+        } catch (failure: Throwable) {
+            fixture.close()
+            throw failure
+        }
+    }
+
+    private fun publicAdvertisement(suffix: String) = buildJsonObject {
+        put("v", 1)
+        put("hostId", "public host α '$suffix")
+        put("hostPublicKeyB64", java.util.Base64.getEncoder().encodeToString(ByteArray(32) { (it + suffix.length).toByte() }))
+        put("relayEndpoint", "wss://relay.nodeterm.dev/$suffix")
+        put("hostDeviceId", "public device Ω \"$suffix\"")
+    }
+
     /** The producer seeds a whole workspace, so it must never use this class's desktop profile. */
     private inner class SshTestHost : AutoCloseable {
         private val ownedRoot = ShortTmuxRoot.create("nt-actions", "tmux", "node-terminal")
@@ -171,6 +194,53 @@ class SshTransportTest {
             "FIXTURE_HOME" to host.home.path, "FIXTURE_USERDATA" to profile.path,
             "FIXTURE_TMUX_DIR" to host.privateTmuxDirectory, "FIXTURE_TMUX_BIN" to tmux
         ))
+    }
+
+    @Test fun `actual account advertisement writer reaches the SSH parser and replaces every public field`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            relayAdvertisementFixture(host).use { fixture ->
+                host.connect().use { connection ->
+                    assertNull(connection.readRelayAdvertisement(), "no advertisement before the real writer runs")
+                    for (value in listOf(publicAdvertisement("first"), publicAdvertisement("replacement"))) {
+                        fixture.command("write $value")
+                        fixture.awaitEvent("written")
+                        assertEquals(value, connection.readRelayAdvertisement(), "the actual writer's public file reaches the real SSH parser")
+                        val file = File(host.home, ".nodeterm/relay.json")
+                        assertEquals(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"), java.nio.file.Files.getPosixFilePermissions(file.toPath()))
+                        assertEquals(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"), java.nio.file.Files.getPosixFilePermissions(file.parentFile.toPath()))
+                    }
+                    fixture.command("remove")
+                    fixture.awaitEvent("removed")
+                    assertNull(connection.readRelayAdvertisement(), "the actual remover makes late-adoption material absent")
+                    assertFalse(File(host.home, ".nodeterm/relay.json").exists())
+                    fixture.command("remove")
+                    fixture.awaitEvent("removed")
+                    assertNull(connection.readRelayAdvertisement(), "removing an absent advertisement remains harmless")
+                }
+            }
+        }
+    }
+
+    @Test fun `relay advertisement stays account scoped across explicit and absent SSH profiles`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val profile = File(host.home, "profiles/custom α ' folder").apply { mkdirs() }
+            val decoy = publicAdvertisement("unrelated-profile")
+            File(profile, "relay.json").writeText(decoy.toString())
+            relayAdvertisementFixture(host).use { fixture ->
+                val profiles = listOf(null, profile.path, File(host.home, "profiles/missing").path)
+                for (choice in profiles) host.connect(choice).use { assertNull(it.readRelayAdvertisement(), "a profile file is never an account advertisement") }
+                val value = publicAdvertisement("account-level")
+                fixture.command("write $value")
+                fixture.awaitEvent("written")
+                for (choice in profiles) host.connect(choice).use {
+                    assertEquals(value, it.readRelayAdvertisement(), "profile selection affects browse, not the account-level public advertisement")
+                }
+                fixture.command("remove")
+                fixture.awaitEvent("removed")
+                for (choice in profiles) host.connect(choice).use { assertNull(it.readRelayAdvertisement()) }
+                assertEquals(decoy.toString(), File(profile, "relay.json").readText(), "removal must not touch unrelated profile files")
+            }
+        }
     }
 
     @Test fun `explicit Server profile reads actual custom publication and Board instead of coexisting desktop`() = runBlocking<Unit> {

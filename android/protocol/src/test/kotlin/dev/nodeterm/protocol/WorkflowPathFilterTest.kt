@@ -101,6 +101,18 @@ class WorkflowPathFilterTest {
     }
 
     @Test
+    fun `the actual relay advertisement writer and remover run the workflow`() {
+        assumeTrue(InteropHarness.available("relay-advertisement"), "node + esbuild are needed for advertisement interop")
+        val inputs = Json.parseToJsonElement(InteropHarness.relayAdvertisementBundleMeta.readText()).jsonObject
+            .getValue("inputs").jsonObject.keys
+        for (required in listOf("src/main/remote/relay-advertise.ts", "src/core/fs-atomic.ts")) {
+            assertTrue(required in inputs, "fixture must execute actual producer $required")
+        }
+        assertCovered(inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet(),
+            "bundled into relay-advertisement-fixture.ts")
+    }
+
+    @Test
     fun `every actual managed creation producer file runs the workflow`() {
         assumeTrue(InteropHarness.available("managed-session"), "node + esbuild are needed for managed creation interop")
         val inputs = Json.parseToJsonElement(InteropHarness.managedSessionBundleMeta.readText()).jsonObject

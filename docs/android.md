@@ -1284,17 +1284,21 @@ relay and device behavior are unverified; the
 marked in its index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md).
 The plan and the decisions still open are in [`android-handover.md`](android-handover.md).
 
-A test caveat (audit `A64`): the relay leg's `projects.list` blob and mirror now come from the
-desktop's code, but the SSH leg still hand-copies desktop shapes — the v3 index and project files,
-`agent-status.json`, the `agent-status-<projectId>.json` slices, and the `~/.nodeterm/pending` and
-`acks` files — and `~/.nodeterm/relay.json` only by its presence (`SshTransportTest` writes it, and
-`HostBrowseTest` reads its path and its removal when the phone host stops from the desktop's sources);
-its content, which late adoption reads, is tested nowhere. A desktop change to one of those fails no
-Android test; it needs the matching hand edit in `SshTransportTest`. That is how a wrong userData path (`A02`: the desktop's
-directory is `node-terminal`, not `nodeterm`) once passed its test; the fixture now uses the real
-name, and `SshScriptsTest` runs the prelude under `/bin/sh` against both spellings. The parser unit
-tests (`ModelTest`, `UsagePaceTest`) also feed hand-written blobs, on purpose: they pin how the
-client reads malformed and edge-case input, not what the desktop writes.
+Interop coverage (audit `A64`) now includes actual producers on both routes. Relay `projects.list`
+uses `buildProjectsListBlob` over the real `WorkspaceStore` and mirror writer; session-list and
+settings-provider inputs remain fixture data. Server-profile tests read actual Server config/platform,
+workspace and mirror publications over private SSH, including selected-profile isolation and Board
+persistence. This component fixture does not boot the full Server or install hooks/account probes.
+`SshActionsInteropTest` and `ManagedSessionInteropTest` exercise actual selected-profile services and
+Kotlin writers; the managed fixture keeps its native process/CLI recorder boundary explicit.
+`AckSweepInteropTest` drives the actual Android `.seen` writer and desktop local/remote consumers.
+Two additional `SshTransportTest` methods now read the actual account-level relay-advertisement
+writer/remover through the Kotlin SSH parser, checking every field, replacement, removal and profile
+isolation. Their producer adapts the OS home only during initialization into a private scratch
+folder; it does not run a standing relay host, mint tokens or prove adoption, SAS approval or revoke.
+Legacy/malformed browse, held-file and driven-status-slice fixtures remain hand-maintained. The
+`A02` directory spelling and `SshScriptsTest` prelude checks remain useful; parser unit tests
+(`ModelTest`, `UsagePaceTest`) deliberately use malformed and edge-case blobs.
 
 Since the audit, the SSH tests also cover: resize/keystrokes/close from a thread that must not do
 network I/O (a JVM stand-in for Android's StrictMode, `A01`), a transport that breaks mid-write
@@ -2759,3 +2763,15 @@ Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**, with beta 10/
 Actual Pixel setup/lifecycle, ordinary PAM accounts, macOS and live Claude checks remain open;
 A25/A93 still need hosted-backend maintainers, iOS follow-up stays with @eneskirca, and A68 remains
 deferred until a requested PR. No PR opened.
+
+### Relay-advertisement producer/SSH coverage (`A64`, 2026-10-05)
+
+Two actual private-SSH regression methods now check every public field from the desktop's
+account-level `relay.json` writer, replacement, removal and profile isolation. A third method
+checks the actual writer/remover and `fs-atomic` bundle inputs against Android CI path coverage.
+All 75 affected protocol methods pass with zero failures/errors/skips. Four isolated behavior
+mutants fail assertions, and control/restored runs pass. Private proof: `.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/a64/`.
+The producer uses a temporary OS-home adapter during module initialization, restored before its
+operations; no standing relay host, token mint, adoption, SAS, revoke or phone result is claimed.
+No production contract or APK changes. Beta 16/code 17 remains prepared, beta 10/code 11 remains
+installed, and phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**.
