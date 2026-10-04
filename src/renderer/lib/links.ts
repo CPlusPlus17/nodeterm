@@ -1,5 +1,5 @@
 /** nodeterm mobile on the App Store (live since 1.0). Render it through `mobileStoreLinks()` —
- *  a guard test (added with the component migration) will refuse a direct import anywhere else. */
+ *  `mobileStore.guard.test.ts` refuses a direct import anywhere else. */
 export const IOS_APP_STORE_URL = 'https://apps.apple.com/app/nodeterm/id6790581233'
 
 /**
