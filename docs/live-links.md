@@ -335,8 +335,8 @@ Control is per CONNECTION, never per session or per person: a reconnect unlocks 
 
 - **Required** for a Control link: 8 to 128 code points, no line breaks or control characters
   (`controlPasswordProblem`, `src/shared/watch-link-password.ts`, one rule for the dialog and core).
-  **Generate** makes 16 symbols from Crockford's 32-letter alphabet (no lookalikes, ~80 bits,
-  `crypto.getRandomValues`).
+  **Generate** makes 16 symbols from Crockford's 32-symbol alphabet (10 digits + 22 letters, no
+  lookalikes, ~80 bits, `crypto.getRandomValues`).
 - **Shown once**, in the dialog's done step, with **Copy password**, beside the link and never in it.
   The dialog says to send the two separately. The plaintext lives in the dialog's state only and is
   cleared on every way out (Done, Escape, the scrim, Cancel); it is never logged and never written to
@@ -427,7 +427,10 @@ host closes the connection.
   `PtyManager.controlInput`) stops the batch with the `dropped` notice, and the chain moves on.
 - A session that ends drops the pending batch and discards an open paste (the viewer is told). Input is
   never held for a later session.
-- Nothing typed is ever logged; the two log lines on this path carry an error's name only.
+- Nothing typed is ever logged. The path's three warnings carry an error's name or a fixed sentence
+  ("the input chain failed", "a pane delivery timed out", "delivering input failed"), and the flush
+  guard (`safe('an input flush')`) logs the text of an error the host's own flush code threw, which
+  carries no input.
 
 ### The splitter and paste framing
 
@@ -657,9 +660,10 @@ until Stop, Stop all, a server 410, node-gone, or (for new joins) a lapse of the
 - The 5-links-per-machine cap is unchanged.
 
 **Downgrade.** A build older than this one drops Control and unlimited records when it loads the links
-file (it knows neither the role nor a null expiry), and its next write removes them. Their server rows
-stay live with no host: nobody can join them, a finite Control link until it expires, an unlimited link
-until **Stop all** (from any machine on the license) reaches the server.
+file (it knows neither the role nor a null expiry), and its next write removes them. A launch alone
+writes nothing (`init()` writes only when it pruned something); the next create, Stop or prune does.
+Their server rows stay live with no host: nobody can join them, a finite Control link until it expires,
+an unlimited link until **Stop all** (from any machine on the license) reaches the server.
 
 ## Live chat drawer
 
@@ -708,21 +712,22 @@ It uses the Explorer's drawer shape and pin rules.
 
 ## Lifecycle
 
-**Create** (`service.create`, in order): `unsupported` shell → parse (`bad-request`; then, for a
-Control link only, `bad-password` when the password breaks the rule — a password on a Viewer or
-Commenter request is ignored) → a build that may not relay (`relay-unavailable`) → wait for `init()`
-(bounded) → the node must be **present** (`node-missing` otherwise; `unknown` answers node-missing too,
-so the dialog flushes the canvas save first — R47) → for Control, a node that refuses it
+**Create** (`service.create`, in order): `unsupported` shell → parse (`bad-request`; then, for a Control
+link only, `bad-password` when the password breaks the rule — a password on a Viewer or Commenter
+request is ignored) → a build that may not relay (`relay-unavailable`) → wait for `init()` (bounded) →
+the node must be **present** (`node-missing` otherwise; `unknown` answers node-missing too, so the
+dialog flushes the canvas save first — R47) → for Control, a node that refuses it
 (`control-unsupported`, before any request) → 5 per machine (`limit-machine`, counting links being
 written and opaque entries) → an entitlement (`not-entitled`) → for Control, the password hashed through
 the scrypt gate (a hash that fails answers `unsupported`, "Live links can't be created here right now.",
 and nothing is created anywhere) → `POST /v1/watch-links` (its refusals pass through: `not-entitled`,
 `limit-active` (15 per license), `limit-daily` (50 per 24 h), `rate-limited`, `license-check`,
 `ttl-unsupported` (Unlimited against an older backend), `network` — which covers timeouts, 5xx and a
-malformed reply, so the copy never says "offline") → the record is written (bounded at `PERSIST_TIMEOUT_MS`, 10 s; on failure the server row is revoked and the
-answer is `persist-failed`: no half-created link survives) → the node is checked AGAIN (absent → revoke,
-`node-missing`) → the host starts. Label and title lose C0/C1, DEL and bidi controls and are capped by
-UTF-16 units without splitting a pair.
+malformed reply, so the copy never says "offline") → the record is written (bounded at
+`PERSIST_TIMEOUT_MS`, 10 s; on failure the server row is revoked and the answer is `persist-failed`: no
+half-created link survives) → the node is checked AGAIN (absent → revoke, `node-missing`) → the host
+starts. Label and title lose C0/C1, DEL and bidi controls and are capped by UTF-16 units without
+splitting a pair.
 
 **The clock.** The expiry timer is derived from the server's `expiresAt` and the response's `Date`
 header (`tokenTtlMs`'s rule), never from the local clock alone; it is re-checked on every host change,
@@ -757,18 +762,18 @@ and resurrect a revoked link at the next boot).
 - `init()` writes only when it actually pruned something, so a boot never rewrites the file.
 
 **Resume** (`init()`, idempotent, never rejects): wait for the boot workspace load (bounded,
-`WORKSPACE_READY_TIMEOUT_MS` 10 s), load, drop expired (never an unlimited link), revoke and drop ABSENT, KEEP unknown, cap at 5
-(extras revoked: a hand-edited file of 200 entries must not start 200 schedulers), start hosts only when
-`relayAllowed()` (an unpackaged dev build lists them `refused` and hosts nothing: a dev run must not host
-the installed app's links).
+`WORKSPACE_READY_TIMEOUT_MS` 10 s), load, drop expired (never an unlimited link), revoke and drop
+ABSENT, KEEP unknown, cap at 5 (extras revoked: a hand-edited file of 200 entries must not start 200
+schedulers), start hosts only when `relayAllowed()` (an unpackaged dev build lists them `refused` and
+hosts nothing: a dev run must not host the installed app's links).
 
 **Node gone is tri-state** (R40, `workspaceNodeState`). Present = some project holds it; absent = the
 store has a complete read of every project (`knownNodeIdsStrict()`) and the id is not in it; anything
-else is unknown. **Only absent** ends a link (`node-gone`, server revoke). An empty answer during the launch-time
-load, or for a node in a project whose file was not read, is not evidence, and a revoke cannot be
-undone. The check runs on every workspace load/save (`onWorkspaceChanged`, which also covers a node
-removed by the canvas authority on a peer's op) and before every join (R29). **An index rebuilt from
-nothing is never a complete read** (R44, R54, R55): a `workspace.json` that is missing, unreadable,
+else is unknown. **Only absent** ends a link (`node-gone`, server revoke). An empty answer during the
+launch-time load, or for a node in a project whose file was not read, is not evidence, and a revoke
+cannot be undone. The check runs on every workspace load/save (`onWorkspaceChanged`, which also covers a
+node removed by the canvas authority on a peer's op) and before every join (R29). **An index rebuilt
+from nothing is never a complete read** (R44, R54, R55): a `workspace.json` that is missing, unreadable,
 corrupt, or parses but is no index this build recognises marks the run, and `knownNodeIdsStrict()`
 answers unknown until the next launch — otherwise the renderer's empty boot save made every node absent
 and every link was revoked a second after launch (probe-confirmed). A genuinely empty v2/v3 index is not
@@ -843,8 +848,9 @@ carry it to teammates and the canvas authority would write it into the git-share
   the card modal header action, the palette ("Manage live links", and "Stop all live links (every
   machine on this license)" for a Pro owner or while a link is listed), Settings → Live links (Remote &
   team). Each row is judged by its node's OWN project's session (`liveLinkMenuItemsFor`, D2/M1).
-  ProCompare lists "Live read-only
-  links to a terminal — viewers need nothing installed"; the Core list is untouched. **Availability is
+  ProCompare lists "Live links to a
+  terminal: watch, chat, or let people type — viewers need nothing installed"; the Core list is
+  untouched. **Availability is
   checked before the Pro gate** (`liveLinkUnavailable` then `requireProOr`), so a Server Edition or relay
   tab never sees an Upgrade dialog; an unavailable row is disabled with its reason, never hidden.
 - **Desktop where local terminals are not tmux** (Windows' session host; tmux switched off or missing;
@@ -859,28 +865,31 @@ carry it to teammates and the canvas authority would write it into the git-share
   follow-up.
 - **The LIVE chip** (`LiveLinkChip`, one component): node header (beside `PresenceChips`), kanban card,
   card modal header, sessions-sidebar row. `● LIVE`, `● LIVE · 2`, `LIVE · 3 · 1 typing` (someone typed
-  in the last 4 s; the title names who, quoted), amber `LIVE · offline` (reconnecting), amber
-  `LIVE · 1 waiting` (a viewer's join was refused — R63), muted `LIVE · refused`; an unread COUNT
-  (`99+` past 99, summed over the node's links) for Commenter and Control chat. A viewer is reported waiting only once a join is REFUSED: a session
-  that merely ends rejoins in seconds and is no news. **Not hideable** — it is the
-  owner's signal that a terminal is being broadcast. It shows only for a node viewed through a LOCAL
-  session (R57): a relay tab's copy of a git-shared node with the same id must not show this machine's
-  chip, and the boards and the sidebar sit outside the node's SessionProvider, so they resolve the
-  session from the project id. The popover (per link): the role name with its label, the countdown ("No end time" for
-  Unlimited), Copy, **Open chat** (Commenter and Control: the Live chat drawer), Stop, the Control
-  section for a Control link (see "The owner's controls"), viewers with Kick (a typing dot and "can
-  type" on controllers), and the chat with reply and "Copy to card comments" (an explicit act, as the
-  owner; mention tokens defused). A join raises an info strip, "Someone started watching <title> (2 watching)." — how an owner
-  notices a leaked link.
+  in the last 4 s; the title names who, quoted), amber `LIVE · offline` (reconnecting), amber `LIVE · 1
+  waiting` (a viewer's join was refused — R63), muted `LIVE · refused`; an unread COUNT (`99+` past 99,
+  summed over the node's links) for Commenter and Control chat. A viewer is reported waiting only once a
+  join is REFUSED: a session that merely ends rejoins in seconds and is no news. **Not hideable** — it
+  is the owner's signal that a terminal is being broadcast. It shows only for a node viewed through a
+  LOCAL session (R57): a relay tab's copy of a git-shared node with the same id must not show this
+  machine's chip, and the boards and the sidebar sit outside the node's SessionProvider, so they resolve
+  the session from the project id. The popover (per link): the role name with its label, the countdown
+  ("No end time" for Unlimited), Copy, **Open chat** (Commenter and Control: the Live chat drawer),
+  Stop, the Control section for a Control link (see "The owner's controls"), viewers with Kick (a typing
+  dot and "can type" on controllers), and the chat with reply and "Copy to card comments" (an explicit
+  act, as the owner; mention tokens defused). A join raises an info strip, "Someone started watching
+  <title> (2 watching)." — how an owner notices a leaked link.
 - **Server Edition:** the same core service is registered, with `entitlement: () => null` and
   `unsupported: true` (R43), because that edition has no license layer yet (`initLicense` is
   desktop-only). Create answers `unsupported` and the renderer shows "Live links need a Pro license on
   this server — not available in the Server Edition yet", no Upgrade button; list answers `[]`; nothing
-  is loaded or hosted. The ws-bridge has a REAL `watchLink` member (`buildWatchLinkApi`, spread only into
-  the Server Edition's own api, never a relay-shared builder): its browser clients are the host's own
-  user, not relay peers, so the host-only prefix does not refuse them. Its four control requests are
-  real too, and answer `false` / `'unknown'` there. A server license layer is the
-  follow-up. A Server Edition that does not own its data dir skips `init()` and logs it.
+  is loaded or hosted. The ws-bridge has a REAL `watchLink` member (`buildWatchLinkApi`, spread only
+  into the Server Edition's own api, never a relay-shared builder): its browser clients are the host's
+  own user, not relay peers, so the host-only prefix does not refuse them. Its four control requests are
+  real too: the three changes (`set-control`, `set-password`, `allow-control`) answer `false` there (no
+  link exists), while `control-support` answers the node's real support (the server wires
+  `controlSupport` like the desktop, and the service does not refuse it in `unsupported` mode). A server
+  license layer is the follow-up. A Server Edition that does not own its data dir skips `init()` and
+  logs it.
 - **Relay tab:** the API is an inert stub (`stubs.ts`); the row is disabled with "Live links are created
   on the machine that runs this terminal."; the chip is not shown. On the peer, every `watchLink:`
   channel is host-only, refused `E_FORBIDDEN` to every relay peer — Team Access guests and hosted owners
@@ -943,8 +952,9 @@ Found while building it:
   watcher join is the follow-up.
 - **A tmux < 3.2 host cannot be watched** (fail closed, "waiting").
 - **After a run whose index was missing, unreadable or corrupt, node-gone waits for the next launch**
-  (R44/R54): a link to a node deleted in that run lives until its expiry (≤ 24 h) with nobody able to
-  join it (its session is destroyed). The agent-status mirror is not affected (R64/M2).
+  (R44/R54): a link to a node deleted in that run lives until its expiry (≤ 24 h) — an Unlimited link
+  until the next complete read at a later launch, or Stop — with nobody able to join it (its session is
+  destroyed). The agent-status mirror is not affected (R64/M2).
   Likewise a link to a truly deleted node in an unread project lingers until the next complete read.
 - **Opaque entries** (an unsealable secret) live in the file ≤ 24 h, or until Stop all for an unlimited
   one.
@@ -1026,7 +1036,8 @@ Found while building them:
 From the spec:
 
 1. Create a link on a Mac; open it in Safari on a phone.
-2. Typing in the viewer does nothing.
+2. Typing in the viewer does nothing (on a Viewer or Commenter link, or on a Control link before
+   unlocking).
 3. Narrowing the viewer's window does not resize the owner's terminal.
 4. The owner scrolling back (tmux copy-mode) is visible to the viewer.
 5. Stop sharing cuts viewers immediately.
@@ -1091,8 +1102,9 @@ The Control role, Unlimited links and the Live chat drawer. From the spec (§9):
 
 35. **Mac, a shell:** create a Control link to a shell node, open it in a browser on a second
     computer, Take control with the password, type `ls` and Enter. Expect: the command runs in the
-    owner's terminal, every viewer sees the output, the owner gets the "can now type" strip and (window
-    unfocused) an OS notification.
+    owner's terminal, every viewer sees the output, the owner gets the "can now type" strip and, with
+    notifications enabled (`notifyOnClaudeDone` on and its one-time consent answered) and the window
+    unfocused, an OS notification.
 36. **Mac, a Claude session:** the same on a Claude node: type a prompt and Enter, then press Esc while
     it works. Expect: the prompt is submitted, Esc interrupts the turn within one batch (no second key
     needed).
@@ -1111,7 +1123,9 @@ The Control role, Unlimited links and the Live chat drawer. From the spec (§9):
 41. **An unlimited link survives an app restart and stops when Pro lapses:** create an Unlimited link,
     quit and relaunch. Expect: it resumes, "No end time" in the popover and in Settings, the viewer
     page reconnects. With a test license that lapses: within a day of the lapse the chip reads
-    `LIVE · refused` and a new viewer cannot join; renewing the license brings it back.
+    `LIVE · refused` and a new viewer cannot join; renewing the license brings it back. The backend
+    keeps the liveness answer in memory for 24 h: to shorten the wait, restart the (test) backend after
+    the lapse, and the next host-token mint (≤ ~90 s) asks keygen again.
 42. **The drawer on the canvas and over the board:** Open chat from a node's chip, pinned and unpinned;
     then from a kanban card modal's chip (per-project board and Omni board). Expect: on the board the
     drawer sits ABOVE the card modal, pinned and unpinned.
@@ -1146,8 +1160,10 @@ From the build:
 50. **The exit chord:** while typing, press Ctrl+Shift+. (⇧⌘. on a Mac). Expect: the focus moves to
     Release and nothing reaches the pane. Repeat on AZERTY and another non-US layout (the chord is
     matched on the physical Period key, so the label may not match the key face) and with an OS or IME
-    shortcut on the same keys (Windows' emoji or IME switch, macOS input source switching): note what
-    wins.
+    shortcut on the same keys (Windows' emoji or IME switch, macOS input source switching). Pass: on
+    every layout tried, the chord moves the focus to Release and nothing reaches the pane. A layout or
+    an OS/IME shortcut that takes the chord before the page (the focus stays in the terminal, or a
+    character reaches the pane) is a FAIL to report, naming the layout and the shortcut.
 51. **Password manager prompts on the viewer's password field:** unlock in Chrome, Safari, Firefox and
     with 1Password installed. Expect: no save prompt, or one the viewer can decline; a password saved
     for one link is never filled into another link's form unasked.
@@ -1170,9 +1186,10 @@ From the build:
 56. **The wheel while typing:** as a controller on a tmux node, scroll the wheel over the terminal.
     Expect: nothing is typed into the pane (no history recall into the prompt).
 57. **Downgrade:** with a Control link and an Unlimited link live, run a build older than this one on
-    the same userData, then this build again. Expect: the older build lists neither link and removes
-    them from the file; both server rows stay live with nobody able to join; Stop all from this build
-    ends them.
+    the same userData. It lists neither link. Its launch alone writes nothing (`init()` writes only when
+    it pruned something), so in the older build create or Stop another link (its next write), then
+    quit and start this build again. Expect: both links are gone from the file and the list; both
+    server rows stay live with nobody able to join; Stop all from this build ends them.
 
 Visual checks (Mac, default look and Liquid Glass, dark and light) — the create dialog:
 
@@ -1229,7 +1246,7 @@ The Live chat drawer:
     and zone snap clear both. With a card modal open, the drawer docks at the right edge instead.
 78. Raised over a card modal (per-project and Omni boards): the drawer above the modal, pinned and
     unpinned; never above Settings. Escape typed in the drawer's reply box leaves the card modal open.
-79. Pinned over the board with no card modal: above the board, beside the controls cluster.
+79. Pinned over the board with no card modal: above the board, docked BELOW the controls cluster.
 80. Liquid Glass: the blur behind the drawer, its hairline, the pinned card on a wallpaper, dark and
     light; nothing inside paints a surface token.
 81. The head: "Live chat", the Pin button (accent when pinned) and the Close ×.
@@ -1240,11 +1257,13 @@ The Live chat drawer:
     hover), and the status wash under it when the link is reconnecting, refused or viewers are waiting.
 84. People: the uppercase muted heading, the Control section fitting 320 px pinned (the Typing row with
     its switch, the password edit row with Generate), viewer rows with the typing dot, bold name, muted
-    "can type" / "watching", and Kick on the right. A Viewer link's People fill the whole body.
-85. The thread: one line per message — muted time, the **Sharer** badge on the owner's lines, the name in
-    the viewer's colour (the same colour as on the web viewer page; on the light theme mixed toward the
-    ink), a muted ": ", the text wrapping. Readable on light, dark and Liquid Glass. An empty thread says
-    "No messages yet. Viewers of this link can chat with you here."
+    "can type" / "watching", and Kick on the right. People take at most 40 % of the drawer's height and
+    scroll past it (many viewers). A Viewer link's People fill the whole body.
+85. The thread: one line per message — muted time, the **Sharer** badge on the owner's lines, the name
+    in the viewer's colour (the same colour as on the web viewer page; on the light theme mixed toward
+    the ink), the owner's own name in `--success`, a muted ": ", the text wrapping. Readable on light,
+    dark and Liquid Glass. An empty thread says "No messages yet. Viewers of this link can chat with you
+    here."
 86. The "N new messages ↓" pill: scroll up, have a viewer post, click the pill: the list goes to the
     bottom and the pill disappears.
 87. The composer: "Reply to viewers…" and Send; its error line sits above the form.
@@ -1252,3 +1271,7 @@ The Live chat drawer:
     chat on another link's chip waits until Done (or moves at once if the save failed).
 89. The chip's unread count keeps rising while another app is in front, even with the drawer pinned on
     that link, and clears when the window comes back.
+90. The palette: "Live chat" in section View, with the chat icon, offered only while a link is live
+    (stop the last link: the entry is gone).
+91. An unpinned drawer open on the last link: stop that link. Expect: the drawer stays open and says "No
+    live links." (only a PINNED drawer disappears with the last link), and × still closes it.

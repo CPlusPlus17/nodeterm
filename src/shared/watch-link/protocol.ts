@@ -77,8 +77,9 @@ export interface WatchMeta {
  *  `off`: the owner turned typing off. `locked`: too many wrong passwords across the link. */
 export type WatchControlState = 'controlling' | 'available' | 'off' | 'locked'
 /** Why an unlock was refused or control was taken away: `wrong` password, the link is `locked`,
- *  typing is `off`, an attempt `too-soon` after the last, the terminal is `unsupported`, or input was
- *  `dropped` (typing too fast, or no session to type into). */
+ *  typing is `off`, an attempt `too-soon` after the last, the terminal is `unsupported`, or some input
+ *  was `dropped` — over the rate limit, with no session to type into, or a delivery to the pane that
+ *  failed. The host does not say which, so a viewer must not name a cause. */
 export type WatchControlReason = 'wrong' | 'locked' | 'off' | 'too-soon' | 'unsupported' | 'dropped'
 const CONTROL_STATES: readonly WatchControlState[] = ['controlling', 'available', 'off', 'locked']
 const CONTROL_REASONS: readonly WatchControlReason[] = ['wrong', 'locked', 'off', 'too-soon', 'unsupported', 'dropped']
