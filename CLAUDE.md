@@ -5684,3 +5684,13 @@ partial/unknown delivery, with no resend. The SessionStart idle rescue latch sto
 agent and receive time; foreign/missing idle identity never creates proof or changes the
 renderer-visible session. These boundaries have behavioral regressions in
 `core/windows-delivery-safety.test.ts` and the mirror/client suites.
+
+## Canvas terminal mouse-leave ordering
+
+Canvas mouse leave defers only xterm blur to the next task (`terminal/deferred-blur.ts`).
+xterm 5.5's DOM renderer redraws its rows synchronously on blur; doing that during React's
+mouseout handling can detach the native target before screen mouseleave clears the link cursor.
+Do not replace the timer with a microtask. Cancel pending blur on re-entry, intentional focus
+and lifecycle cleanup before parking; a parked Terminal can be adopted by another component.
+Status/presence release stays synchronous. Behavioral tests cover cancellation and ownership;
+full native Linux Desktop checks are separate from Server, GPU and Android device verification.

@@ -140,6 +140,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 | [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
 | [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods, seven assertion mutants and 28 native OpenSSH checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
+| [A121](#a121) | low | | small | desktop/bug | ✅ source-fixed; full native UI pending · guarded next-task Canvas blur preserves mouseleave; nine behavioral methods and five assertion mutants pass |
 
 ## A01
 
@@ -4104,3 +4105,24 @@ Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**, with beta 10/
 Actual Pixel setup/lifecycle, ordinary PAM accounts, macOS and live Claude checks remain open;
 A25/A93 still need hosted-backend maintainers, iOS follow-up stays with @eneskirca, and A68 remains
 deferred until a requested PR. No PR opened.
+
+## A121
+
+**Canvas terminal blur can leave a stale link pointer (2026-10-05).**
+
+- Severity: **low**; effort: small; area: desktop renderer; kind: bug
+- Status: **source-fixed; complete native verification pending**.
+
+**Observed:** the isolated full Linux Electron Desktop UI at `c0accdfcb0642dc2d643e1794640065f61906f34` rendered a wrapped URL through the real plain NodePTY and bundled xterm DOM renderer. Tail hover, complete URL activation by Ctrl-click, and native non-drag movement outside the terminal were delivered. In the SGR mouse case, moving to the canvas left xterm's active link and pointer state set (`A92_HOVER_CLEAR_FAILED`). No pointer capture was active. The normal mouse case completed the same leave successfully.
+
+**Cause:** `src/renderer/nodes/TerminalNode.tsx` calls `term.blur()` synchronously from `onBodyLeave`. The bundled xterm DOM renderer handles blur by immediately rendering all rows with `replaceChildren`. The native trace records screen `pointerleave` and `mouseout`, then destination `mouseover` whose former span is detached, with no actual screen `mouseleave`. Linkifier clears its hover on that missing `mouseleave`, so its `mouseOut` stays false and pointer/link state survives. The visible row underline can disappear during blur even though Linkifier's hovered decoration state and pointer remain; this finding does not claim every visible underline persisted.
+
+**Source repair:** `terminal/deferred-blur.ts` defers only the captured terminal's blur with `setTimeout(0)`. Re-entry, intentional focus and lifecycle cleanup cancel it; generation and exact current-terminal identity reject stale callbacks, including same-object park/adopt. The controller remains reusable after cleanup. Status/presence release stays synchronous. Nine behavioral methods pass, all 63 tests in four affected terminal files and the full TypeScript check pass, and five isolated production mutations fail on assertions (immediate blur, microtask, ignored cancel, missing generation, missing owner). The control/restored copies pass. Private proof: `.nodeterm/android-beta-build-16/desktop-links-and-advertisement-receipt/a121-unit/`. A fresh full eight-case native Desktop UI control and deliberate synchronous-blur mutant are still required to verify the actual wiring.
+
+**Scope:** Desktop and Server share the Canvas `TerminalNode` handler. The observed execution is Linux Desktop only; Server behavior remains a shared-source implication until executed. Modal terminal leave does not use this handler. Android's terminal is unaffected, and this repair changes no external protocol or iOS contract. The Android APK source, installed phone version and 64-item physical ledger stay unchanged.
+
+**Separate A92 evidence:** the old upward-bound link mutant already fails with the named `A92_TAIL_HOVER_MISSING` in a real native tail hover. That establishes sensitivity to A92's lookup cap defect; it does not turn this incomplete control into a full A92 UI pass. Preserve that receipt separately from A121's leave failure.
+
+Private evidence:
+- Current failed control: `/tmp/nodeterm-a92-current-ys5prgif/runtime/control-7yoizvhv/proof/{receipt.json,runtime-result.json,canvas-soft-sgr-hover-clear-failed.png}`.
+- A92 old-bound mutant: `/tmp/nodeterm-a92-mutant-7dyrrp0u/runtime/old-upward-bound-mgnkw593/proof/{receipt.json,runtime-result.json}`.

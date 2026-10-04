@@ -3,6 +3,7 @@ import { FIND_DECORATIONS } from '../lib/palette'
 import { ptyRefusal } from '@shared/pty-refusal'
 
 import { patchImeModeSwitch } from '../terminal/ime-mode-switch'
+import { createDeferredBlur } from '../terminal/deferred-blur'
 import { installGlassCellBackgrounds, scheduleGlassCellAlpha, setGlassCellAlpha } from '../terminal/glass-cell-backgrounds'
 
 import { deliverRelayInitialLaunch } from '../terminal/relay-initial-launch'
@@ -1289,6 +1290,7 @@ export function TerminalNode({
   // ResizeObserver in the lifecycle effect.
   const rootRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const deferredBlur = useMemo(() => createDeferredBlur(() => termRef.current), [])
   // Copy feedback: the `Copied` pill (fed by the OSC 52 handler below, through `copySubs`) and the
   // one-time "hold ⌥ to select" hint for a pane whose app captured the mouse.
   // The host is `bodyRef` (`.term-node__xterm`) and NOT the node body on purpose: the hover guard
@@ -4454,6 +4456,9 @@ export function TerminalNode({
 
     return () => {
       disposed = true
+      // A park can hand the SAME Terminal to another mount. Retire this run's pending blur here,
+      // rather than in park-carried cleanups, before its ref is cleared or its element is moved.
+      deferredBlur.cancel()
       // Nothing may restart a node that is no longer mounted — park, respawn and real teardown all
       // pass through here. A remount re-registers (superseding, so a stale unregister is inert).
       unregisterRestart()
@@ -4977,6 +4982,7 @@ export function TerminalNode({
    * jump. The one caller that passes false is the window-activation restore.
    */
   const enterNow = (opts?: { ack?: boolean }) => {
+    deferredBlur.cancel()
     const aimed = opts?.ack !== false
     if (dwellRef.current) clearTimeout(dwellRef.current)
     if (aimed) setArmed(false)
@@ -5007,6 +5013,7 @@ export function TerminalNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusReq])
   const onBodyEnter = () => {
+    deferredBlur.cancel()
     if (dwellRef.current) clearTimeout(dwellRef.current)
     const enter = () => {
       // While Cmd/Ctrl is held the user is zooming the canvas — don't grab focus / enter the
@@ -5016,6 +5023,7 @@ export function TerminalNode({
         return
       }
       setArmed(false)
+      deferredBlur.cancel()
       termRef.current?.focus()
       useTerminalFocus.getState().remember(id)
       useAgentStatus.getState().setActive(id, true)
@@ -5030,7 +5038,9 @@ export function TerminalNode({
   const onBodyLeave = () => {
     if (dwellRef.current) clearTimeout(dwellRef.current)
     setArmed(true)
-    termRef.current?.blur()
+    // Let native mouseleave reach xterm before blur repaints its DOM rows. Focus/presence release
+    // still happens now; only the repaint moves to the next task and is canceled on re-entry.
+    deferredBlur.schedule()
     useAgentStatus.getState().setActive(id, false)
     presence.releaseFocus(id)
   }
@@ -5137,6 +5147,7 @@ export function TerminalNode({
     // FIRST — otherwise the drag-source keeps keyboard focus and the user types into the wrong app.
     // A paste came from THIS window, which already has it.
     if (opts.raiseWindow) window.nodeTerminal.focusWindow()
+    deferredBlur.cancel()
     term.focus()
     useTerminalFocus.getState().remember(id)
     term.paste(paths.join(' ') + ' ')

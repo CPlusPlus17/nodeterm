@@ -3,7 +3,7 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A120`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A121`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
@@ -2088,3 +2088,15 @@ The producer uses a temporary OS-home adapter during module initialization, rest
 operations; no standing relay host, token mint, adoption, SAS, revoke or phone result is claimed.
 No production contract or APK changes. Beta 16/code 17 remains prepared, beta 10/code 11 remains
 installed, and phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**.
+
+## Canvas terminal link leave follow-up (A121, 2026-10-05)
+
+The full Linux Desktop native hover check for A92 exposed a separate Canvas leave defect:
+synchronous blur redraws xterm's DOM rows before its screen receives mouseleave, leaving the
+link pointer active after a native non-drag leave in the SGR mouse case. A121 now defers only
+owned blur to the next timer task and cancels it on re-entry, focus and cleanup before park.
+Nine behavioral methods, all 63 affected terminal tests, full TypeScript and five assertion
+mutants pass. The full native eight-case control and synchronous-blur mutant are still pending;
+the earlier old-bound A92 mutant already fails on actual native tail hover. No Android runtime, APK, external contract
+or iOS change is involved. Phone testing remains paused: beta 10/code 11 is last installed,
+beta 16/code 17 is prepared, and the physical ledger stays **10 Pass / 22 Partial / 32 Pending**.
