@@ -3,6 +3,7 @@
 // index and settings. The phone names a project; it never supplies an owner.
 import { describe, expect, it } from 'vitest'
 import { createHostNewSessions, type HostNewSessionsDeps } from './host-new-sessions'
+import type { CanvasNodeState } from '../../shared/types'
 
 const ENTRIES: Record<string, { cwd?: string; ssh?: unknown }> = {
   'entry-local': { cwd: '/repo' },
@@ -24,6 +25,43 @@ function resolver(over: Partial<HostNewSessionsDeps> = {}) {
 }
 
 describe('createHostNewSessions', () => {
+  const node = (over: Partial<CanvasNodeState> = {}): CanvasNodeState => ({
+    id: 'saved-node', kind: 'terminal', title: 'Saved', position: { x: 0, y: 0 }, size: { width: 500, height: 300 },
+    color: '#0a84ff', group: null,
+    cwd: '/repo/sub', agentId: 'claude', accountId: 'acct-ok', ...over
+  })
+
+  it('cold-restores saved local cwd, agent, account and indexed owner without a create hint', () => {
+    const r = resolver({ persistedCanvases: () => [{ id: 'entry-local', nodes: [node()] }] })
+    expect(r.resolveNode?.('saved-node')).toEqual({
+      cwd: '/repo/sub', agentId: 'claude', accountId: 'acct-ok', ownerProjectId: 'entry-local'
+    })
+    expect(r.resolveNode?.('unknown')).toBeUndefined()
+  })
+
+  it('known ineligible and ambiguous nodes cannot be treated as unknown create targets', () => {
+    for (const nodes of [[node({ kind: 'sticky' })], [node({ ssh: { host: 'remote', user: 'u' } })],
+      [node({ sshRemoteTmux: true })], [node(), node()]]) {
+      expect(resolver({ persistedCanvases: () => [{ id: 'entry-local', nodes }] }).resolveNode?.('saved-node')).toBeNull()
+    }
+    for (const id of ['entry-ssh', 'entry-inline', 'unknown-project']) {
+      expect(resolver({ persistedCanvases: () => [{ id, nodes: [node()] }] }).resolveNode?.('saved-node')).toBeNull()
+    }
+    expect(resolver({ persistedCanvases: () => [
+      { id: 'entry-local', nodes: [node()] }, { id: 'entry-ssh', nodes: [node()] }
+    ] }).resolveNode?.('saved-node')).toBeNull()
+  })
+
+  it('retains saved custom agents only while their configuration exists on this host', () => {
+    const deps = { persistedCanvases: () => [{ id: 'entry-local', nodes: [node({ agentId: 'custom:owned' })] }],
+      customAgents: () => [{ id: 'custom:owned', baseAgent: 'claude' }] }
+    const r = resolver(deps)
+    expect(r.resolveNode?.('saved-node')).toEqual({ cwd: '/repo/sub', agentId: 'custom:owned',
+      accountId: 'acct-ok', ownerProjectId: 'entry-local' })
+    expect(resolver({ ...deps, customAgents: () => [] }).resolveNode?.('saved-node')).not.toHaveProperty('agentId')
+    // A wire create hint never acquires saved custom-agent execution privileges.
+    expect(r.resolve({ projectId: 'entry-local', agentId: 'custom:owned', accountId: 'acct-ok' })).not.toHaveProperty('agentId')
+  })
   it("owns the pane by the host's index ENTRY id, beside the project's folder", () => {
     expect(resolver().resolve({ projectId: 'entry-local' })).toEqual({
       cwd: '/repo',

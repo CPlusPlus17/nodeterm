@@ -742,6 +742,99 @@ describe('pty.attach creates a phone-started session in its project', () => {
   // genuine fresh spawn only), and "could not tell" is a join, never a create.
   const RESOLVED = { cwd: '/repo', agentId: 'claude' as const, ownerProjectId: 'p1' }
 
+  it('uses saved cold host facts instead of conflicting wire launch hints', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    vi.mocked(pty.sessionExists).mockResolvedValue(false)
+    const resolve = vi.fn(() => ({ cwd: '/wrong', ownerProjectId: 'wrong' }))
+    const handlers = handlersWith(pty, socket, fs, { resolve, resolveNode: () => RESOLVED })
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'saved', projectId: 'wrong', agentId: 'codex' } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect(resolve).not.toHaveBeenCalled()
+    expect(vi.mocked(pty.attachDetached).mock.calls[0][2]).toEqual({ cols: 80, rows: 24, ...RESOLVED })
+  })
+
+  it('keeps known ineligible nodes bare rather than accepting a replacement project hint', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    vi.mocked(pty.sessionExists).mockResolvedValue(false)
+    const resolve = vi.fn(() => RESOLVED)
+    const handlers = handlersWith(pty, socket, fs, { resolve, resolveNode: () => null })
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'ineligible', projectId: 'p1' } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect(resolve).not.toHaveBeenCalled()
+    expect(vi.mocked(pty.attachDetached).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
+  })
+
+  it('finishes preparation before responding and commits after SnapshotEnd without losing the launch line', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    vi.mocked(pty.sessionExists).mockResolvedValue(false)
+    let finish!: () => void
+    const ready = new Promise<void>((resolve) => { finish = resolve })
+    const commit = vi.fn(() => 'prepared-session')
+    pty.prepareDetachedAttach = vi.fn(async () => { await ready; return { fresh: true, attach: commit } })
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => RESOLVED))
+    const phases: string[] = []
+    socket.sendFrame = (op, streamId) => {
+      if (op === OP.SnapshotEnd) {
+        phases.push('snapshot-end')
+        // Network input runs on the next turn, like the actual encrypted relay socket.
+        queueMicrotask(() => handlers.onFrame({ op: OP.Input, streamId, seq: 0,
+          payload: new TextEncoder().encode('claude --resume saved\r') }))
+      }
+      return true
+    }
+    commit.mockImplementation(() => { phases.push('attach'); return 'prepared-session' })
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'saved', projectId: 'p1' } })
+    await vi.waitFor(() => expect(pty.prepareDetachedAttach).toHaveBeenCalled())
+    expect(responses).toEqual([])
+    expect(commit).not.toHaveBeenCalled()
+    finish()
+    await vi.waitFor(() => expect(pty.write).toHaveBeenCalledWith(null, 'prepared-session', 'claude --resume saved\r'))
+    expect(phases).toEqual(['snapshot-end', 'attach'])
+    expect(responses[0]).toEqual({ id: 'n', ok: true, body: { streamId: 1, fresh: true } })
+    expect(pty.attachDetached).not.toHaveBeenCalled()
+  })
+
+  it('discards a preparation canceled while settings resolve without spawning or sending ready frames', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    vi.mocked(pty.sessionExists).mockResolvedValue(false)
+    let finish!: () => void
+    const waiting = new Promise<void>((resolve) => { finish = resolve })
+    const commit = vi.fn(() => 'prepared')
+    pty.prepareDetachedAttach = vi.fn(async () => { await waiting; return { fresh: true, attach: commit } })
+    const frames = vi.fn(() => true)
+    socket.sendFrame = frames
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => RESOLVED))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'saved', projectId: 'p1' } })
+    await vi.waitFor(() => expect(pty.prepareDetachedAttach).toHaveBeenCalled())
+    handlers.closeAll()
+    finish()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(commit).not.toHaveBeenCalled()
+    expect(responses).toEqual([])
+    expect(frames).not.toHaveBeenCalled()
+  })
+
+  it('reports the prepared warm verdict if another owner creates the pane while settings resolve', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    vi.mocked(pty.sessionExists).mockResolvedValue(false)
+    pty.prepareDetachedAttach = vi.fn(async () => ({ fresh: false, attach: () => 'joined' }))
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => RESOLVED))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'saved', projectId: 'p1' } })
+    await vi.waitFor(() => expect(responses).toHaveLength(1))
+    expect(responses[0]).toEqual({ id: 'n', ok: true, body: { streamId: 1, fresh: false } })
+  })
+
+  it('carries saved launch facts into preparation if an initially warm pane disappears before commit', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    vi.mocked(pty.sessionExists).mockResolvedValue(true)
+    pty.prepareDetachedAttach = vi.fn(async () => ({ fresh: true, attach: () => 'recreated' }))
+    const handlers = handlersWith(pty, socket, fs, { resolve: () => null, resolveNode: () => RESOLVED })
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'saved' } })
+    await vi.waitFor(() => expect(responses).toHaveLength(1))
+    expect(pty.prepareDetachedAttach).toHaveBeenCalledWith('saved', { cols: 80, rows: 24, ...RESOLVED })
+    expect(responses[0]).toEqual({ id: 'n', ok: true, body: { streamId: 1, fresh: true } })
+  })
+
   it('applies nothing when the session already exists (a join, not a create)', async () => {
     const { socket, fs, pty } = makeHostFakes()
     ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(true)

@@ -97,6 +97,13 @@ class RelayInteropTest {
         ).also { harnesses += it }
     }
 
+    private fun startLaunch(trusted: Boolean): InteropHarness {
+        val userData = Files.createTempDirectory("nt-launch-ud").toFile().also { userDataDirs += it }
+        return InteropHarness.start("project-launch", mapOf("FIXTURE_USERDATA" to userData.path,
+            "SHELL" to "/fixture/a72-default",
+            "FIXTURE_LAUNCH_TRUSTED" to if (trusted) "1" else "0")).also { harnesses += it }
+    }
+
     private fun InteropHarness.str(key: String) = ready[key]!!.jsonPrimitive.content
     private fun JsonObject.str(key: String) = this[key]!!.jsonPrimitive.content
 
@@ -511,6 +518,59 @@ class RelayInteropTest {
             assertEquals("claude", ev.str("agentId"))
             assertEquals("p1", ev.str("ownerProjectId"))
             s.detach()
+        }
+    }
+
+    @Test
+    fun `managed phone creation consumes the real trusted project settings before launch input (A72)`() = runBlocking<Unit> {
+        val h = startLaunch(true)
+        connect(h).connection.use { conn ->
+            val sink = RecordingSink()
+            val stream = conn.attach("term-settings-new", 80, 24, sink,
+                dev.nodeterm.protocol.host.NewSessionHint("launch-project", null, "claude"))
+            assertTrue(stream.fresh)
+            sink.awaitText("launch-env:trusted-project shell:/bin/sh")
+            stream.write("A72_NEW_LAUNCH\r")
+            val written = h.awaitEvent("launch-write")
+            assertEquals("A72_NEW_LAUNCH\r", written.str("text"))
+            assertEquals(h.str("projectCwd"), written.str("cwd"))
+            assertEquals("trusted-project", written.str("projectEnv"))
+            assertEquals("/bin/sh", written.str("shell"))
+            stream.detach()
+        }
+    }
+
+    @Test
+    fun `cold saved node attach restores host project settings and cwd without wire hints (A72)`() = runBlocking<Unit> {
+        val h = startLaunch(true)
+        connect(h).connection.use { conn ->
+            val sink = RecordingSink()
+            val stream = conn.attach("term-settings-saved", 80, 24, sink)
+            assertTrue(stream.fresh)
+            sink.awaitText("launch-env:trusted-project shell:/bin/sh")
+            stream.write("A72_SAVED_LAUNCH\r")
+            val written = h.awaitEvent("launch-write")
+            assertEquals(h.str("savedCwd"), written.str("cwd"))
+            assertEquals("trusted-project", written.str("projectEnv"))
+            assertEquals("/bin/sh", written.str("shell"))
+            stream.detach()
+        }
+    }
+
+    @Test
+    fun `untrusted shared project env and shell stay out of a managed phone cold spawn (A72)`() = runBlocking<Unit> {
+        val h = startLaunch(false)
+        connect(h).connection.use { conn ->
+            val sink = RecordingSink()
+            val stream = conn.attach("term-settings-saved", 80, 24, sink)
+            sink.awaitText("launch-env:absent shell:")
+            stream.write("A72_UNTRUSTED_LAUNCH\r")
+            val written = h.awaitEvent("launch-write")
+            assertEquals(null, written["projectEnv"]?.takeUnless { it.toString() == "null" })
+            assertFalse(written.str("shell") == "/bin/sh")
+            assertEquals(setOf("agents", "shell"), setOf(h.awaitEvent("launch-trust").str("family"),
+                h.awaitEvent("launch-trust").str("family")))
+            stream.detach()
         }
     }
 

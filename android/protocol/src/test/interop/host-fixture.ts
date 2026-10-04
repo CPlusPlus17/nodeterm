@@ -94,7 +94,7 @@ initPlatform({
 
 // ---- a relay broker: pair `?token=host-<room>` with `?token=client-<room>` ------------------------
 
-function startBroker(): Promise<number> {
+export function startBroker(): Promise<number> {
   const rooms = new Map<string, { host?: WebSocket; client?: WebSocket; queue: { to: 'host' | 'client'; data: unknown; binary: boolean }[] }>()
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
   wss.on('connection', (ws, req) => {
@@ -522,7 +522,7 @@ async function runPair(): Promise<void> {
 const mode = process.argv[2]
 if (mode === 'never-ready') {
   setInterval(() => {}, 60_000)
-} else {
+} else if (mode !== 'project-launch') {
   ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : runRelay()).catch((err) => {
     emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
     process.exit(1)

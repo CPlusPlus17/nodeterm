@@ -32,6 +32,27 @@ if (!outfile || !electronStub) {
 const root = process.cwd()
 // Resolved from the repo root, the tree whose node_modules the harness checked for esbuild.
 const esbuild = require(require.resolve('esbuild', { paths: [root] }))
+// Only the managed-launch fixture runs the real PtyManager. Replace its native process boundary
+// and login-PATH probe; virtualize os.homedir() so node tokens/accounts cannot touch a real profile.
+// Settings/trust/workspace/host handlers are the production implementations, never aliases.
+const projectLaunch = entry === 'android/protocol/src/test/interop/project-launch-fixture.ts'
+const launchSeams = {
+  'os': 'launch-os.ts', 'node:os': 'launch-os.ts',
+  'node-pty': 'launch-native.ts'
+}
+const launchPlugin = {
+  name: 'isolated-managed-launch',
+  setup(build) {
+    build.onResolve({ filter: /^(?:os|node:os|node-pty|child_process|\.\/(?:exec-path|tmux-hint))$/ }, (args) => {
+      if (args.importer.endsWith('/launch-os.ts')) return
+      const managerPath = args.importer === path.join(root, 'src/core/pty-manager.ts') ||
+        args.importer === path.join(root, 'src/core/tmux-hint.ts')
+      const managerBoundary = managerPath && ['./exec-path', './tmux-hint', 'child_process'].includes(args.path)
+      const leaf = launchSeams[args.path] || (managerBoundary ? 'launch-native.ts' : null)
+      if (leaf) return { path: path.join(root, 'android/protocol/src/test/interop', leaf) }
+    })
+  }
+}
 
 esbuild
   .build({
@@ -47,6 +68,7 @@ esbuild
       '@renderer': './src/renderer'
     },
     external: ['ws'],
+    plugins: projectLaunch ? [launchPlugin] : [],
     metafile: true,
     logLevel: 'warning'
   })

@@ -1,5 +1,7 @@
 package dev.nodeterm.protocol
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
 import kotlin.test.Test
@@ -18,6 +20,24 @@ import kotlin.test.assertTrue
  */
 class InteropHarnessTest {
     private val needs = "node + repo node_modules (npm ci) are needed for interop tests"
+
+    @Test
+    fun `managed launch fixture uses real settings trust and spawn producers with scoped native boundaries`() {
+        assumeTrue(InteropHarness.available(), needs)
+        val source = InteropHarness.projectLaunchBundle.readText()
+        val inputs = Json.parseToJsonElement(InteropHarness.projectLaunchBundleMeta.readText())
+            .jsonObject["inputs"]!!.jsonObject.keys
+        for (input in listOf("src/core/pty-manager.ts", "src/core/workspace-store.ts",
+            "src/core/project-spawn-overrides.ts", "src/core/project-trust-store.ts",
+            "src/main/remote/host-service.ts", "src/main/remote/host-new-sessions.ts",
+            "android/protocol/src/test/interop/launch-os.ts", "android/protocol/src/test/interop/launch-native.ts")) {
+            assertTrue(input in inputs, "managed launch fixture omits its real producer/boundary: $input")
+        }
+        assertFalse(Regex("""require\(\s*["'](?:node-pty|os)["']\s*\)""").containsMatchIn(source),
+            "managed launch fixture escaped its native/profile isolation")
+        assertTrue(source.contains("managed launch fixture refused a subprocess"),
+            "managed launch fixture lacks its fail-closed manager subprocess boundary")
+    }
 
     @Test
     fun `the bundle step runs node, never an npm shim`() {

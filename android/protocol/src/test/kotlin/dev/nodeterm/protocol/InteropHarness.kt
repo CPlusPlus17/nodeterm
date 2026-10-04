@@ -104,12 +104,22 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             out
         }
 
+        internal val projectLaunchBundle: File by lazy {
+            val out = File(repoRoot, "android/protocol/build/interop/project-launch-fixture.cjs")
+            val proc = ProcessBuilder(bundleCommand(out) + "android/protocol/src/test/interop/project-launch-fixture.ts")
+                .directory(repoRoot).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "esbuild failed: $log" }
+            out
+        }
+
         /**
          * esbuild's metafile for [bundle], which the bundler writes beside it: its `inputs` are the files
          * the bundle was built from, repo-relative and `/`-separated (audit A63, [WorkflowPathFilterTest]).
          */
         internal val bundleMeta: File by lazy { File(bundle.path + ".meta.json") }
         internal val ackBundleMeta: File by lazy { File(ackBundle.path + ".meta.json") }
+        internal val projectLaunchBundleMeta: File by lazy { File(projectLaunchBundle.path + ".meta.json") }
 
         /**
          * Home-directory variables pointing a fixture at [home]. `os.homedir()` reads HOME on POSIX and
@@ -141,7 +151,11 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             onSpawn: (Process) -> Unit = {}
         ): InteropHarness {
             assumeTrue(available(mode), "node + repo node_modules (npm ci) are needed for interop tests")
-            val fixture = if (mode == "ack-sweep") ackBundle else bundle
+            val fixture = when (mode) {
+                "ack-sweep" -> ackBundle
+                "project-launch" -> projectLaunchBundle
+                else -> bundle
+            }
             val pb = ProcessBuilder("node", fixture.path, mode).directory(repoRoot)
             pb.environment().putAll(env)
             val h = InteropHarness(pb.start())

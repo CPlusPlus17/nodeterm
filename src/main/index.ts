@@ -4050,7 +4050,9 @@ app.whenReady().then(async () => {
     // its pane stayed unproven for agent messaging). See host-new-sessions.ts.
     newSessions: createHostNewSessions({
       projectTargetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
-      claudeAccounts: () => settingsStore.get().claudeAccounts ?? []
+      claudeAccounts: () => settingsStore.get().claudeAccounts ?? [],
+      persistedCanvases: () => workspaceStore.persistedCanvases(),
+      customAgents: () => settingsStore.get().customAgents ?? []
     }),
     // A relay phone's Inbox actions (`approvals.answer` / `inbox.ack`): the SAME answer writer the
     // canvas Approve/Deny button uses, and the SAME ack pair the `~/.nodeterm/acks` sweep runs for a

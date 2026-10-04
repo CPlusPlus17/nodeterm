@@ -74,6 +74,12 @@ export interface HostPtyManager {
     sinks: DetachedSinks,
     options?: Omit<PtyCreateOptions, 'persistKey'>
   ): string
+  /** Resolve bounded project settings before the phone can deliver its cold launch line.
+   * The commit stays synchronous: no input may fall between SnapshotEnd and live attachment. */
+  prepareDetachedAttach?(
+    persistKey: string,
+    options: Omit<PtyCreateOptions, 'persistKey'>
+  ): Promise<{ readonly fresh: boolean; attach(sinks: DetachedSinks): string }>
   /** Current visible screen of a node's tmux session, for the attach snapshot. */
   captureSnapshot(persistKey: string): Promise<string>
   /** Does a tmux session for this node id exist RIGHT NOW? Asked before `attachDetached`, which
@@ -269,6 +275,9 @@ export interface HostNewSessions {
     accountId?: string
     agentId?: string
   }): Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId' | 'ownerProjectId'> | null
+  /** Saved host facts win over create hints. Undefined means unknown; null means known but
+   * ineligible, so a caller cannot replace that node's owner with a different project hint. */
+  resolveNode?(nodeId: string): ReturnType<HostNewSessions['resolve']> | undefined
 }
 
 interface Stream {
@@ -496,25 +505,24 @@ export function createHostHandlers(
     // (`agents/pane-ownership.ts`: ownership is recorded on a genuine fresh spawn only).
     let create: Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId' | 'ownerProjectId'> | null = null
     const projectId = str(p.projectId)
-    if (!remote && newSessions && projectId && projectId.length <= REF_MAX_LEN) {
+    if (!remote && newSessions) {
       try {
-        create = newSessions.resolve({
-          projectId,
-          accountId: str(p.accountId) ?? undefined,
-          agentId: str(p.agentId) ?? undefined
-        })
+        const saved = newSessions.resolveNode?.(nodeId)
+        create = saved === undefined
+          ? projectId && projectId.length <= REF_MAX_LEN
+            ? newSessions.resolve({ projectId, accountId: str(p.accountId), agentId: str(p.agentId) })
+            : null
+          : saved
       } catch {
         create = null
       }
     }
-    let created = false
-
     const streamId = ++streamCounter
     const stream: Stream = { sessionId: '', persistKey: nodeId, seq: 0, paused: false }
     const sinks = makeSinks(streamId, stream, p.resizedFrames === true)
 
-    // Reserve the stream, then respond so the client can route Input/Resize frames; the snapshot
-    // + live attach then proceed. Capturing the screen is async (a tmux side-call).
+    // Reserve while the capture/settings preparation is async. Respond, snapshot and live attach
+    // commit together afterwards, so the client cannot send its launch into an unready session.
     streams.set(streamId, stream)
     // A phone viewer is now watching this node's session (reported at RESERVE time, balanced by
     // `dropStream`): the desktop wakes a hibernated node for it and shields it from Eco.
@@ -540,21 +548,26 @@ export function createHostHandlers(
         (remote ? pty.sessionExistsOver!(nodeId, remote) : pty.sessionExists(nodeId)).catch(() => true),
         new Promise<boolean>((r) => setTimeout(() => r(true), FRESH_PROBE_BUDGET_MS))
       ])
-      created = !existed
-      socket.respond(req.id, true, { streamId, fresh: !existed })
-      return (remote ? pty.captureSnapshotOver!(nodeId, remote) : pty.captureSnapshot(nodeId)).catch(() => '')
+      const snapshot = await (remote ? pty.captureSnapshotOver!(nodeId, remote) : pty.captureSnapshot(nodeId)).catch(() => '')
+      if (!streams.has(streamId)) return null
+      const options = remote
+        ? { cols, rows, sshRemote: remote, requireRemote: true }
+        : { cols, rows, ...((pty.prepareDetachedAttach || !existed) && create ? create : {}) }
+      const prepared = pty.prepareDetachedAttach
+        ? await pty.prepareDetachedAttach(nodeId, options)
+        : { fresh: !existed, attach: (s: DetachedSinks) => pty.attachDetached(nodeId, s, options) }
+      return { snapshot, prepared }
     })()
-      .then((snapshot) => {
+      .then((result) => {
         // The stream may have been killed/closed while the capture was in flight.
-        if (!streams.has(streamId)) return
+        if (!result || !streams.has(streamId)) return
+        socket.respond(req.id, true, { streamId, fresh: result.prepared.fresh })
         // Snapshot first (current screen) — then live output begins on attach.
-        sendSnapshot(streamId, stream, snapshot)
+        sendSnapshot(streamId, stream, result.snapshot)
         try {
           // `requireRemote`: if the master died since `resolve`, spawn NOTHING rather than fall
           // through to a local session (PtyCreateOptions.requireRemote).
-          stream.sessionId = remote
-            ? pty.attachDetached(nodeId, sinks, { cols, rows, sshRemote: remote, requireRemote: true })
-            : pty.attachDetached(nodeId, sinks, { cols, rows, ...(created && create ? create : {}) })
+          stream.sessionId = result.prepared.attach(sinks)
         } catch {
           // Attach failed (e.g. tmux unavailable) — surface as an exit so the client tears down.
           socket.sendFrame(
@@ -565,6 +578,11 @@ export function createHostHandlers(
           )
           dropStream(streamId)
         }
+      })
+      .catch(() => {
+        if (!streams.has(streamId)) return
+        socket.respond(req.id, false, { message: 'Could not prepare this session.' })
+        dropStream(streamId)
       })
   }
 

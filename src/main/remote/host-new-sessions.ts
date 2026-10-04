@@ -22,7 +22,8 @@
 // Every value applies only when the attach CREATES the session (the relay host decides that from
 // this machine's own `sessionExists` probe); a join changes nothing.
 
-import { BUILTIN_AGENT_IDS, type BuiltinAgentId } from '../../shared/agents/config'
+import { BUILTIN_AGENT_IDS, type AgentId, type BuiltinAgentId } from '../../shared/agents/config'
+import type { CanvasNodeState } from '../../shared/types'
 import type { HostNewSessions } from './host-service'
 
 export interface HostNewSessionsDeps {
@@ -30,30 +31,40 @@ export interface HostNewSessionsDeps {
   projectTargetInfo(projectId: string): { cwd?: string; ssh?: unknown } | null
   /** This machine's managed Claude accounts (settings.json — hand-editable, so re-checked here). */
   claudeAccounts(): ReadonlyArray<{ id: string; pending?: boolean; host?: string }>
+  /** Saved host canvases, with portable node cwds resolved by WorkspaceStore. */
+  persistedCanvases?(): ReadonlyArray<{ id: string; nodes: ReadonlyArray<CanvasNodeState> }>
+  /** Only saved custom agents may use this host's already configured custom-agent environment. */
+  customAgents?(): ReadonlyArray<{ id: string; baseAgent?: string }>
 }
 
 export function createHostNewSessions(deps: HostNewSessionsDeps): HostNewSessions {
+  const launch = (projectId: string, accountId?: string, agentId?: string, saved = false) => {
+    const info = deps.projectTargetInfo(projectId)
+    if (!info || info.ssh || !info.cwd) return null
+    const custom = saved && agentId?.startsWith('custom:')
+      ? deps.customAgents?.().find((a) => a.id === agentId)
+      : undefined
+    const agent = agentId && (BUILTIN_AGENT_IDS as readonly string[]).includes(agentId)
+      ? (agentId as BuiltinAgentId)
+      : custom ? (custom.id as AgentId) : undefined
+    const account = accountId && (agent === 'claude' || custom?.baseAgent === 'claude') &&
+      deps.claudeAccounts().some((a) => a.id === accountId && !a.pending && !a.host)
+      ? accountId : undefined
+    return { cwd: info.cwd, ownerProjectId: projectId,
+      ...(account ? { accountId: account } : {}), ...(agent ? { agentId: agent } : {}) }
+  }
   return {
-    resolve: ({ projectId, accountId, agentId }) => {
-      const info = deps.projectTargetInfo(projectId)
-      if (!info || info.ssh || !info.cwd) return null
-      const account =
-        accountId &&
-        agentId === 'claude' &&
-        deps.claudeAccounts().some((a) => a.id === accountId && !a.pending && !a.host)
-          ? accountId
-          : undefined
-      const agent =
-        agentId && (BUILTIN_AGENT_IDS as readonly string[]).includes(agentId)
-          ? (agentId as BuiltinAgentId)
-          : undefined
-      return {
-        cwd: info.cwd,
-        // The entry the lookup above matched EXACTLY — not the phone's string re-used unchecked.
-        ownerProjectId: projectId,
-        ...(account ? { accountId: account } : {}),
-        ...(agent ? { agentId: agent } : {})
-      }
+    resolve: ({ projectId, accountId, agentId }) => launch(projectId, accountId, agentId),
+    resolveNode: (nodeId) => {
+      const matches = deps.persistedCanvases?.().flatMap((p) =>
+        p.nodes.filter((n) => n.id === nodeId).map((node) => ({ projectId: p.id, node }))) ?? []
+      if (!matches.length) return undefined
+      // Ambiguous clones, nonterminals and standalone remote terminals cannot claim a local pane.
+      if (matches.length !== 1) return null
+      const { projectId, node } = matches[0]
+      if (node.kind !== 'terminal' || node.ssh || node.sshRemoteTmux) return null
+      const resolved = launch(projectId, node.accountId, node.agentId, true)
+      return resolved ? { ...resolved, cwd: node.cwd || resolved.cwd } : null
     }
   }
 }

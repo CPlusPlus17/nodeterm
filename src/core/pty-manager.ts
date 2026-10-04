@@ -2348,21 +2348,8 @@ export class PtyManager {
     if (options.agentId && hasSharedIdentity(options.agentId as AgentId) && !options.sshRemote) {
       installCodexLauncher()
     }
-    // Resolved HERE rather than inside `spawnSession` because that function is synchronous and two
-    // of its three callers (`createDetached`/`attachDetached`, the relay host's attach path) are
-    // synchronous public API.
-    //
-    // Those two are NOT merely attaches — `attachDetached` goes through `tmux new-session -A`, which
-    // CREATES when the host's session died (that is exactly what `sessionExists` is asked ahead of,
-    // and what `fresh` reports). They get no project overrides (`.nodeterm/settings.json` env and
-    // shell): being synchronous, nothing awaits that read for them. What the relay host DOES pass
-    // depends on who is attaching — a phone joining or re-creating an existing node sends
-    // `{cols, rows}` only, so that spawn keeps the bare login shell it always got (the hook env's
-    // node id and endpoint included, as for every persistKey); a phone STARTING a session names
-    // its project, and the host resolves a cwd, account, agent and `ownerProjectId` for it (audits
-    // A33, A72 — `HostNewSessions`), applied only when that attach creates the session. The agent
-    // gives that session the same agent-gated hook env a canvas spawn gets, and `attachDetached`
-    // records the owner.
+    // Resolve before the synchronous spawn. Relay attaches use prepareDetachedAttach for the same
+    // bounded/trust-aware read, then commit synchronously after their snapshot (A72).
     const projectOverrides = await this.projectSpawnOverrides(options)
     // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides. The relay
     // host's detached SSH attach (audit A09) does not come through here, and does not need to: it
@@ -2873,6 +2860,55 @@ export class PtyManager {
     if (shouldRecordOwnership(!joining, persistKey, options.ownerProjectId))
       recordFreshSpawnOwner(persistKey, options.ownerProjectId)
     return sessionId
+  }
+
+  /** Prepare a relay attach without spawning anything. A cold pane gets the SAME trust-aware
+   * project reader as create(); live panes neither prompt nor change their launch facts. The host
+   * commits after SnapshotEnd in one turn, so the phone's first launch line cannot be dropped while
+   * an asynchronous settings read is pending. Discarding this result has no PTY side effects. */
+  async prepareDetachedAttach(
+    persistKey: string,
+    options: Omit<PtyCreateOptions, 'persistKey'> = { cols: 80, rows: 24 }
+  ): Promise<{ readonly fresh: boolean; attach(sinks: DetachedSinks): string }> {
+    const exists = async (): Promise<boolean> => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        return await Promise.race([
+          (options.sshRemote
+            ? this.sessionExistsOver(persistKey, options.sshRemote)
+            : this.sessionExists(persistKey)).catch(() => true),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(true), 750)
+            timer.unref?.()
+          })
+        ])
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }
+    let cold = !(await exists())
+    const overrides = cold && !options.sshRemote
+      ? await this.projectSpawnOverrides({ ...options, persistKey })
+      : null
+    // Another desktop/phone may have created the backend pane while trust/settings were read.
+    // Reprobe the backend too: a warm tmux pane need not have a live wrapper in this manager.
+    if (cold) cold = !(await exists())
+    const fresh = (): boolean => cold && !this.liveSessionForPersistKey(persistKey)
+    return {
+      get fresh() { return fresh() },
+      attach: (sinks) => {
+        const creating = fresh()
+        const launch: Omit<PtyCreateOptions, 'persistKey'> = creating ? options : {
+          cols: options.cols, rows: options.rows,
+          ...(options.sshRemote ? { sshRemote: options.sshRemote } : {}),
+          ...(options.requireRemote ? { requireRemote: true } : {})
+        }
+        const id = this.spawnSession({ ...launch, persistKey }, null, sinks, undefined, creating ? overrides : null)
+        if (shouldRecordOwnership(creating, persistKey, launch.ownerProjectId))
+          recordFreshSpawnOwner(persistKey, launch.ownerProjectId)
+        return id
+      }
+    }
   }
 
   /**
