@@ -4,6 +4,11 @@ import dev.nodeterm.protocol.host.HostCapabilities
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.HostUnansweredException
 import dev.nodeterm.protocol.host.NeedsRelayException
+import dev.nodeterm.protocol.host.ManagedSessionChoice
+import dev.nodeterm.protocol.host.ManagedSessionReceipt
+import dev.nodeterm.protocol.host.ManagedSessionRefusedException
+import dev.nodeterm.protocol.host.ManagedSessions
+import dev.nodeterm.protocol.host.PreparedManagedSession
 import dev.nodeterm.protocol.model.ProjectInfo
 import kotlinx.serialization.json.*
 import java.util.UUID as JavaUuid
@@ -16,7 +21,8 @@ internal class SshActions(private val execute: (String, Long, String?, Boolean, 
     val capabilities: HostCapabilities get() {
         val a = advertisement?.takeIf { System.nanoTime() < expiresAtNanos }
         return HostCapabilities(git = false, boardWrites = a?.methods?.containsAll(BOARD) == true,
-            nodeActions = a?.methods?.containsAll(NODE) == true, registerNode = false, answerApprovals = true)
+            nodeActions = a?.methods?.containsAll(NODE) == true, registerNode = false, answerApprovals = true,
+            managedCreate = a?.methods?.contains(ManagedSessions.METHOD) == true)
     }
     fun clear() { advertisement = null; expiresAtNanos = 0 }
     fun probe(userData: String?): Advertisement? {
@@ -31,7 +37,7 @@ internal class SshActions(private val execute: (String, Long, String?, Boolean, 
         return a
     }
     fun call(userData: String?, method: String, params: JsonObject, targetId: String, owns: (Advertisement) -> Boolean): JsonElement {
-        require(method in ALL)
+        require(method in BOARD + NODE) // Creation never enters the fresh-nonce convenience API.
         val a = probe(userData) ?: unavailable(targetId)
         if (method !in a.methods || !owns(a)) unavailable(targetId)
         val nonce = JavaUuid.randomUUID().toString()
@@ -44,6 +50,31 @@ internal class SshActions(private val execute: (String, Long, String?, Boolean, 
         if (exit == 3 && raw.trim() == SshActionsScripts.UNAVAILABLE) { clear(); unavailable(targetId) }
         if (exit != 0 || !raw.startsWith("NT-ACTIONS-REPLY\n")) uncertain()
         return parseResponse(raw.removePrefix("NT-ACTIONS-REPLY\n").trimEnd('\n'), a.instance, nonce)
+    }
+    fun prepareManaged(userData: String?, choice: ManagedSessionChoice, owns: (Advertisement) -> Boolean): PreparedManagedSession {
+        val a = probe(userData)
+        if (a == null || ManagedSessions.METHOD !in a.methods || !owns(a)) throw ManagedSessionRefusedException("This profile cannot create a managed session over SSH. Refresh or update nodeterm on the computer.")
+        return PreparedManagedSession(userData!!, a.instance, JavaUuid.randomUUID().toString(), a.updatedAt,
+            JavaUuid.randomUUID().toString(), choice, a.raw)
+    }
+    /** One dispatch, using exactly the durable request. An uncertain result is never replayed. */
+    fun createManaged(request: PreparedManagedSession, owns: (Advertisement) -> Boolean): ManagedSessionReceipt {
+        val a = probe(request.profile)
+        if (a == null || a.instance != request.hostInstance || ManagedSessions.METHOD !in a.methods || !owns(a)) {
+            throw ManagedSessionRefusedException("The selected desktop profile changed before creation was sent. Refresh and choose the project again.")
+        }
+        // Keep every original immutable descriptor field, not a new service/nonce after reconnect.
+        val original = parseAdvertisement("NT-ACTIONS-1\t${request.issuedAt}\n${request.advertisement}")
+            ?: throw ManagedSessionRefusedException("The saved creation request is invalid.")
+        if (original.instance != request.hostInstance || original.updatedAt != request.issuedAt) throw ManagedSessionRefusedException("The saved creation request is invalid.")
+        val (exit, raw) = execute(SshActionsScripts.submit(request.profile, original, request.nonce), 20,
+            request.wireRequest(), true, SshActionsScripts.MAX_BYTES + 128)
+        if (exit == 3 && raw.trim() == SshActionsScripts.UNAVAILABLE) throw ManagedSessionRefusedException("The desktop profile changed before creation was published. Refresh and try again.")
+        if (exit != 0 || !raw.startsWith("NT-ACTIONS-REPLY\n")) uncertain()
+        val result = try { parseResponse(raw.removePrefix("NT-ACTIONS-REPLY\n").trimEnd('\n'), request.hostInstance, request.nonce) }
+            catch (e: HostUnansweredException) { throw e }
+            catch (e: HostException) { throw ManagedSessionRefusedException(e.message ?: "The computer refused creation.") }
+        return runCatching { ManagedSessions.receipt(result, request) }.getOrElse { uncertain() }
     }
     private fun unavailable(id: String): Nothing = throw NeedsRelayException(id,
         "This desktop profile does not currently serve this action over SSH. Try it through the relay.",
@@ -58,7 +89,7 @@ internal class SshActions(private val execute: (String, Long, String?, Boolean, 
         }
         val BOARD = setOf("projects.ensureBoard", "projects.setCardColumn", "projects.editCardLabels")
         val NODE = setOf("node.wake", "node.refresh", "node.rename")
-        val ALL = BOARD + NODE
+        val ALL = BOARD + NODE + ManagedSessions.METHOD
         fun parseAdvertisement(output: String): Advertisement? = runCatching {
             require(output.toByteArray().size <= SshActionsScripts.MAX_BYTES + 128)
             val header = output.substringBefore('\n').split('\t')

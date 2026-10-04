@@ -5419,8 +5419,25 @@ monotonic, and cleanup cannot remove a successor. Accept bounded private regular
 never use the hook bearer. Board mutations pass through WorkspaceStore's actual save queue and
 final live-instance/node fences. Deduplicate immutable request nonces within their bounded retry
 window; a lost/expired receipt is uncertain and never authorizes another mutation or relay replay.
-Server advertises Board only; Desktop may acknowledge node nudge delivery. Do not equate delivery
+Server has no renderer node nudges; Desktop may acknowledge their delivery. Do not equate delivery
 with a completed wake/repaint or implement cold managed New by writing metadata alone.
+
+**Managed SSH New is a host-owned launch transaction.** `sessions.createManagedV1` accepts only
+a creation UUID, owned project id, shell/builtin-agent choice, optional local account/title and
+bounded terminal size. The host resolves one open local folder project from WorkspaceStore;
+SSH, driven, inline, closed and ambiguous owners cannot become local launches. Derive executable
+input through the canonical command assembler and the host's trust-aware project settings,
+actual CLI capabilities, account directory, permission policy, model and shared Codex identity.
+Never accept a phone command/cwd/shell/model/permission override or default away a missing selected
+account. Account absence means an explicit System choice; freeze a displayed default by sending
+its id. Revalidate these facts across awaits.
+Keep expanded launch text host-private; shared recovery intent must not serialize environment
+values or launch secrets. Both Desktop and Server advertise creation only with real tmux support,
+after the workspace has loaded. An exclusive exact-pane receipt, current
+instance fence and durable coordinator phases govern spawn/register/launch; a persisted receipt
+cannot restore runtime ownership or authorize a replay. Unknown delivery stays recoverable and
+uncertain, never a second launch or a legacy fallback. Keep Android producer/client interop in
+the same change and flag the additive SSH method/receipt for @eneskirca in iOS.
 
 - **Two docs, two audiences — keep both.** This file holds the deep invariants with their
   reasoning and measurements; it is dense on purpose and is loaded automatically by coding agents.

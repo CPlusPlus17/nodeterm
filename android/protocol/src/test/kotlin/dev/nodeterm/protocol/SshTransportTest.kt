@@ -1,5 +1,13 @@
 package dev.nodeterm.protocol
 
+import dev.nodeterm.protocol.host.ManagedSessionAdoption
+import dev.nodeterm.protocol.host.ManagedSessionChoice
+import dev.nodeterm.protocol.host.ManagedSessionReceipt
+import dev.nodeterm.protocol.host.PreparedManagedSession
+import dev.nodeterm.protocol.host.ManagedSessions
+import dev.nodeterm.protocol.ssh.SshActions
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import dev.nodeterm.protocol.host.ApprovalOutcome
 import dev.nodeterm.protocol.host.Capability
 import dev.nodeterm.protocol.host.CardLabelEdit
@@ -103,6 +111,7 @@ class SshTransportTest {
         private val tmuxDir = File(ownedRoot, "tmux").apply { mkdirs() }
         private val server = SshServer.setUpDefaultServer()
         @Volatile var onCommand: ((String, ShCommand) -> Unit)? = null
+        @Volatile var commandPath: String? = null
 
         init {
             try {
@@ -114,7 +123,7 @@ class SshTransportTest {
                     user == "dev" && key.encoded.contentEquals(expected)
                 }
                 server.commandFactory = org.apache.sshd.server.command.CommandFactory { _, command ->
-                    ShCommand(command, home, childEnv(home, tmuxDir)).also { onCommand?.invoke(command, it) }
+                    ShCommand(command, home, childEnv(home, tmuxDir) + (commandPath?.let { mapOf("PATH" to it) } ?: emptyMap())).also { onCommand?.invoke(command, it) }
                 }
                 server.start()
             } catch (e: Exception) {
@@ -126,8 +135,193 @@ class SshTransportTest {
 
         fun connect() = SshHostConnection.connect("127.0.0.1", server.port, "dev", identity, MemoryPin())
 
+        fun tmux(vararg args: String): Pair<Int, String> {
+            val p = ProcessBuilder(listOf("tmux", "-L", "node-terminal") + args).redirectErrorStream(true).apply {
+                environment().clear(); environment().putAll(childEnv(home, tmuxDir))
+            }.start()
+            val text = p.inputStream.bufferedReader().readText(); return p.waitFor() to text
+        }
+        fun execute(script: String): Pair<Int, String> {
+            val p = ProcessBuilder("/bin/sh", "-c", script).directory(home).redirectErrorStream(true).apply {
+                environment().clear(); environment().putAll(childEnv(home, tmuxDir) + (commandPath?.let { mapOf("PATH" to it) } ?: emptyMap()))
+            }.start()
+            val text = p.inputStream.bufferedReader().readText(); return p.waitFor() to text
+        }
+        fun advertisement(instance: String): SshActions.Advertisement {
+            val ud = File(home, ".config/node-terminal").apply { mkdirs() }
+            val root = File(ud, "ssh-actions").apply { mkdirs(); setReadable(false, false); setWritable(false, false); setExecutable(false, false); setReadable(true, true); setWritable(true, true); setExecutable(true, true) }
+            File(root, instance).apply { mkdirs(); setReadable(false, false); setWritable(false, false); setExecutable(false, false); setReadable(true, true); setWritable(true, true); setExecutable(true, true) }
+            val stamp = System.currentTimeMillis()
+            val raw = buildJsonObject { put("version", 1); put("instance", instance); put("pid", ProcessHandle.current().pid()); put("updatedAt", stamp); put("remoteProjects", false); put("methods", JsonArray(listOf(JsonPrimitive(ManagedSessions.METHOD)))) }.toString()
+            File(root, "advertisement.json").apply { writeText(raw); setReadable(false, false); setWritable(false, false); setReadable(true, true); setWritable(true, true) }
+            return assertNotNull(SshActions.parseAdvertisement("NT-ACTIONS-1\t$stamp\n$raw"))
+        }
         override fun close() {
-            try { server.stop(true) } finally { ownedRoot.deleteRecursively() }
+            try { server.stop(true) } finally { runCatching { tmux("kill-server") }; ownedRoot.deleteRecursively() }
+        }
+    }
+
+    /** Native tmux fixture facts are setup only; the product verifies them over actual SSH. */
+    private fun managedAdoption(host: SshTestHost): ManagedSessionAdoption {
+        val ud = File(host.home, ".config/node-terminal").apply { mkdirs() }
+        val cwd = File(host.home, "managed-project").apply { mkdirs() }
+        val id = "term-managed-1234"
+        val creation = java.util.UUID.randomUUID().toString()
+        val instance = java.util.UUID.randomUUID().toString()
+        val ad = host.advertisement(instance)
+        val hidden = File(cwd, ".nodeterm").apply { mkdirs() }
+        File(hidden, "project.json").writeText(buildJsonObject {
+            put("version", 1); put("rev", 1); put("savedAt", "fixture"); put("name", "Managed")
+            put("color", "blue"); put("viewport", buildJsonObject { put("x", 0); put("y", 0); put("zoom", 1) })
+            put("nodes", JsonArray(listOf(buildJsonObject {
+                put("id", id); put("kind", "terminal"); put("title", "Managed"); put("color", "blue"); put("cwd", cwd.path)
+                put("position", buildJsonObject { put("x", 0); put("y", 0) }); put("size", buildJsonObject { put("width", 640); put("height", 440) })
+            })))
+        }.toString())
+        File(ud, "workspace.json").writeText(buildJsonObject {
+            put("version", 3); put("activeProjectId", "managed-project")
+            put("entries", JsonArray(listOf(buildJsonObject { put("id", "managed-project"); put("name", "Managed"); put("cwd", cwd.path); put("color", "blue") })))
+        }.toString())
+        val (exit, out) = host.tmux("-f", "/dev/null", "new-session", "-d", "-s", "nt-$id", "-c", cwd.path,
+            "-e", "NODETERM_MANAGED_CREATION_ID=$creation", *paneShell)
+        assertEquals(0, exit, out)
+        val identity = host.tmux("list-panes", "-s", "-t", "=nt-$id", "-F", "#{session_created}|#{pane_id}|#{pane_pid}").second.trim().split('|')
+        val pid = identity[2].toInt()
+        val birth = if (System.getProperty("os.name").startsWith("Linux")) {
+            val stat = File("/proc/$pid/stat").readText().substringAfterLast(')').trim().split(Regex("\\s+"))
+            "linux:${File("/proc/sys/kernel/random/boot_id").readText().trim()}:${stat[19]}"
+        } else {
+            val p = ProcessBuilder("ps", "-o", "lstart=", "-p", "$pid").apply { environment()["LC_ALL"] = "C" }.start()
+            val started = p.inputStream.bufferedReader().readText().trim().replace(Regex("\\s+"), " ")
+            assertEquals(0, p.waitFor()); "darwin:$started"
+        }
+        val request = PreparedManagedSession(ud.path, instance, java.util.UUID.randomUUID().toString(), ad.updatedAt,
+            creation, ManagedSessionChoice("managed-project", "shell"), ad.raw)
+        return ManagedSessionAdoption(request, ManagedSessionReceipt(creation, id, "managed-project", instance,
+            "node-terminal", "nt-$id", identity[1], pid, birth, identity[0]))
+    }
+
+    @Test fun `managed receipt adopts the actual SSH viewer with output input and reconnect without creating again`() = runBlocking {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val r = adoption.receipt
+            assertEquals(0, host.tmux("new-session", "-d", "-s", r.session + "-other", *paneShell).first)
+            host.connect().use { conn ->
+                assertTrue(conn.listProjects().findNode(r.nodeId) != null)
+                assertTrue(conn.capabilities.managedCreate); assertFalse(conn.capabilities.registerNode)
+                val sink = Sink(); val stream = conn.attachManagedSession(adoption, 56, 25, sink)
+                try {
+                    assertFalse(stream.fresh, "host creation already delivered any agent launch")
+                    stream.write("printf 'managed_%s\\n' input\r"); sink.waitFor("managed_input")
+                    assertFalse(synchronized(sink.out) { sink.out.toString(Charsets.UTF_8) }.contains("NT-MANAGED-VIEW"), "private tty acknowledgement must not paint in xterm")
+                    assertEquals(r.panePid.toString(), host.tmux("display-message", "-p", "-t", r.paneId, "#{pane_pid}").second.trim())
+                } finally { stream.detach() }
+            }
+            host.connect().use { conn ->
+                val sink = Sink(); val stream = conn.attachManagedSession(adoption, 52, 20, sink)
+                stream.write("printf 'reopen_%s\\n' receipt\r"); sink.waitFor("reopen_receipt")
+                try {
+                    assertTrue(assertFailsWith<HostException> { stream.endSession() }.message.orEmpty().contains("relay"))
+                    assertEquals(0, host.tmux("has-session", "-t", "=${r.session}").first, "canvas End still needs the app route; refusal does not stop the managed shell")
+                    assertEquals(0, host.tmux("has-session", "-t", "=${r.session}-other").first, "refusal keeps the prefix neighbour")
+                } finally { stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `managed SSH adoption rejects stale process marker service profile and multi pane identities`() = runBlocking {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val r = adoption.receipt
+            host.connect().use { conn ->
+                for (changed in listOf(r.copy(panePid = r.panePid + 1), r.copy(sessionCreated = (r.sessionCreated.toLong() + 1).toString()),
+                    r.copy(paneBirth = if (r.paneBirth.startsWith("linux:")) r.paneBirth.substringBeforeLast(':') + ":0" else "darwin:Mon Jan 1 00:00:00 2000"))) {
+                    assertFailsWith<HostException> { conn.attachManagedSession(ManagedSessionAdoption(adoption.request, changed), 80, 24, Sink()) }
+                }
+                assertEquals("", host.tmux("list-clients", "-t", "=${r.session}").second.trim(), "no refused receipt acquires a viewer")
+                assertEquals(0, host.tmux("set-environment", "-t", "=${r.session}", "NODETERM_MANAGED_CREATION_ID", java.util.UUID.randomUUID().toString()).first)
+                assertFailsWith<HostException> { conn.attachManagedSession(adoption, 80, 24, Sink()) }
+                assertEquals(0, host.tmux("set-environment", "-t", "=${r.session}", "NODETERM_MANAGED_CREATION_ID", r.creationId).first)
+                val pane = host.tmux("split-window", "-d", "-t", r.paneId, "-P", "-F", "#{pane_id}", *paneShell)
+                assertEquals(0, pane.first, pane.second)
+                assertFailsWith<HostException> { conn.attachManagedSession(adoption, 80, 24, Sink()) }
+                assertEquals(0, host.tmux("kill-pane", "-t", pane.second.trim()).first)
+                host.advertisement(java.util.UUID.randomUUID().toString())
+                assertFailsWith<HostException> { conn.attachManagedSession(adoption, 80, 24, Sink()) }
+                host.advertisement(r.hostInstance)
+                val changedProfile = adoption.copy(request = adoption.request.copy(profile = File(host.home, "other-profile").path))
+                assertFailsWith<HostException> { conn.attachManagedSession(changedProfile, 80, 24, Sink()) }
+                assertEquals("", host.tmux("list-clients", "-t", "=${r.session}").second.trim())
+                assertEquals(0, host.tmux("has-session", "-t", "=${r.session}").first, "refusal never kills the created shell")
+            }
+        }
+    }
+
+    @Test fun `managed SSH final tmux queue refuses a marker replaced after shell proof`() = runBlocking {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val r = adoption.receipt
+            val lookup = ProcessBuilder("/bin/sh", "-c", "command -v tmux").start()
+            val tmuxPath = lookup.inputStream.bufferedReader().readText().trim(); assertEquals(0, lookup.waitFor())
+            val bin = File(host.home, "race-bin").apply { mkdirs() }
+            val replaced = java.util.UUID.randomUUID().toString()
+            val wrapper = File(bin, "tmux").apply {
+                writeText("""#!/bin/sh
+                    case "${'$'}*" in *' if-shell '*)
+                      ${SshScripts.q(tmuxPath)} -L node-terminal set-environment -t ${SshScripts.q("=" + r.session)} NODETERM_MANAGED_CREATION_ID ${SshScripts.q(replaced)} || exit 99
+                    ;; esac
+                    exec ${SshScripts.q(tmuxPath)} "${'$'}@"
+                """.trimIndent()); assertTrue(setExecutable(true, true))
+            }
+            host.commandPath = bin.path + File.pathSeparator + System.getenv("PATH")
+            val ad = assertNotNull(SshActions.parseAdvertisement("NT-ACTIONS-1\t${System.currentTimeMillis()}\n${adoption.request.advertisement}"))
+            val (exit, proof) = host.execute(SshScripts.attachManaged(adoption, ad, attach = false))
+            assertTrue(exit != 0, "The final false branch must return a failed command: $proof")
+            assertFalse(proof.trim() == "NT-MANAGED-VERIFIED")
+            assertEquals(0, host.tmux("set-environment", "-t", "=${r.session}", "NODETERM_MANAGED_CREATION_ID", r.creationId).first)
+            host.connect().use { conn ->
+                assertFailsWith<HostException> { conn.attachManagedSession(adoption, 56, 25, Sink()) }
+                assertEquals(replaced, host.tmux("show-environment", "-t", "=${r.session}", "NODETERM_MANAGED_CREATION_ID").second.trim().substringAfter('='), "the replacement happened between the shell proof and final queue")
+                assertEquals("", host.tmux("list-clients", "-t", "=${r.session}").second.trim())
+                assertEquals(0, host.tmux("has-session", "-t", "=${r.session}").first)
+                host.commandPath = null
+                assertEquals(0, host.tmux("set-environment", "-t", "=${r.session}", "NODETERM_MANAGED_CREATION_ID", r.creationId).first)
+                val sink = Sink(); val stream = conn.attachManagedSession(adoption, 56, 25, sink)
+                try { stream.write("printf 'race_%s\\n' restored\r"); sink.waitFor("race_restored") } finally { stream.detach() }
+            }
+            assertTrue(wrapper.isFile)
+        }
+    }
+
+    @Test fun `managed SSH viewer without an exit acknowledgement is not adopted or retried`() = runBlocking {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val r = adoption.receipt; var confirmations = 0
+            host.onCommand = { command, channel -> if (command.contains("nt_wait=0; nt_found=0")) { confirmations++; channel.omitExitStatus = true } }
+            host.connect().use { conn ->
+                assertFailsWith<HostException> { conn.attachManagedSession(adoption, 56, 25, Sink()) }
+                assertEquals(1, confirmations, "only one viewer confirmation is attempted")
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (host.tmux("list-clients", "-t", "=${r.session}").second.isNotBlank()) {
+                    assertTrue(System.nanoTime() < deadline, "unacknowledged viewer stayed attached"); Thread.sleep(50)
+                }
+                assertEquals(r.panePid.toString(), host.tmux("display-message", "-p", "-t", r.paneId, "#{pane_pid}").second.trim())
+                assertEquals(0, host.tmux("has-session", "-t", "=${r.session}").first)
+            }
+        }
+    }
+
+    @Test fun `managed SSH attach cancelled during opening detaches only that viewer and retains the shell`() = runBlocking {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val r = adoption.receipt
+            host.connect().use { conn ->
+                val attaching = AtomicReference<Job>(); val attachCommand = AtomicReference<ShCommand>()
+                host.onCommand = { command, channel -> if (command.contains("NT-MANAGED-VIEW")) { attachCommand.set(channel); attaching.get().cancel() } }
+                val job = launch(Dispatchers.Default, start = CoroutineStart.LAZY) { conn.attachManagedSession(adoption, 56, 25, Sink()) }
+                attaching.set(job); job.start(); job.join(); assertTrue(job.isCancelled)
+                assertTrue(assertNotNull(attachCommand.get()).exited.await(10, TimeUnit.SECONDS))
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (host.tmux("list-clients", "-t", "=${r.session}").second.isNotBlank()) {
+                    assertTrue(System.nanoTime() < deadline, "cancelled viewer stays attached"); Thread.sleep(50)
+                }
+                assertEquals(0, host.tmux("has-session", "-t", "=${r.session}").first)
+            }
         }
     }
 

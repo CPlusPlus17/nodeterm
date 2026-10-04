@@ -129,6 +129,18 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         }
         internal val sshActionsBundleMeta: File by lazy { File(sshActionsBundle.path + ".meta.json") }
 
+        /** Actual managed host transaction with an explicit native-process recorder boundary. */
+        internal val managedSessionBundle: File by lazy {
+            val out = File(repoRoot, "android/protocol/build/interop/managed-session-fixture.cjs")
+            File(out.path + ".meta.json").delete()
+            val proc = ProcessBuilder(bundleCommand(out) + "android/protocol/src/test/interop/managed-session-fixture.ts")
+                .directory(repoRoot).redirectErrorStream(true).start()
+            val log = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "esbuild failed: $log" }
+            out
+        }
+        internal val managedSessionBundleMeta: File by lazy { File(managedSessionBundle.path + ".meta.json") }
+
         /**
          * esbuild's metafile for [bundle], which the bundler writes beside it: its `inputs` are the files
          * the bundle was built from, repo-relative and `/`-separated (audit A63, [WorkflowPathFilterTest]).
@@ -151,7 +163,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
             // The esbuild PACKAGE (its JS API), not the .bin shim the harness no longer runs.
             return node && File(repoRoot, "node_modules/esbuild/package.json").exists() &&
-                (mode == "ack-sweep" || mode == "ssh-actions" || (File(repoRoot, "node_modules/ws").exists() &&
+                (mode == "ack-sweep" || mode == "ssh-actions" || mode == "managed-session" || (File(repoRoot, "node_modules/ws").exists() &&
                     File(repoRoot, "node_modules/tweetnacl").exists()))
         }
 
@@ -171,6 +183,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
                 "ack-sweep" -> ackBundle
                 "project-launch" -> projectLaunchBundle
                 "ssh-actions" -> sshActionsBundle
+                "managed-session" -> managedSessionBundle
                 else -> bundle
             }
             val pb = ProcessBuilder("node", fixture.path, mode).directory(repoRoot)

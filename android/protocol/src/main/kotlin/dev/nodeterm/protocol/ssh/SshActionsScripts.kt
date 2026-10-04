@@ -40,6 +40,26 @@ internal object SshActionsScripts {
         """.trimIndent()
     }
 
+    /** Final attachment reads the same selected profile and a fresh unchanged service identity. */
+    fun adoptionGuard(userData: String, ad: SshActions.Advertisement): String {
+        require(validProfile(userData))
+        val identity = ad.raw.replace(Regex("\"updatedAt\":\\d+"), "\"updatedAt\":0")
+        return guards + "\n" + """
+            ud=${q(userData)}; root="${'$'}ud/ssh-actions"; directory="${'$'}root/${ad.instance}"
+            expected=${q(identity)}
+            nt_managed_ad() {
+              dir "${'$'}ud" 022 && dir "${'$'}root" 077 && dir "${'$'}directory" 077 && read_private "${'$'}root/advertisement.json" || return 1
+              identity=$(printf '%s' "${'$'}value" | sed 's/"updatedAt":[0-9][0-9]*/"updatedAt":0/')
+              [ "${'$'}identity" = "${'$'}expected" ] || return 1
+              stamp=$(printf '%s' "${'$'}value" | sed -n 's/.*"updatedAt":\([0-9][0-9]*\).*/\1/p')
+              case "${'$'}stamp" in ''|*[!0-9]*) return 1;; esac
+              clock || return 1
+              [ "${'$'}stamp" -le ${'$'}((now + 30000)) ] && [ "${'$'}stamp" -ge ${'$'}((now - 15000)) ]
+            }
+            nt_managed_ad || unavailable
+        """.trimIndent()
+    }
+
     /** Heartbeats may replace the descriptor; only immutable identity/capability fields are pinned. */
     fun submit(userData: String, ad: SshActions.Advertisement, nonce: String): String {
         require(validProfile(userData) && SshActions.UUID.matches(nonce))

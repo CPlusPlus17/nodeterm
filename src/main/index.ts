@@ -79,9 +79,12 @@ import {
 import type { RemoteLogExec } from '../core/board-log'
 import type { TranscriptPresence } from '../shared/types'
 import { boardLogRemotePath } from '../core/board-log'
-import { PtyManager } from '../core/pty-manager'
+import { PtyManager, resolveLocalSessionShell } from '../core/pty-manager'
 import { WorkspaceStore } from '../core/workspace-store'
 import { startSshActionsService, type SshActionsService } from '../core/ssh-actions'
+import { ManagedTerminals } from '../core/managed-terminals'
+import { createManagedTerminalPlanner } from '../core/managed-terminal-plan'
+import { findInLoginPath } from '../core/exec-path'
 import type { CardLabelEdit } from '../core/project-kanban-write'
 import { WorkspaceWatcher } from '../core/workspace-watcher'
 import { SettingsStore } from '../core/settings-store'
@@ -273,8 +276,8 @@ import { initClaudeAccounts } from './claude-accounts'
 import { initCodexAccounts } from './codex-accounts'
 import { claudeCliCaps, registerClaudeCliIpc, type ClaudeCliCaps } from '../core/claude-cli'
 import type { CodexCliCaps } from '../shared/types'
-import { registerGrokCliIpc } from '../core/grok-cli'
-import { refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
+import { grokCliCaps, registerGrokCliIpc } from '../core/grok-cli'
+import { codexIdentityCaps, refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
 import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc } from '../core/wallpaper'
 import {
@@ -4106,7 +4109,20 @@ app.whenReady().then(async () => {
   // Files are reachable only to the same OS user authenticated by SSH; never through hook bearers.
   // Seed persisted ownership before advertising even if the renderer has not loaded a canvas yet.
   await workspaceStore.load({ sideline: false })
-  sshActionsService = await startSshActionsService(corePlatform.userDataDir, workspaceStore, hostBridge.nodeActions)
+  const managedPlanner = createManagedTerminalPlanner({ store: workspaceStore,
+    userData: corePlatform.userDataDir, settings: () => settingsStore.get(), trust: projectTrustStore,
+    executable: findInLoginPath, sessionShell: resolveLocalSessionShell,
+    claudeCaps: claudeCliCaps, codexCaps: codexCliCaps, grokCaps: grokCliCaps,
+    codexIdentity: codexIdentityCaps })
+  const managedTerminals = ptyManager.supportsManagedCreation() ? new ManagedTerminals(
+    corePlatform.userDataDir, workspaceStore, {
+      supported: () => ptyManager.supportsManagedCreation(), ...managedPlanner,
+      create: (options, creationId, current) => ptyManager.createManagedHeadless(options, creationId, current),
+      verify: (receipt, current) => ptyManager.verifyManagedPane(receipt, current),
+      deliver: (receipt, command, current) => ptyManager.deliverManagedLaunch(receipt, command, current)
+    }) : undefined
+  sshActionsService = await startSshActionsService(corePlatform.userDataDir, workspaceStore,
+    hostBridge.nodeActions, true, managedTerminals)
   initRemoteHost(win, ptyManager, listProjectsOutput, hostBridge)
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class
   // CorePlatform client of this desktop after mutual SAS approval. Runs BESIDE initRemoteHost (the

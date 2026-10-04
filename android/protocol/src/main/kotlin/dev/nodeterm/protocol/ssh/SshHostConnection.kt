@@ -7,6 +7,12 @@ import dev.nodeterm.protocol.host.GitVerb
 import dev.nodeterm.protocol.host.HostCapabilities
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.ManagedSessionAdoption
+import dev.nodeterm.protocol.host.ManagedSessionChoice
+import dev.nodeterm.protocol.host.ManagedSessionReceipt
+import dev.nodeterm.protocol.host.ManagedSessionRefusedException
+import dev.nodeterm.protocol.host.ManagedSessions
+import dev.nodeterm.protocol.host.PreparedManagedSession
 import dev.nodeterm.protocol.host.HostUnansweredException
 import dev.nodeterm.protocol.host.LabelEditResult
 import dev.nodeterm.protocol.host.LegRouting
@@ -379,6 +385,66 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 } catch (e: Exception) {
                     runCatching { session.close() }
                     throw HostException("Couldn't open the terminal over SSH: ${e.message}")
+                }
+            }
+        } catch (e: CancellationException) {
+            opened?.let { s -> withContext(NonCancellable) { s.detach() } }
+            throw e
+        }
+    }
+
+    private fun ownsManagedChoice(listing: ActionListing, choice: ManagedSessionChoice): Boolean {
+        val candidates = listing.projects.filter { it.id == choice.projectId }
+        return candidates.size == 1 && candidates.single().let {
+            !it.closed && !it.drivenRemotely && it.sshTarget == null && it.cwd != null
+        }
+    }
+    override suspend fun prepareManagedSession(choice: ManagedSessionChoice): PreparedManagedSession = withContext(Dispatchers.IO) {
+        ensureListed()
+        val listing = actionListing
+        actions.prepareManaged(listing.userData, choice) { actionListing === listing && ownsManagedChoice(listing, choice) }
+    }
+    override suspend fun createManagedSession(request: PreparedManagedSession): ManagedSessionReceipt = withContext(Dispatchers.IO) {
+        ensureListed()
+        val listing = actionListing
+        if (listing.userData != request.profile) throw ManagedSessionRefusedException("The selected desktop profile changed before creation was sent.")
+        actions.createManaged(request) { actionListing === listing && ownsManagedChoice(listing, request.choice) }
+    }
+    override suspend fun attachManagedSession(adoption: ManagedSessionAdoption, cols: Int, rows: Int, sink: TerminalSink): TerminalStream {
+        var opened: SshStream? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                browseNow() // Re-resolve the committed node's unique profile ownership before adoption.
+                val listing = actionListing
+                val r = adoption.receipt
+                if (listing.userData != adoption.request.profile || !ownsManagedChoice(listing, adoption.request.choice) ||
+                    listing.projects.sumOf { p -> p.nodes.count { it.id == r.nodeId } } != 1 ||
+                    listing.projects.singleOrNull { it.id == r.projectId }?.nodes?.count { it.id == r.nodeId } != 1) {
+                    throw HostException("The created terminal's desktop profile or project is no longer available. Check it on the computer.")
+                }
+                val ad = actions.probe(listing.userData)
+                if (ad == null || ad.instance != r.hostInstance || ManagedSessions.METHOD !in ad.methods) {
+                    throw HostException("The desktop restarted or creation is no longer available. Check the computer before discarding this saved receipt; the session will not be created again.")
+                }
+                val (code, proof) = run(SshScripts.attachManaged(adoption, ad, attach = false), outputLimit = 256)
+                if (code != 0 || proof.trim() != "NT-MANAGED-VERIFIED") throw HostException("The host-created terminal changed or ended. Refresh the sessions list; no replacement was started.")
+                val channel = client.startSession()
+                try {
+                    channel.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
+                    val command = channel.exec("/bin/sh -c " + SshScripts.q(SshScripts.attachManaged(adoption, ad)))
+                    val deadline = WATCHDOG.schedule({ runCatching { channel.close() } }, 10, TimeUnit.SECONDS)
+                    try {
+                        val tty = ManagedViewHandshake.read(command.inputStream)
+                        val (attached, confirmed) = run(SshScripts.attachManaged(adoption, ad, attach = false, clientTty = tty), timeoutSec = 8, outputLimit = 256)
+                        if (attached != 0 || confirmed.trim() != "NT-MANAGED-VERIFIED") throw HostException("The created terminal could not confirm this SSH viewer. Check it on the computer; no replacement was started.")
+                    } finally { deadline.cancel(false) }
+                    // The host already created and launched this generation; this attach is warm.
+                    SshStream(channel, command, fresh = false, sink = sink, nodeId = r.nodeId, socket = r.socket).also {
+                        opened = it; it.start()
+                    }
+                } catch (e: Exception) {
+                    runCatching { channel.close() }
+                    throw HostException("Couldn't view the host-created terminal over SSH: ${e.message}")
                 }
             }
         } catch (e: CancellationException) {

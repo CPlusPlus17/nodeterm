@@ -2,6 +2,7 @@ package dev.nodeterm.protocol.ssh
 
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.TmuxNames
+import dev.nodeterm.protocol.host.ManagedSessionAdoption
 import dev.nodeterm.protocol.model.TerminalHistory
 
 /**
@@ -271,6 +272,62 @@ object SshScripts {
             TERM=xterm-256color; export TERM
             $LOCALE
             exec "${'$'}NT_TMUX" -u -L $s attach-session -t ${q("=$target")}
+        """.trimIndent()
+    }
+
+    /** View only the exact host-created pane. Missing/replaced generations are never recreated. */
+    internal fun attachManaged(adoption: ManagedSessionAdoption, ad: SshActions.Advertisement, attach: Boolean = true, clientTty: String? = null): String {
+        val r = adoption.receipt
+        require(ad.instance == r.hostInstance)
+        require(clientTty == null || !attach && ManagedViewHandshake.validTty(clientTty))
+        val format = "#{session_name}|#{session_created}|#{pane_id}|#{pane_pid}|#{NODETERM_MANAGED_CREATION_ID}"
+        val tuple = "${r.session}|${r.sessionCreated}|${r.paneId}|${r.panePid}|${r.creationId}"
+        val parts = listOf("#{==:#{session_name},${r.session}}", "#{==:#{session_created},${r.sessionCreated}}",
+            "#{==:#{pane_id},${r.paneId}}", "#{==:#{pane_pid},${r.panePid}}", "#{==:#{NODETERM_MANAGED_CREATION_ID},${r.creationId}}")
+        val condition = parts.reduce { a, b -> "#{&&:$a,$b}" }
+        return """
+            $PRELUDE
+            [ "${'$'}NT_UD" = ${q(adoption.request.profile)} ] || exit $NO_SESSION_EXIT
+            [ -n "${'$'}NT_TMUX" ] || exit $NO_SESSION_EXIT
+            ${SshActionsScripts.adoptionGuard(adoption.request.profile, ad)}
+            nt_tuple=${'$'}("${'$'}NT_TMUX" -L ${q(r.socket)} list-panes -s -t ${q("=" + r.session)} -F ${q(format)} 2>/dev/null) || exit $NO_SESSION_EXIT
+            [ "${'$'}nt_tuple" = ${q(tuple)} ] || exit $NO_SESSION_EXIT
+            case "${'$'}(uname -s 2>/dev/null)" in
+              Linux)
+                nt_stat=${'$'}(cat /proc/${r.panePid}/stat 2>/dev/null) || exit $NO_SESSION_EXIT
+                nt_boot=${'$'}(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || exit $NO_SESSION_EXIT
+                nt_fields=${'$'}{nt_stat##*) }; set -f; set -- ${'$'}nt_fields
+                [ "${'$'}#" -ge 20 ] || exit $NO_SESSION_EXIT
+                shift 19; nt_birth="linux:${'$'}nt_boot:${'$'}1"
+                ;;
+              Darwin)
+                nt_started=${'$'}(LC_ALL=C ps -o lstart= -p ${r.panePid} 2>/dev/null | awk '{${'$'}1=${'$'}1; print}')
+                [ -n "${'$'}nt_started" ] || exit $NO_SESSION_EXIT
+                nt_birth="darwin:${'$'}nt_started"
+                ;;
+              *) exit $NO_SESSION_EXIT ;;
+            esac
+            [ "${'$'}nt_birth" = ${q(r.paneBirth)} ] || exit $NO_SESSION_EXIT
+            nt_managed_ad || exit $NO_SESSION_EXIT
+            TERM=xterm-256color; export TERM
+            $LOCALE
+            ${if (attach) """
+            nt_tty=${'$'}(tty 2>/dev/null) || exit $NO_SESSION_EXIT
+            printf 'NT-MANAGED-VIEW %s\n' "${'$'}nt_tty"
+            """.trimIndent() else ""}
+            ${if (clientTty != null) """
+            nt_wait=0; nt_found=0
+            while [ "${'$'}nt_wait" -lt 30 ]; do
+              nt_clients=${'$'}("${'$'}NT_TMUX" -L ${q(r.socket)} list-clients -t ${q("=" + r.session)} -F '#{client_tty}|#{session_name}' 2>/dev/null) || exit $NO_SESSION_EXIT
+              if printf '%s\n' "${'$'}nt_clients" | ${"awk -v expected=" + q(clientTty + "|" + r.session)} 'BEGIN { found=0 } ${'$'}0 == expected { found=1 } END { exit !found }'; then nt_found=1; break; fi
+              nt_wait=${'$'}((nt_wait + 1)); sleep 0.1
+            done
+            [ "${'$'}nt_found" = 1 ] || exit $NO_SESSION_EXIT
+            """.trimIndent() else ""}
+            # -F has no asynchronous shell probe: the final tuple and attach share a tmux queue.
+            # An unknown command in the false branch fails closed, with no alternate target.
+            exec "${'$'}NT_TMUX" -u -L ${q(r.socket)} if-shell -F -t ${q(r.paneId)} ${q(condition)} \
+              ${q(if (attach) "attach-session -t " + q("=" + r.session) else "display-message -p NT-MANAGED-VERIFIED")} 'managed-session-receipt-mismatch'
         """.trimIndent()
     }
 

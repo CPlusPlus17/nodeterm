@@ -48,7 +48,9 @@ data class HostCapabilities(
     val nodeActions: Boolean,
     val registerNode: Boolean,
     /** Can answer a held hook-reply approval (docs/hook-reply-approvals.md) without keystrokes. */
-    val answerApprovals: Boolean
+    val answerApprovals: Boolean,
+    /** Host-owned cold canvas creation followed by receipt-only SSH adoption. Older hosts refuse. */
+    val managedCreate: Boolean = false
 )
 
 data class NewNode(val id: String, val title: String?, val agentId: String?, val accountId: String?)
@@ -96,6 +98,14 @@ interface HostConnection : Closeable {
     suspend fun setCardColumn(projectId: String, nodeId: String, columnId: String?): Boolean
     suspend fun editCardLabels(projectId: String, nodeId: String, edit: CardLabelEdit): LabelEditResult?
     suspend fun registerNode(projectId: String, node: NewNode): Boolean
+
+    suspend fun prepareManagedSession(choice: ManagedSessionChoice): PreparedManagedSession =
+        throw HostException("Managed session creation is unavailable on this host. Update nodeterm on the computer.")
+    suspend fun createManagedSession(request: PreparedManagedSession): ManagedSessionReceipt =
+        throw HostException("Managed session creation is unavailable on this host. Update nodeterm on the computer.")
+    /** Attach to exactly the confirmed host-created generation. This never creates or launches. */
+    suspend fun attachManagedSession(adoption: ManagedSessionAdoption, cols: Int, rows: Int, sink: TerminalSink): TerminalStream =
+        throw HostException("Connect over SSH to open this host-created terminal.")
 
     /**
      * Answer a held hook-reply approval (one that carries a `pendingId`): the relay's

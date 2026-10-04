@@ -6,10 +6,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { WorkspaceStore, type WorkspaceWriteFence } from './workspace-store'
 import { renameAtomicSync } from './fs-atomic'
 import { parseCardLabelEdit } from './project-kanban-write'
+import type { ManagedTerminals } from './managed-terminals'
 
 export const SSH_ACTIONS_VERSION = 1
 export const SSH_ACTIONS_MAX_BYTES = 128 * 1024
 export const SSH_ACTIONS_METHODS = ['projects.ensureBoard', 'projects.setCardColumn', 'projects.editCardLabels'] as const
+export const SSH_MANAGED_METHOD = 'sessions.createManagedV1'
 export const SSH_NODE_METHODS = ['node.wake', 'node.refresh', 'node.rename'] as const
 export const SSH_ACTIONS_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 export const SSH_ACTIONS_RETRY_MS = 10 * 60_000
@@ -21,7 +23,7 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
 const id = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !CONTROL.test(v)
 export interface SshActionsAdvertisement { version: 1; instance: string; pid: number; updatedAt: number; methods: string[]; remoteProjects: boolean }
 export interface SshActionRequest { version: 1; instance: string; nonce: string; issuedAt: number; method: string; params: Record<string, unknown> }
-export interface SshActionResponse { version: 1; instance: string; nonce: string; ok: boolean; result?: unknown; error?: string; uncertain?: boolean }
+export interface SshActionResponse { version: 1; instance: string; nonce: string; ok: boolean; result?: unknown; error?: string; uncertain?: boolean; recoveryNodeId?: string }
 export interface SshNodeActions {
   wake(nodeId: string): boolean | Promise<boolean>
   refresh(nodeId: string): boolean | Promise<boolean>
@@ -87,10 +89,10 @@ export class SshActionsService {
   private readonly ledger = new Map<string, { fingerprint: string; expiresAt: number; response: SshActionResponse }>()
   private readonly namespace = process.platform === 'linux' ? nodeFs.readlinkSync('/proc/self/ns/pid') : process.platform
   readonly methods: string[]
-  constructor(readonly userData: string, private readonly store: WorkspaceStore, private readonly nodeActions?: SshNodeActions, private readonly allowRemoteProjects = true) {
+  constructor(readonly userData: string, private readonly store: WorkspaceStore, private readonly nodeActions?: SshNodeActions, private readonly allowRemoteProjects = true, private readonly managedTerminals?: ManagedTerminals) {
     this.root = path.join(userData, 'ssh-actions')
     this.directory = path.join(this.root, this.instance)
-    this.methods = [...SSH_ACTIONS_METHODS, ...(nodeActions ? SSH_NODE_METHODS : [])]
+    this.methods = [...SSH_ACTIONS_METHODS, ...(nodeActions ? SSH_NODE_METHODS : []), ...(managedTerminals?.supported() ? [SSH_MANAGED_METHOD] : [])]
   }
   private advertisement(): SshActionsAdvertisement { return { version: 1, instance: this.instance, pid: process.pid, updatedAt: Date.now(), methods: this.methods, remoteProjects: this.allowRemoteProjects } }
   private syncFile(file: string): Record<string, unknown> {
@@ -262,13 +264,13 @@ export class SshActionsService {
       } else {
         if (this.ledger.size >= MAX_LEDGER) throw new Error('SSH actions are busy; wait for earlier requests to expire')
         try { response = { version: 1, instance: this.instance, nonce, ok: true, result: await this.dispatch(r) } }
-        catch (e) { response = { version: 1, instance: this.instance, nonce, ok: false, error: (e as Error).message, ...((e as { uncertain?: boolean }).uncertain ? { uncertain: true } : {}) } }
+        catch (e) { response = { version: 1, instance: this.instance, nonce, ok: false, error: (e as Error).message, ...((e as { uncertain?: boolean }).uncertain ? { uncertain: true } : {}), ...((e as { recoveryNodeId?: string }).recoveryNodeId ? { recoveryNodeId: (e as { recoveryNodeId: string }).recoveryNodeId } : {}) } }
         if (Buffer.byteLength(JSON.stringify(response)) > SSH_ACTIONS_MAX_BYTES) {
           response = { version: 1, instance: this.instance, nonce, ok: false, uncertain: true, error: 'SSH action response too large; check the computer before repeating it' }
         }
         this.ledger.set(nonce, { fingerprint, expiresAt: r.issuedAt + SSH_ACTIONS_RETRY_MS, response })
       }
-    } catch (e) { response = { version: 1, instance: this.instance, nonce, ok: false, error: (e as Error).message, ...((e as { uncertain?: boolean }).uncertain ? { uncertain: true } : {}) } }
+    } catch (e) { response = { version: 1, instance: this.instance, nonce, ok: false, error: (e as Error).message, ...((e as { uncertain?: boolean }).uncertain ? { uncertain: true } : {}), ...((e as { recoveryNodeId?: string }).recoveryNodeId ? { recoveryNodeId: (e as { recoveryNodeId: string }).recoveryNodeId } : {}) } }
     await privateDir(this.directory)
     await publish(path.join(this.directory, nonce + '.response'), response, this.current)
     // Only a successfully read, regular owned request can be consumed. Invalid/symlink/FIFO
@@ -295,6 +297,7 @@ export class SshActionsService {
   private async dispatch(r: SshActionRequest): Promise<unknown> {
     if (!this.current() || !this.methods.includes(r.method)) throw new Error('SSH action is unavailable on this instance')
     const p = r.params
+    if (r.method === SSH_MANAGED_METHOD) return this.managedTerminals!.create(p, this.instance, this.current)
     if (r.method.startsWith('projects.')) {
       const projectId = this.project(p.projectId)
       const fence: WorkspaceWriteFence = { current: this.current }
@@ -330,11 +333,11 @@ export class SshActionsService {
 }
 
 /** Unavailable on Windows/unsafe profiles/another owner: leave SSH capabilities unadvertised. */
-export async function startSshActionsService(userData: string, store: WorkspaceStore, nodeActions?: SshNodeActions, allowRemoteProjects = true): Promise<SshActionsService | undefined> {
+export async function startSshActionsService(userData: string, store: WorkspaceStore, nodeActions?: SshNodeActions, allowRemoteProjects = true, managedTerminals?: ManagedTerminals): Promise<SshActionsService | undefined> {
   if (process.platform === 'win32') return undefined
   let service: SshActionsService | undefined
   try {
-    service = new SshActionsService(userData, store, nodeActions, allowRemoteProjects)
+    service = new SshActionsService(userData, store, nodeActions, allowRemoteProjects, managedTerminals)
     await service.start()
     return service
   } catch { await service?.stop().catch(() => {}); return undefined }

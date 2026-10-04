@@ -17,8 +17,13 @@ import { initPlatform } from '../core/platform'
 import { SettingsStore } from '../core/settings-store'
 import { WorkspaceStore } from '../core/workspace-store'
 import { startSshActionsService } from '../core/ssh-actions'
+import { ManagedTerminals } from '../core/managed-terminals'
+import { createManagedTerminalPlanner } from '../core/managed-terminal-plan'
+import { findInLoginPath } from '../core/exec-path'
+import { codexIdentityCaps } from '../core/codex-identity-caps'
+import { grokCliCaps } from '../core/grok-cli'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
-import { PtyManager } from '../core/pty-manager'
+import { PtyManager, resolveLocalSessionShell } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
 import { registerGitHubIntegration } from '../core/github/integration'
 import { runGitHubCliCommand } from '../core/github/credentials'
@@ -810,8 +815,22 @@ export async function startServer(
   })
 
   // Server Edition has no standing desktop renderer nudge consumer or SSH ControlMaster.
-  // Serve local Board writes through the shared save chain; leave node and remote-project actions off.
-  const sshActionsService = await startSshActionsService(platform.userDataDir, workspaceStore, undefined, false)
+  // Serve local Board writes and host-owned tmux creation through the shared save chain;
+  // leave renderer nudges and remote-project actions off.
+  const managedPlanner = createManagedTerminalPlanner({ store: workspaceStore,
+    userData: platform.userDataDir, settings: () => settingsStore.get(), trust: projectTrustStore,
+    executable: findInLoginPath, sessionShell: resolveLocalSessionShell,
+    claudeCaps: claudeCliCaps, codexCaps: codexCliCaps, grokCaps: grokCliCaps,
+    codexIdentity: codexIdentityCaps })
+  const managedTerminals = ptyManager.supportsManagedCreation() ? new ManagedTerminals(
+    platform.userDataDir, workspaceStore, {
+      supported: () => ptyManager.supportsManagedCreation(), ...managedPlanner,
+      create: (options, creationId, current) => ptyManager.createManagedHeadless(options, creationId, current),
+      verify: (receipt, current) => ptyManager.verifyManagedPane(receipt, current),
+      deliver: (receipt, command, current) => ptyManager.deliverManagedLaunch(receipt, command, current)
+    }) : undefined
+  const sshActionsService = await startSshActionsService(platform.userDataDir, workspaceStore,
+    undefined, false, managedTerminals)
 
   // Headless notification host: every core service above (incl. the loopback hook server, which
   // is its own listener and MUST run) is booted, but we bind NO public HTTP/WS listener — no

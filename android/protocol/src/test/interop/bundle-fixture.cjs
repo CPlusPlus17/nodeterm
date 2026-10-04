@@ -36,6 +36,7 @@ const esbuild = require(require.resolve('esbuild', { paths: [root] }))
 // and login-PATH probe; virtualize os.homedir() so node tokens/accounts cannot touch a real profile.
 // Settings/trust/workspace/host handlers are the production implementations, never aliases.
 const projectLaunch = entry === 'android/protocol/src/test/interop/project-launch-fixture.ts'
+const managedSession = entry === 'android/protocol/src/test/interop/managed-session-fixture.ts'
 const launchSeams = {
   'os': 'launch-os.ts', 'node:os': 'launch-os.ts',
   'node-pty': 'launch-native.ts'
@@ -48,7 +49,9 @@ const launchPlugin = {
       const managerPath = args.importer === path.join(root, 'src/core/pty-manager.ts') ||
         args.importer === path.join(root, 'src/core/tmux-hint.ts')
       const managerBoundary = managerPath && ['./exec-path', './tmux-hint', 'child_process'].includes(args.path)
-      const leaf = launchSeams[args.path] || (managerBoundary ? 'launch-native.ts' : null)
+      const nativeLeaf = managedSession ? 'managed-native.ts' : 'launch-native.ts'
+      const leaf = args.path === 'node-pty' ? nativeLeaf :
+        launchSeams[args.path] || (managerBoundary ? nativeLeaf : null)
       if (leaf) return { path: path.join(root, 'android/protocol/src/test/interop', leaf) }
     })
   }
@@ -68,7 +71,7 @@ esbuild
       '@renderer': './src/renderer'
     },
     external: ['ws'],
-    plugins: projectLaunch ? [launchPlugin] : [],
+    plugins: projectLaunch || managedSession ? [launchPlugin] : [],
     metafile: true,
     logLevel: 'warning'
   })

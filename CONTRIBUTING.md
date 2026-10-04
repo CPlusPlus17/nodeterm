@@ -209,7 +209,15 @@ lane unaffected.
   Direct SSH Git stays typed and physically jailed; remote rejection text never authorizes a
   second push. SSH Board/node actions use the selected live profile's private typed service and
   actual WorkspaceStore save queue. Missing receipts are uncertain; Server has no node nudges,
-  and canvas New is not a metadata-only write. See CLAUDE.md for the deeper invariants.
+  and canvas New is not a metadata-only write. Managed SSH creation is one host-owned transaction:
+  resolve an open owned local project, valid local account and actual CLI capabilities; derive
+  commands/env/shell from trusted host settings. The request supplies identifiers and display/size
+  choices only. Account absence means System; send a displayed default's id to freeze that choice.
+  Expanded launch text stays host-private, outside the git-shared recovery intent.
+  Revalidate across awaits, require exclusive exact-pane proof, and never replay an
+  uncertain launch. Advertise this method only after workspace load with supported tmux, on both
+  Desktop and Server. Update Android interop and flag the additive method/receipt for iOS.
+  See CLAUDE.md for the deeper invariants.
 
 - **Branch labels describe a checkout on one core.** Share existing status reads through
   `renderer/state/gitBranches.ts`; do not cache a branch forever by project id or copy a project
