@@ -32,6 +32,14 @@ class DeviceChecklistDocsTest {
     private val readme = read(File(InteropHarness.repoRoot, "android/README.md"))
 
     @Test
+    fun `continuation findings with three digits retain their full identity`() {
+        assertEquals(setOf("A09", "A100", "A108", "A1000"),
+            findingIds("A09 A100 A108 A1000 A9 AA100 A100suffix"))
+        assertEquals(listOf("A09", "A100", "A108"),
+            auditHeadingIds("## A09\n## A100\n## A108\n### A109\n## A9\n## A100suffix"))
+    }
+
+    @Test
     fun `the device checklist is numbered from 1 and every item names a finding the audit has`() {
         val items = checklistItems()
         assertTrue(
@@ -189,12 +197,14 @@ class DeviceChecklistDocsTest {
     }
 
     private fun auditIds(): Set<String> =
-        read(File(InteropHarness.repoRoot, "docs/android-audit-2026-09.md")).lines()
-            .mapNotNull { Regex("""^## (A\d{2})$""").find(it)?.groupValues?.get(1) }
+        auditHeadingIds(read(File(InteropHarness.repoRoot, "docs/android-audit-2026-09.md")))
             .toSet()
             .also { assertTrue(it.size >= 70, "found only ${it.size} findings in the audit; has its heading format changed?") }
 
-    private fun findingIds(text: String): Set<String> = Regex("""\bA\d{2}\b""").findAll(text).map { it.value }.toSet()
+    private fun auditHeadingIds(text: String): List<String> = text.lines()
+        .mapNotNull { Regex("""^## (A\d{2,})$""").find(it)?.groupValues?.get(1) }
+
+    private fun findingIds(text: String): Set<String> = Regex("""\bA\d{2,}\b""").findAll(text).map { it.value }.toSet()
 
     private fun read(file: File) = file.readText().replace("\r\n", "\n")
 
