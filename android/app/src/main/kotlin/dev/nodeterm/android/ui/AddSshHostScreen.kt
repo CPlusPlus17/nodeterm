@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
@@ -52,6 +53,9 @@ import dev.nodeterm.android.Route
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.ssh.ManualHost
 import dev.nodeterm.protocol.ssh.SshProfilePath
+import dev.nodeterm.protocol.ssh.SshPasswordBootstrap
+import androidx.lifecycle.compose.LifecycleStartEffect
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -59,10 +63,9 @@ import kotlinx.coroutines.withContext
 /**
  * "Add SSH server" (audit A27, part b): a computer with no pairing code — a headless Server Edition,
  * which has no pairing service, or a macOS / Linux computer the phone reaches only over SSH — added by
- * its address. The phone cannot put its own key on the computer before it can log in, so the user adds
- * the phone's key line there first; then the first connect pins the SSH host key, only once the
- * computer has accepted that key, and shows it. The rules are [ManualHost]'s (protocol, tested); this
- * screen only lays them out.
+ * its address. The user can add the public key manually, or confirm the computer's SSH fingerprint
+ * before a one-time password login installs it. Both paths save a host only after the computer
+ * accepts the phone's retained key. Protocol rules live in [ManualHost] and [SshPasswordBootstrap].
  *
  * Such a computer is reached over SSH only: no relay, no push.
  */
@@ -83,24 +86,92 @@ fun AddSshHostScreen(nav: Navigator) {
     var invalid by remember { mutableStateOf<ManualHost.Check.Invalid?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Passwords and fingerprint approval belong only to this visible setup attempt.
+    var password by remember { mutableStateOf("") }
+    var inspection by remember { mutableStateOf<SshPasswordBootstrap.Inspection?>(null) }
+    var confirmed by remember { mutableStateOf<SshPasswordBootstrap.ConfirmedHost?>(null) }
+    var bootstrapJob by remember { mutableStateOf<Job?>(null) }
     val keyLine = remember { ManualHost.authorizedKeysLine(graph.sshIdentity) }
     val install = remember(keyLine) { ManualHost.installCommand(keyLine) }
 
-    fun connect() {
-        profileError = profile.takeIf { it.isNotBlank() }?.let(SshProfilePath::error)
-        if (profileError != null) return
-        val profilePath = SshProfilePath.fromInput(profile)
+    fun resetBootstrap() {
+        password = ""
+        inspection = null
+        confirmed = null
+    }
+
+    LifecycleStartEffect(Unit) {
+        onStopOrDispose {
+            resetBootstrap()
+            bootstrapJob?.cancel()
+        }
+    }
+
+    fun checkedAddress(): ManualHost.Address? {
         val checked = ManualHost.check(address, port, user, name)
-        if (checked is ManualHost.Check.Invalid) {
-            invalid = checked
-            return
+        invalid = checked as? ManualHost.Check.Invalid
+        if (checked !is ManualHost.Check.Ok) return null
+        profileError = profile.takeIf { it.isNotBlank() }?.let(SshProfilePath::error)
+        if (profileError != null) return null
+        ManualHost.existing(graph.hosts.hosts.value, checked.address)?.let {
+            error = "${checked.address.user}@${checked.address.host} is already in your list, as ${it.name}."
+            return null
         }
-        val ok = (checked as ManualHost.Check.Ok).address
-        invalid = null
-        ManualHost.existing(graph.hosts.hosts.value, ok)?.let {
-            error = "${ok.user}@${ok.host} is already in your list, as ${it.name}."
-            return
+        return checked.address
+    }
+
+    fun inspectHost() {
+        val target = checkedAddress() ?: return
+        resetBootstrap()
+        busy = true
+        error = null
+        bootstrapJob = scope.launch {
+            try {
+                inspection = SshPasswordBootstrap.inspect(target)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "Couldn't inspect this computer's SSH host key."
+            } finally {
+                busy = false
+                bootstrapJob = null
+            }
         }
+    }
+
+    fun installWithPassword() {
+        val target = checkedAddress() ?: return
+        val approved = confirmed ?: return
+        if (inspection?.address != target || password.isEmpty()) return
+        val profilePath = SshProfilePath.fromInput(profile)
+        val secret = password.toCharArray()
+        password = ""
+        busy = true
+        error = null
+        bootstrapJob = scope.launch {
+            try {
+                val record = SshPasswordBootstrap.install(approved, graph.sshIdentity, secret)
+                    .copy(sshProfilePath = profilePath)
+                val already = graph.hosts.addManual(record)
+                if (already != null) error = "${target.user}@${target.host} is already in your list, as ${already.name}."
+                else addedId = record.id
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "Couldn't finish SSH key setup."
+            } finally {
+                secret.fill('\u0000')
+                resetBootstrap()
+                busy = false
+                bootstrapJob = null
+            }
+        }
+    }
+
+    fun connect() {
+        resetBootstrap()
+        val ok = checkedAddress() ?: return
+        val profilePath = SshProfilePath.fromInput(profile)
         busy = true
         error = null
         scope.launch {
@@ -147,7 +218,7 @@ fun AddSshHostScreen(nav: Navigator) {
             )
             OutlinedTextField(
                 value = address,
-                onValueChange = { address = it },
+                onValueChange = { resetBootstrap(); address = it },
                 label = { Text("Address") },
                 placeholder = { Text("devbox.local or 192.168.1.20") },
                 isError = invalid?.host != null,
@@ -160,7 +231,7 @@ fun AddSshHostScreen(nav: Navigator) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = user,
-                    onValueChange = { user = it },
+                    onValueChange = { resetBootstrap(); user = it },
                     label = { Text("User") },
                     isError = invalid?.user != null,
                     supportingText = invalid?.user?.let { e -> { Text(e) } },
@@ -170,7 +241,7 @@ fun AddSshHostScreen(nav: Navigator) {
                 )
                 OutlinedTextField(
                     value = port,
-                    onValueChange = { port = it },
+                    onValueChange = { resetBootstrap(); port = it },
                     label = { Text("Port") },
                     isError = invalid?.port != null,
                     supportingText = invalid?.port?.let { e -> { Text(e) } },
@@ -182,16 +253,15 @@ fun AddSshHostScreen(nav: Navigator) {
             }
             OutlinedTextField(
                 value = name,
-                onValueChange = { name = it },
+                onValueChange = { resetBootstrap(); name = it },
                 label = { Text("Name (optional)") },
                 singleLine = true,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth()
             )
-
             OutlinedTextField(
                 value = profile,
-                onValueChange = { profile = it },
+                onValueChange = { resetBootstrap(); profile = it },
                 label = { Text("Profile folder (optional)") },
                 supportingText = { Text(profileError ?: "Full path on the computer, for a custom Server data directory. Leave blank for automatic discovery.") },
                 isError = profileError != null,
@@ -203,7 +273,7 @@ fun AddSshHostScreen(nav: Navigator) {
             HorizontalDivider()
             Text("1. Let this phone in", style = MaterialTheme.typography.titleMedium)
             Text(
-                "The phone can't put its key on the computer before it can log in, so add this line to " +
+                "To set up key access manually, add this line to " +
                     "~/.ssh/authorized_keys of that user on the computer:"
             )
             Monospace(keyLine)
@@ -214,6 +284,34 @@ fun AddSshHostScreen(nav: Navigator) {
             Text("Or run this in a terminal on the computer, logged in as that user. Running it twice adds nothing:")
             Monospace(install)
             OutlinedButton(onClick = { copy(context, install, "Copied the command") }) { Text("Copy the command") }
+
+            Text("Or install the phone's key using this SSH user's password. The password is used only for setup; later connections use the phone's key.")
+            if (inspection == null) {
+                OutlinedButton(onClick = { inspectHost() }, enabled = !busy) { Text("Set up with a password") }
+            } else {
+                val candidate = inspection!!
+                Text("Compare this SSH host fingerprint with the computer before entering its password:")
+                Monospace(candidate.fingerprint)
+                Monospace(ManualHost.FINGERPRINT_CHECK_COMMAND)
+                if (confirmed == null) {
+                    OutlinedButton(onClick = { confirmed = candidate.confirm(candidate.fingerprint) }, enabled = !busy) {
+                        Text("I compared it — it matches")
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("SSH password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(onClick = { installWithPassword() }, enabled = !busy && password.isNotEmpty()) { Text("Install key and connect") }
+                }
+                OutlinedButton(onClick = { resetBootstrap() }, enabled = !busy) { Text("Cancel password setup") }
+            }
 
             HorizontalDivider()
             Text("2. Connect", style = MaterialTheme.typography.titleMedium)

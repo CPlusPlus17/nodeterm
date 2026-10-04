@@ -286,8 +286,12 @@ nodeterm of its own to show a code, so neither can be paired. "Add SSH server" (
 list, its empty state and the Pair screen) adds one by host, port (22) and user; the rules are
 `ManualHost` (`android/protocol`, `ManualHostTest`) and the screen only lays them out:
 
-- **The key.** The phone cannot put its own key on the computer before it can log in, and it never
-  asks for or keeps a password. The screen shows the phone's Ed25519 public key line
+- **The key.** Set up manually using the public key below, or choose **Set up with a password**
+  (A120). Password setup first inspects the SSH host fingerprint without authenticating. Compare it
+  on the computer, confirm the match, then enter the SSH user's password. The app installs only its
+  retained public key and proves a fresh key-only login against that fingerprint before saving.
+  Passwords stay in memory for this attempt and are cleared from the screen on leaving/backgrounding;
+  they are never saved or used for normal connections. The manual path shows the phone's Ed25519 public key line
   (`ssh-ed25519 … nodeterm-android`, the same key every pairing installs; copy or share it) to add
   to `~/.ssh/authorized_keys` of that user, and a one-line command that does it: `sh -c '…'`, so a
   bash, zsh or fish prompt hands it to `sh` as is (only `/bin/sh` itself is tested), which adds the
@@ -2236,8 +2240,9 @@ the wider relay action matrix remain device checks.
   It gets no push either: the grant an iOS phone drops in
   such a host's `~/.nodeterm/push-grants` and the backend's `/v1/push` fan-out are APNs-only (see
   Push), and Android drops none, so the phone polls it like any other computer; docs/SERVER.md's
-  "full push / Live-Activity coverage" is iOS's. Not built: a one-time password login to install the key (the user adds the
-  line), the Server Edition's `install-server.sh` one-liner offered per connection, and Windows (the
+  "full push / Live-Activity coverage" is iOS's. A120 adds optional one-time password setup after human
+  fingerprint confirmation. Keyboard-interactive/MFA, the Server Edition's `install-server.sh`
+  one-liner offered per connection, and Windows remain unsupported (the
   browse is POSIX `sh` + tmux, as for a paired computer). The host key is trust on first use, as for
   a paired computer, but with no pairing LAN behind the first connect: compare the fingerprint the
   screen shows. A119 adds an explicit saved profile folder for a Server Edition's custom `--data-dir`;
@@ -2656,3 +2661,34 @@ the latest prepared APK at this checkpoint and does not contain A119. A later be
 iOS implication for @eneskirca: offer an explicit saved SSH profile choice consistently for discovery
 and managed attachment. No host verb or pairing payload changed. A25/A93 and A68 remain open;
 no PR is opened.
+
+## A120: one-time password SSH setup (2026-10-04)
+
+Add SSH server keeps its public-key Copy/Share/manual command and adds **Set up with a password**.
+The app inspects the SSH host key without authentication. Compare its fingerprint on the computer,
+then explicitly confirm **I compared it — it matches** before entering the password. Password login
+rechecks that exact key, installs only the retained phone public key, closes the setup connection,
+and proves a separate pinned key-only login before saving the host. A changed key, refused password,
+unsafe key-file target, uncertain command or failed key verification never saves a computer.
+No setup write is automatically replayed. A lost acknowledgement may leave the public key installed;
+use the normal key connection or check authorized_keys on the computer before starting a new attempt.
+
+The password is memory-only, absent from saved state/preferences, shell text and diagnostics. Leaving
+or backgrounding setup cancels owned sockets and clears its password/fingerprint approval. JVM/library
+transient copies cannot all be erased. Existing keys and restrictions are preserved; commented or
+trailing key-like text is not an installed declaration. Symlink, nonregular, foreign-owned and hardlinked
+targets refuse. These are bounded pathname preflight checks, not descriptor-atomic protection against
+concurrent same-user replacement. Keyboard-interactive/MFA, password changes and Server installation
+remain unsupported. Host pins, pairing/relay credentials and ordinary key-based connections retain
+existing behavior. iOS implication for @eneskirca: confirm fingerprints before password auth and verify
+fresh retained-key auth before saving; no host-service verb or pairing payload changed.
+
+Seventeen actual protocol methods pass against a private MINA SSH server and private POSIX HOME.
+They cover fingerprint/auth order, other/restricted keys, uncertainty/no replay, both-stream output
+limits, own timeout versus external cancellation and socket closure. Offline app compilation passes.
+Seven isolated compiled semantic variants fail assertions, with 17 passing control/restored
+methods and exact integrated source hashes. Private proof: `.nodeterm/android-ssh-setup-2026-10-04/password-final/`.
+The full required gate verifies actual Gradle/JUnit method registration too. This is source/fixture proof;
+actual Android setup UX and OpenSSH/macOS runtime checks remain pending. Phone testing stays paused,
+with beta 10/code 11 last installed and **10 Pass / 22 Partial / 32 Pending**. Beta 15 excludes A119/A120;
+a new beta is needed. A25/A93 require the hosted-backend maintainers; A68 stays deferred and no PR opens.

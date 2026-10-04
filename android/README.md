@@ -375,7 +375,7 @@ tested where the layer allows, and the numbered
 | | Android | Notes |
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
-| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: reachable by LAN/VPN, with no hosted push or relay fallback. Direct Git works on admitted local/driven folders independently of the actions service. A live selected-profile service supplies owned Board writes on Desktop/Server and delivery-only node nudges on Desktop. Current enabled local Linux/macOS tmux hosts also provide managed canvas New over SSH (A111); older hosts need the relay. Phone-owned plain SSH New is separate. Optional saved SSH profile folder supports custom Server data directories (A119). No password login, no Windows |
+| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: reachable by LAN/VPN, with no hosted push or relay fallback. Direct Git works on admitted local/driven folders independently of the actions service. A live selected-profile service supplies owned Board writes on Desktop/Server and delivery-only node nudges on Desktop. Current enabled local Linux/macOS tmux hosts also provide managed canvas New over SSH (A111); older hosts need the relay. Phone-owned plain SSH New is separate. Optional saved SSH profile folder supports custom Server data directories (A119). Optional one-time password setup confirms the SSH fingerprint before authentication, installs only the retained public key and verifies a fresh key-only login (A120). No keyboard-interactive/MFA or Windows |
 | Direct connection on your network (SSH + tmux) | ✓ | Host key checked against the keys the computer names at pairing, then pinned (trust on first use with a desktop that names none); the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body), also when remote access is turned on only after pairing; an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
@@ -866,7 +866,8 @@ iOS app does receive the detail, in the push the desktop sends.
   command). A changed key stops it; forget it and add it again only if you know why it changed. To
   revoke the phone there, remove the line ending in `nodeterm-android` from that user's
   `~/.ssh/authorized_keys` (the same key every pairing installs, under another comment). The phone
-  never asks for or keeps an SSH password.
+  can use a password once for explicit key setup, after you confirm the displayed host fingerprint
+  (A120). It never saves that password; ordinary connections use the retained phone key.
 - No cleartext HTTP anywhere; the LAN `/pair` POST runs over a raw socket and is sealed to the host
   key from the QR. Its answer is read as untrusted: at most 64 KiB, within 45 seconds.
 
@@ -1144,3 +1145,34 @@ the latest prepared APK at this checkpoint and does not contain A119. A later be
 iOS implication for @eneskirca: offer an explicit saved SSH profile choice consistently for discovery
 and managed attachment. No host verb or pairing payload changed. A25/A93 and A68 remain open;
 no PR is opened.
+
+## A120: one-time password SSH setup (2026-10-04)
+
+Add SSH server keeps its public-key Copy/Share/manual command and adds **Set up with a password**.
+The app inspects the SSH host key without authentication. Compare its fingerprint on the computer,
+then explicitly confirm **I compared it — it matches** before entering the password. Password login
+rechecks that exact key, installs only the retained phone public key, closes the setup connection,
+and proves a separate pinned key-only login before saving the host. A changed key, refused password,
+unsafe key-file target, uncertain command or failed key verification never saves a computer.
+No setup write is automatically replayed. A lost acknowledgement may leave the public key installed;
+use the normal key connection or check authorized_keys on the computer before starting a new attempt.
+
+The password is memory-only, absent from saved state/preferences, shell text and diagnostics. Leaving
+or backgrounding setup cancels owned sockets and clears its password/fingerprint approval. JVM/library
+transient copies cannot all be erased. Existing keys and restrictions are preserved; commented or
+trailing key-like text is not an installed declaration. Symlink, nonregular, foreign-owned and hardlinked
+targets refuse. These are bounded pathname preflight checks, not descriptor-atomic protection against
+concurrent same-user replacement. Keyboard-interactive/MFA, password changes and Server installation
+remain unsupported. Host pins, pairing/relay credentials and ordinary key-based connections retain
+existing behavior. iOS implication for @eneskirca: confirm fingerprints before password auth and verify
+fresh retained-key auth before saving; no host-service verb or pairing payload changed.
+
+Seventeen actual protocol methods pass against a private MINA SSH server and private POSIX HOME.
+They cover fingerprint/auth order, other/restricted keys, uncertainty/no replay, both-stream output
+limits, own timeout versus external cancellation and socket closure. Offline app compilation passes.
+Seven isolated compiled semantic variants fail assertions, with 17 passing control/restored
+methods and exact integrated source hashes. Private proof: `.nodeterm/android-ssh-setup-2026-10-04/password-final/`.
+The full required gate verifies actual Gradle/JUnit method registration too. This is source/fixture proof;
+actual Android setup UX and OpenSSH/macOS runtime checks remain pending. Phone testing stays paused,
+with beta 10/code 11 last installed and **10 Pass / 22 Partial / 32 Pending**. Beta 15 excludes A119/A120;
+a new beta is needed. A25/A93 require the hosted-backend maintainers; A68 stays deferred and no PR opens.

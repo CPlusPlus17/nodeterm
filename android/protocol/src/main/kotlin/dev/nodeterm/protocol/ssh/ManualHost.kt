@@ -21,7 +21,8 @@ import javax.net.SocketFactory
  *  - **The key.** Pairing has the desktop install the phone's key; here nothing on the computer acts
  *    for the phone, and the phone cannot install its key before it can log in. So the user adds the
  *    line [authorizedKeysLine] to `~/.ssh/authorized_keys` themselves ([installCommand] does it in one
- *    line, idempotently). There is no password login: the phone never asks for or keeps one.
+ *    line, idempotently). [SshPasswordBootstrap] also offers memory-only password enrollment after
+ *    explicit host fingerprint confirmation. Ordinary connections use the retained phone key.
  *  - **The host key.** No QR carries anything to check it against, so it is trust on first use, by
  *    A49's rule: [connectFirst] pins the key of the first server that ACCEPTS this phone's key, never
  *    of one that merely answered, and the record is made only then. The app shows the pin with
