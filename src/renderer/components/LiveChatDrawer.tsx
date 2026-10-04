@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { WatchChatMessage, WatchLinkView } from '@shared/watch-link-types'
 import { stripBidiControls } from '@shared/watch-link-types'
 import { CHAT_TEXT_MAX } from '@shared/watch-link/protocol'
 import { isTopDialog, nextDialogId, popDialog, pushDialog } from './dialog-stack'
-import { ControlHold, ControlSection, hasChat, kickViewer } from './LiveLinkControls'
+import { ControlHold, ControlSection, hasChat, kickViewer, type ControlHoldKind } from './LiveLinkControls'
 import { IconClose, IconPin } from './icons'
 import { CHAT_NOT_SENT_MESSAGE, KICK_NOTE, ROLE_NAME, statusLine, viewerName, waitingViewers } from '../lib/liveLink'
 import { chatClock, chatNameColor, nearBottom, newMessagesLabel } from '../lib/liveChatLook'
-import { chatLinkOptionLabels, LIVE_CHAT_DRAWER_ATTR, pickChatLink } from '../lib/liveChatPin'
+import { chatLinkOptionLabels, inLiveChatDrawer, LIVE_CHAT_DRAWER_ATTR, pickChatLink } from '../lib/liveChatPin'
 import { useLinkThread, useWatchLinks } from '../state/watchLinks'
 
 const EMPTY_CHAT: WatchChatMessage[] = []
@@ -48,26 +48,43 @@ function linkTitle(l: Pick<WatchLinkView, 'title'>): string {
  * modal keep their keys.
  */
 export function LiveChatDrawer(p: LiveChatDrawerProps): React.JSX.Element {
-  const { pinned, raised, onClose } = p
+  const { pinned, raised, onClose, onPickLink } = p
   const links = useWatchLinks((s) => s.links)
-  const shownId = pickChatLink(links, p.linkId)
-  const link = shownId === null ? null : (links.find((l) => l.linkId === shownId) ?? null)
 
-  // A new Control password on its way to being shown holds the drawer open (`ControlHold`): its
-  // plaintext exists nowhere else once core takes it. A counter, not state — nothing renders from it.
-  const holds = useRef(0)
-  const hold = useCallback((): (() => void) => {
-    holds.current++
+  // A new Control password holds the drawer (`ControlHold`) — its plaintext exists nowhere else once
+  // core takes it. `saves` counts the saves in flight: they keep the drawer from closing AND on its
+  // link. `pins` counts every hold (a save, or a new password on screen until Done): they keep the
+  // drawer on its link, whatever an Open chat for another link or the fallback says meanwhile. The
+  // counters are refs (read in handlers); the held link is state, because it decides what renders.
+  const saves = useRef(0)
+  const pins = useRef(0)
+  const [heldLink, setHeldLink] = useState<string | null>(null)
+  const wanted = pickChatLink(links, p.linkId)
+  const shownId = heldLink !== null && links.some((l) => l.linkId === heldLink) ? heldLink : wanted
+  const link = shownId === null ? null : (links.find((l) => l.linkId === shownId) ?? null)
+  const shownRef = useRef(shownId)
+  shownRef.current = shownId
+  const hold = useCallback((kind: ControlHoldKind = 'save'): (() => void) => {
+    if (kind === 'save') saves.current++
+    if (++pins.current === 1) setHeldLink(shownRef.current)
     let released = false
     return () => {
       if (released) return
       released = true
-      holds.current--
+      if (kind === 'save') saves.current--
+      if (--pins.current === 0) setHeldLink(null)
     }
   }, [])
+  // The remembered link is gone (or none was remembered): the drawer shows the most recent one, and
+  // ADOPTS it, so Canvas's state and the remembered pick say what is on screen. Never while held:
+  // there the difference is an open on another link waiting for the hold to end.
+  useEffect(() => {
+    if (heldLink !== null || shownId === null || shownId === p.linkId) return
+    onPickLink(shownId)
+  }, [heldLink, shownId, p.linkId, onPickLink])
   /** Close unless something is held. Every close gesture of the owner comes here. */
   const requestClose = useCallback((): void => {
-    if (holds.current > 0) return
+    if (saves.current > 0) return
     onClose()
   }, [onClose])
 
@@ -84,6 +101,10 @@ export function LiveChatDrawer(p: LiveChatDrawerProps): React.JSX.Element {
     if (pinned) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || !isTopDialog(dialogId)) return
+      // Only an Escape that is the drawer's: typed inside it, or with nothing focused. The palette and
+      // Settings are not on the dialog stack — an Escape typed there is theirs, and closing the drawer
+      // underneath would also pull the keyboard out of them (the drawer gives focus back on close).
+      if (!inLiveChatDrawer(e.target) && e.target !== document.body) return
       e.preventDefault()
       e.stopPropagation()
       requestClose()
@@ -165,10 +186,13 @@ export function LiveChatDrawer(p: LiveChatDrawerProps): React.JSX.Element {
                     className="confirm__input live-chat__select"
                     aria-label="Live link"
                     value={link.linkId}
+                    // Switching links unmounts the controls: not while a new password is on its way or
+                    // on screen.
+                    disabled={heldLink !== null}
+                    title={heldLink !== null ? 'Finish the password change first.' : undefined}
                     onChange={(e) => {
-                      // Switching links unmounts the controls: not while a new password is on its way.
-                      if (holds.current > 0) return
-                      p.onPickLink(e.target.value)
+                      if (pins.current > 0) return
+                      onPickLink(e.target.value)
                     }}
                   >
                     {chatLinkOptionLabels(links).map((text, i) => (
@@ -189,7 +213,7 @@ export function LiveChatDrawer(p: LiveChatDrawerProps): React.JSX.Element {
                     onClick={() => {
                       // A modal drawer gives way to the canvas — unless a new password is still on
                       // its way to being shown here.
-                      if (!pinned && holds.current > 0) return
+                      if (!pinned && saves.current > 0) return
                       p.onGoToNode(link.nodeId)
                     }}
                   >
@@ -279,8 +303,12 @@ function MessageTime({ at }: { at: number }): React.JSX.Element | null {
  * The thread, the viewer page's live chat: one dense line per message, a Sharer badge on the owner's
  * own lines (the HOST's word, `from === 'sharer'` — never a name), and a list that stays at the newest
  * message unless the owner scrolled up, then says how many arrived ("N new messages ↓").
+ *
+ * `memo`: its only prop is the link id, and it reads the thread from the store itself — so a push
+ * about the link's viewers (a typing dot, every few seconds while someone types) does not re-render
+ * the whole message list.
  */
-function Thread({ linkId }: { linkId: string }): React.JSX.Element {
+const Thread = memo(function Thread({ linkId }: { linkId: string }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const chat = useWatchLinks((s) => s.chats[linkId] ?? EMPTY_CHAT)
   const [draft, setDraft] = useState('')
@@ -391,4 +419,4 @@ function Thread({ linkId }: { linkId: string }): React.JSX.Element {
       </form>
     </div>
   )
-}
+})

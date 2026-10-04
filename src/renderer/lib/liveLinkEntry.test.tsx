@@ -322,8 +322,12 @@ describe('liveLinkCommands (palette)', () => {
     const entitled = liveLinkCommands({ ...base, entitled: true, activeLinks: 0, manage, confirmStopAll })
     expect(entitled.map((c) => c.id)).toEqual(['live-links-manage', 'live-links-stop-all'])
     // Never in the Server Edition (R43): no license layer, nothing to stop.
-    const server = liveLinkCommands({ ...base, serverEdition: true, entitled: true, activeLinks: 3, manage, confirmStopAll })
-    expect(server.map((c) => c.id)).not.toContain('live-links-stop-all')
+    // The Server Edition lists no link of its own (no license layer): Manage alone. Were one listed,
+    // its chat would show — and still no Stop all.
+    const server = liveLinkCommands({ ...base, serverEdition: true, entitled: true, activeLinks: 0, manage, confirmStopAll })
+    expect(server.map((c) => c.id)).toEqual(['live-links-manage'])
+    const serverWithLinks = liveLinkCommands({ ...base, serverEdition: true, entitled: true, activeLinks: 3, manage, confirmStopAll })
+    expect(serverWithLinks.map((c) => c.id)).toEqual(['live-links-manage', 'live-chat'])
     const some = liveLinkCommands({ ...base, activeLinks: 2, manage, confirmStopAll })
     expect(some.map((c) => c.id)).toEqual(['live-links-manage', 'live-chat', 'live-links-stop-all'])
     expect(some[0].label).toBe('Manage live links')

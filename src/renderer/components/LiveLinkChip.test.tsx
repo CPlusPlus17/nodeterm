@@ -80,6 +80,10 @@ beforeEach(() => {
   api.setPassword.mockImplementation(async () => true)
   api.allowControl.mockImplementation(async () => true)
   writeText.mockClear()
+  // A focused, visible window: the thread counts as read only while someone can see it
+  // (useLinkThread). jsdom answers `hasFocus()` from whatever an EARLIER test focused, which made the
+  // read tests pass in a full run and fail alone.
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = { watchLink: api, clipboard: { writeText } }
   host = document.createElement('div')
   document.body.append(host)
@@ -90,6 +94,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   resetDialogStack()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 const render = (ui: React.ReactElement): void => act(() => root.render(ui))

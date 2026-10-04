@@ -10,6 +10,12 @@ import { openDialogCount, popDialog, pushDialog, resetDialogStack } from './dial
 import { CHAT_NOT_SENT_MESSAGE, CONTROL_LOCKED_TEXT, KICK_NOT_DONE_MESSAGE } from '../lib/liveLink'
 import { chatNameColor } from '../lib/liveChatLook'
 
+// Spied, with the real implementation: how often the message list was RENDERED (one call per line).
+vi.mock('../lib/liveChatLook', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/liveChatLook')>()
+  return { ...real, chatNameColor: vi.fn(real.chatNameColor) }
+})
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
@@ -60,6 +66,8 @@ beforeEach(() => {
   api.kick.mockImplementation(async () => true)
   api.sendChat.mockImplementation(async (_l: string, t: string) => ({ id: 's', name: 'Ada', text: t, at: 0, from: 'sharer' }))
   api.setPassword.mockImplementation(async () => true)
+  // A focused, visible window: someone can see the drawer (the read-state rule, useLinkThread).
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = { watchLink: api, clipboard: { writeText: vi.fn() } }
   host = document.createElement('div')
   document.body.append(host)
@@ -69,6 +77,8 @@ afterEach(() => {
   act(() => root.unmount())
   document.body.innerHTML = ''
   resetDialogStack()
+  vi.restoreAllMocks()
+  delete (document as { visibilityState?: unknown }).visibilityState
 })
 
 const noop = (): void => {}
@@ -97,7 +107,9 @@ const type = (input: HTMLInputElement, value: string): void =>
     set.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
-const keydown = (key: string): void => act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
+/** A key with nothing focused: its target is the body. */
+const keydown = (key: string): void =>
+  act(() => void document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
 
 describe('LiveChatDrawer', () => {
   it('is the Explorer drawer: titled Live chat, a pin button with aria-pressed, and a close', () => {
@@ -408,5 +420,128 @@ describe('LiveChatDrawer', () => {
     expect(button('Copy password')).toBeTruthy()
     click(drawer().querySelector<HTMLButtonElement>('button[aria-label="Close"]')!)
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  // ── Hardening round ──
+  it('Escape typed OUTSIDE the drawer (the palette, Settings — not on the dialog stack) is not the drawer\'s', () => {
+    setLinks([link()])
+    const onClose = vi.fn()
+    render(props({ onClose }))
+    const palette = document.createElement('input')
+    document.body.append(palette)
+    palette.focus()
+    act(() => void palette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+    expect(onClose).not.toHaveBeenCalled()
+    // …and the palette keeps the keyboard (no focus restore pulled out from under it).
+    expect(document.activeElement).toBe(palette)
+    // On the body (nothing focused) with the drawer as the top dialog: it is the drawer's.
+    keydown('Escape')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Escape inside the drawer closes it when it is the top dialog', () => {
+    setLinks([link()])
+    const onClose = vi.fn()
+    render(props({ onClose }))
+    const input = drawer().querySelector<HTMLInputElement>('.live-chat__reply input')!
+    input.focus()
+    act(() => void input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  const controlLinks = (): WatchLinkView[] => [
+    link({ role: 'controller', control: { enabled: true, locked: false } }),
+    link({ linkId: 'M', nodeId: 'n2', title: 'other', createdAt: 5 })
+  ]
+  const startSave = async (): Promise<(ok: boolean) => void> => {
+    let answer: (ok: boolean) => void = () => {}
+    api.setPassword.mockImplementation(() => new Promise<boolean>((r) => (answer = r)))
+    click(button('Change password…'))
+    click(button('Generate'))
+    click(button('Save'))
+    await flush()
+    expect(button('Saving…')).toBeTruthy()
+    return (ok) => answer(ok)
+  }
+  const shown = (): string => drawer().querySelector<HTMLSelectElement>('select')!.value
+
+  it('a password save in flight keeps the drawer on its link: an open on another link waits (refused save → then it moves)', async () => {
+    setLinks(controlLinks())
+    const onPickLink = vi.fn()
+    render(props({ linkId: 'L', onPickLink }))
+    const answer = await startSave()
+    // Canvas's `nodeterm:live-chat` listener opens the drawer on M meanwhile.
+    render(props({ linkId: 'M', onPickLink }))
+    expect(shown()).toBe('L')
+    expect(button('Saving…')).toBeTruthy()
+    expect(drawer().querySelector('select')!.disabled).toBe(true)
+    await act(async () => answer(false))
+    expect(shown()).toBe('M')
+    // The drawer followed Canvas's link; it never asked Canvas to change it back.
+    expect(onPickLink).not.toHaveBeenCalled()
+  })
+
+  it('a password that took stays on screen (its plaintext exists nowhere else) until Done, then the drawer moves', async () => {
+    setLinks(controlLinks())
+    render(props({ linkId: 'L' }))
+    const answer = await startSave()
+    render(props({ linkId: 'M' }))
+    await act(async () => answer(true))
+    expect(shown()).toBe('L')
+    expect(button('Copy password')).toBeTruthy()
+    click(button('Done'))
+    expect(shown()).toBe('M')
+  })
+
+  it('when the remembered link is gone, the drawer adopts what it shows (Canvas state and the pick agree)', () => {
+    setLinks([link({ linkId: 'A', createdAt: 1 }), link({ linkId: 'B', createdAt: 9 })])
+    const onPickLink = vi.fn()
+    render(props({ linkId: 'gone', onPickLink }))
+    expect(onPickLink).toHaveBeenCalledWith('B')
+    onPickLink.mockClear()
+    render(props({ linkId: 'B', onPickLink }))
+    expect(onPickLink).not.toHaveBeenCalled()
+  })
+
+  it('a message counts as read only while someone can see it: hidden or unfocused, the chip\'s count grows', () => {
+    setLinks([link()])
+    addChat('L', msg('1'))
+    vi.mocked(document.hasFocus).mockReturnValue(false)
+    render(props({ pinned: true }))
+    expect(useWatchLinks.getState().unread.L).toBe(1)
+    addChat('L', msg('2'))
+    expect(useWatchLinks.getState().unread.L).toBe(2)
+    // The window gains focus: what is on screen is read.
+    vi.mocked(document.hasFocus).mockReturnValue(true)
+    act(() => void window.dispatchEvent(new Event('focus')))
+    expect(useWatchLinks.getState().unread.L).toBe(0)
+    addChat('L', msg('3'))
+    expect(useWatchLinks.getState().unread.L).toBe(0)
+    // Blurred: it counts again.
+    vi.mocked(document.hasFocus).mockReturnValue(false)
+    act(() => void window.dispatchEvent(new Event('blur')))
+    addChat('L', msg('4'))
+    expect(useWatchLinks.getState().unread.L).toBe(1)
+    // Focused but HIDDEN (minimized, another Space): still counts.
+    vi.mocked(document.hasFocus).mockReturnValue(true)
+    act(() => void window.dispatchEvent(new Event('focus')))
+    expect(useWatchLinks.getState().unread.L).toBe(0)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    addChat('L', msg('5'))
+    expect(useWatchLinks.getState().unread.L).toBe(1)
+  })
+
+  it('a viewer typing push does not re-render the message list', () => {
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: 'Mert', joinedAt: 1, waiting: false, controlling: false, typing: false }] })])
+    useWatchLinks.getState().setChat('L', [msg('1'), msg('2'), msg('3')])
+    render(props())
+    const color = vi.mocked(chatNameColor)
+    color.mockClear()
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: 'Mert', joinedAt: 1, waiting: false, controlling: false, typing: true }] })])
+    expect(drawer().querySelector('.live-pop__typing')).not.toBeNull()
+    expect(color).not.toHaveBeenCalled()
+    addChat('L', msg('4'))
+    expect(color).toHaveBeenCalled()
   })
 })

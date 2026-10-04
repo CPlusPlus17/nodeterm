@@ -6,7 +6,7 @@ import { stripBidiControls } from '@shared/watch-link-types'
 import { CHAT_TEXT_MAX, type WatchChatMessage } from '@shared/watch-link/protocol'
 import { useDialogStack } from './dialog-stack'
 import { useCopied } from './LiveLinkPassword'
-import { ControlHold, ControlSection, hasChat, kickViewer } from './LiveLinkControls'
+import { ControlHold, ControlSection, hasChat, kickViewer, type ControlHoldKind } from './LiveLinkControls'
 import { useMenuFlip } from '../ui/useMenuFlip'
 import {
   CHAT_NOT_SENT_MESSAGE,
@@ -115,7 +115,10 @@ export function LiveLinkPopover({
   const flip = useMenuFlip(anchor.bottom + 6, anchor.left, anchor.top - 6)
   // Holds (see `ControlHold`): a counter, not state — nothing renders from it.
   const holds = useRef(0)
-  const hold = useCallback((): (() => void) => {
+  // Only a save holds the popover: it has no link to switch away from, and a password on screen does
+  // not keep the owner from closing it (`ControlHoldKind`).
+  const hold = useCallback((kind: ControlHoldKind = 'save'): (() => void) => {
+    if (kind !== 'save') return () => {}
     holds.current++
     let released = false
     return () => {

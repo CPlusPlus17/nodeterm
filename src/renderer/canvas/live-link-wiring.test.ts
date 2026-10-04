@@ -138,7 +138,13 @@ describe('Canvas live-link wiring', () => {
     expect(src).toContain('const liveLinkCount = useWatchLinks((s) => s.links.length)')
     // `beside` follows the drawer actually on screen, not just the pin.
     const mount = src.slice(src.indexOf('<LiveChatDrawer'))
-    expect(mount.slice(0, mount.indexOf('/>'))).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned}')
+    expect(mount.slice(0, mount.indexOf('/>'))).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}')
+  })
+
+  it('raised only over a card modal on an open board, and never over Settings (hardening 3/4)', () => {
+    // Settings (z 55) stays on top: the drawer is not lifted to 57 while it is open. Raised, the
+    // drawer is not docked beside the Explorer either — the Explorer sits under the card modal.
+    expect(src).toContain('const liveChatRaised = cardModalOpen && kanbanOpen && !settingsOpen')
   })
 
   it('raised while a card modal is open, beside only when BOTH drawers are pinned', () => {
@@ -146,8 +152,8 @@ describe('Canvas live-link wiring', () => {
     const props = mount.slice(0, mount.indexOf('/>'))
     expect(props).toContain('linkId={liveChat.linkId}')
     expect(props).toContain('pinned={liveChat.pinned}')
-    expect(props).toContain('raised={cardModalOpen && kanbanOpen}')
-    expect(props).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned}')
+    expect(props).toContain('raised={liveChatRaised}')
+    expect(props).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}')
     expect(props).toContain('onGoToNode={goToLiveChatNode}')
     // The card modal's open state is published where every board reports it.
     expect(callback('setKanbanModalNode')).toContain('setCardModalOpen(id !== null)')

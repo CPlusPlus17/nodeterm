@@ -17448,6 +17448,12 @@ export function Canvas() {
     travelToNodeRef.current = travelToNode
   })
 
+  /** The Live chat drawer sits above a kanban card modal (z 57 over 55) — opened from the card's LIVE
+   *  chip — but never above Settings, which stays on top. `kanbanOpen` too: the per-project board
+   *  reports a closed modal on change, not on unmount, so a board closed with its card open would
+   *  leave the flag behind. */
+  const liveChatRaised = cardModalOpen && kanbanOpen && !settingsOpen
+
   /** The Live chat drawer's "Go to terminal": a modal drawer gives way to the canvas first (its scrim
    *  would cover the node); a docked one stays. The project switch, a closed project's reopen and the
    *  board's "open the card" are `travelToNode`'s. */
@@ -19134,10 +19140,8 @@ export function Canvas() {
         <LiveChatDrawer
           linkId={liveChat.linkId}
           pinned={liveChat.pinned}
-          // `kanbanOpen` too: the per-project board reports a closed modal on change, not on unmount,
-          // so a board closed with its card open would leave the flag behind.
-          raised={cardModalOpen && kanbanOpen}
-          beside={liveChat.pinned && explorerOpen && explorer.pinned}
+          raised={liveChatRaised}
+          beside={liveChat.pinned && explorerOpen && explorer.pinned && !liveChatRaised}
           onPickLink={pickLiveChatLink}
           onClose={closeLiveChat}
           onTogglePin={toggleLiveChatPin}

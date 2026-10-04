@@ -22,13 +22,22 @@ import {
 } from '../lib/liveLink'
 
 /**
- * Something inside a surface the owner must still be shown — a new Control password whose save is in
- * flight: once core takes it, its plaintext exists nowhere else, so a popover or drawer closed under
- * it would lose a password that was changed. `hold()` keeps the surface from closing on the owner's
- * close gestures until the returned release runs. The link going away still closes the popover
- * (nothing is owed for a link that no longer exists). Absent: nothing to hold.
+ * What a section holds its surface for:
+ *  - `save`: a new Control password's save is in flight. Once core takes it, its plaintext exists
+ *    nowhere else, so a surface closed under it would lose a password that was changed: the surface
+ *    must not close on the owner's close gestures, nor switch away from this link.
+ *  - `shown`: the new password is on screen until Done. Closing is the owner's own gesture (they have
+ *    it in front of them), but a surface that switches LINKS by itself (the drawer, on an Open chat
+ *    for another link) must not take it away first.
  */
-export const ControlHold = createContext<(() => () => void) | null>(null)
+export type ControlHoldKind = 'save' | 'shown'
+
+/**
+ * `hold(kind)` holds the surface until the returned release runs (see `ControlHoldKind`). The link
+ * going away still closes the popover (nothing is owed for a link that no longer exists). Absent:
+ * nothing to hold.
+ */
+export const ControlHold = createContext<((kind?: ControlHoldKind) => () => void) | null>(null)
 
 /** The roles whose viewers can chat: a Control link is a Commenter link plus typing (spec §2.1). */
 export function hasChat(role: WatchLinkRole): boolean {
@@ -91,10 +100,13 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
   // A hold and a deadline this section took and has not given back — both go on unmount too (the
   // link went away: nothing is owed for it).
   const releaseRef = useRef<(() => void) | null>(null)
+  /** The `shown` hold while a new password is on screen (released by Done, or on unmount). */
+  const shownReleaseRef = useRef<(() => void) | null>(null)
   const deadlineRef = useRef<ReturnType<typeof setTimeout>>()
   useEffect(
     () => () => {
       releaseRef.current?.()
+      shownReleaseRef.current?.()
       clearTimeout(deadlineRef.current)
     },
     []
@@ -114,10 +126,9 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
   }
   /**
    * Save a new password, holding the surface (popover or drawer) open until the answer is in and, on
-   * success, shown —
-   * its plaintext exists nowhere else. Bounded: with no answer after `PASSWORD_SAVE_TIMEOUT_MS` the
-   * hold is released and the owner is told the outcome is unknown. An answer that lands later still
-   * counts: a new password that did take is shown, one refused says so.
+   * success, shown — its plaintext exists nowhere else. Bounded: with no answer after
+   * `PASSWORD_SAVE_TIMEOUT_MS` the hold is released and the owner is told the outcome is unknown. An
+   * answer that lands later still counts: a new password that did take is shown, one refused says so.
    */
   const save = (): void => {
     const next = draft
@@ -146,8 +157,15 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
       .then(() => api.setPassword(linkId, next))
       .then(
         (ok) => {
+          const current = gen === saveGen.current
+          // A password that took is held on screen until Done — taken BEFORE the save's hold goes, so
+          // there is no moment in which the drawer may switch to another link and drop it.
+          if (ok && current) {
+            shownReleaseRef.current?.()
+            shownReleaseRef.current = hold?.('shown') ?? null
+          }
           settle()
-          if (gen !== saveGen.current) return
+          if (!current) return
           if (ok) {
             setError(null)
             setShown(next)
@@ -211,6 +229,8 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
               type="button"
               className="confirm__btn live-pop__btn"
               onClick={() => {
+                shownReleaseRef.current?.()
+                shownReleaseRef.current = null
                 setShown(null)
                 setFocusTo('change')
               }}
