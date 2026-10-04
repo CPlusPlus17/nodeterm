@@ -1226,8 +1226,9 @@ variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while ma
 
 When phone testing resumes, install prepared beta 14/code 15 as a same-signer update
 and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
-the matching APK source for host-dependent features, keeping the held older paired fixture
-and its original terminal intact. Test A100–A116 and earlier A96–A99 on the intended Pixel;
+the current branch checkpoint for host-dependent features, including the later A13 fix. Its
+Android client inputs are unchanged from the prepared APK source. Keep the held older paired
+fixture and its original terminal intact. Test A100–A116 and earlier A96–A99 on the intended Pixel;
 source/build results do not promote physical checklist items.
 
 **Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
