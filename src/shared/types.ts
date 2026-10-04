@@ -3775,12 +3775,13 @@ export interface LicenseStatus {
 
 /**
  * Where the entitlement behind this install came from. A verified entitlement's licenseId is NOT
- * always a keygen license id: an App Store purchase on a paired phone bridges Pro to the desktop
- * and mints `apple:<txn>`, and `free:` exists too. For those the server makes zero keygen calls
- * and answers `key: null, used: 0, seats: 0` — genuinely "device counting does not apply here",
- * which is a different fact from a failed read and from a keygen license with no devices yet.
+ * always a keygen license id: a store purchase on a paired phone bridges Pro to the desktop and
+ * mints `apple:<txn>` (App Store) or `google:<orderId>` (Google Play), and `free:` exists too. For
+ * those the server makes zero keygen calls and answers `key: null, used: 0, seats: 0` — genuinely
+ * "device counting does not apply here", which is a different fact from a failed read and from a
+ * keygen license with no devices yet.
  */
-export type LicenseSource = 'keygen' | 'apple' | 'free'
+export type LicenseSource = 'keygen' | 'apple' | 'google' | 'free'
 
 /** What Settings → License shows: the key to copy and how much of the device cap is in use.
  *  A failed read is an ERROR, never "0 devices" — the two are different facts. */
