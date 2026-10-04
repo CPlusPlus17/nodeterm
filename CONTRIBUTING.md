@@ -197,6 +197,20 @@ lane unaffected.
 
 ## House rules
 
+- **Android contracts change together.** Keep host verbs, project/mirror/pairing payloads,
+  SSH-visible files and Android interop in the same change; flag iOS adoption for @eneskirca.
+  Retained history search addresses the attached generation/exact pane with bounded literal
+  results; stale queries/streams cannot publish into a replacement screen. Cold relay launch
+  resolves saved owner/account/agent and trusted project env/shell before accepting input. Use
+  that agent/host's measured permission dialect. Offscreen wake requires saved ownership and
+  exact process/generation proof; honor Pause and never create/adopt a pane or replay uncertain
+  input. Held rules/questions use the original hook request and guarded answer file, with no
+  guessed digits or arbitrary rule JSON; iOS must adopt the v2 fields/verbs together.
+  Direct SSH Git stays typed and physically jailed; remote rejection text never authorizes a
+  second push. SSH Board/node actions use the selected live profile's private typed service and
+  actual WorkspaceStore save queue. Missing receipts are uncertain; Server has no node nudges,
+  and canvas New is not a metadata-only write. See CLAUDE.md for the deeper invariants.
+
 - **Branch labels describe a checkout on one core.** Share existing status reads through
   `renderer/state/gitBranches.ts`; do not cache a branch forever by project id or copy a project
   branch onto worktree nodes. Source, Sessions and worktree headers consume the same observations,

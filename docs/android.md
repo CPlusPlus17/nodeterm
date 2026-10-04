@@ -1,14 +1,26 @@
 # Android companion — design notes
 
 `android/` is the Android counterpart of the iOS companion (nodeterm-ios, a separate private repo).
-It speaks the protocol the desktop already serves to phones; the only desktop-side additions were
-two relay verbs a relay-only phone was missing (below). This doc records what the app relies on,
+It speaks the protocol the desktop serves to phones, with additive typed host verbs, mirror
+fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
+
+**Current source checkpoint (2026-10-04, A100–A109).** The branch adds full retained
+terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
+offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
+questions. Source Control now works over direct SSH. A private typed file service lets a current
+Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
+an upstream contribution; no PR has been opened. The new release is being verified locally.
+Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
+ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
+Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
+the maintainers; the user has no backend checkout. Canvas-registered cold New over bare SSH still
+needs a host-owned launch API. See the audit and Known gaps for the remaining limits.
 
 **Post-beta-10 additions (2026-10-04).** Sessions search filters displayed names, agent labels,
 project names/folders and phone-terminal folders while keeping the existing project/status groups.
 The saved query returns after opening a terminal. All computers now watches each paired host while
-visible, with automatic approval holds intact and serialized refreshes. Find opens the captured
+visible, with automatic approval holds intact and serialized refreshes. The beta-11 Find action opened the captured
 output Copy sheet: literal case-insensitive matches, UTF-16 highlighting and wrapping Previous/Next
 navigation preserve the original rows and copy selection. It searches the captured output, not the
 remote tmux history. SSH anchor discovery follows bounded recursive configuration Includes, including
@@ -17,7 +29,7 @@ remain unsupported. These are included in prepared private beta 11; the installe
 and its 10 Pass / 22 Partial / 32 Pending device ledger are unchanged while phone checks are paused.
 Additional physical checks belong beside items 10/11/50/56/60; they do not inherit earlier Pass results.
 
-**Prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
+**Historical prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
 `314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
 A95 desktop Board fix. Full offline protocol checks pass **730 tests / 70 suites**, with zero
 failures, errors or skips; the offline app compile, **297 affected Vitest tests / 17 files** and
@@ -322,22 +334,26 @@ describes as the future. The Android client implements what the host actually se
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
-| Wake on open | the attach itself: host-service reports the viewer (`remoteViewer.attached` → `agent:wake`) and the desktop wakes a Sleeping node it has mounted; the phone offers nothing, so it never types a second `--resume` | nothing reaches the desktop, so opening a Sleeping node offers the desktop's wake line (the agent's `--resume <id>`, plus the permission mode for Claude only, no `cd` or account: the pane's shell already has both), only while a shell owns the pane (`#{pane_current_command}`, read on open and again at the tap), typed only on a tap, after a kill-line |
-| Wake, refresh, rename | `node.wake|refresh|rename` | through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
-| Board | `projects.ensureBoard|setCardColumn|editCardLabels` | reads over SSH; writes through the relay leg opened next to it (`A26`), disabled with the reason when the phone has none |
+| Wake on open (`A103`, `A104`) | existing remote-viewer nudge wakes a mounted node or resolves one saved offscreen/closed-project node without switching views; exact owner/generation and Pause guards, no fresh shell or uncertain input replay | explicit Sleeping wake offer uses the agent's measured approval policy and host capabilities; the existing shell/WakeContext checks and user tap remain |
+| Wake, refresh, rename | `node.wake\|refresh\|rename` | current Desktop's selected-profile SSH service (`A108`); older hosts need an allowed relay; Server has no node nudges |
+| Board | `projects.ensureBoard\|setCardColumn\|editCardLabels` | current Desktop/Server selected-profile service (`A108`), using the real save queue; older hosts need an allowed relay |
 | New session on the canvas | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | the whole launch goes through the relay leg opened next to SSH (`A26`); disabled with the reason when the phone has none |
 | Explicit plain terminal on the SSH host (`A90`) | separate from canvas registration | Sessions → New terminal → Home/project/custom absolute folder → Create; phone-owned `nodeterm-phone` session, rediscovered under Phone terminals; focused Pixel creation/history/restart/update/reconnect/exact End pass, beta 10/code 11 installed. Item 32 Partial; relay plain-shell creation/input/End pass, managed/cellular pending; A91 empty-host variant passes |
-| Source control (`A29`) | `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd, …}`, `cwd` = the project's folder from `projects.list`; the desktop jails it to its project folders and hands each verb to its `GitService` | through the relay leg opened next to SSH (`A26`); the screen says why when the phone has none. There is no SSH git of its own (see Known gaps) |
-| Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
+| Source control (`A107`) | unchanged `git.status\|diff\|stage\|unstage\|commit\|push\|pull\|history {cwd,…}` and typed result models; host project-root jail | the same eight verbs over typed POSIX Git argv, physically jailed to listed local/driven folders and repository root; excludes third-machine projects; bounded output, confirmed writes and exact missing-upstream-only push fallback |
+| Answer a held approval (`A105`) | `approvals.answer {nodeId, pendingId, decision}` keeps allow/deny and adds allow-always plus original `suggestionIndex`; host-owned live-card/request validation; honest answered/reason outcome | legacy allow/deny file unchanged; remembered reply is marker + request-derived hook JSON, streamed through stdin with post-stream request guard and confirmed status |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
 | Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`; local tmux answers resolve the exact session to a pane ID, cancel copy mode and type there, also while mounted. Complete writes are ordered per node. SSH-project answers use the project's ControlMaster; unavailable sessions return `sent:false` (the phone opens the session). An older desktop gets attach → wait for paint → write → linger | resolve the exact session to a pane ID, cancel copy mode, then `tmux send-keys -l` there; missing exit status or any command failure opens the session without resending. SSH-project nodes go through the relay leg (`A09`) |
+| Retained terminal history search (`A100`) | `pty.historySearch {streamId, query}` searches the attached generation/exact pane, returns bounded matching lines, searched-line count and truncation; older hosts refuse without replacement | resolve the selected session's exact pane and search all retained plain tmux history on the computer, with bounded private spool/result; no copy-mode/input changes |
+| Cold relay attach (`A102`) | saved node/project/account/agent facts override create hints; prepare trust-aware project env/shell without spawning, recheck warm races, then respond/snapshot/attach synchronously; a warm join retains its launch facts | existing attach-only SSH behavior stays; cold agent creation is still refused rather than guessing its hook environment |
+| Answer complete held questions (`A106`) | `questions.answer {nodeId, pendingId, selections:number[][]}`; original live request determines exact labels for every question and preserves tool input; old hosts open session | same full-schema builder over the selected node's original pending JSON and v2 answer file; gone/unsupported tickets never become numeric keys |
+| SSH Board and node actions (`A108`) | existing `projects.ensureBoard/setCardColumn/editCardLabels` and `node.wake/refresh/rename` | same typed requests through `<selected userData>/ssh-actions`; fresh private advertisement, instance/nonce/host-time guards, actual WorkspaceStore save queue; Desktop nudges are delivery receipts; Server advertises Board only |
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
 the shared pty. An `OP.Resized` still shows a "sized to another screen · fit this screen" hint.
 
-### Why the two new relay verbs
+### Why typed host verbs
 
-Both already existed for a phone on SSH — as files it writes on the host. A relay-only phone (every
+The original approval/read-ack actions already existed for a phone on SSH as owned files. A relay-only phone (every
 Windows host, and any phone off the LAN) had neither: `fs.*` is jailed to project roots, correctly.
 Typing `1` into the pane is **not** a substitute for answering a held hook-reply approval: while the
 hook holds the request the prompt is not on screen, so the keystroke lands in the agent's composer.
@@ -1641,8 +1657,8 @@ later fix left to a device.
 
 1. For beta readiness, install two consecutive private betas using the same private signer and
    increasing version codes; pair on the first and update to the second without uninstalling, keeping
-   the pairing. After the hike, pair on current beta 9 / code 10 with desktop-issued JSON or QR,
-   then use a later same-signer higher-code update. Do not downgrade or uninstall the working app.
+   the pairing. The installed beta 10 / code 11 already retains the desktop-issued pairing;
+   test its next same-signer higher-code update. Do not downgrade or uninstall the working app.
    Also check the committed-debug-key path separately with two CI debug APKs (artifact
    `nodeterm-android-debug`). Migrating from debug to private beta needs one deliberate uninstall
    because the signing certificates differ; revoke the stale phone entries and pair again.
@@ -1791,12 +1807,15 @@ later fix left to a device.
     reattaches by itself rather than saying the session ended. *(A13)*
 29. A Sleeping (Eco) session opened over direct SSH offers "Wake <agent>" while a shell owns its pane.
     The tap wakes the conversation, and opening it again (the CLI now running) offers nothing. Through
-    the relay, opening it wakes it with no offer. *(A76)*
+    the relay, opening it wakes it with no offer. Verify capable agents retain their actual host's
+    project approval policy on wake, including non-Claude agents. *(A76, A103)*
 30. Reboot the desktop, then open a session through the relay: the resume offer appears, and Resume
     continues the right conversation, in the node's folder, under its Claude account and with the
     project's permission mode. Drop the connection before tapping it: the offer comes back with the
     reattach and can be tapped once the reattach has settled. Over direct SSH such a session is not
-    created: the phone offers "Open through the relay". *(A15, A16, A41, A08)*
+    created: the phone offers "Open through the relay". Repeat non-Claude resumes with their
+    measured approval flags and available old/new Codex vocabulary; unsupported modes keep the
+    actual CLI default. *(A15, A16, A41, A08, A102, A103)*
 31. A session of one of the desktop's SSH projects: over direct SSH the phone offers the relay
     instead, and through the relay it opens on that project's host. *(A09, A28)*
 
@@ -1807,7 +1826,12 @@ later fix left to a device.
     Claude permission prompt reaches the phone's Inbox as an approval. Managed Claude accounts are
     named by their label or email in the picker, the session row and the Usage card, never by an id.
     Repeat against a Windows desktop: the session starts in the project's folder under the chosen
-    account there too. Separately, on the intended Pixel's installed beta 9 / code 10
+    account there too. On a current desktop, verify trusted project env/shell overrides on a cold
+    relay launch; denied/untrusted executable settings cannot run. Saved owner/account/agent facts
+    override conflicting create hints, and joining a warm session does not change its launch facts.
+    Repeat with capable non-Claude agents and their project approval modes; verify the host Codex
+    vocabulary and unsupported-mode defaults against the actual CLI, without a sandbox bypass.
+    Separately, on the intended Pixel's installed beta 10 / code 11
     over manual SSH/WireGuard use Sessions → New terminal → project folder → Create, then create
     another in Home; also check a custom absolute folder. Confirm real shell cwd, input and history; disconnect/reopen and
     restart the app so both remain in Phone terminals; end only the owned session and confirm
@@ -1815,16 +1839,22 @@ later fix left to a device.
     does not verify relay registration, managed-agent launch or account selection.
     On an otherwise empty SSH host, end the last owned phone shell: its row disappears after
     refresh, while the host stays connected over SSH and New terminal remains available.
-    *(A72, A33, A14, A39, A75, A90, A91, A94)*
+    *(A72, A33, A14, A39, A75, A90, A91, A94, A102, A103)*
 33. New session, then Back within a second of Start (before the launch line is typed), and once more
     by sending the app to the background right after Start: both times the node still appears on the
     canvas with its agent running, not a bare shell. *(A40)*
 34. With the New-session dialog open, close the selected project on the desktop (or remove the
     selected account): within a refresh the dialog moves to a project it still offers, or disables
     Start with a line saying why; nothing crashes. *(A42)*
-35. Wake, refresh, rename and end a session from the phone. *(A65)*
-36. Board: move a card, add and remove a label, create a new one; the desktop's board updates without a
-    reload. *(A65, A95)*
+35. Wake, refresh, rename and end a session from the phone, through the relay and with the
+    current Desktop SSH actions service and remote access off. Wake an eligible Sleeping node in
+    an inactive and closed project without switching desktop tabs; explicit Pause stays respected,
+    a replaced/exited pane refuses, and an old backend is not restarted. Refresh/Rename receipts
+    prove nudge delivery; inspect the actual result separately. *(A65, A104, A108)*
+36. Board: move a card, add and remove a label, create a new one; the desktop's board updates
+    without a reload. Repeat through the current selected-profile SSH service with remote access
+    off, alongside mounted desktop edits, and on Server Board. A replaced/stopped service or lost
+    receipt never reports success or retries the mutation through another transport. *(A65, A95, A108)*
 37. On the Board tab, pick a project and scroll; open a terminal and come back: the same tab, scroll
     position and project. Switching tabs and back keeps them too. *(A43)*
 38. Kill the app's process in the background (Developer options → "Don't keep activities", or
@@ -1833,17 +1863,20 @@ later fix left to a device.
 
 ### Inbox, notifications and usage
 
-39. Approve and deny a held Claude permission from the Inbox within 45 s. Answer one after its hold
-    has expired: the phone must not report success. *(A06, A35)*
+39. Approve and deny a held Claude permission from the Inbox within 45 s. Answer one after its
+    hold has expired: the phone must not report success. On an eligible v2 ticket, confirm the exact
+    Always allow rule/destination on relay and SSH; verify actual CLI application and its settings
+    scope. Changed/expired/no-suggestion requests offer no remembered answer and never type 2.
+    *(A06, A35, A56, A105)*
 40. A subagent's approval while its parent waits on a question: Approve from the Inbox answers it,
     rather than saying "Already handled." *(A38)*
-41. Answer a single-select AskUserQuestion from the Inbox, through the relay and over the network: the
-    answer lands in the live session in one tap. A multi-select question lists its options read-only
-    beside "Open session". Repeat with the pane scrolled into tmux copy mode: the answer reaches the
-    application and leaves copy mode, on both routes. Through the relay repeat with the desktop's
-    terminal mounted and with its project offscreen/released, so the first background answer also
-    works. A missing session must not type into a longer session name sharing its prefix.
-    *(A12, A57, A65, A78, A79, A80)*
+41. Answer complete held AskUserQuestion cards through relay and SSH: single/multi selections
+    and 2–4 questions, exact labels, every question required, input preserved and actual CLI result.
+    Expired/replaced/unsupported tickets never type guessed keys; older phones open held v2 cards.
+    Separately test an unheld legacy single-select with the pane in copy mode: the answer reaches
+    the application and leaves copy mode on both routes. Legacy multi-select offers Open session.
+    Repeat mounted and offscreen/released relay background answers; a missing session must not
+    type into a longer session name sharing its prefix. *(A12, A57, A65, A78, A79, A80, A106)*
 42. Open a finished session on the phone: the desktop's unread dot clears. On a host that runs its
     own nodeterm and is driven over SSH by another desktop, repeat for each desktop's sessions while
     both sweepers run: the owning desktop's unread dot/Done card clears and the other's pending
@@ -1886,36 +1919,22 @@ later fix left to a device.
 
 ### The relay leg next to SSH
 
-52. On the same network as the computer, with remote access on and the route Automatic (the host
-    screen says "On your network"): New session starts a session that appears on the canvas; a card
-    moved or labelled on the Board moves there; Wake, Refresh and Rename from a session's menu act.
-    On a desktop that has not pinned this phone, the first of these shows the approval code on the
-    host screen. With remote access off (re-pair with it off), and again with the route "Only on my
-    network", the New session button, the card actions and the menu items are shown disabled with a
-    reason that matches the case (New session's is the first row of the Sessions list, and the last
-    session stays reachable above the button), and none of them opens a relay connection. In both
-    cases a node of one of the desktop's SSH projects, opened, ended from the Sessions list or
-    answered from the Inbox, is refused without a relay offer: "remote access isn't set up" in the
-    first case, the "Only on my network (SSH)" setting named in the second. Then, with
-    the host screen open on the same network: turn remote access OFF on a computer this phone already
-    holds a relay token for — within one refresh (8 s) the controls turn disabled with "remote access
-    is off on the computer", and no tap waits for the relay; turn it back ON — within one refresh
-    they are enabled again. On a phone paired with it off, turning it on while the host screen is
-    open enables them within a refresh or two, with no reconnect. *(A26)*
-
+52. On the same network with Automatic, compare the current SSH actions service and an older
+    desktop: current Board/Wake/Refresh/Rename work over SSH with remote access off; older hosts
+    need the allowed relay and show the reason when unavailable. Canvas New still needs the relay.
+    With Only on my network, no action silently opens relay. A submitted unanswered SSH mutation
+    is not replayed after reconnect. Desktop-owned SSH-project metadata can use its service;
+    opening/typing/ending that third-machine terminal still needs its relay. After toggling remote
+    access, old-host relay availability updates within a listing. *(A26, A108)*
 ### Source control
 
-53. From a project's heading (Sessions) or beside the Board's project picker, open Source control,
-    through the relay and again on the same network (the relay leg next to SSH): the branch, the
-    staged, changed and untracked files and the recent commits match the desktop's Source Control;
-    a file's diff opens and Back closes it; stage, unstage, commit (the message box stays above the
-    keyboard), push and pull act and the desktop shows the result; a push that fails there (no
-    network, a rejected push) shows git's own message. An SSH project and a project with no folder
-    say why instead of opening. With a merge that conflicted (on the computer, or a Pull from the
-    phone), the conflicted files are under Conflicts, not Untracked, their diff shows the conflict
-    markers, and Commit says to resolve them first. A commit whose pre-commit hook runs longer than
-    30 s still lands, and the phone shows it. *(A29)*
-
+53. Open Source control from Sessions/Board through relay and direct SSH, including remote
+    access off and Only on my network. Status/diff/history match the actual repository; stage,
+    unstage, commit, push and pull show confirmed results. Test spaces/newlines/Unicode and
+    dash/pathspec-like filenames, nested repositories, symlink escape refusal, no-folder and
+    third-machine projects. Conflicts remain unresolved in the screen; a long hook completes
+    within the write deadline. A rejected remote mentioning set-upstream never triggers a second
+    push. Lost/missing status retires the SSH connection without a replay or success. *(A29, A107)*
 ### Links and copy in the terminal
 
 54. Print a URL long enough to wrap over several rows, e.g.
@@ -1939,7 +1958,11 @@ later fix left to a device.
     ("Copied N lines"), Share opens the system share sheet, and Back or × closes the sheet. The sheet
     opens on the line at the top of the screen. A tap on the sheet's title, its instructions or its
     "No lines selected" line does nothing: no soft keyboard comes up, and nothing reaches the pane
-    under the sheet (after closing it, the pane shows no click or scroll there). *(A32)*
+    under the sheet (after closing it, the pane shows no click or scroll there). Separately, Find
+    searches text emitted before attachment in the computer's retained history on both routes:
+    literal case-sensitive query, line numbers, caps, Previous/Next and copied matches. A new query,
+    replaced stream or background closes/discards stale results; Copy-sheet search remains local.
+    *(A32, A98, A100)*
 
 ### Notification actions
 
@@ -2001,9 +2024,10 @@ later fix left to a device.
     this computer's own ones, marked "run here over SSH", with its sessions and, while that desktop is
     connected, their states; quit that desktop and within about two minutes those states read
     Unknown, while the sessions stay listed. Open one of its sessions and type; answer one of its
-    approvals from the Inbox; end one of its sessions: the other desktop shows it ended. Its New
-    session, board writes and Wake / Refresh / Rename say they belong to the other computer. A node of
-    the paired desktop's own SSH projects still opens through the relay. *(A27, A09)*
+    approvals from the Inbox; end one of its sessions: the other desktop shows it ended. Its canvas New
+    session and unowned Board/Wake/Refresh/Rename say they belong to the other computer; direct SSH
+    Git works only within that host's listed admitted folder. A node of
+    the paired desktop's own SSH projects still opens through the relay. *(A27, A09, A108)*
 
 ### A computer added by its SSH address
 
@@ -2015,9 +2039,10 @@ later fix left to a device.
     and `~/.ssh` `700`), and tap Connect: the computer is added and the screen shows a `SHA256:`
     fingerprint that matches one line of the screen's `ssh-keygen` command on the computer. Open it:
     the Sessions tab lists the Server Edition's projects, the host screen shows its version, and a
-    session opens and takes keys. Canvas New session, board writes and Wake / Refresh / Rename say remote
-    access isn't set up for this computer, and so does a session that is not running; Settings → How
-    to reach each computer offers no choice for it. *(A27)*
+    session opens and takes keys. Current Server Board writes for its local owned projects and
+    direct SSH Git work without a relay; Server SSH-project references remain refused. Canvas New and
+    Wake/Refresh/Rename remain unavailable, as does a cold session that is not running; Settings → How
+    to reach each computer offers no choice for it. *(A27, A108)*
 64. Add a Linux dev host that another computer's nodeterm drives over SSH (no nodeterm of its own) by
     its address: its projects and sessions are listed as in item 62, and approvals are answered from
     the Inbox. Open one of its finished sessions on the phone: within about 15 s the other computer's
@@ -2028,6 +2053,10 @@ later fix left to a device.
     *(A27, A49)*
 
 ## Known gaps
+
+Immediate Android push (`A25`) and fresh-different-desktop relay recovery (`A93`) need the hosted
+backend maintainers. The user has no service repository to supply. Same-owned-desktop paired-update
+recovery does not establish recovery on a fresh different identity; no backend fix is claimed.
 
 - **A95 is fixed and physically verified in the owned production fixture.** Commit `ec12ea9a`
   fixes the core Board announcement and actual Desktop preload subscription. Actual beta 10 phone
@@ -2116,75 +2145,58 @@ the wider relay action matrix remain device checks.
   empty-screen/Home recreation/second-End cycle; final fixture/service cleanup is not claimed. Broader checks
   resumed on Oct4; item 32 stays Partial because managed and cellular creation remain open; relay plain-shell creation/input/End pass.
 
-- **Direct SSH is POSIX-only by design** (like iOS): board writes, node actions and canvas-registered new sessions
-  go through nodeterm the app, so on the LAN the phone opens the computer's relay leg next to the
-  SSH connection for them (`A26`, see "The relay leg next to SSH"). iOS writes `project.json` over
-  SSH for some of these; Android deliberately does not (the host verbs exist because that write
-  breaks past `MAX_ARG_STRLEN` and cannot reach an SSH project's file at all). The cost: while the
-  computer has remote access OFF the phone cannot do them on the LAN at all (a relay token it got
-  while remote access was on does not help: there is no relay to reach), where iOS can for a local
-  folder project whose file still fits in one argv string. The controls say so instead of vanishing.
-  How fast they notice is one listing: a toggle changed while no screen of that computer is open is
-  seen when one is (the desktop's `relay.json` is the signal, and it can lag a desktop that crashed
-  or quit with remote access on: the file stays, and a tap then waits out the relay before saying
-  the computer did not answer).
-- **Source control is the desktop's git bridge, and only that** (audit `A29`). Over direct SSH the
-  phone has no git of its own: it opens the relay leg next to SSH for it, as for the other app-only
-  verbs, so a phone with no relay leg (remote access off, or the route "Only on my network") cannot
-  use it on the LAN, and says so. An SSH implementation (`git -C <cwd>` over the session, jailed to
-  the project folders like the desktop's `isWithinRoots`) was deliberately not built: it would be a
-  second copy of the bridge's rules on the phone. The bridge serves no branch switch, discard, init,
-  publish, per-commit file list or older history (the desktop's default 50 commits), so the phone
-  offers none of them. The desktop's SSH projects are not reachable from the phone's Source Control:
-  the listing names their folder (`ssh.remoteCwd`), but that is a path on another host, which the
-  desktop's own Source Control reaches over its ControlMaster, and the bridge's jail is this
-  computer's local project folders, which normally do not include it. Merge conflicts are shown,
-  never resolved: the phone neither edits a file nor stages an unmerged one (a terminal session can).
+- **Direct SSH is POSIX-only (`A108`).** Current Desktop/Server instances advertise their
+  private typed SSH actions service for Board writes on the selected profile. Desktop additionally
+  accepts Wake/Refresh/Rename nudges; Server has no renderer and advertises no node nudges.
+  Unknown claim ownership fails closed; a crash inside its short startup/cleanup transition
+  requires operator recovery before the SSH service can be advertised again.
+  The service uses the actual WorkspaceStore save queue and normal change broadcasts, preserving
+  mounted edits. Old/unavailable services may use an allowed relay before submission; a submitted
+  unanswered mutation never replays or switches transport. A Desktop can serve its own SSH-project
+  metadata; another desktop's driven project is refused without selected-profile ownership.
+  Canvas-registered New is still relay-only: writing registration metadata cannot safely create
+  its cold managed shell/hook environment. The separate phone-owned plain SSH terminal remains.
+- **Direct SSH source control is implemented (`A107`); its physical matrix remains
+  open.** The eight existing typed verbs run Git on listed local/driven folders of that computer,
+  with physical cwd/repository-root jails, bounded output and honest confirmed/uncertain write
+  outcomes. Third-machine projects remain unavailable. A second push is allowed only for the
+  exact native exit-128 missing-upstream diagnosis matching the current branch before dispatch.
+  Branch switch, discard, init, publish, per-commit file lists, older-than-50 history and merge
+  resolution remain outside the exposed contract; the phone still cannot edit or stage unmerged
+  conflict resolutions through this screen.
+
 - **A desktop mounting a node can still detach a direct-SSH phone.** The desktop leaves `-D` off
   its own tmux client only while a relay-served client of that node is attached (it spawned that
   one itself, so it can see it). A phone attached over direct SSH is detached (exit 0), and so is a
   relay phone on a desktop older than that change; the app checks that the session is still live
   and reattaches.
-- **No "Always allow" on approval cards** (audit `A56`). iOS has one that types `2`, and
-  docs/hook-reply-approvals.md is the only place the repo states that digit. Read from the Claude
-  Code 2.1.283 bundle (not measured on a live prompt), option 2 depends on the ask: the Bash prompt
-  offers `Yes`, then a "don't ask again" row only when Claude has one for this ask, then an
-  optional "Yes, and switch to auto mode", then `No`. So a blind `2` can deny the request or switch
-  the session to auto mode, and the phone cannot see which. The same hazard applies to iOS's `2`:
-  an iOS follow-up for @eneskirca (this repo cannot see whether the iOS code guards the digit).
-  A held ticket (the default, since `hookReplyApprovals` is on) has no prompt on screen at all.
-  The layout-independent route is the hook's own: answer `allow` with `updatedPermissions` taken
-  from the request's `permission_suggestions` (both fields exist in that CLI's hook schema). That
-  changes the `~/.nodeterm/pending` answer file and `approvals.answer`, so it needs the desktop,
-  iOS and Android together.
-- **Multi-select questions are answered in the session** (audit `A57`). The Inbox card lists the
-  options, numbered and read-only, but offers no answer: nothing in this repo measures how Claude
-  Code's multi-select picker toggles an option or submits the selection, and the phone cannot see the
-  picker, so a guessed key sequence could submit the wrong set. Answering from the Inbox needs those
-  keys measured on a live CLI, and would keep the still-waiting re-check the single-select digits
-  have. Whether iOS answers these cannot be seen from this repo.
-- **A Sleeping node the desktop has not mounted stays asleep through the relay** (`A76`). The relay
-  attach's wake is the desktop's `wakeHibernatedNode` nudge, which does nothing for a node that is
-  not on screen (a project other than the active one), and the phone offers no wake there because
-  it cannot tell the two apart: a second `--resume` typed into a CLI the desktop just woke arrives
-  as a prompt. Typing the resume by hand, or opening the node over direct SSH, works.
-- **Codex/Gemini/… launch flags.** A phone-started non-Claude agent launches bare (its own default
-  approval mode): the per-agent approval table needs host facts (codex's vocabulary moved between
-  releases, #785) the mirror only partly publishes. The same holds for the resume lines the phone
-  offers: a cold-attach resume and a Sleeping node's wake carry the permission mode for Claude only,
-  where the desktop's own wake and cold restore append each capable agent's flag. Some of those
-  sessions come back looser than their mode: a Gemini or Grok session whose mode is `plan` (read-only)
-  resumes in its CLI's default, which can edit after asking, and a Codex node in `manual` on a
-  codex before 0.149 loses `--ask-for-approval untrusted` and resumes in `on-request`, where the
-  model decides when to ask.
+- **Safe remembered rules and complete question answers replace the old fixed gaps (`A105`,
+  `A106`; prior `A56`, `A57`).** Always allow confirms only exact eligible original addRules
+  scopes; it cannot mean guessed option 2 or a permission-mode switch. Held questions expose every
+  question and submit all selected labels through the documented hook contract, preserving full
+  input. Older phones see Open on held v2 cards; older hosts, unsupported/free-text cases and
+  expired/replaced tickets never fall back to digits. Unheld legacy multi-select remains read-only
+  with Open session. Real CLI application and physical phone question/rule flows remain open.
+  @eneskirca must adopt the additive mirror/verb/v2 SSH contract in iOS together.
+- **Legacy unheld multi-select questions remain Open session.** Complete held questions use
+  the v2 hook contract described above; unsupported/free-text schemas open the session.
+- **Sleeping offscreen relay wake is implemented (`A104`).** The desktop resolves the saved
+  node/project and owning live/released pane even outside the mounted canvas, without switching
+  tabs or creating a shell. It preserves explicit Pause, recorded exit proof and exact process/
+  generation guards, and never retries an uncertain write. Unsupported older hosts refuse safely;
+  physical inactive/closed-project wake and ownership/lifecycle variants remain to verify.
+- **Trusted project env/shell and per-agent policy are carried on cold relay launches (`A102`,
+  `A103`).** Saved host owner/account/agent facts win over phone hints; warm panes are left intact.
+  The phone now uses the measured Claude/Codex/Gemini/Grok dialects for launch, cold resume and
+  Sleeping wake. Codex's host vocabulary and Claude's own auto gate determine emitted flags;
+  unsupported modes keep the CLI default. No physical/live agent policy matrix is claimed.
 - **The SSH pin is anchored only by a current desktop, and the LAN address is refreshed only over the
   relay** (audit `A49`/`A74`). A desktop with `A49-anchor` names its SSH host keys in the sealed `/pair`
   answer and the first connect must present one of them; an older desktop, one that could not read
   its keys, a computer paired before this build and one added by its SSH address still pin on first
   use (on the pairing LAN, right after the QR, so normally the real computer), where a server that
   accepts any key could become the pin. An sshd that serves a key `ssh-host-keys.ts` cannot see is
-  refused over SSH, as a key the computer did not report: a `HostKey` in a file `sshd_config`
-  includes from elsewhere than `sshd_config.d/`, a relative `HostKey` path, a key with no `.pub`
+  refused over SSH, as a key the computer did not report: a relative `HostKey` path, a key with no `.pub`
   beside it (sshd needs only the private key), and a `HostKey` named only in a config file the
   desktop's user cannot read (some distributions install `sshd_config` and its drop-ins readable by
   root only; `/etc/ssh/ssh_host_*_key.pub` are still read there). Pairing again does not help: it

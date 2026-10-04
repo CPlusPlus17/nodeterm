@@ -5358,6 +5358,70 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
 
 ## Conventions
 
+**Retained history search is host-owned (A100).** `pty.historySearch` addresses an existing stream,
+not caller-supplied node paths. Capture the attached retained generation or exact resolved tmux
+pane; reject replacement during capture. Search literal, case-sensitive text with bounded query,
+spool and answer sizes, and return line numbers/truncation honestly. Do not turn an unsupported
+older session host into a replacement/restart or an empty success. Native STOP/dispose retires the
+history sheet; late results never migrate to a replacement stream. SessionSearch and captured
+TerminalCopy search remain local; retained TerminalHistory search runs on the computer.
+
+**Interrupted backend reads may be resent; uncertain writes may not (A101).** The additional
+session-host retry policy allows only the named typed read operations after `EPIPE` or
+`ECONNRESET`. It does not replay sent writes, permission refusals, deadlines or unknown errors.
+Keep the existing separate proof for frames never handed to `socket.write`, the bounded attempt
+count and the original transport error if reconnect cannot proceed.
+
+**Cold relay launch prepares trusted owner facts before accepting input (A102).** Resolve the saved
+node's project/account/agent and trust-aware project env/shell on the host. A known ineligible or
+ambiguous saved node cannot be reassigned by phone hints. Preparation spawns nothing; recheck warm
+races before its synchronous response/snapshot/attach commit. Joining a warm pane does not change
+its launch facts or owner. Never leave an asynchronous settings read between SnapshotEnd and input
+routing. Keep reserved hook environment filtering and shared executable-content trust gates.
+
+**Permission policy belongs to the agent and host that will run it (A103).** Android launch, cold
+resume and Sleeping wake use the desktop's measured approval dialects. Only Claude's auto flag
+uses its own capability gate; Codex values use that host's advertised vocabulary and measured
+unknown-host baseline. Unsupported modes use the CLI default, never a guessed looser equivalent.
+Do not fold a sandbox bypass into an approval-mode mapping or borrow local capabilities for SSH.
+
+**Offscreen wake never creates or adopts a pane (A104).** Resolve one saved project/node and its
+actual session id, launch override, approval policy and recorded WakeContext without switching
+projects. Fence saved state and the owning live/released backend across awaits; require the exact
+pane/process/generation before a single delivery. Automatic wakes honor explicit Pause. Retry only
+an unreadable pre-write observation; never retry uncertain input, attach a fresh shell, use an
+ordinary name-only write or replace an older backend to add this capability.
+
+**Held replies use the original request, not prompt numbering (A105/A106).** New remembered rules
+must be concrete eligible original addRules suggestions with exact tool/content/destination,
+confirmed in the UI; never infer an Always allow digit or change permission mode. Held questions
+carry every question and option, submit all selected indexes, preserve original tool input and
+rederive exact labels on the computer. Omit legacy numbered choices on held v2 cards so older
+phones open the session. Recheck still-open ticket/card ownership and schema, stage replies, and
+repeat the request identity/checksum guard after streamed stdin immediately before rename.
+Structured cards settle only on the hook's consumed-answer POST. Missing, changed, expired or
+unsupported requests never fall back to keys or pretend success; legacy allow/deny remains intact.
+These mirror/verb/SSH changes owe Android interop and an iOS adoption note for @eneskirca.
+
+**Direct SSH Git stays typed and jailed (A107).** Reuse the existing eight GitVerb/result contracts
+for listed local or driven-project folders on the selected computer; refuse third-machine targets.
+Recheck physical cwd and repository root under admitted physical project roots, use quoted argv
+and literal pathspecs, and keep credentials/hooks/signing on that SSH account. Bound output and
+require confirmed status. No automatic replay or relay fallback follows an uncertain write. A
+push may set upstream only after the exact native exit-128 missing-upstream diagnostic for the
+branch observed before that push; remote/hook rejection text and transport failures authorize no
+second attempt. The existing branch/discard/init/publish/merge-resolution gaps are unchanged.
+
+**SSH actions belong to one live selected profile (A108).** Advertise only implemented methods,
+with an instance nonce and host-clock heartbeat. Claim one selected profile atomically before
+advertising; retain its lifetime ownership until in-flight work and cleanup finish. Retirement is
+monotonic, and cleanup cannot remove a successor. Accept bounded private regular owned files;
+never use the hook bearer. Board mutations pass through WorkspaceStore's actual save queue and
+final live-instance/node fences. Deduplicate immutable request nonces within their bounded retry
+window; a lost/expired receipt is uncertain and never authorizes another mutation or relay replay.
+Server advertises Board only; Desktop may acknowledge node nudge delivery. Do not equate delivery
+with a completed wake/repaint or implement cold managed New by writing metadata alone.
+
 - **Two docs, two audiences — keep both.** This file holds the deep invariants with their
   reasoning and measurements; it is dense on purpose and is loaded automatically by coding agents.
   **`CONTRIBUTING.md` is the short human door**: setup, the process-boundary rules, the house rules

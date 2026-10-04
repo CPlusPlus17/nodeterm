@@ -3,10 +3,22 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A99`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A109`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+**Current source checkpoint (2026-10-04, A100–A109).** The branch adds full retained
+terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
+offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
+questions. Source Control now works over direct SSH. A private typed file service lets a current
+Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
+an upstream contribution; no PR has been opened. The new release is being verified locally.
+Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
+ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
+Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
+the maintainers; the user has no backend checkout. Canvas-registered cold New over bare SSH still
+needs a host-owned launch API. See the audit and Known gaps for the remaining limits.
 
 - **Four additions are implemented after the beta-10 checkpoint (2026-10-04).** Sessions search,
   live All computers refresh, Find in captured terminal output, and recursive SSH Include anchor
@@ -15,7 +27,7 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   restoration/fixture Forget and background notification checks. The current device ledger stays
   10 Pass / 22 Partial / 32 Pending; new search/refresh/Include flows need physical verification.
 
-**Prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
+**Historical prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
 `314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
 A95 desktop Board fix. Full offline protocol checks pass **730 tests / 70 suites**, with zero
 failures, errors or skips; the offline app compile, **297 affected Vitest tests / 17 files** and
@@ -208,14 +220,39 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   These verify delivered movement/order/cancellation, not terminal FPS or satisfactory user feel.
   At the beta-4 checkpoint the user reported missing momentum; beta 6 now has controlled and
   user drag/coast confirmation. Custom wheel bindings and the remaining `A86` checks stay open.
-- Of the original 77 audit findings, 73 are fixed. `A25` still needs backend FCM, `A56` was deliberately
-  not built, `A50` has signed delivery with full validation open, and `A68` waits for a requested PR.
+- Of the original 77 audit findings, 74 are fixed after the request-owned A56 follow-up.
+  `A25` still needs backend FCM, `A50` has signed delivery with full validation open, and `A68`
+  waits for a requested PR.
   QR pairing, cellular relay/SAS denial/revoke, actual outage/notification/answer behavior and
   the full 64-item pass remain open.
   Push is authorized; required checks precede each push and its Android workflow must be green.
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Owned SSH actions and remaining source gaps (2026-10-04)
+
+A100–A109 are implemented in small signed commits. Retained-history matching, interrupted typed
+read recovery, trusted project env/shell preparation, measured per-agent policy and offscreen wake
+have regression and isolated mutation receipts. V2 held replies add exact remembered rule scopes
+and complete question answers without guessed digits. Direct SSH Git supports the existing eight
+verbs with physical jails and honest uncertain writes. The selected-profile SSH actions service
+routes Board writes through the actual store; Desktop offers delivery-only node nudges, Server local
+Board only. Exclusive lifetime claims, monotonic retirement, bounded replies and immutable nonce
+windows guard startup, shutdown and retries. The service's actual filesystem/FIFO, Desktop wiring
+and headless Server checks pass 33 tests; 29 native and 29 client mutation variants are caught.
+Real Node/Kotlin/generated-shell interop passes. The full merged release gates follow this source
+checkpoint; no new device or live-Claude application result is claimed.
+
+Current commits: A100 `2f693d83`/`97b8a9a4`/`4f1985f5`; A101 `fbaa535d`; A102 `e584586f`;
+A103 `91e6a3f5`; A104 `2d6cb2cd`; A105/A106 `db4abccf`/`7c206ec5`; A107 `489c30a8`;
+A108 `d716138c`/`585e726f`; A109 `4e2f877d`. The original A56 blind-digit proposal is superseded,
+giving 74 of the original 77 source fixes. Historical records below retain their original scope.
+
+The user intends an upstream PR contribution and cannot supply the backend repository. A25 FCM
+and A93 fresh-different-desktop relay recovery remain maintainer dependencies. iOS implications
+for @eneskirca include v2 held mirror/verbs/SSH answers, retained history, launch/policy facts and
+the optional selected-profile SSH actions file contract. No PR opened; A68 remains deferred.
 
 ### Beta 10 installed: saved relay pairing survives update (2026-10-04)
 
@@ -1077,6 +1114,12 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps;
+A108 adds owned SSH Board and Desktop node nudges. Device testing remains paused. The user
+intends an upstream Android contribution but has not requested opening the PR. A25/A93 are
+maintainer backend dependencies with no source supplied; A68 stays deferred until PR preparation.
+Cold canvas New over bare SSH still needs host-owned creation, rather than registration alone.
+
 The user resumed broader Pixel release checks on 2026-10-04 after the hike. Beta 10 / code 11 is
 installed with A90/A91 and A94's authoritative-empty completion fix. Item 1 paired-update passes;
 A93 fresh-different-desktop refusal is open; A95 is fixed in `ec12ea9a` with actual phone-to-rebuilt
@@ -1133,13 +1176,16 @@ section before starting, since the verifier corrections take precedence):
    at `c37798b6495b4b68df379d0ae80887c23104b66d` completed with all five jobs green, confirming
    observed CI repair. Each subsequent push still needs its own green workflow.
    Push is authorized: run required checks before each push and confirm Android CI afterward.
-3. **Pick a remaining known gap.** Batch D and E are done; do not repeat their completed work.
-   Remaining examples: relay cellular/SAS-denial/revoke checks, offscreen Sleeping nodes and non-Claude
-   permission flags. Read-ack ownership is locally fixed in `A82`; finish its device verification.
+3. **Verify the new source flows and remaining known gaps.** Batch D/E and A103/A104 source
+   changes are done. Remaining physical/live cases include relay cellular/SAS-denial/revoke,
+   offscreen Sleeping wake and non-Claude permission policy. Verify retained history, structured
+   hook answers, SSH Git and the selected-profile Board/node service too. Read-ack ownership is
+   locally fixed in `A82`; finish its device verification.
    For iOS adoption, @eneskirca should read `relayApproved` and `sshHostKeyFingerprints` in the sealed
    `/pair` answer and `lan` beside `projects.list` output; iOS also needs to send `boxPublicKey`
    there for late-adoption approval and the revoke cut, and should key notification seen state
-   by computer.
+   by computer. Adopt the new held rule/question fields, verbs and v2 SSH marker together;
+   `docs/hook-reply-approvals.md` lists the exact iOS changes.
 4. **`A68` last, when a PR is requested.** `push: branches: [main]` + `pull_request`, no
    `merge_group` (see the verifier). After it, pushes to this branch no longer run the Android
    workflow until a PR exists. No PR should be opened unless asked. The first local beta build had
@@ -1151,19 +1197,17 @@ section before starting, since the verifier corrections take precedence):
 - **A13 for direct-SSH phones.** The desktop fix covers phones attached through the relay. A phone
   attached over direct SSH (Android or iOS) is still detached by the app's `-D`, because its tmux
   client is not spawned by this process; the Android exit-0 reattach (`68d0925`) covers it.
-- **A56 "Always allow".** Needs a layout-independent answer: the hook replies `allow` with
-  `updatedPermissions`, carried by the answer file and `approvals.answer`. That spans the desktop,
-  the `~/.nodeterm/pending` contract, iOS and Android, so it needs a design decision. The iOS app's
-  blind `2` should be re-checked by @eneskirca.
+- **A56/A57 are source-fixed through v2 request-owned hook replies (A105/A106).** Physical
+  rule persistence and full-question CLI application remain unverified. Legacy unheld multi-select
+  still opens the session. iOS adoption is owed to @eneskirca; see `hook-reply-approvals.md`.
 - **A49 / A74 residuals.** Phones paired before batch E have no anchors and stay on
-  trust-on-first-use until they pair again or get a relay listing. A host key sshd serves from an
-  `Include` outside `sshd_config.d` or a relative `HostKey` path is not read, so SSH is refused for
+  trust-on-first-use until they pair again or get a relay listing. Recursive Includes are source-fixed in A99. A relative `HostKey` path remains unread, so SSH is refused for
   it (Auto falls back to the relay). `pickLanIPv4` reports the first non-internal adapter, which
   may not be the one the phone can reach. A phone that only uses "Only on my network" never gets a
   refresh.
-- **A72 project overrides.** A phone-started session gets the agent env and a proven owner, but not
-  the project's `.nodeterm/settings.json` env/shell overrides (that read is async and may raise a
-  trust dialog).
+- **A72 follow-up is source-fixed (A102/A103).** Trusted project env/shell is prepared before
+  cold relay input; saved owner/account/agent wins. Per-agent launch/resume/wake policy uses actual
+  host capabilities. Physical/live agent policy combinations remain open.
 - **Quick-answer false-success hazards found during batch E.** Local desktop input previously
   used a prefix-matching target and did not cancel copy mode; direct-SSH phone input targeted
   exactly but did not cancel copy mode. Those continuation hazards are locally fixed in `A78`
@@ -1176,15 +1220,12 @@ section before starting, since the verifier corrections take precedence):
   any phone that does not send `boxPublicKey`, which includes current iOS builds) has nothing to
   unpin or cut on revoke and is not approved on a late adoption. Fixing it needs a SAS-approval pin
   to be linked to a device entry, which the approved-devices store does not record.
-- **Batch D leftovers.** No git over direct SSH (Source Control needs the relay leg; `A29`). With
-  remote access off, canvas New session and board edits are disabled with the reason, where iOS writes
-  `project.json` over SSH (`A26`). `A90` adds a separate phone-owned plain shell, without that
-  registration write; it has focused Pixel plain-SSH proof on beta8/9 and beta 10 relay plain-shell creation/input/End; managed and cellular creation remain pending.
-  No FCM push and no Live-Activity equivalent (`A25`). The All
-  computers screen now polls while visible, preserving automatic approval holds (`A55`); its new
-  lifecycle and notification behavior still need physical verification.
-  Dictation uses the phone's own language with no picker (`A59`). "Add SSH server" has no one-time
-  password bootstrap and does not offer the Server Edition install one-liner (`A27`).
+- **Remaining parity.** Current typed SSH Git and the A108 selected-profile service support
+  Board writes and Desktop node nudges without relay; managed canvas New over bare SSH remains
+  unsupported. Phone-owned plain SSH New remains separate, with historical focused Pixel proof.
+  No immediate FCM or Live-Activity equivalent (A25); A93 needs the hosted relay maintainers.
+  All-computers lifecycle/notifications and new source flows need physical verification. Dictation
+  has no language picker (A59); SSH setup has no password bootstrap/install one-liner (A27).
 - **Desktop file-link follow-up (`A92`) is fixed in `127b6b28`.** `paragraphContaining` now reserves
   the hovered row within the 32-row window. Focused/affected Vitest suites, full TypeScript check
   and three isolated mutants pass; interactive desktop hover is pending.
@@ -1483,7 +1524,7 @@ template. Mention @eneskirca for the mobile implications: the pairing-key pin fr
 
 Moved to [`android.md` → Device checklist](android.md#device-checklist) (`A65`): one numbered list,
 grouped by area, each item naming the finding it checks, including every device check the fix
-commits asked for. Nothing on it has been run.
+commits asked for. Its ledger is 10 Pass / 22 Partial / 32 Pending; new source features need their own checks.
 
 ## Conventions for whoever continues
 
@@ -1508,95 +1549,27 @@ commits asked for. Nothing on it has been run.
 
 ## Follow-up prompt
 
-Paste this into the next session.
+Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodeterm.
+Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
+source before editing. A100–A109 close retained history, typed read recovery, project launch settings,
+agent policy, offscreen wake, held rule/question replies, SSH Git and owned Board/node actions.
+The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
+paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
 
-```text
-Continue the Android companion work on branch claude/android-ios-parity-75kfem of CPlusPlus17/nodeterm.
+When the user resumes device work, use only the intended Pixel (ADB serial `55271FDCH000A6`),
+request its current main Wireless debugging endpoint, and use disposable owned terminals. Resume
+rotation/QA-host cleanup and the expanded 64-item checklist; do not inherit older Pass results for
+new flows. Test real Claude rule persistence and full-question application separately from synthetic
+hook/producer tests. Preserve the held rebuilt Desktop fixture and its original terminal.
 
-Start by reading docs/android-handover.md (progress log, "What is still open", environment notes,
-conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). 73 of the
-77 findings and the batch E follow-ups are fixed on the branch. The first signed private beta is
-updated to code 3 on the intended Pixel 10 Pro with basic manual direct-SSH browse/input proof;
-the code-4 A86 scroll update built/signed/updated locally, but the user reported lag and too
-little movement. A87 restores responsive gain and preserves automatic reports; the user confirms
-beta 4 moved more lines but lacked momentum. Beta 5 / code 6 at source 1ad2e944 adds bounded
-kinetic coast and native stop, but actual continuous dragging loses continued movement and shows
-no post-command coast. A89 in c4b1f6cf fixes xterm's detached touch-span target with stable-screen CSS;
-corrected beta-6/code-7 source c4b1f6cf built/signed/updated on the intended Pixel. SSH reopened
-with the retained key/pin at 56×48; controlled continuous drag, post-command coast and Esc stopping
-pass. New-touch stopping also passes with a held touch at a stable 56×25 viewport; earlier
-keyboard-resizing touch checks were inconclusive. The user confirms normal drag/coast both work;
-reversal/lifecycle, custom bindings and FPS remain open. Final beta-6 manual-SSH cellular WireGuard
-connection and smooth scrolling with Wi-Fi off are user-confirmed; cellular hosted relay is untested.
-Historical beta-6 checks passed all 658 protocol tests in 63 suites
-and offline app type-check; 35 JS, eleven native and three CSS mutations are caught. A88 in f5fd3821 handles the actual SDK 37 V3.0 Signer
-label; 39 Python tests per SDK 36/37 and ten new mutations pass, but CI4 failed private packaging
-and follow-up run 37061593216 at c37798b6495b4b68df379d0ae80887c23104b66d completed all five
-jobs green, confirming observed packaging repair. Each later push still needs green CI.
-A85 fixes a one-row terminal caused by WRAP_CONTENT WebView layout parameters; the corrected beta
-fills 52×45 and shows pre-attach tmux history after swiping. The wrong-MI8 test installation/key
-were removed. The user confirms terminal access over mobile-data WireGuard with Wi-Fi off.
-Encrypted paste pairing and hosted relay browse now work. QR pairing, cellular relay/SAS variants,
-actual outage/notification/answer behavior and the full device checklist remain open.
+Immediate FCM and fresh-different-desktop relay refusal A93 need the hosted backend maintainers;
+the user has no backend repository to supply. Cold canvas New over bare SSH needs an actual
+host-owned launch API; metadata registration alone is unsafe. Source is intended for an upstream
+PR, but none was requested/opened. Apply A68 only when preparing a requested PR: push on main only,
+keep pull_request, no merge_group. Flag all new mirror/verb/SSH contracts for @eneskirca's iOS client.
 
-1. A91 is host-fixed: authoritative NothingFound clears cached rows, other errors retain them,
-   cancellation propagates and SSH route/error stay intact. Full protocol 688/67/zero
-   failures/errors/skips (52s), offline app compile (6s) and six new Kotlin mutants pass.
-   Beta 9/code 10/source 4d33a5b5 built in 43s and updated the intended Pixel with the retained
-   signer in 6.46s; installed SHA 719cfeea1dcf27900dd35692a59004ca07e8261b3f14bd43922f0706b6b4ab54 matches.
-   At that beta9 update, install identity/notification grant/app data and three phone shells
-   survived, followed by verified exact cleanup. The separate otherwise-empty-host first
-   creation/End/second creation passes on beta9 Oct4; its second shell survives the beta 10 update
-   and is then ended through the full A91/A94 completed-empty/Home recreation/second-End flow.
-   A90 is implemented in protocol bcc92367 and UI/model b88d1415: 684 tests / 66 suites / zero
-   failures/errors/skips (48s), offline app compile (1s) and 32 new protocol/helper/wiring mutants pass.
-   Clean b88d1415 built beta 8 / code 9 in 49s; R8, retained-signer packaging and independent SDK 36/37
-   artifact review pass. APK SHA256 d373ad5c1790f714cb4464ad4a0a38c5ba9ab68e35103e54cf3aef5ce53081ce;
-   proof .nodeterm/android-beta-build-8, artifact .nodeterm/android-beta-8. Historical beta 8 was installed
-   on the exact intended Pixel, with matching pulled APK hashes/signer, non-debuggable metadata,
-   retained install identity/notification grant and existing manual-SSH host row. Receipt:
-   .nodeterm/android-beta-build-8/device-install-20261003/receipt.json. The regular host reconnects
-   over SSH, loads real driven projects and shows New terminal enabled; no terminal was created or ended.
-   Desktop-issued beta9 pairing/relay now survives the same-signer higher-code beta 10 update,
-   with saved relay reopen/input proven. Item 1 passes without downgrade or uninstall.
-   Focused A90 real cwd/input/history, app-restart rediscovery and exact owned End already pass; verify remaining cellular and managed-agent variants
-   on the Pixel over manual SSH/WireGuard (item 32); it does not register on the desktop canvas.
-   Then finish remaining QR/cellular-relay/worker, outage/answer and all 64 device items, then A86
-   reversal/remaining lifecycle/FPS/custom-binding checks on the intended Pixel in
-   docs/android.md (#device-checklist). Record results in "What is verified" and turn every failure
-   into a finding. Code-3 build/sign/update, identity persistence, SSH browse/input, font/keyboard
-   resizing and pre-attach tmux history are verified; all 689 protocol tests and the offline app
-   type-check pass. Mobile-data WireGuard terminal access is user-confirmed with Wi-Fi off;
-   encrypted paste pairing and forced hosted relay browse work. QR/cellular-relay/SAS,
-   actual outage/notification/answer behavior and the full checklist remain open.
-   Requirement-audited real Pixel QA completes items 18/19/21/22/24/38/39 and adds partial copy/link/
-   SSH recovery proof; see the 64-row table. Background am kill restores Inbox tab and host back stack.
-   Current installed beta 10's source is e3ce041c; all five CI jobs passed in run37194375778.
-   Historical beta9 source CI37144282865 failed docs mapping; it is superseded by later exact-head green receipts.
-   The next push needs its own green workflow. Beta 7 / code 8 remains
-   a historical prepared, unused candidate; beta-6 physical evidence is preserved.
-   Focused A90 physical proof .nodeterm/android-beta-build-8/a90-pixel-check-20261003/final-focused-results.json
-   verifies Home/project/custom creation/history/restart/update/reconnect/exact End; only item 32 is Partial.
-   All 11 desktop sessions/PIDs and 9 protected hashes retained; own fixtures cleaned. Item 1 beta9→10 paired update now passes; device ledger10 Pass / 22 Partial / 32 Pending.
-   Live /v1/relay/join accepts the current client shape against production desktop source 58a202be
-   in an isolated home; actual relay terminal input and shipped-hook Approve/Deny/expiry now pass.
-   The hook producer is synthetic, not a live Claude CLI/account or requested Bash execution;
-   phone New session, remaining node actions, question/copy-mode route/target variants and
-   notification checks stay open. Mounted relay single/multi/copy-mode application/PostToolUse proof
-   is recorded; item 41 stays Partial. Cleanup returned the phone to regular Sessions and removed
-   only disposable fixture resources. The user confirms final beta-6/code-7 usual-terminal
-   connection and smooth scrolling over cellular WireGuard with Wi-Fi off; cellular hosted relay
-   remains untested. Remaining lifecycle and FPS/custom bindings stay open. Future
-   private betas retain the same signer and use a higher version code.
-2. Reconcile newer branch work before changing code, then pick from the remaining known gaps.
-   Batch D and E are done. The user authorized this local build instead of Actions and has now
-   authorized pushing the branch. Each push requires checks first and green Android CI afterward;
-   a later CI release path requires APK/R8/provenance from one successful run.
-3. Keep A68 last, when a PR is requested. Do not open a PR unless asked.
-
-Before each push run the protocol tests (cd android/protocol && gradle test --offline; an existing
-npm install at the repo root is enough), the offline type-check (cd android/tools/typecheck && gradle
-compileKotlin --offline), and for desktop changes the affected vitest files plus npm run typecheck;
-after each push confirm the Android workflow is green. Keep docs/android.md, android/README.md, the
-handover and the audit index in sync. Do not open a PR unless asked.
-```
+Commit small logical changes with regression tests and isolated mutation checks. Before each push:
+protocol `gradle test --offline`, offline app `gradle compileKotlin --offline`, affected Vitest and
+`npm run typecheck` for desktop changes. Confirm the exact-head Android workflow green afterwards.
+Local offline APK builds are authorized; keep the retained signer, APKs and private proofs out of Git.
+Google Maven is blocked: use existing cached local tools or the real CI build, never try to reach it.

@@ -6,13 +6,25 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Current source checkpoint (2026-10-04, A100–A109).** The branch adds full retained
+terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
+offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
+questions. Source Control now works over direct SSH. A private typed file service lets a current
+Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
+an upstream contribution; no PR has been opened. The new release is being verified locally.
+Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
+ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
+Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
+the maintainers; the user has no backend checkout. Canvas-registered cold New over bare SSH still
+needs a host-owned launch API. See the audit and Known gaps for the remaining limits.
+
 **New work after beta 10 (2026-10-04):** the branch adds Sessions search by name, agent and folder;
-live refresh on All computers while visible; and Find in the terminal's captured-output Copy sheet,
+live refresh on All computers while visible; and captured-output Copy-sheet search,
 with highlighted matches and Previous/Next. The computer now discovers SSH host-key anchors through
 recursive configuration Includes. Beta 11/code 12 is prepared locally; the Pixel still runs
 beta 10/code 11. Phone checks remain paused, so none of these additions has a physical pass.
 
-**Prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
+**Historical prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
 `314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
 A95 desktop Board fix. Full offline protocol checks pass **730 tests / 70 suites**, with zero
 failures, errors or skips; the offline app compile, **297 affected Vitest tests / 17 files** and
@@ -293,25 +305,26 @@ tested where the layer allows, and the numbered
 | | Android | Notes |
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
-| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: no relay (so no canvas-registered new session, board writes, node actions or source control from the phone, and nothing "from anywhere" beyond what reaches its SSH, a VPN say) and no push. No password login, no Windows |
+| Add a computer by its SSH address ("Add SSH server") | ✓ | For a computer with no pairing code: a headless Server Edition, or a macOS / Linux host you reach only over SSH. Shows the phone's key line (copy, share, or a one-line command) to add to `~/.ssh/authorized_keys`; Connect pins the SSH host key once the computer accepts that key, and shows the fingerprint to compare. **SSH only**: reachable by LAN/VPN, with no hosted push. Direct Git works on admitted folders; current Desktop/Server serves Board writes and Desktop also serves node nudges. Canvas-registered New still needs relay. No password login, no Windows |
 | Direct connection on your network (SSH + tmux) | ✓ | Host key checked against the keys the computer names at pairing, then pinned (trust on first use with a desktop that names none); the tmux socket of the nodeterm on the computer, and the one a desktop that drives the computer over SSH uses (its sessions, project files and status slices are read there too). Finds a Server Edition's data dir |
 | From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body), also when remote access is turned on only after pairing; an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
 | Terminal (co-attach to the live tmux session) | ✓ | xterm.js renderer, native input bar, special keys, swipe = tmux scroll. Tap a link (also one wrapped over several rows, or an OSC 8 link): the phone names its host and opens it only when you confirm, and only an http(s) one. The Copy chip opens a sheet of the screen's lines and links to select and copy or share. A copy the pane sends itself (OSC 52, e.g. vim's `"+y`) reaches the clipboard too, but tmux's copy-mode is out of easy reach on a touch screen |
+| Retained terminal history search | both | Find searches all retained host output on the exact stream/pane, literal case-sensitive matches with line numbers and explicit caps; captured Copy search stays local |
 | Dictation into the input bar | ✓ | A mic beside Send: Android's speech recognizer, in the phone's language, writes into the draft and never sends it. The microphone permission is asked on the first tap; no mic shows on a phone without a recognizer. Not the on-device Whisper of iOS and the desktop (see [Known gaps](../docs/android.md#known-gaps)); the keyboard's own voice typing works too |
-| Sleeping (Eco) session opened | ✓ | Through the relay the computer wakes it on open. Over SSH the phone offers the desktop's wake line (`--resume <id>`, + permission mode for Claude only), while a shell owns the pane, typed only on a tap |
+| Sleeping (Eco) session opened | ✓ | Relay wakes an eligible owned offscreen/closed-project node without switching tabs. Direct SSH offers an explicit wake tap. Both apply the agent's measured policy and preserve Pause/owner/process guards |
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay when it is the computer's own; a session another computer's nodeterm runs there, or one no listing names, is not offered the relay |
 | Sessions of the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Over direct SSH the phone offers the relay instead |
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches. On your network the phone opens the relay leg next to SSH for it; with no relay leg (remote access off) the button is disabled and says why |
 | New plain terminal on an SSH host | ✓ (`A90`, installed beta 10/code 11) | Focused Pixel Home/project/custom cwd/input/history, restart/update/reconnect and exact End pass. Independent Phone terminals group; no desktop canvas/agent registration. Item 32 Partial: relay plain-shell creation/input/End pass, managed and cellular creation pending; A91 empty-host variant passes |
-| Wake / refresh / rename / end session | relay (end: both) | `node.*` verbs, through the relay leg next to SSH when on your network; over SSH "end" stops the tmux session only |
-| Kanban board, move cards, labels | relay (reads: both) | `projects.ensureBoard/setCardColumn/editCardLabels`; on your network the writes go through the relay leg next to SSH, and are disabled with the reason when there is none |
-| Source control: status, diffs, stage/unstage, commit, push/pull, recent commits | relay | The desktop's typed `git.*` bridge on the project's folder (no free-form git). On your network it goes through the relay leg next to SSH; not for the computer's SSH projects or a project with no folder, which say why. Merge conflicts are listed and their diff shown; resolve them on the computer or in a terminal |
-| Inbox: approvals, questions, finished turns | ✓ | Held hook approvals are answered deterministically (never with keystrokes); a multi-select question lists its options but is answered in the session; each card shows its node's context % when known |
+| Wake / refresh / rename / end session | relay and current Desktop SSH service (end: both) | Typed node verbs; SSH service acknowledges nudge delivery. Server has no renderer/node nudges; inspect actual wake/rename result |
+| Kanban board, move cards, labels | both on current Desktop/Server | Typed selected-profile SSH service uses the actual WorkspaceStore save queue and mounted change broadcasts. Server serves local owned projects; Desktop can serve its own SSH-project metadata. Older hosts need an allowed relay |
+| Source control: status, diffs, stage/unstage, commit, push/pull, recent commits | both | Eight typed verbs, admitted physical folder/repository-root jail, literal filenames and bounded results. Third-machine/no-folder projects refuse; uncertain writes never replay. Resolve merge conflicts on the computer or in a terminal |
+| Inbox: approvals, questions, finished turns | ✓ | Request-owned held approvals; Always allow confirms a concrete original rule and scope. Full held Claude questions submit every single/multi selection through hook JSON. Legacy unheld multi-select opens the session; context % when known |
 | Read-ack (reading a finished session clears it on the computer) | ✓ | `inbox.ack` over the relay, `~/.nodeterm/acks` over SSH |
 | Usage (rate limits per account) | ✓ | From the agent-status mirror, with a pace line ("5h usage pace faster") when the reset time is known |
-| All computers: every paired computer's Inbox and Usage on one screen | ✓ | With two or more computers paired: cards newest first across computers, each naming its computer and answered on it; one Usage section per computer that reports usage. Each computer's row shows how many of its approvals and questions are open, from its last listing (the list dials nothing) |
+| All computers: every paired computer's Inbox and Usage on one screen | ✓ | With two or more computers paired: cards newest first across computers, each naming its computer and answered on it; one Usage section per computer that reports usage. Each computer's row shows how many of its approvals and questions are open, from saved snapshots in the host list; All computers watches and refreshes hosts while visible |
 | Notifications | local | See "Notifications" below |
 
 ## Before using it away from your computer

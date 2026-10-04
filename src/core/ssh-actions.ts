@@ -70,8 +70,8 @@ function request(raw: string, instance: string, nonce: string): SshActionRequest
   return r
 }
 
-/** One bounded ledger per live instance. Outcomes remain until stop; completed retries never
- * execute twice, and a fresh process cannot adopt a previous instance's uncertain requests. */
+/** One bounded ledger per live instance. Outcomes remain within their immutable retry window;
+ * completed retries never execute twice, and a fresh process cannot adopt old uncertain requests. */
 export class SshActionsService {
   readonly instance = randomUUID()
   readonly root: string

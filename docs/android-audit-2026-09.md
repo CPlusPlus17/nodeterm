@@ -75,8 +75,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
 | [A54](#a54) | low |  | small | security/bug | ✅ fixed in `32330df` · PairingClient trusts an unbounded Content-Length / EOF body from the pairing endpoint |
 | [A55](#a55) | low |  | medium | parity/gap | ✅ fixed in `71b592a`, `0772cbf` · Inbox and Usage are per computer; iOS merges them across all paired computers |
-| [A56](#a56) | low |  | small | parity/gap | 📝 not built, by decision (`38fa6c4`): a blind `2` can answer No or switch to auto mode on current Claude Code · Approval cards lack iOS's "Always allow" answer |
-| [A57](#a57) | low |  | small | parity/gap | ✅ fixed in `8dbeb48` · Multi-select AskUserQuestion cards fall back to "Open session" |
+| [A56](#a56) | low |  | small | parity/gap | ✅ fixed in `db4abccf`, `7c206ec5` (A105): original concrete hook rules, never blind `2`; physical persistence remains open · Approval cards lack iOS's "Always allow" answer |
+| [A57](#a57) | low |  | small | parity/gap | ✅ display fixed in `8dbeb48`; full held answers in `db4abccf` (A106) · Multi-select AskUserQuestion cards fall back to "Open session" |
 | [A58](#a58) | low |  | small | parity/gap | ✅ fixed in `a44f16c` · Usage and feed cards omit iOS's pace line and the context indicator on event cards |
 | [A59](#a59) | low |  | small | parity/gap | ✅ fixed in `57804cf`, `8020796` · No built-in dictation (iOS has on-device Whisper plus a Cloud engine) |
 | [A60](#a60) | low |  | small | ci-docs/bug | ✅ fixed in `67e6297` · Interop fixture needs the Electron binary, which is downloaded at test time inside the 20 s ready window, despite the workflow saying 'not Electron' |
@@ -119,6 +119,16 @@ the audit's proposal, the handover's progress log says how and why.
 | [A97](#a97) | low | | small | parity/gap | ✅ fixed in `8443e71e`; isolated control/restored 25-method runs / 31 mutants and protocol730/70/app checks pass; beta 11 prepared, physical follow-up pending · All computers does not refresh live while visible (A55 residual) |
 | [A98](#a98) | low | | small | terminal/UX | ✅ fixed in `1b1872f1`; 9 bounded JVM checks / 13 isolated mutants, protocol730/70 and app checks pass; beta 11 prepared, physical follow-up pending · Captured terminal output cannot be searched |
 | [A99](#a99) | low | | small | security/risk | ✅ fixed in `e07071e9`; actual Linux control/restored 19 tests / 16 isolated mutants and protocol730/70/app/desktop checks pass; physical included-key pairing pending · SSH host-key discovery ignores recursive external Includes (A49 residual) |
+| [A100](#a100) | medium | | medium | terminal/gap | ✅ source fixed in `2f693d83, 97b8a9a4, 4f1985f5` · Retained host history search; new physical checks pending |
+| [A101](#a101) | medium | | small | runtime/bug | ✅ source fixed in `fbaa535d` · Interrupted typed session-host reads reconnect; source regression verified |
+| [A102](#a102) | medium | | medium | protocol/gap | ✅ source fixed in `e584586f` · Cold relay attach retains trusted project launch settings; new physical checks pending |
+| [A103](#a103) | medium | | medium | protocol/gap | ✅ source fixed in `91e6a3f5` · Agent approval policy survives launch, resume and wake; new physical checks pending |
+| [A104](#a104) | medium | | medium | runtime/gap | ✅ source fixed in `2d6cb2cd` · Offscreen Sleeping nodes can wake without switching projects; new physical checks pending |
+| [A105](#a105) | low | | medium | parity/gap | ✅ source fixed in `db4abccf, 7c206ec5` · Always allow uses original concrete hook rule scopes; new physical checks pending |
+| [A106](#a106) | low | | medium | parity/gap | ✅ source fixed in `db4abccf` · Complete held Claude questions have deterministic answers; new physical checks pending |
+| [A107](#a107) | medium | | medium | parity/gap | ✅ source fixed in `489c30a8` · Typed source control works on direct SSH; new physical checks pending |
+| [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
+| [A109](#a109) | low | | small | tests/bug | ✅ source fixed in `4e2f877d` · Three-digit findings retain device coverage; source regression verified |
 
 ## A01
 
@@ -938,6 +948,8 @@ Add an FCM leg to the backend's `/v1/push/notify` and `/v1/push/live-update`, sh
 
 ## A26
 
+**Current follow-up:** A108 now adds selected-profile SSH Board and Desktop node nudges without a relay; cold canvas New remains relay-only.
+
 **New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH**
 
 - Severity: **medium**; claimed by auditor: high; effort: medium; area: parity; kind: gap
@@ -1063,6 +1075,8 @@ Over SSH, refuse or relay-route nodes whose project has `sshTarget` (the relay's
 > A precision note on wording: the resume is only offered, never typed automatically. Accepting it launches the agent CLI on the Mac, where the transcript does not exist.
 
 ## A29
+
+**Current follow-up:** A107 adds the same eight typed verbs over direct SSH with a physical project/repository jail and no uncertain replay.
 
 **No source-control screen, although the protocol layer already implements the git verbs iOS uses**
 
@@ -1903,6 +1917,8 @@ ledger is unchanged.
 
 ## A56
 
+**Current follow-up:** A105 implements request-owned remembered rules through hook JSON; the original blind-digit proposal below remains unsafe.
+
 **Approval cards lack iOS's "Always allow" answer**
 
 - Severity: **low**; claimed by auditor: low; effort: small; area: parity; kind: gap
@@ -1929,6 +1945,8 @@ Add an "Always allow" action for Claude approvals. It re-checks that the node is
 >    - Also add the gap to docs/android.md "Known gaps" if it is not built.
 
 ## A57
+
+**Current follow-up:** A106 extends the display fix to complete held single/multi question answers through hook JSON. Legacy unheld multi-select still opens the session.
 
 **Multi-select AskUserQuestion cards fall back to "Open session"**
 
@@ -2323,6 +2341,8 @@ State the supported range ('JDK 17–24; Android Studio's bundled JDK works'), o
 > 3. Bump the wrapper to Gradle 9.1+. This needs its AGP compatibility with AGP 8.9.1 checked first; I have not verified that.
 
 ## A72
+
+**Current follow-up:** A102 now includes trusted project env/shell and A103 preserves measured per-agent policy; old evidence below describes the earlier gap.
 
 **Phone-started sessions are created without the agent-specific env, so for their whole life they get no hook-reply approvals, no canvas control and no pane ownership**
 
@@ -3464,3 +3484,83 @@ private APK: `.nodeterm/android-beta-11/nodeterm-android-0.1.0-beta.11.apk`.
 No installation, new physical PASS or new CI result is claimed by this preparation. Each
 requested push still requires green exact-head workflow verification; current phone cleanup,
 rotation restoration and background watcher checks remain pending.
+
+## A100
+
+**Retained host history search**
+
+Source change: `2f693d83, 97b8a9a4, 4f1985f5`.
+
+Find previously searched only phone-captured output. It now searches retained host history on the attached generation/exact pane, with literal case-sensitive queries, original line numbers and explicit capture/result bounds. Search does not change copy mode or input. Old backends refuse without replacement. Query/stream/lifecycle fences discard stale answers. Actual producer/consumer and retained output-order tests pass; physical Find flow remains pending.
+
+## A101
+
+**Interrupted typed session-host reads reconnect**
+
+Source change: `fbaa535d`.
+
+An EPIPE in the existing socket suite also reproduced on the earlier baseline. Bounded reconnect/resend now allows only named typed reads after EPIPE/ECONNRESET. Sent writes, deadlines, host refusals and unknown errors do not replay. Actual socket tests and three isolated policy mutants pass.
+
+## A102
+
+**Cold relay attach retains trusted project launch settings**
+
+Source change: `e584586f`.
+
+Cold phone attaches previously omitted project env/shell. The host prepares trust-aware settings without spawning, resolves saved project/account/agent ownership ahead of phone hints, rechecks warm races, then commits reply/snapshot/attach synchronously. Existing warm sessions retain launch facts. Real shared launch builders and 22 mutations verify the source; actual fixture discovery is isolated from host tmux. Physical/live launches remain pending.
+
+## A103
+
+**Agent approval policy survives launch, resume and wake**
+
+Source change: `91e6a3f5`.
+
+Non-Claude launch/resume/wake previously dropped project approval policy. Android now matches measured desktop agent dialects and the actual host Codex vocabulary; only Claude uses its own auto capability gate. Unsupported modes retain CLI defaults. Eight actual mirror/desktop-builder fixtures and six mutations pass; a live agent/device matrix remains pending.
+
+## A104
+
+**Offscreen Sleeping nodes can wake without switching projects**
+
+Source change: `2d6cb2cd`.
+
+The renderer-only mounted-node nudge left offscreen/closed-project sessions Sleeping. The desktop now resolves unique saved ownership and actual live/released session proof across awaits, preserving Pause, exit/process/generation guards and original SSH routing. A typed persistent-backend wake is additive; an old backend refuses without restart. Actual socket/tmux regressions and 22 mutations pass. Windows runtime and physical inactive-project/lifecycle checks remain open.
+
+## A105
+
+**Always allow uses original concrete hook rule scopes**
+
+Source change: `db4abccf, 7c206ec5`.
+
+A56 is now implemented without its unsafe proposed blind digit. Eligible original addRules suggestions carry exact tool/content/destination and UI confirmation; the guarded v2 reply uses updatedPermissions. Android and Desktop/Server offer the same original scopes. Gone/replaced/unsupported requests never type keys. Actual shipped managed-shell consumer and Kotlin/TypeScript fixtures pass; live CLI rule application and physical persistence remain open. iOS adoption is owed to @eneskirca.
+
+## A106
+
+**Complete held Claude questions have deterministic answers**
+
+Source change: `db4abccf`.
+
+A57 display-only work is extended to all supported held questions. Parent PreToolUse AskUserQuestion requests publish full question schemas, submit every selected index, preserve original input and derive exact answer labels through hook JSON. Held v2 cards omit legacy digits for old phones; unheld multi-select remains Open session. Request/card/file fences and consumed-hook POST govern settlement. The 52 shared hook/Android mutants cover A105/A106 together; live CLI and physical question flows remain open.
+
+## A107
+
+**Typed source control works on direct SSH**
+
+Source change: `489c30a8`.
+
+The existing eight Git verbs now execute over POSIX SSH inside physically admitted local/driven roots and repository roots, with quoted argv/literal paths, NUL-delimited parsing, bounded output and confirmed status. Third-machine projects refuse. Unknown writes retire the connection with no replay. Upstream fallback requires the exact native exit-128 missing-upstream diagnostic for the pre-dispatch branch. Real SSH Git tests include hostile filenames, symlink jail escape, hooks/signatures, rejected pushes and transport uncertainty. Twenty-six pure and five real transport/routing mutants are caught; physical Source Control remains pending.
+
+## A108
+
+**Owned SSH Board and Desktop session actions**
+
+Source change: `d716138c`, `585e726f`.
+
+Current Desktop/Server exposes bounded private typed request/response files under the exact selected userData profile, with fresh instance/host-time advertisement, ownership and nonce guards. Board operations use the actual WorkspaceStore save queue and change broadcasts. Desktop offers delivery-only wake/refresh/rename nudges; Server offers Board only. Duplicate requests do not execute twice inside their immutable retry window; unknown results never replay/fallback. Another desktop's unowned driven projects refuse. Canvas cold New remains unsupported until a host-owned launch API exists. Actual filesystem/FIFO, Desktop wiring and headless Server checks pass (33 tests); 29 native and 29 Android client mutation variants catch regressions. Real Node/Kotlin/generated-shell interop passes; the full merged Gradle gate verifies MINA and bundle coverage. Physical service flows remain pending.
+
+## A109
+
+**Three-digit findings retain device coverage**
+
+Source change: `4e2f877d`.
+
+The documentation scanner recognized only two-digit finding IDs, silently ignoring continuation IDs from A100. Both heading and reference scanners now accept full IDs with at least two digits and reject malformed suffixes. The actual regression and restored control pass; reverting either production regex is caught by an assertion. Two mutants are killed.
