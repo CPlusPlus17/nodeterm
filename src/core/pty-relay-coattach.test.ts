@@ -8,22 +8,8 @@ import { IPC } from '../shared/ipc'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import { sessionName } from './tmux-naming'
 
-/**
- * AUDIT A13 — the app's own tmux client must not detach a phone's relay-served client.
- *
- * A relay-served pty (`attachDetached`, the phone over the relay) attaches with `-A` alone, so it
- * mirrors a desktop client that is already there. The reverse order was the bug: when the desktop
- * mounts a node while a phone is attached to it — a phone that started a session and registered it
- * as a node, or a node remounting on a project switch / park expiry / offscreen revive while a
- * phone watches — the renderer's client attached with `-A -D`, `-D` detached the phone's tmux
- * client, it exited 0, and the phone said "The session ended (exit 0)." Relay ptys are deliberately
- * not indexed in `byPersistKey`, so co-attach could not join them either.
- *
- * What is pinned here is the ARGV `PtyManager` hands tmux: `-D` present when no relay client of
- * that node is live (the unchanged "one app client per session" rule), absent when one is. That
- * `-D` is what detaches the other client, and that `-A` alone leaves it attached, is a property of
- * tmux and is measured against a real one in relay-coattach.realtmux.test.ts.
- */
+/** A13: every local painter co-attaches; only privately attested app painters can be retired.
+ * The native process/tmux boundary is exercised in relay-coattach.realtmux.test.ts. */
 
 interface FakePty {
   onDataCb?: (d: string) => void
@@ -32,6 +18,17 @@ interface FakePty {
 }
 const spawned: FakePty[] = []
 const spawnArgs: Array<{ file: string; args: string[] }> = []
+const painterTracks = vi.hoisted(() => [] as Array<{
+  options: { userData: string; session: string; pid: number; current(): boolean }
+  close: ReturnType<typeof vi.fn>
+}>)
+vi.mock('./tmux-painter', () => ({
+  trackTmuxPainter: (options: typeof painterTracks[number]['options']) => {
+    const close = vi.fn()
+    painterTracks.push({ options, close })
+    return { close, settled: Promise.resolve() }
+  }
+}))
 
 // Pin the persistence backend (see src/core/__fixtures__/no-session-host.ts): whether this suite
 // exercised tmux or a real session-host shim must not depend on whether anyone ran a build.
@@ -146,6 +143,7 @@ describe("the app's tmux client beside a relay-served (phone) client — audit A
   beforeEach(() => {
     spawned.length = 0
     spawnArgs.length = 0
+    painterTracks.length = 0
     liveTmuxSessions.clear()
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-relayco-'))
     fake = fakePlatform({ userDataDir })
@@ -179,11 +177,47 @@ describe("the app's tmux client beside a relay-served (phone) client — audit A
     }>
   const sinks = () => ({ onData: vi.fn(), onExit: vi.fn() })
 
-  it('keeps -D when no relay client of the node is live (the unchanged one-app-client rule)', async () => {
+  it('tracks only the local app painter after creation; relay sinks are never takeover candidates', async () => {
+    const m = await tmuxManager()
+    m.attachDetached('node-1', sinks())
+    expect(painterTracks).toHaveLength(0)
+    await create()
+    expect(painterTracks).toHaveLength(1)
+    expect(painterTracks[0].options).toMatchObject({ userData: userDataDir, session: 'nt-node-1', pid: 1 })
+    expect(painterTracks[0].options.current()).toBe(true)
+  })
+
+  it('joins one painter across app viewers, then retires its receipt only on final release', async () => {
+    const m = await tmuxManager()
+    const first = await create()
+    await fake.handlers[IPC.ptyCreate](2, { cols: 100, rows: 40, persistKey: 'node-1' })
+    expect(painterTracks).toHaveLength(1)
+    expect(spawnArgs).toHaveLength(1)
+    m.kill(ALICE, first.sessionId)
+    expect(painterTracks[0].close).not.toHaveBeenCalled()
+    expect(painterTracks[0].options.current()).toBe(true)
+    m.kill(2, first.sessionId)
+    expect(painterTracks[0].close).toHaveBeenCalledOnce()
+    expect(painterTracks[0].options.current()).toBe(false)
+  })
+
+  it('retires painter tracking on both process exit and normal app shutdown', async () => {
+    const m = await tmuxManager()
+    await create()
+    spawned[0].onExitCb?.({ exitCode: 0 })
+    expect(painterTracks[0].close).toHaveBeenCalledOnce()
+    expect(painterTracks[0].options.current()).toBe(false)
+    await create('node-2')
+    await m.killAll()
+    expect(painterTracks[1].close).toHaveBeenCalledOnce()
+    expect(painterTracks[1].options.current()).toBe(false)
+  })
+
+  it('co-attaches even when no in-process relay client is known', async () => {
     await tmuxManager()
     await create()
     expect(spawnArgs).toHaveLength(1)
-    expect(localAttachFlags(spawnArgs[0].args)).toEqual(['-A', '-D'])
+    expect(localAttachFlags(spawnArgs[0].args)).toEqual(['-A'])
   })
 
   it('co-attaches WITHOUT -D while a relay client of the same node is attached', async () => {
@@ -219,27 +253,27 @@ describe("the app's tmux client beside a relay-served (phone) client — audit A
     expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A'])
   })
 
-  it('a relay client of ANOTHER node does not take -D away', async () => {
+  it('a relay client of another node does not change safe local attachment', async () => {
     const m = await tmuxManager()
     m.attachDetached('node-2', sinks())
     await create('node-1')
-    expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A', '-D'])
+    expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A'])
   })
 
-  it('restores -D once the relay client has left (the stream was closed)', async () => {
+  it('preserves unknown external viewers after an in-process relay stream closes', async () => {
     const m = await tmuxManager()
     const relayId = m.attachDetached('node-1', sinks())
     m.kill(null, relayId) // the phone detached right before the desktop mounted the node
     await create()
-    expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A', '-D'])
+    expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A'])
   })
 
-  it("restores -D once the relay client's pty has exited", async () => {
+  it("preserves unknown external viewers after a relay pty exits", async () => {
     const m = await tmuxManager()
     m.attachDetached('node-1', sinks())
     spawned[0].onExitCb?.({ exitCode: 0 })
     await create()
-    expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A', '-D'])
+    expect(localAttachFlags(spawnArgs[1].args)).toEqual(['-A'])
   })
 
   it('the next remount (park expiry, offscreen revive) still spares a phone that stayed', async () => {
@@ -276,7 +310,7 @@ describe("the app's tmux client beside a relay-served (phone) client — audit A
     }
   })
 
-  it('a relay client over an SSH master does not take -D away from a LOCAL spawn of the same id', async () => {
+  it('a relay client over an SSH master leaves local external viewers untouched', async () => {
     // Not a state the app reaches (a remote node refuses a local spawn — `requireRemote`), but the
     // predicate must ask about the tmux server the spawn attaches to, not about the node id alone.
     const m = await tmuxManager()
@@ -284,15 +318,15 @@ describe("the app's tmux client beside a relay-served (phone) client — audit A
     await create('node-1')
     const local = spawnArgs.filter((s) => s.file !== '/usr/bin/ssh')
     expect(local).toHaveLength(1)
-    expect(localAttachFlags(local[0].args)).toEqual(['-A', '-D'])
+    expect(localAttachFlags(local[0].args)).toEqual(['-A'])
   })
 })
 
 describe('tmuxAttachFlags (A13)', () => {
   it('drops -D for a relay-served pty and for the app client beside one, and only then', async () => {
     const { tmuxAttachFlags } = await import('./pty-manager')
-    expect(tmuxAttachFlags(false)).toEqual(['-A', '-D'])
-    expect(tmuxAttachFlags(false, false)).toEqual(['-A', '-D'])
+    expect(tmuxAttachFlags(false)).toEqual(['-A'])
+    expect(tmuxAttachFlags(false, false)).toEqual(['-A'])
     expect(tmuxAttachFlags(false, true)).toEqual(['-A'])
     expect(tmuxAttachFlags(true)).toEqual(['-A'])
     expect(tmuxAttachFlags(true, true)).toEqual(['-A'])

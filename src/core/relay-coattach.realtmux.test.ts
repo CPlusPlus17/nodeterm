@@ -1,24 +1,13 @@
-// AUDIT A13, AGAINST A REAL TMUX: the app's client must not detach a phone's relay-served client.
-//
-// pty-relay-coattach.test.ts pins the ARGV `PtyManager` builds: `-A -D` for the app's own client
-// normally, `-A` alone while a relay-served client of the same node is attached. What those flags
-// DO to a client that is already attached is a property of tmux, so it is measured here, with the
-// flags taken from the same `tmuxAttachFlags` the spawn path calls and the exact conf `tmuxConf()`
-// ships.
-//
-// The first test is the control, and it is the A13 mechanism itself: the app's `-A -D` detaches the
-// phone's client, which exits 0 — the "The session ended (exit 0)." the phone showed. Without it,
-// the second test could pass on a harness that simply cannot observe a detach.
-//
-// The clients are CONTROL-MODE clients (`tmux -C` over plain pipes) rather than pty-backed ones:
-// they need no terminal, and node-pty is a native module this suite must not depend on. `-D`
-// detaches every other client of the session whatever its mode (measured on tmux 3.4), so a control
-// client stands in for the phone's pty client exactly where it matters.
+// A13 against real tmux. Ordinary attach-only control clients represent the external SSH phone
+// at the actual tmux-client boundary; app painters use the production attach flags and tracker.
+// No native node-pty/SSH/device proof is claimed here. The legacy -D control proves the harness
+// observes detachment, while current claims run the actual server-side identity format gate.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { execFileSync, spawn, type ChildProcess } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { tmuxAttachFlags, tmuxConf } from './pty-manager'
+import { trackTmuxPainter, painterDetachArgs } from './tmux-painter'
 import { makeTmuxTmpdir } from './tmux-test-socket'
 
 // Only two PURE exports of pty-manager are used here; the module still imports node-pty at load,
@@ -44,6 +33,7 @@ const TMUX = process.platform === 'win32' ? null : findTmux()
 let work: string
 let conf: string
 const children: ChildProcess[] = []
+const trackers: Array<ReturnType<typeof trackTmuxPainter>> = []
 
 /** The sandbox dir LAST: a caller never chooses which server it reaches. */
 function tmuxEnv(): NodeJS.ProcessEnv {
@@ -87,6 +77,44 @@ function clientPids(session: string): number[] {
   }
 }
 
+function phoneAttach(session: string): ChildProcess {
+  const child = spawn(TMUX as string, ['-L', SOCKET, '-C', 'attach-session', '-t', `=${session}`],
+    { env: tmuxEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
+  child.stdout?.resume(); child.stderr?.resume(); children.push(child)
+  return child
+}
+
+function own(child: ChildProcess, session: string, userData = work) {
+  const handle = trackTmuxPainter({ userData, tmux: TMUX as string, socket: SOCKET, session,
+    pid: child.pid as number, current: () => child.exitCode === null && child.signalCode === null,
+    run: async (args) => tmux(args.slice(2)) })
+  trackers.push(handle)
+  return handle
+}
+
+function identity(session: string, child: ChildProcess) {
+  const lines = tmux(['list-clients', '-t', `=${session}`, '-F', '#{client_pid}|#{client_created}|#{client_name}|#{pid}']).trim().split('\n')
+  const line = lines.find((row) => row.startsWith(`${child.pid}|`))
+  if (!line) throw new Error('Owned test client is missing')
+  const [pid, created, name, server] = line.split('|')
+  return { pid: Number(pid), created, name, server: Number(server), session }
+}
+
+function setGrid(session: string, child: ChildProcess, width: number, height: number): void {
+  const c = identity(session, child)
+  tmux(['refresh-client', '-t', c.name, '-C', `${width}x${height}`])
+}
+
+function widths(session: string): string[] {
+  return tmux(['list-clients', '-t', `=${session}`, '-F', '#{client_pid}:#{client_width}']).trim().split('\n').sort()
+}
+
+function paneGrid(session: string): string {
+  // tmux 3.7c leaves client_height empty for control clients, even in its default listing.
+  // Actual pane geometry still measures both axes; do not reduce the unequal-grid proof to widths.
+  return tmux(['display-message', '-p', '-t', `=${session}:`, '#{pane_width}x#{pane_height}']).trim()
+}
+
 async function waitUntil(pred: () => boolean, ms = 4000): Promise<void> {
   const t0 = Date.now()
   while (!pred()) {
@@ -116,6 +144,7 @@ beforeAll(() => {
 
 afterAll(() => {
   if (!TMUX) return
+  for (const tracker of trackers) tracker.close()
   for (const c of children) if (c.exitCode === null) c.kill()
   try {
     tmux(['kill-server']) // our PRIVATE socket — nothing else can be on it
@@ -132,7 +161,7 @@ describe('a relay-served client beside the app client on a real tmux (audit A13)
     await waitUntil(() => clientPids(session).includes(phone.pid as number))
 
     // The pre-A13 app client: no relay client known, or not asked.
-    const app = attach(session, tmuxAttachFlags(false))
+    const app = attach(session, ['-A', '-D'])
     await waitUntil(() => clientPids(session).includes(app.pid as number))
 
     expect(await exitWithin(phone, 3000)).toBe(0)
@@ -152,5 +181,95 @@ describe('a relay-served client beside the app client on a real tmux (audit A13)
     // the control above exits well inside this window.
     expect(await exitWithin(phone, 750)).toBe('still-attached')
     expect(clientPids(session).sort()).toEqual([phone.pid, app.pid].sort())
+  })
+
+  it.skipIf(!TMUX)('direct SSH first: remount retires only an owned app painter and keeps unequal phone grids', async () => {
+    const session = 'nt-a13-ssh-first'
+    tmux(['new-session', '-d', '-s', session, 'sleep', '300'])
+    const phone = phoneAttach(session)
+    await waitUntil(() => clientPids(session).includes(phone.pid as number))
+    setGrid(session, phone, 56, 48)
+    await waitUntil(() => paneGrid(session) === '56x48')
+    const first = attach(session, tmuxAttachFlags(false))
+    await own(first, session).settled
+    setGrid(session, first, 120, 30)
+    await waitUntil(() => paneGrid(session) === '120x30')
+    expect(widths(session)).toEqual([`${phone.pid}:56`, `${first.pid}:120`].sort())
+
+    const next = attach(session, tmuxAttachFlags(false))
+    const replacement = own(next, session)
+    await replacement.settled
+    await waitUntil(() => first.exitCode !== null)
+    setGrid(session, next, 100, 40)
+    await waitUntil(() => paneGrid(session) === '100x40')
+    expect(first.exitCode).toBe(0)
+    expect(await exitWithin(phone, 150)).toBe('still-attached')
+    expect(clientPids(session).sort()).toEqual([phone.pid, next.pid].sort())
+    expect(widths(session)).toEqual([`${phone.pid}:56`, `${next.pid}:100`].sort())
+    replacement.close(); next.kill()
+    await waitUntil(() => clientPids(session).length === 1 && paneGrid(session) === '56x48')
+    expect(clientPids(session)).toEqual([phone.pid])
+    expect(await exitWithin(phone, 150)).toBe('still-attached')
+  })
+
+  it.skipIf(!TMUX)('app first: a direct SSH phone stays through later app takeover and release', async () => {
+    const session = 'nt-a13-app-first'
+    const first = attach(session, tmuxAttachFlags(false))
+    const initial = own(first, session)
+    await initial.settled
+    const phone = phoneAttach(session)
+    await waitUntil(() => clientPids(session).includes(phone.pid as number))
+    const next = attach(session, tmuxAttachFlags(false))
+    const replacement = own(next, session)
+    await replacement.settled
+    await waitUntil(() => first.exitCode !== null)
+    expect(clientPids(session).sort()).toEqual([phone.pid, next.pid].sort())
+    replacement.close(); next.kill()
+    await waitUntil(() => next.exitCode !== null || next.signalCode !== null)
+    expect(clientPids(session)).toEqual([phone.pid])
+    expect(await exitWithin(phone, 150)).toBe('still-attached')
+  })
+
+  it.skipIf(!TMUX)('does not claim another profile or an unmarked legacy app client', async () => {
+    const session = 'nt-a13-other-profile'
+    const old = attach(session, tmuxAttachFlags(false))
+    const otherProfile = fs.mkdtempSync(path.join(work, 'other-profile-'))
+    await own(old, session, otherProfile).settled
+    const unmarked = attach(session, tmuxAttachFlags(false))
+    await waitUntil(() => clientPids(session).includes(unmarked.pid as number))
+    const next = attach(session, tmuxAttachFlags(false))
+    await own(next, session).settled
+    expect(clientPids(session).sort()).toEqual([old.pid, unmarked.pid, next.pid].sort())
+    expect(await exitWithin(old, 150)).toBe('still-attached')
+    expect(await exitWithin(unmarked, 150)).toBe('still-attached')
+  })
+
+  it.skipIf(!TMUX)('the server-side gate preserves the old client when the incoming painter disappears', async () => {
+    const session = 'nt-a13-new-gone'
+    const old = attach(session, ['-A'])
+    const incoming = attach(session, ['-A'])
+    await waitUntil(() => clientPids(session).length === 2)
+    const args = painterDetachArgs(SOCKET, identity(session, old), identity(session, incoming))
+    incoming.kill()
+    await waitUntil(() => !clientPids(session).includes(incoming.pid as number))
+    tmux(args.slice(2))
+    expect(await exitWithin(old, 150)).toBe('still-attached')
+    expect(clientPids(session)).toEqual([old.pid])
+  })
+
+  it.skipIf(!TMUX)('the server-side gate refuses an old client that switched to another session', async () => {
+    const session = 'nt-a13-old-switched'
+    const old = attach(session, ['-A'])
+    const incoming = attach(session, ['-A'])
+    await waitUntil(() => clientPids(session).length === 2)
+    const oldIdentity = identity(session, old)
+    const args = painterDetachArgs(SOCKET, oldIdentity, identity(session, incoming))
+    const other = 'nt-a13-different'
+    tmux(['new-session', '-d', '-s', other, 'sleep', '300'])
+    tmux(['switch-client', '-c', oldIdentity.name, '-t', `=${other}`])
+    tmux(args.slice(2))
+    expect(await exitWithin(old, 150)).toBe('still-attached')
+    expect(clientPids(other)).toEqual([old.pid])
+    expect(clientPids(session)).toEqual([incoming.pid])
   })
 })
