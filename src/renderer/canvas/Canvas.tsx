@@ -116,6 +116,7 @@ import { Tooltip } from '../components/Tooltip'
 import {
   IconBranch,
   IconBroadcast,
+  IconChat,
   IconCanvasView,
   IconClose,
   IconCollapse,
@@ -158,6 +159,7 @@ import {
   SettingsPage,
   SourceControlPanel,
   ExplorerPanel,
+  LiveChatDrawer,
   ShortcutsPanel,
   OnboardingFlow,
   DictationOverlay,
@@ -436,6 +438,15 @@ const sshDisconnect = (scopeId: string): Promise<unknown> =>
 import { opensInEditor } from '../lib/openTarget'
 import { displacedFilesPatch } from '../lib/filesNode'
 import { newEntryPath, parentDir } from '../lib/explorerCreate'
+import {
+  liveChatIsOpen,
+  nextLiveChat,
+  readLiveChatLink,
+  readLiveChatPinned,
+  writeLiveChatLink,
+  writeLiveChatPinned,
+  type LiveChatState
+} from '../lib/liveChatPin'
 import {
   explorerIsOpen,
   nextExplorerPin,
@@ -3653,14 +3664,44 @@ export function Canvas() {
       }),
     []
   )
-  // The popover's "Open chat" (`nodeterm:live-chat`, `{ linkId }`). A STUB that opens nothing yet:
-  // Task 8 replaces it with the Live chat drawer. It exists so the event is heard
-  // (lib/nodeterm-events.test.ts pairs every dispatch with a listener).
+  // The Live chat drawer (lib/liveChatPin — the Explorer's pin pattern, its own keys): which link it
+  // follows and whether it is docked are this machine's view state, in localStorage only. Opened by
+  // the popover's "Open chat" (`nodeterm:live-chat`, `{ linkId }` — this is its ONE listener, pinned
+  // in lib/nodeterm-events.test.ts) and by the palette's "Live chat".
+  const [liveChat, setLiveChat] = useState<LiveChatState>(() => ({
+    pinned: readLiveChatPinned(),
+    dismissed: false,
+    open: false,
+    linkId: readLiveChatLink()
+  }))
+  const liveChatOpen = liveChatIsOpen(liveChat)
+  const liveChatRef = useRef(liveChat)
+  liveChatRef.current = liveChat
   useEffect(() => {
-    const on = (): void => {}
+    const on = (e: Event): void => {
+      const linkId = (e as CustomEvent<{ linkId?: unknown }>).detail?.linkId
+      if (typeof linkId !== 'string' || !linkId) return
+      // Open chat on a chip IS a pick: the drawer comes back to this link next time.
+      writeLiveChatLink(linkId)
+      setLiveChat((s) => nextLiveChat(s, { kind: 'open', linkId }))
+    }
     window.addEventListener('nodeterm:live-chat', on)
     return () => window.removeEventListener('nodeterm:live-chat', on)
   }, [])
+  const pickLiveChatLink = useCallback((linkId: string) => {
+    writeLiveChatLink(linkId)
+    setLiveChat((s) => nextLiveChat(s, { kind: 'open', linkId }))
+  }, [])
+  const closeLiveChat = useCallback(() => setLiveChat((s) => nextLiveChat(s, { kind: 'close' })), [])
+  const toggleLiveChatPin = useCallback(() => {
+    setLiveChat((s) => {
+      const next = nextLiveChat(s, { kind: 'pin' })
+      writeLiveChatPinned(next.pinned)
+      return next
+    })
+  }, [])
+  /** True while a kanban card modal is open (either board): the drawer then sits above its scrim. */
+  const [cardModalOpen, setCardModalOpen] = useState(false)
   const [liveLinkDialog, setLiveLinkDialog] = useState<LiveLinkTarget | null>(null)
   const closeLiveLinkDialog = useCallback(() => setLiveLinkDialog(null), [])
   /** The facts the ONE availability rule reads, for the node's OWN project (H4): a node of a relay
@@ -12262,6 +12303,8 @@ export function Canvas() {
   // whole board on every Canvas render.
   const setKanbanModalNode = useCallback((id: string | null) => {
     kanbanModalNodeRef.current = id
+    // The Live chat drawer opened from the card's LIVE chip must sit above the modal (`raised`).
+    setCardModalOpen(id !== null)
     // The one place the "is anyone looking at this session" predicate learns about the modal —
     // every asker (the sweep's plan, the node's fire-time re-ask, the nudge) reads it through
     // `isNodeWatched`, so the modal clause cannot go missing from one of them.
@@ -17403,6 +17446,17 @@ export function Canvas() {
     travelToNodeRef.current = travelToNode
   })
 
+  /** The Live chat drawer's "Go to terminal": a modal drawer gives way to the canvas first (its scrim
+   *  would cover the node); a docked one stays. The project switch, a closed project's reopen and the
+   *  board's "open the card" are `travelToNode`'s. */
+  const goToLiveChatNode = useCallback(
+    (nodeId: string) => {
+      if (!liveChatRef.current.pinned) setLiveChat((s) => nextLiveChat(s, { kind: 'close' }))
+      travelToNode(nodeId)
+    },
+    [travelToNode]
+  )
+
   // Prepare-for-update (Windows session host, issue #829). Opened from the update card or ⌘K via
   // `nodeterm:prepare-update`. `prepareUpdateAvailable` gates the ⌘K entry: the main process answers
   // `unsupported` off Windows, when the session host is not the backend, and in the Server Edition.
@@ -18150,11 +18204,13 @@ export function Canvas() {
         entitled: useEntitlement.getState().isPremium,
         serverEdition: isBrowserRuntime(),
         icon: <IconBroadcast />,
+        chatIcon: <IconChat />,
         manage: () => {
           setSettingsSection('live-links')
           setSettingsNonce((n) => n + 1)
           setSettingsOpen(true)
         },
+        openChat: () => setLiveChat((s) => nextLiveChat(s, { kind: 'open' })),
         confirmStopAll: confirmStopAllLiveLinks
       }),
       // Hidden when the canvas has no restartable agent node — the row would have nothing to act
@@ -19069,6 +19125,21 @@ export function Canvas() {
           reveal={reveal}
           pinned={explorer.pinned}
           onTogglePin={toggleExplorerPin}
+        />
+      )}
+
+      {liveChatOpen && (
+        <LiveChatDrawer
+          linkId={liveChat.linkId}
+          pinned={liveChat.pinned}
+          // `kanbanOpen` too: the per-project board reports a closed modal on change, not on unmount,
+          // so a board closed with its card open would leave the flag behind.
+          raised={cardModalOpen && kanbanOpen}
+          beside={liveChat.pinned && explorerOpen && explorer.pinned}
+          onPickLink={pickLiveChatLink}
+          onClose={closeLiveChat}
+          onTogglePin={toggleLiveChatPin}
+          onGoToNode={goToLiveChatNode}
         />
       )}
 

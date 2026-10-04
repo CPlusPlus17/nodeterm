@@ -1,30 +1,19 @@
-import { createContext, memo, useCallback, useContext, useEffect, useId, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { NodeTerminalApi } from '@shared/types'
-import type { WatchLinkControlView, WatchLinkRole, WatchLinkView } from '@shared/watch-link-types'
+import type { WatchLinkView } from '@shared/watch-link-types'
 import { stripBidiControls } from '@shared/watch-link-types'
 import { CHAT_TEXT_MAX, type WatchChatMessage } from '@shared/watch-link/protocol'
 import { useDialogStack } from './dialog-stack'
-import { newControlPassword, PasswordField, useCopied } from './LiveLinkPassword'
+import { useCopied } from './LiveLinkPassword'
+import { ControlHold, ControlSection, hasChat, kickViewer } from './LiveLinkControls'
 import { useMenuFlip } from '../ui/useMenuFlip'
-import { Switch } from '../ui/Switch'
 import {
   CHAT_NOT_SENT_MESSAGE,
   commentFromChat,
-  CONTROL_CHANGE_FAILED_MESSAGE,
-  CONTROL_LOCKED_TEXT,
   formatClock,
   formatRemaining,
-  KICK_FAILED_MESSAGE,
-  KICK_NOT_DONE_MESSAGE,
   KICK_NOTE,
-  PASSWORD_CHANGE_FAILED_MESSAGE,
-  PASSWORD_CHANGE_NOTE,
-  PASSWORD_SAVE_TIMEOUT_MS,
-  PASSWORD_UNCONFIRMED_MESSAGE,
-  PASSWORD_SEPARATE_NOTE,
-  PASSWORD_SHOWN_ONCE,
-  passwordProblemText,
   ROLE_LABEL,
   ROLE_NAME,
   statusLine,
@@ -33,7 +22,7 @@ import {
   waitingViewers
 } from '../lib/liveLink'
 import { thisMachine } from '../lib/machineName'
-import { EMPTY_LINKS, useWatchLinks, viewLinkThread } from '../state/watchLinks'
+import { EMPTY_LINKS, useLinkThread, useWatchLinks } from '../state/watchLinks'
 import { useBoardLog } from '../state/boardLog'
 import { useProjects } from '../state/projects'
 import { sessionForProject } from '../session/session'
@@ -101,20 +90,6 @@ function commentTarget(nodeId: string): { projectId: string; api: NodeTerminalAp
 }
 
 /**
- * Something inside the popover the owner must still be shown — a new Control password whose save is
- * in flight: once core takes it, its plaintext exists nowhere else, so a popover closed under it
- * would lose a password that was changed. `hold()` keeps the popover from closing on an outside
- * click, Escape or Open chat until the returned release runs. The link going away still closes it
- * (nothing is owed for a link that no longer exists). Absent (the drawer): nothing to hold.
- */
-const PopoverHold = createContext<(() => () => void) | null>(null)
-
-/** The roles whose viewers can chat: a Control link is a Commenter link plus typing (spec §2.1). */
-export function hasChat(role: WatchLinkRole): boolean {
-  return role === 'commenter' || role === 'controller'
-}
-
-/**
  * Per-link controls for one node: copy, stop, the viewer list with Kick, and — for a Commenter or
  * Control link — the thread with a reply box and "Copy to card comments" (the owner's explicit act;
  * nothing a viewer writes is ever stored automatically, spec D2) plus Open chat. A Control link adds
@@ -138,7 +113,7 @@ export function LiveLinkPopover({
   const now = useNow(30_000)
   // Below the chip; above it when there is no room below (the dropdown case of useMenuFlip).
   const flip = useMenuFlip(anchor.bottom + 6, anchor.left, anchor.top - 6)
-  // Holds (see `PopoverHold`): a counter, not state — nothing renders from it.
+  // Holds (see `ControlHold`): a counter, not state — nothing renders from it.
   const holds = useRef(0)
   const hold = useCallback((): (() => void) => {
     holds.current++
@@ -204,11 +179,11 @@ export function LiveLinkPopover({
         aria-label="Live links"
         tabIndex={-1}
       >
-        <PopoverHold.Provider value={hold}>
+        <ControlHold.Provider value={hold}>
           {links.map((l) => (
             <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} requestClose={requestClose} />
           ))}
-        </PopoverHold.Provider>
+        </ControlHold.Provider>
       </div>
     </>,
     document.body
@@ -262,7 +237,7 @@ const LinkBlock = memo(function LinkBlock({
             type="button"
             className="confirm__btn live-pop__btn"
             onClick={() => {
-              // The Live chat drawer (Task 8) listens; the popover gives way to it — unless a new
+              // The Live chat drawer (Canvas) listens; the popover gives way to it — unless a new
               // password is still on its way to being shown here.
               if (!requestClose()) return
               window.dispatchEvent(new CustomEvent('nodeterm:live-chat', { detail: { linkId: link.linkId } }))
@@ -309,15 +284,7 @@ const LinkBlock = memo(function LinkBlock({
                     type="button"
                     className="confirm__btn live-pop__btn live-pop__kick"
                     title={KICK_NOTE}
-                    onClick={() => {
-                      setError(null)
-                      api.kick(link.linkId, v.viewerId).then(
-                        (ok) => {
-                          if (!ok) setError(KICK_NOT_DONE_MESSAGE)
-                        },
-                        () => setError(KICK_FAILED_MESSAGE)
-                      )
-                    }}
+                    onClick={() => kickViewer(api, link.linkId, v.viewerId, setError)}
                   >
                     Kick
                   </button>
@@ -333,240 +300,8 @@ const LinkBlock = memo(function LinkBlock({
   )
 })
 
-/**
- * A Control link's owner controls (spec §2.6): the Typing switch, Change password (a new one is shown
- * ONCE, then only its hash exists — core keeps no plaintext), and Allow control again while the link
- * is locked by wrong passwords. Exported for the Live chat drawer.
- *
- * The switch shows core's state (the next push), never an optimistic one: a change core refused must
- * not look applied. A typed or new password lives only in this component's state and goes with it.
- */
-export function ControlSection({ linkId, control }: { linkId: string; control: WatchLinkControlView }): React.JSX.Element {
-  const api = window.nodeTerminal.watchLink
-  const hold = useContext(PopoverHold)
-  const invalidId = useId()
-  const [busy, setBusy] = useState(false)
-  /** A password save is in flight: the popover holds open, Save reads "Saving…". */
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [shown, setShown] = useState<string | null>(null)
-  const [copied, copy] = useCopied()
-  // Keyboard focus follows the flow: the new field on entering it, Copy password once a new one is
-  // shown, "Change password…" again on Cancel or Done (whose button would otherwise take the focus
-  // with it as it unmounts). Applied after the render that mounts the target.
-  const [focusTo, setFocusTo] = useState<'field' | 'copy' | 'change' | null>(null)
-  const fieldRef = useRef<HTMLInputElement>(null)
-  const copyRef = useRef<HTMLButtonElement>(null)
-  const changeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    if (!focusTo) return
-    const el = focusTo === 'field' ? fieldRef.current : focusTo === 'copy' ? copyRef.current : changeRef.current
-    el?.focus({ preventScroll: true })
-    setFocusTo(null)
-  }, [focusTo])
-  // A hold and a deadline this section took and has not given back — both go on unmount too (the
-  // link went away: nothing is owed for it).
-  const releaseRef = useRef<(() => void) | null>(null)
-  const deadlineRef = useRef<ReturnType<typeof setTimeout>>()
-  useEffect(
-    () => () => {
-      releaseRef.current?.()
-      clearTimeout(deadlineRef.current)
-    },
-    []
-  )
-  /** Which save is current: a late answer to an older one is not shown. */
-  const saveGen = useRef(0)
-  const run = (call: () => Promise<boolean>, failed: string): void => {
-    setBusy(true)
-    setError(null)
-    void Promise.resolve()
-      .then(call)
-      .then(
-        (ok) => !ok && setError(failed),
-        () => setError(failed)
-      )
-      .finally(() => setBusy(false))
-  }
-  /**
-   * Save a new password, holding the popover open until the answer is in and, on success, shown —
-   * its plaintext exists nowhere else. Bounded: with no answer after `PASSWORD_SAVE_TIMEOUT_MS` the
-   * hold is released and the owner is told the outcome is unknown. An answer that lands later still
-   * counts: a new password that did take is shown, one refused says so.
-   */
-  const save = (): void => {
-    const next = draft
-    const gen = ++saveGen.current
-    const release = hold?.() ?? null
-    releaseRef.current = release
-    let open = true
-    const settle = (): void => {
-      if (!open) return
-      open = false
-      clearTimeout(deadlineRef.current)
-      setSaving(false)
-      setBusy(false)
-      release?.()
-      if (releaseRef.current === release) releaseRef.current = null
-    }
-    setSaving(true)
-    setBusy(true)
-    setError(null)
-    deadlineRef.current = setTimeout(() => {
-      if (!open) return
-      settle()
-      setError(PASSWORD_UNCONFIRMED_MESSAGE)
-    }, PASSWORD_SAVE_TIMEOUT_MS)
-    void Promise.resolve()
-      .then(() => api.setPassword(linkId, next))
-      .then(
-        (ok) => {
-          settle()
-          if (gen !== saveGen.current) return
-          if (ok) {
-            setError(null)
-            setShown(next)
-            setDraft('')
-            setEditing(false)
-            setFocusTo('copy')
-          } else setError(PASSWORD_CHANGE_FAILED_MESSAGE)
-        },
-        () => {
-          settle()
-          if (gen === saveGen.current) setError(PASSWORD_CHANGE_FAILED_MESSAGE)
-        }
-      )
-  }
-  const problem = passwordProblemText(draft)
-  const showProblem = draft !== '' && problem !== null
-  return (
-    <div className="live-pop__control">
-      {control.locked && (
-        <div className="live-pop__locked">
-          <p className="live-pop__status" role="status">
-            {CONTROL_LOCKED_TEXT}
-          </p>
-          <button
-            type="button"
-            className="confirm__btn live-pop__btn"
-            disabled={busy}
-            onClick={() => run(() => api.allowControl(linkId), CONTROL_CHANGE_FAILED_MESSAGE)}
-          >
-            Allow control again
-          </button>
-        </div>
-      )}
-      <div className="live-pop__toggle">
-        <span>
-          <span className="live-pop__who">Typing</span>{' '}
-          <span className="live-pop__muted">
-            {control.enabled ? 'Anyone with the password can type.' : 'Off: viewers can watch and chat.'}
-          </span>
-        </span>
-        {/* `pending`, not `disabled`: a switch the owner just toggled from the keyboard keeps the focus. */}
-        <Switch
-          checked={control.enabled}
-          ariaLabel="Typing"
-          pending={busy}
-          onChange={(on) => run(() => api.setControl(linkId, on), CONTROL_CHANGE_FAILED_MESSAGE)}
-        />
-      </div>
-      {shown !== null ? (
-        <>
-          <div className="live-pop__password">
-            <PasswordField value={shown} readOnly label="New password" />
-            <button type="button" ref={copyRef} className="confirm__btn live-pop__btn" onClick={() => copy(shown)}>
-              {copied ? 'Copied!' : 'Copy password'}
-            </button>
-          </div>
-          <p className="live-pop__muted live-pop__note">{PASSWORD_SHOWN_ONCE}</p>
-          <p className="live-pop__muted live-pop__note">{PASSWORD_SEPARATE_NOTE}</p>
-          <div className="live-pop__actions">
-            <button
-              type="button"
-              className="confirm__btn live-pop__btn"
-              onClick={() => {
-                setShown(null)
-                setFocusTo('change')
-              }}
-            >
-              Done
-            </button>
-          </div>
-        </>
-      ) : editing ? (
-        <>
-          <div className="live-pop__password">
-            <PasswordField
-              inputRef={fieldRef}
-              value={draft}
-              disabled={busy}
-              onChange={setDraft}
-              label="New password"
-              describedBy={showProblem ? invalidId : undefined}
-            />
-            <button type="button" className="confirm__btn live-pop__btn" disabled={busy} onClick={() => setDraft(newControlPassword())}>
-              Generate
-            </button>
-          </div>
-          {showProblem && (
-            <p className="live-pop__invalid" id={invalidId}>
-              {problem}
-            </p>
-          )}
-          <p className="live-pop__muted live-pop__note">{PASSWORD_CHANGE_NOTE}</p>
-          <div className="live-pop__actions">
-            <button
-              type="button"
-              className="confirm__btn live-pop__btn"
-              disabled={busy}
-              onClick={() => {
-                setEditing(false)
-                setDraft('')
-                setError(null)
-                setFocusTo('change')
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="confirm__btn primary live-pop__btn"
-              disabled={busy || problem !== null}
-              onClick={save}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="live-pop__actions">
-          <button
-            type="button"
-            ref={changeRef}
-            className="confirm__btn live-pop__btn"
-            onClick={() => {
-              setEditing(true)
-              setFocusTo('field')
-            }}
-          >
-            Change password…
-          </button>
-        </div>
-      )}
-      {error && (
-        <p className="live-pop__error" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  )
-}
-
-/** A Commenter or Control link's thread with the owner's reply box. Exported for the Live chat drawer. */
-export function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): React.JSX.Element {
+/** A Commenter or Control link's thread with the owner's reply box (the drawer has its own look). */
+function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const chat = useWatchLinks((s) => s.chats[linkId] ?? EMPTY_CHAT)
   const onBoard = useProjects((s) => s.projects.some((p) => p.nodes.some((n) => n.id === nodeId)))
@@ -575,21 +310,8 @@ export function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string 
   const [copyError, setCopyError] = useState(false)
   const [sendError, setSendError] = useState(false)
   const threadRef = useRef<HTMLOListElement>(null)
-  // While this thread is on screen, what lands in it is read as it arrives (N2).
-  useEffect(() => viewLinkThread(linkId), [linkId])
-  // Core keeps the thread in memory; ask for it once when the thread opens (a reload, or messages
-  // that arrived before this renderer subscribed). The store merges it with what was pushed.
-  useEffect(() => {
-    void api.chatHistory(linkId).then(
-      (m) => useWatchLinks.getState().setChat(linkId, m),
-      () => {}
-    )
-  }, [api, linkId])
-  // Open = read (H21): what arrived before the thread opened is read on open; what lands while it
-  // is open never counts (`viewLinkThread` above).
-  useEffect(() => {
-    useWatchLinks.getState().markRead(linkId)
-  }, [linkId])
+  // On screen = read, and core's history asked once (the thread rule, shared with the drawer).
+  useLinkThread(linkId, api)
   // Follow the newest message. Keyed on the LAST message's id, not the length — at the 200-message
   // cap the length stops changing.
   const lastId = chat.length > 0 ? chat[chat.length - 1].id : ''

@@ -125,4 +125,38 @@ describe('Canvas live-link wiring', () => {
     expect(src).toContain("window.addEventListener('nodeterm:live-link', on)")
     expect(src).toMatch(/openLiveLinkFor\(\{ nodeId: d\.nodeId, title, projectId: d\.projectId \}\)/)
   })
+
+  // ── The Live chat drawer (Task 8) ──
+  it('the drawer is lazy-loaded like the Explorer and mounted only while open', () => {
+    const lazyImport = src.slice(0, src.indexOf("} from '../components/lazyPanels'"))
+    expect(lazyImport.slice(lazyImport.lastIndexOf('import {'))).toContain('LiveChatDrawer')
+    expect(src).toMatch(/\{liveChatOpen && \(\s*<LiveChatDrawer/)
+  })
+
+  it('raised while a card modal is open, beside only when BOTH drawers are pinned', () => {
+    const mount = src.slice(src.indexOf('<LiveChatDrawer'))
+    const props = mount.slice(0, mount.indexOf('/>'))
+    expect(props).toContain('linkId={liveChat.linkId}')
+    expect(props).toContain('pinned={liveChat.pinned}')
+    expect(props).toContain('raised={cardModalOpen && kanbanOpen}')
+    expect(props).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned}')
+    expect(props).toContain('onGoToNode={goToLiveChatNode}')
+    // The card modal's open state is published where every board reports it.
+    expect(callback('setKanbanModalNode')).toContain('setCardModalOpen(id !== null)')
+  })
+
+  it('the pin is persisted by the toggle; Go to terminal travels (closing a modal drawer first)', () => {
+    expect(callback('toggleLiveChatPin')).toContain('writeLiveChatPinned(next.pinned)')
+    const go = callback('goToLiveChatNode')
+    expect(go).toContain("if (!liveChatRef.current.pinned) setLiveChat((s) => nextLiveChat(s, { kind: 'close' }))")
+    expect(go).toContain('travelToNode(nodeId)')
+    expect(callback('pickLiveChatLink')).toContain('writeLiveChatLink(linkId)')
+  })
+
+  it('the palette opens it; nothing about chat raises an OS notification', () => {
+    const cmds = src.slice(src.indexOf('...liveLinkCommands({'))
+    expect(cmds.slice(0, 600)).toContain("openChat: () => setLiveChat((s) => nextLiveChat(s, { kind: 'open' })),")
+    const drawerSrc = readFileSync(join(__dirname, '../components/LiveChatDrawer.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    expect(drawerSrc).not.toMatch(/notify\(/)
+  })
 })

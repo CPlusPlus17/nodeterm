@@ -5,6 +5,7 @@
 // serialized into a project, a canvas op or the board — link state is not canvas content, and a
 // guard test (lib/live-link.guard.test.ts) keeps it out of every shared type. A reload rebuilds it
 // from `list()`; chat history comes back from `chatHistory()` (core keeps it in memory only).
+import { useEffect } from 'react'
 import { create } from 'zustand'
 import type { NodeTerminalApi } from '@shared/types'
 import type { WatchChatMessage, WatchLinkNotice, WatchLinkView } from '@shared/watch-link-types'
@@ -147,6 +148,25 @@ export const useWatchLinks = create<WatchLinksState>((set) => ({
 
   markRead: (linkId) => set((s) => (s.unread[linkId] ? { unread: { ...s.unread, [linkId]: 0 } } : s))
 }))
+
+/**
+ * The thread rule for a link's chat on screen — the chip's popover and the Live chat drawer, ONE
+ * definition: what lands while it is shown is read as it arrives (`viewLinkThread`, N2); what arrived
+ * before is read on open (`markRead`, H21), which clears the chip's count; and core's history is asked
+ * once (a reload, or messages pushed before this renderer subscribed — the store merges the two).
+ */
+export function useLinkThread(linkId: string, api: Pick<NodeTerminalApi['watchLink'], 'chatHistory'>): void {
+  useEffect(() => viewLinkThread(linkId), [linkId])
+  useEffect(() => {
+    void api.chatHistory(linkId).then(
+      (m) => useWatchLinks.getState().setChat(linkId, m),
+      () => {}
+    )
+  }, [api, linkId])
+  useEffect(() => {
+    useWatchLinks.getState().markRead(linkId)
+  }, [linkId])
+}
 
 /**
  * A PRIMITIVE signature of everything one node's chip shows (tone, label, title, unread count) —

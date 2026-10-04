@@ -311,7 +311,7 @@ describe('stopAllLiveLinks (R62)', () => {
 })
 
 describe('liveLinkCommands (palette)', () => {
-  const base = { entitled: false, serverEdition: false, icon: null }
+  const base = { entitled: false, serverEdition: false, icon: null, chatIcon: null, openChat: () => {} }
   it('Manage always; Stop all with links OR a Pro license (R62), labelled for every machine, and it CONFIRMS', () => {
     const manage = vi.fn()
     const confirmStopAll = vi.fn()
@@ -323,15 +323,26 @@ describe('liveLinkCommands (palette)', () => {
     expect(entitled.map((c) => c.id)).toEqual(['live-links-manage', 'live-links-stop-all'])
     // Never in the Server Edition (R43): no license layer, nothing to stop.
     const server = liveLinkCommands({ ...base, serverEdition: true, entitled: true, activeLinks: 3, manage, confirmStopAll })
-    expect(server.map((c) => c.id)).toEqual(['live-links-manage'])
+    expect(server.map((c) => c.id)).not.toContain('live-links-stop-all')
     const some = liveLinkCommands({ ...base, activeLinks: 2, manage, confirmStopAll })
-    expect(some.map((c) => c.id)).toEqual(['live-links-manage', 'live-links-stop-all'])
+    expect(some.map((c) => c.id)).toEqual(['live-links-manage', 'live-chat', 'live-links-stop-all'])
     expect(some[0].label).toBe('Manage live links')
-    expect(some[1].label).toBe('Stop all live links (every machine on this license)')
+    expect(some[2].label).toBe('Stop all live links (every machine on this license)')
     some[0].run()
     expect(manage).toHaveBeenCalledTimes(1)
-    some[1].run()
+    some[2].run()
     expect(confirmStopAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('"Live chat" (section View) while any link is live, and it opens the drawer', () => {
+    const openChat = vi.fn()
+    const args = { ...base, openChat, manage: () => {}, confirmStopAll: () => {} }
+    expect(liveLinkCommands({ ...args, activeLinks: 0 }).some((c) => c.id === 'live-chat')).toBe(false)
+    const chat = liveLinkCommands({ ...args, activeLinks: 1 }).find((c) => c.id === 'live-chat')!
+    expect(chat.label).toBe('Live chat')
+    expect(chat.section).toBe('View')
+    chat.run()
+    expect(openChat).toHaveBeenCalledTimes(1)
   })
 })
 

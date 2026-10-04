@@ -283,9 +283,10 @@ export async function stopAllLiveLinks(
   }
 }
 
-/** The palette's live-link entries. "Stop all" appears wherever the owner could have links to stop
- *  (`showsStopAll`: a link listed here, OR a Pro license — its links on other machines are invisible
- *  here), and its `run` opens the confirm — it never stops anything itself. */
+/** The palette's live-link entries. "Live chat" (the drawer) while any link is live here. "Stop all"
+ *  appears wherever the owner could have links to stop (`showsStopAll`: a link listed here, OR a Pro
+ *  license — its links on other machines are invisible here), and its `run` opens the confirm — it
+ *  never stops anything itself. */
 export function liveLinkCommands(o: {
   activeLinks: number
   /** Pro is active on this machine (`useEntitlement` `isPremium`). */
@@ -293,7 +294,10 @@ export function liveLinkCommands(o: {
   /** `isBrowserRuntime()`: no license layer there (R43), so nothing to stop. */
   serverEdition: boolean
   icon: ReactNode
+  chatIcon: ReactNode
   manage: () => void
+  /** Open the Live chat drawer (on the link picked last). */
+  openChat: () => void
   confirmStopAll: () => void
 }): Command[] {
   return [
@@ -304,6 +308,18 @@ export function liveLinkCommands(o: {
       icon: o.icon,
       run: o.manage
     },
+    ...(o.activeLinks > 0
+      ? [
+          {
+            id: 'live-chat',
+            label: 'Live chat',
+            hint: 'live link viewers messages reply people kick control',
+            section: 'View',
+            icon: o.chatIcon,
+            run: o.openChat
+          }
+        ]
+      : []),
     ...(showsStopAll({ serverEdition: o.serverEdition, entitled: o.entitled, activeLinks: o.activeLinks })
       ? [
           {
