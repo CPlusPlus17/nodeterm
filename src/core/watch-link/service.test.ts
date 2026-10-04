@@ -1165,7 +1165,7 @@ describe('createWatchLinkService — the Control host seams', () => {
     await vi.waitFor(() => expect(warn.mock.calls.some(([l]) => /lock/.test(String(l)))).toBe(true))
     expect(t.s.list()[0].control).toEqual({ enabled: true, locked: true })
     const c = t.hosts.made[0].record.control!
-    expect(allLogged([warn])).not.toMatch(new RegExp([PW, c.salt, c.hash].map((x) => x.replace(/[+/=]/g, '\\$&')).join('|')))
+    for (const secret of [PW, c.salt, c.hash]) expect(allLogged([warn])).not.toContain(secret)
     warn.mockRestore()
   })
 
@@ -1361,7 +1361,7 @@ describe('createWatchLinkService — the owner controls a Control link', () => {
     expect(other.ok).toBe(true)
     expect(f.written.at(-1)?.enabled).toBe(false)
     expect(t.s.list().find((l) => l.linkId === id)?.control).toEqual({ enabled: false, locked: false })
-    expect(allLogged([warn])).not.toMatch(new RegExp(PW.replace(/[+/=]/g, '\\$&')))
+    expect(allLogged([warn])).not.toContain(PW)
     warn.mockRestore()
   })
 
@@ -1386,9 +1386,7 @@ describe('createWatchLinkService — the owner controls a Control link', () => {
     h.deps.onControlLocked() // any later write: this one is the lock's
     await flush()
     expect(f.written.at(-1)).toMatchObject({ salt: now.salt, hash: now.hash, locked: true })
-    expect(allLogged([warn])).not.toMatch(
-      new RegExp([PW, NEW_PW, now.salt, now.hash].map((x) => x.replace(/[+/=]/g, '\\$&')).join('|'))
-    )
+    for (const secret of [PW, NEW_PW, now.salt, now.hash]) expect(allLogged([warn])).not.toContain(secret)
     warn.mockRestore()
   })
 
