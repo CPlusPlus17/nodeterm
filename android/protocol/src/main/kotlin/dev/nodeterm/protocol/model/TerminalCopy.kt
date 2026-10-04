@@ -30,6 +30,42 @@ object TerminalCopy {
      */
     data class Snapshot(val lines: List<String>, val links: List<ExternalLink>, val firstVisible: Int)
 
+    /** Keep matching cheap even when the captured output repeats a short query thousands of times. */
+    const val MAX_SEARCH_MATCHES = 2_000
+
+    /** UTF-16 offsets, matching Kotlin strings and Compose's text spans; [end] is exclusive. */
+    data class Match(val line: Int, val start: Int, val end: Int)
+
+    data class Search(val matches: List<Match>, val truncated: Boolean = false) {
+        /** Previous/next wraps; a missing or stale cursor starts at the appropriate edge. */
+        fun move(current: Int?, forward: Boolean): Int? {
+            if (matches.isEmpty()) return null
+            if (current == null || current !in matches.indices) return if (forward) 0 else matches.lastIndex
+            return if (forward) (current + 1) % matches.size else (current + matches.size - 1) % matches.size
+        }
+    }
+
+    /**
+     * Case-insensitive literal search of this captured snapshot, without changing row identities or
+     * selection. Whitespace within a nonblank query is significant. Matches on a row do not overlap.
+     * This is not a search of remote tmux history: the sheet holds only what the page captured.
+     */
+    fun search(lines: List<String>, query: String): Search {
+        if (query.isBlank()) return Search(emptyList())
+        val matches = ArrayList<Match>()
+        for ((row, line) in lines.withIndex()) {
+            var from = 0
+            while (from <= line.length - query.length) {
+                val start = line.indexOf(query, startIndex = from, ignoreCase = true)
+                if (start < 0) break
+                if (matches.size == MAX_SEARCH_MATCHES) return Search(matches, truncated = true)
+                matches.add(Match(row, start, start + query.length))
+                from = start + query.length
+            }
+        }
+        return Search(matches)
+    }
+
     /** Null when [json] is not a snapshot at all. */
     fun parse(json: String): Snapshot? {
         if (json.length > MAX_JSON) return null

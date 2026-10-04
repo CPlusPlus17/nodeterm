@@ -58,6 +58,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -357,11 +359,20 @@ private fun LinkOffer(controller: TerminalController, link: ExternalLink) {
 @Composable
 private fun CopySheet(controller: TerminalController, snapshot: TerminalCopy.Snapshot) {
     val ctx = LocalContext.current
+    val focusManager = LocalFocusManager.current
     var selection by remember(snapshot) { mutableStateOf(TerminalCopy.Selection()) }
+    var query by remember(snapshot) { mutableStateOf("") }
+    var matchIndex by remember(snapshot, query) { mutableStateOf(0) }
+    val search = remember(snapshot, query) { TerminalCopy.search(snapshot.lines, query) }
+    val matchesByLine = remember(search) { search.matches.groupBy { it.line } }
+    val activeMatch = search.matches.getOrNull(matchIndex)
     BackHandler { controller.closeCopySheet() }
     // The links come first in the list: the sheet opens on the screen's top line below them.
     val linkRows = if (snapshot.links.isEmpty()) 0 else snapshot.links.size + 2
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = linkRows + snapshot.firstVisible)
+    LaunchedEffect(search, matchIndex) {
+        activeMatch?.let { listState.scrollToItem(linkRows + it.line) }
+    }
     Column(Modifier.fillMaxSize().blockTouchesBelow().background(NtColors.panel)) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Copy from the terminal", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -378,6 +389,36 @@ private fun CopySheet(controller: TerminalController, snapshot: TerminalCopy.Sna
             style = MaterialTheme.typography.bodySmall,
             color = NtColors.muted
         )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("Search captured output") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            trailingIcon = {
+                if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
+                    Icon(Icons.Filled.Close, "Clear search")
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = {
+                search.move(matchIndex, forward = true)?.let { matchIndex = it }
+                focusManager.clearFocus()
+            })
+        )
+        if (query.isNotBlank()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (search.matches.isEmpty()) "No matches in captured output"
+                    else "${matchIndex + 1} of ${search.matches.size}${if (search.truncated) "+" else ""} matches",
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NtColors.muted
+                )
+                TextButton(onClick = { search.move(matchIndex, forward = false)?.let { matchIndex = it } }, enabled = activeMatch != null) { Text("Previous") }
+                TextButton(onClick = { search.move(matchIndex, forward = true)?.let { matchIndex = it } }, enabled = activeMatch != null) { Text("Next") }
+            }
+        }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
             if (snapshot.links.isNotEmpty()) {
                 item(key = "links") { SheetHeading("Links") }
@@ -403,10 +444,16 @@ private fun CopySheet(controller: TerminalController, snapshot: TerminalCopy.Sna
             if (snapshot.lines.isEmpty()) {
                 item(key = "empty") { SheetHeading("The terminal shows no text.") }
             }
-            itemsIndexed(snapshot.lines) { i, line ->
+            itemsIndexed(snapshot.lines, key = { i, _ -> "line:$i" }) { i, line ->
                 val selected = i in selection.selected
+                val highlighted = buildAnnotatedString {
+                    append(line.ifEmpty { " " })
+                    matchesByLine[i].orEmpty().forEach { match ->
+                        addStyle(SpanStyle(background = NtColors.accent.copy(alpha = if (match == activeMatch) 0.65f else 0.25f)), match.start, match.end)
+                    }
+                }
                 Text(
-                    line.ifEmpty { " " },
+                    highlighted,
                     Modifier
                         .fillMaxWidth()
                         .background(if (selected) NtColors.accent.copy(alpha = 0.3f) else NtColors.canvas)
@@ -460,6 +507,10 @@ private fun KeyRow(controller: TerminalController) {
         // so it works attached or not. The input bar lets go of focus first: its keyboard would sit
         // over the sheet.
         KeyChip("Copy") {
+            focusManager.clearFocus()
+            controller.openCopySheet()
+        }
+        KeyChip("Find") {
             focusManager.clearFocus()
             controller.openCopySheet()
         }
