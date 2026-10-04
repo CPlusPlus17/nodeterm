@@ -3621,6 +3621,31 @@ live Claude rule/question application and the new physical feature matrix remain
 Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
 remains deferred until a PR is requested.
 
+**Prepared private beta 14 (2026-10-04).** `0.1.0-beta.14` / code `15`, clean built source
+`facbbd0384bb5b0ee91656f364793a12f8f41eb1`, adds A113 truthful revoke outcomes, A114 dictation language, A115 exact host/session
+retirement and A116 saved pairing/LAN adapter choice. Full offline protocol checks pass
+**890 tests / 92 suites**, with zero failures, errors or skips.
+Offline app compilation, **1628 affected Vitest tests / 71 files** and full
+TypeScript checking pass. Only the ten existing Windows/macOS runtime cases are skipped on Linux.
+The minified offline release build passes in **47.96 seconds** with the retained private
+signer and R8/runtime keeps. Independent SDK 36/37 signature, nondebuggable manifest, payload/
+provenance and 16-KB ZIP/native checks pass.
+
+The private archive records **158 assertion-caught isolated mutation variants**,
+with passing controls/restored runs and each receipt's source bindings. One additional redundant
+retired-guard variant survives equivalently and is recorded separately, never counted as caught.
+Historical/intermediate bindings stay separate; full merged gates verify the release source.
+Actual local HTTP and producer→Android tests use synthetic OS/key facts; HostStore tests use
+in-memory Android interfaces. Native wiring source guards and cached compilation do not prove
+physical recognition, VPN reachability, relay revocation or replacement behavior. Earlier beta
+proof remains historical. APK SHA-256: `3c75912a5b7bb561fa9a0720be5cb11be75e1672f98379e4745871bf2729f8f6`. Artifact:
+`.nodeterm/android-beta-14/nodeterm-android-0.1.0-beta.14.apk`; private proof:
+`.nodeterm/android-beta-build-14/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone testing is paused; the ledger stays **10 Pass / 22 Partial /
+32 Pending**. No PR opened; A68 stays deferred. Each push requires its own exact-head green
+Android workflow. A13 direct-SSH Desktop detachment, full legacy identity association and the
+A25/A93 hosted backend dependencies remain open.
+
 **Historical prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
 `ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
 along with the beta-12 changes. Full offline protocol checks pass **845 tests / 87 suites**,

@@ -15,12 +15,37 @@ Board writes and Desktop wake/refresh/rename. New session can now ask a current 
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
-has been opened. Beta 14/code 15 release checks are being prepared; beta 13 remains a historical prepared artifact.
+has been opened. Beta 14/code 15 is prepared and has passed the local release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
+
+**Prepared private beta 14 (2026-10-04).** `0.1.0-beta.14` / code `15`, clean built source
+`facbbd0384bb5b0ee91656f364793a12f8f41eb1`, adds A113 truthful revoke outcomes, A114 dictation language, A115 exact host/session
+retirement and A116 saved pairing/LAN adapter choice. Full offline protocol checks pass
+**890 tests / 92 suites**, with zero failures, errors or skips.
+Offline app compilation, **1628 affected Vitest tests / 71 files** and full
+TypeScript checking pass. Only the ten existing Windows/macOS runtime cases are skipped on Linux.
+The minified offline release build passes in **47.96 seconds** with the retained private
+signer and R8/runtime keeps. Independent SDK 36/37 signature, nondebuggable manifest, payload/
+provenance and 16-KB ZIP/native checks pass.
+
+The private archive records **158 assertion-caught isolated mutation variants**,
+with passing controls/restored runs and each receipt's source bindings. One additional redundant
+retired-guard variant survives equivalently and is recorded separately, never counted as caught.
+Historical/intermediate bindings stay separate; full merged gates verify the release source.
+Actual local HTTP and producer→Android tests use synthetic OS/key facts; HostStore tests use
+in-memory Android interfaces. Native wiring source guards and cached compilation do not prove
+physical recognition, VPN reachability, relay revocation or replacement behavior. Earlier beta
+proof remains historical. APK SHA-256: `3c75912a5b7bb561fa9a0720be5cb11be75e1672f98379e4745871bf2729f8f6`. Artifact:
+`.nodeterm/android-beta-14/nodeterm-android-0.1.0-beta.14.apk`; private proof:
+`.nodeterm/android-beta-build-14/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone testing is paused; the ledger stays **10 Pass / 22 Partial /
+32 Pending**. No PR opened; A68 stays deferred. Each push requires its own exact-head green
+Android workflow. A13 direct-SSH Desktop detachment, full legacy identity association and the
+A25/A93 hosted backend dependencies remain open.
 
 **Historical prepared private beta 13 (2026-10-04).** `0.1.0-beta.13` / code `14`, clean built source
 `ba64f6289c0f552b85bfc17f99aee879aaf45975`, includes A111 managed SSH New and A112 producer-input coverage,
@@ -1198,7 +1223,7 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-When phone testing resumes, install the newest prepared private beta as a same-signer update
+When phone testing resumes, install prepared beta 14/code 15 as a same-signer update
 and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
 the matching APK source for host-dependent features, keeping the held older paired fixture
 and its original terminal intact. Test A100–A116 and earlier A96–A99 on the intended Pixel;
@@ -1648,7 +1673,7 @@ Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodet
 Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
 source before editing. A100–A116 close retained history, typed read recovery, project launch settings,
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
-host-owned managed New over SSH, revoke reporting, dictation language, host retirement and pairing adapter choice. Beta 14/code 15 release checks are being prepared.
+host-owned managed New over SSH, revoke reporting, dictation language, host retirement and pairing adapter choice. Beta 14/code 15 is prepared with local release checks complete.
 The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
 paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
 
