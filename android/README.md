@@ -14,7 +14,7 @@ with an enabled Linux/macOS tmux backend to create and register a managed shell 
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). Managed canvas End still requires the relay;
 closing the SSH viewer leaves the session running. This prepares the upstream Android contribution; no PR
-has been opened. Beta 14/code 15 is prepared and has passed the local release checks. Later host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117). A118 adds eligible legacy relay identity proof and requires a newer Android APK than beta 14.
+has been opened. Beta 15/code 16 is prepared from `aa902d0a` and has passed the local release checks, including A118's eligible legacy relay identity proof. Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -1059,7 +1059,47 @@ are explicit fixture boundaries. Private evidence: `.nodeterm/android-legacy-rel
 
 This is an additive host/Android contract. iOS @eneskirca needs the same retained-key signer and
 exact encoding to repair eligible legacy records; old iOS remains usable. A phone without its
-retained SSH seed, an attributable host key or SSH support still needs re-pairing. This proof never
+retained SSH seed, its matching attributed SSH public key in the host's authorized_keys or SSH support still needs re-pairing. This proof never
 bypasses first SAS approval and does not solve hosted FCM or A93. New Android source needs a later
 APK than beta 14; no new installation or physical/live transport pass is claimed. Phone testing
 remains paused, beta 10/code 11 is last installed, and the ledger stays 10 Pass / 22 Partial / 32 Pending.
+
+## Prepared private beta 15 and verification checkpoint (2026-10-04)
+
+`0.1.0-beta.15` / code `16` is built from clean signed source `aa902d0a52ba8ccfa0be57e073c350e90cfad5d3` and includes
+A118's optional retained-SSH legacy relay identity proof. The host must also run this source for
+migration; older or unprovable hosts remain browsable. A117's relative private-key Include fix and
+A13's coattachment fix are included in the host source.
+
+Required source checks pass: 912 protocol methods / 94 suites, zero failures/errors/skips;
+offline app compile; 1,919 affected desktop methods with exactly ten known macOS/Windows skips;
+full TypeScript checking. All five exact-source Android jobs pass: [source CI](https://github.com/CPlusPlus17/nodeterm/actions/runs/37228985208).
+A118's focused proof remains 87 host and 15 helper methods, 40 + 25 compiled assertion-caught
+mutants and seven actual producer→Kotlin methods with six additional assertion-caught variants.
+
+The local release build uses a fresh tracked Android-only snapshot, cached AGP 8.10.1/Kotlin 2.2.0/
+Gradle 8.14.3/JDK 21 and `--offline`. R8 runtime keeps and 56 independent artifact checks pass:
+SDK 36/37 signatures and 16 KB alignment, retained signer, actual version/manifest/provenance,
+service-loader mappings and unchanged terminal/native assets versus beta 10.
+Private APK: `.nodeterm/android-beta-15/nodeterm-android-0.1.0-beta.15.apk`.
+SHA-256: `c1e707c8a18555db7e01129b709d39db342128f3c54d8103d548cc177bc9abaf`.
+Signer SHA-256: `c610c3a0b637a8005b6fd858587e8cbf5260622648bc1cd97c0de0ab5f146dbd`. Private build/review evidence:
+`.nodeterm/android-beta-build-15/`. The APK, signer and proof remain outside source exports.
+
+Live A105/A106 application is still unverified. An isolated installed Claude 2.1.289 fixture uses
+the actual managed hook server/script/writer with an in-memory CorePlatform. Its fresh-context,
+read-only credential/config and fixed-tool guards pass 34 static checks and the exact offline
+mount/auth gate. The first attempt hid the system DNS target and timed out before tools; a
+separate corrected fixture exposes only that regular resolver file read-only. It reaches the
+provider, but receives authentication HTTP 401 before any tool request. No application pass is
+claimed. Original profile/source/binary/resolver metadata remains unchanged; raw diagnostics stay
+private and no credential refresh/reset is attempted. After the existing CLI account is usable
+for inference, rerun the isolated remembered-rule/full-question checks. This gives no physical,
+renderer, SSH or hosted-relay proof.
+
+Phone testing remains paused. Beta 10/code 11 is last confirmed installed; beta 15 is prepared
+and not installed. The ledger stays **10 Pass / 22 Partial / 32 Pending**. Next device work uses
+this APK and current host source, checks saved key/pin survival and the expanded checklist,
+then restores rotation and removes only owned QA host state. A25/A93 still require hosted-backend
+maintainers; iOS @eneskirca owes the new proof contract and earlier mirror/verb/v2-answer adoption.
+No PR is opened; A68 stays deferred until requested PR preparation.
