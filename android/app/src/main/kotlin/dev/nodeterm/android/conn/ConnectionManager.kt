@@ -29,6 +29,8 @@ import dev.nodeterm.protocol.model.SshTerminalCreation
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.RelayBlock
+import dev.nodeterm.protocol.pairing.RelayPairingProof
+import dev.nodeterm.protocol.crypto.BoxKeyPair
 import dev.nodeterm.protocol.relay.RelayApi
 import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.LanRefresh
@@ -228,7 +230,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 val requireApproved = (decision as? RelayApprovalGate.Decision.Dial)?.requireApproved == true
                 _state.value = ConnState.Connecting("Connecting through the relay…")
                 try {
-                    val connected = dialRelay(relay, token, hostKey, requireApproved, lease) { st ->
+                    val connected = dialRelay(host, relay, token, hostKey, requireApproved, lease) { st ->
                         lifetime.whenCurrent(lease) { when (st) {
                             is RelayConnectStatus.AwaitingApproval -> _state.value = ConnState.AwaitingApproval(st.sas)
                             RelayConnectStatus.Handshaking -> _state.value = ConnState.Connecting("Verifying your computer…")
@@ -285,6 +287,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         !host.manual && host.relay != null && host.relayHostKeyB64 != null && graph.secure.hasRelayToken(host.id)
 
     private suspend fun dialRelay(
+        host: PairedHost,
         relay: RelayBlock,
         token: String,
         hostKey: String,
@@ -300,12 +303,14 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 lifetime.requireCurrent(lease)
                 val join = RelayApi(graph.hosts.apiBase).join(token, relay.hostId)
                 lifetime.requireCurrent(lease)
+                val deviceKeys = graph.boxKeys
                 RelayConnector.connect(
                     relayUrl = relay.relayEndpoint,
                     token = join.pairingToken,
-                    deviceKeys = graph.boxKeys,
+                    deviceKeys = deviceKeys,
                     hostPublicKeyB64 = hostKey,
                     requireApproved = requireApproved,
+                    legacyPairing = legacyRelayPairing(host, hostKey, deviceKeys, lease),
                     onStatus = onStatus
                 ).also { dialed = it }
             }
@@ -313,6 +318,20 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             dialed?.let { connected -> scope.launch(Dispatchers.IO) { runCatching { connected.connection.close() } } }
             throw e
         }
+    }
+
+    /** No get-or-create: a relay-only upgrade cannot replace a missing SSH identity to prove it. */
+    private fun legacyRelayPairing(host: PairedHost, hostKey: String, keys: BoxKeyPair, lease: HostLifetime.Lease): RelayPairingProof.Context {
+        return RelayPairingProof.Context(host, hostKey, keys.publicKeyB64,
+            retainedSshSeed = { graph.secure.getBytes(SecureStore.SSH_SEED) },
+            requireCurrent = {
+                lifetime.requireCurrent(lease)
+                val current = graph.hosts.currentHost(host.id, host.hostKeyB64) { lifetime.isCurrent(lease) }
+                    ?: throw kotlinx.coroutines.CancellationException("This computer pairing changed.")
+                if (current.manual || current.relayHostKeyB64 != hostKey || graph.boxKeys.publicKeyB64 != keys.publicKeyB64) {
+                    throw kotlinx.coroutines.CancellationException("This computer's relay identity changed.")
+                }
+            })
     }
 
     /** A relay connection held NEXT TO a direct-SSH one, for what SSH must not do (see [viaRelay]). */
@@ -423,7 +442,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     is RelayApprovalGate.Decision.Dial -> d.requireApproved
                 }
                 val connected = try {
-                    dialRelay(relay, token, hostKey, requireApproved = requireApproved, lease = lease) { st ->
+                    dialRelay(host, relay, token, hostKey, requireApproved = requireApproved, lease = lease) { st ->
                         lifetime.whenCurrent(lease) {
                             _relayApproval.value = (st as? RelayConnectStatus.AwaitingApproval)?.sas
                             onStatus(st)

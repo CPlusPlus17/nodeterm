@@ -3,19 +3,19 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A117`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A118`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-04, A100–A117).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-04, A100–A118).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
-has been opened. Beta 14/code 15 is prepared and has passed the local release checks. Later host source also fixes direct-SSH coattachment (A13); the prepared Android client is unchanged.
+has been opened. Beta 14/code 15 is prepared and has passed the local release checks. Later host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117). A118 adds eligible legacy relay identity proof and requires a newer Android APK than beta 14.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -1318,8 +1318,9 @@ section before starting, since the verifier corrections take precedence):
 - **A07 for older pairings.** A device paired without a recorded `relayBoxKey` (before A07, or
   any phone that does not send `boxPublicKey`, which includes current iOS builds) has nothing to
   unpin or cut on revoke and is not approved on a late adoption. A113 now reports that relay
-  revocation is unconfirmed, rather than promising remote access is gone. Full repair still needs
-  a SAS-approval pin linked to a device entry, which the approved-devices store does not record.
+  revocation is unconfirmed, rather than promising remote access is gone. A118 now repairs an
+  eligible association through approved relay plus exact retained SSH proof. It cannot recover
+  missing SSH seeds/attribution or bypass first SAS approval; those cases still need re-pairing.
 - **Remaining parity.** Current typed SSH Git and the A108 selected-profile service support
   Board writes and Desktop delivery-only node nudges without relay. Git works on admitted
   local/driven folders independently of the service; Server advertises Board and, with an
@@ -1671,9 +1672,12 @@ commits asked for. Its ledger is 10 Pass / 22 Partial / 32 Pending; new source f
 
 Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodeterm.
 Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
-source before editing. A100–A116 close retained history, typed read recovery, project launch settings,
+source before editing. A100–A118 close retained history, typed read recovery, project launch settings,
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
-host-owned managed New over SSH, revoke reporting, dictation language, host retirement and pairing adapter choice. Beta 14/code 15 is prepared with local release checks complete.
+host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
+adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
+Beta 14/code 15 is prepared with local release checks complete; A118's Android changes require
+the next prepared APK. Resume device checks only when asked, using current host source too.
 The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
 paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
 
@@ -1840,3 +1844,50 @@ The sealed field and Android production code are unchanged; the actual interop f
 with the producer. iOS @eneskirca should verify the existing anchor handling against the current
 host. Prepared beta 14 remains valid client source and is not installed. Physical checks remain
 pending; phone testing is paused and the ledger stays 10 Pass / 22 Partial / 32 Pending.
+
+## A118
+
+**Eligible older pairings cannot associate their existing relay key with a saved device (2026-10-04).**
+
+The standing phone host now offers `pairing.relayKeyChallengeV1 {pairingId}` and
+`pairing.relayKeyProofV1 {challengeId, signatureB64}` only after the normal relay approval gate.
+A legacy pairing is eligible only when its exact host-minted UUID has one unambiguous, canonical
+Ed25519 public key under the host's existing `nodeterm-ios-<id>` authorized_keys attribution.
+Missing, option-bearing, duplicate, malformed, replaced or unsafe files refuse proof; relative
+identity guesses and device names are never used.
+
+Each connection holds at most one ephemeral challenge and one in-flight inspection. It binds
+version, challenge UUID, pairing UUID, pinned host box key, authenticated peer box key, raw SSH
+public key, random nonce and expiry. All fields use the fixed newline encoding in
+`src/shared/relay-pairing-proof.ts` and Android `RelayPairingProof.Challenge.signingBytes`.
+Both wall and monotonic host time enforce 60 seconds. Every proof attempt consumes the challenge
+before awaiting publication, including malformed signatures; another session cannot use it.
+
+Android attempts the optional proof only after an approved first listing, using its existing
+encrypted SSH seed. It validates the captured host, peer and SSH keys before signing, checks the
+current record/lifetime around awaits, and never creates an identity, changes approval or tokens,
+or retries an uncertain proof. Missing identity, unsupported older hosts and ordinary optional
+errors preserve browsing; cancellation propagates. A socket closed during proof cannot be handed
+off as connected, and a later network close after proved approval is not reported as Deny.
+
+The actual host pairing queue stages a private association, then rechecks the bounded exact
+registry snapshot, attributed public key, approval, connection lifetime and expiry immediately
+before synchronous atomic publication. Existing same-key association is idempotent; conflicts and
+deleted/replaced entries refuse. This is a same-service queue, not a cross-process transaction.
+Normal revocation can then unpin/cut the exact proven last key; a sibling pairing still authorizing
+that key keeps the explicit retained outcome.
+
+Focused controls pass 87 host and 15 Android helper methods. Forty compiled host and 25 compiled
+helper mutation variants fail assertions. Seven real producer→Kotlin encrypted interop methods
+cover sealed legacy pairing, actual signature verification, exact publication/revoke, distinct and
+shared-key siblings, wrong SSH identity, cross-session/consumed challenges, old-host fallback,
+unapproved access and the close/callback ordering. Six additional interop variants fail assertions
+with passing controls/restored. The public-pin adapter, human decision, OS address and unused PTY
+are explicit fixture boundaries. Private evidence: `.nodeterm/android-legacy-relay-proof-2026-10-04/`.
+
+This is an additive host/Android contract. iOS @eneskirca needs the same retained-key signer and
+exact encoding to repair eligible legacy records; old iOS remains usable. A phone without its
+retained SSH seed, an attributable host key or SSH support still needs re-pairing. This proof never
+bypasses first SAS approval and does not solve hosted FCM or A93. New Android source needs a later
+APK than beta 14; no new installation or physical/live transport pass is claimed. Phone testing
+remains paused, beta 10/code 11 is last installed, and the ledger stays 10 Pass / 22 Partial / 32 Pending.

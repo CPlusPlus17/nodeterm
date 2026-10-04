@@ -46,6 +46,8 @@ import { connectRelay, type RelaySocket, type RpcRequest } from './relay-socket'
 import { initHostCanvasHub, currentCanvas, subscribeCanvas } from './host-canvas-hub'
 import { createPhonePresence, type PhonePresence } from './phone-presence'
 import type { HostLanReport } from './host-lan-report'
+import { createRelayPairingProof, type LegacyRelayPairings } from './relay-pairing-proof'
+import { RELAY_PAIRING_CHALLENGE_METHOD, RELAY_PAIRING_PROOF_METHOD } from '../../shared/relay-pairing-proof'
 
 // Default relay endpoint; `NODETERM_RELAY_URL` overrides it (mirrors license.ts's API_BASE /
 // CHECKOUT_URL env-override pattern — used both as the dev gate and for local testing).
@@ -1373,6 +1375,8 @@ export interface HostSession {
 }
 
 export interface HostSessionOptions {
+  /** Optional on the standing phone host only; approved retained-SSH association, never approval. */
+  legacyRelayPairings?: LegacyRelayPairings
   /** Relay wss URL. */
   url: string
   /** Single-use pairing token gating entry at the relay. */
@@ -1455,6 +1459,11 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
   // Approval gate: a freshly-bridged peer serves NO pty/fs RPCs or input frames until approved,
   // so a leaked/guessed pairing cannot grant silent access. Reset on every (re)connect.
   let approved = false
+  let closed = false
+  const pairingProof = opts.legacyRelayPairings ? createRelayPairingProof({
+    hostKey: publicKeyToB64(opts.ourKeys.publicKey), peerKey: () => socket.peerPublicKeyB64(),
+    current: () => approved && !closed, pairings: opts.legacyRelayPairings
+  }) : null
   // Requests held while an async `onPeerReady` is still making its silent decision (review of
   // A07-late). The host fires onReady the moment it confirms the handshake, so the phone's first
   // request can arrive one relay round trip later, while the standing host is still reading its
@@ -1507,6 +1516,7 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
 
   const session: HostSession = {
     approve() {
+      if (closed) return
       approved = true
       // Flush the current canvas now that the device is trusted.
       pushCurrentCanvas()
@@ -1523,6 +1533,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
       return socket.peerPublicKeyB64()
     },
     close() {
+      closed = true
+      pairingProof?.close()
       if (broadcastTimer) {
         clearTimeout(broadcastTimer)
         broadcastTimer = null
@@ -1544,6 +1556,7 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     role: 'host',
     ourKeys: opts.ourKeys,
     onReady: () => {
+      if (closed) return
       // Bridge established. Require approval before serving ANYTHING — including canvas state
       // (which carries workspace metadata). Nothing is pushed until approve() flushes it.
       approved = false
@@ -1577,6 +1590,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
       if (approved) handlers?.onFrame(frame)
     },
     onClose: () => {
+      closed = true
+      pairingProof?.close()
       approved = false
       stopHolding()
       handlers?.closeAll()
@@ -1588,6 +1603,15 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     // snapshots (canvas:request). An unapproved device gets nothing but the approval prompt.
     if (!approved) {
       if (req.id) socket.respond(req.id, false, { message: 'Awaiting host approval.' })
+      return
+    }
+    if (req.method === RELAY_PAIRING_CHALLENGE_METHOD || req.method === RELAY_PAIRING_PROOF_METHOD) {
+      if (!req.id) return // notifications cannot allocate/consume a proof
+      if (!pairingProof) { socket.respond(req.id, false, { message: 'Relay pairing proof is not served on this host.' }); return }
+      const result = req.method === RELAY_PAIRING_CHALLENGE_METHOD ? pairingProof.challenge(req.params) : pairingProof.proof(req.params)
+      void result.then(body => { if (!closed) socket.respond(req.id, true, body) }, () => {
+        if (!closed) socket.respond(req.id, false, { message: 'The pairing identity could not be verified. Pair again to repair it.' })
+      })
       return
     }
     // A client asking for a fresh canvas snapshot → re-push the current one (read-only).

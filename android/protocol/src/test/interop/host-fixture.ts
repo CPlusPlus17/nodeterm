@@ -38,6 +38,7 @@
 // Do not cast what it hands to the desktop code (`as unknown as`, `as never`); a cast turns that
 // check off for the value, and the drift then shows up only at run time.
 import { execFileSync } from 'child_process'
+import { createInterface } from 'readline'
 import { runAckSweep } from './ack-fixture'
 import fs from 'fs'
 import http from 'http'
@@ -78,6 +79,8 @@ import { assembleLaunchCommand, assembleResumeCommand } from '../../../../../src
 import { AGENT_CONFIG, ALL_PERMISSION_MODES, gatePermissionMode } from '../../../../../src/shared/agents/config'
 import { normalizeFor } from '../../../../../src/shared/agents/normalize'
 import { createPairingService } from '../../../../../src/main/pairing-service'
+import { emptyApprovedDevices, isPinned, pinDevice } from '../../../../../src/main/remote/approved-devices-core'
+import { createRevoker } from '../../../../../src/main/remote/revocation'
 import { buildPairingPayload } from '../../../../../src/main/pairing-core'
 import { pairingNetworkChoices, pairingNetworkIPv4, type PairingInterfaces } from '../../../../../src/shared/pairing-network'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
@@ -540,6 +543,103 @@ async function runPair(): Promise<void> {
   emit({ ready: true, payload: started.payload, hostPublicKeyB64: publicKeyToB64(keys.publicKey), relayPlan: started.relayPlan })
 }
 
+/** Actual sealed legacy pairing, approved E2EE session, guarded writer and exact revoker. The
+ * public pin-store adapter and human SAS decision are explicit in-memory fixture boundaries. */
+async function runLegacyPairing(): Promise<void> {
+  const scratch = process.env.FIXTURE_HOME
+  if (!scratch || path.resolve(os.homedir()) !== path.resolve(scratch) ||
+      path.resolve(platform().userDataDir) !== path.resolve(scratch)) throw new Error('legacy pairing requires one scratch home/profile')
+  const keys = genKeyPair()
+  const port = await startBroker()
+  const endpoint = `ws://127.0.0.1:${port}`
+  let pins = emptyApprovedDevices()
+  const sessions = new Map<string, HostSession>()
+  const killed: string[] = []
+  const revoker = createRevoker({
+    load: async () => pins,
+    save: async next => { pins = next },
+    onRevoke: key => {
+      killed.push(key)
+      for (const session of sessions.values()) if (session.peerPublicKeyB64() === key) session.close()
+    }
+  })
+  const api = http.createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      if (req.url !== '/v1/relay/device') { res.writeHead(404).end(); return }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ deviceToken: 'inert-legacy-device-token', hostId: 'legacy-fixture-host', exp: 123 }))
+    })
+  })
+  await new Promise<void>(resolve => api.listen(0, '127.0.0.1', resolve))
+  const apiPort = (api.address() as { port: number }).port
+  const service = createPairingService({
+    getSettings: () => ({ ...DEFAULT_SETTINGS, phoneAccessEnabled: true }),
+    getEntitlement: () => null, loadHostKeyPair: async () => keys,
+    relayEndpoint: endpoint, apiBase: `http://127.0.0.1:${apiPort}`, relayAllowed: () => true,
+    pinRelayKey: async key => { pins = pinDevice(pins, key) },
+    revokeRelayKey: key => revoker.revoke(key)
+  }, { timeoutMs: 60_000, platform: 'linux', sshHostKeyDirs: [path.join(scratch, 'no-public-host-keys')],
+    interfaces: () => ({ fixture: [{ address: '10.23.45.67', family: 'IPv4', internal: false }] }) })
+  const store = await seedDesktopState()
+  const legacyRelayPairings = process.env.FIXTURE_LEGACY_CLOSE_DURING_PROOF === '1' ? {
+    ...service.legacyRelayPairings,
+    inspect: async (pairingId: string, peerKey: string) => {
+      const found = await service.legacyRelayPairings.inspect(pairingId, peerKey)
+      sessions.get('subject')?.close()
+      emit({ event: 'legacy-mid-proof-close' })
+      return found
+    }
+  } : service.legacyRelayPairings
+  for (const room of ['subject', 'other']) {
+    const session = connectHostSession({
+      ...(process.env.FIXTURE_LEGACY_UNSUPPORTED === '1' ? {} : { legacyRelayPairings }),
+      url: endpoint, token: `host-${room}`, ourKeys: keys,
+      pty: {
+        createDetached() { throw new Error('no terminal is created in this fixture') },
+        attachDetached() { throw new Error('no terminal is attached in this fixture') },
+        captureSnapshot: async () => '', sessionExists: async () => false,
+        write() { throw new Error('no terminal input is allowed') }, resize() {}, setFlow() {}, kill() {}
+      },
+      getLatestCanvas: () => null, subscribeCanvas: () => () => {}, applyMutation() {},
+      listProjects: () => buildProjectsListBlob({ workspace: store, userDataDir: scratch, listSessions: async () => [] }),
+      onPeerReady: session => {
+        const peer = session.peerPublicKeyB64()
+        if (!peer) throw new Error('a handshake must identify its peer')
+        if (isPinned(pins, peer) || (room === 'subject' && process.env.FIXTURE_LEGACY_APPROVE !== '0')) {
+          // This is the fixture's explicit human decision, never an association-based approval.
+          const approve = (): void => { pins = pinDevice(pins, peer); session.approve() }
+          const delay = Number(process.env.FIXTURE_LEGACY_APPROVE_AFTER_MS ?? '0')
+          if (room === 'subject' && !isPinned(pins, peer) && delay > 0) setTimeout(approve, delay)
+          else approve()
+        }
+        emit({ event: 'legacy-peer', room, approved: session.isApproved(), key: peer })
+      },
+      onClose: () => emit({ event: 'legacy-close', room })
+    })
+    sessions.set(room, session)
+  }
+  const state = async (): Promise<void> => {
+    const obj: { devices: Array<{ id: string; relayBoxKey?: string }> } = JSON.parse(
+      await fs.promises.readFile(path.join(scratch, '.nodeterm/agent.json'), 'utf8'))
+    emit({ event: 'legacy-state', devices: obj.devices.map(({ id, relayBoxKey }) => ({ id, relayBoxKey })),
+      pins: pins.pubkeys, killed, live: [...sessions].map(([room, session]) => ({ room, approved: session.isApproved() })) })
+  }
+  const pair = () => service.start(done => emit({ event: 'legacy-paired', ...done }))
+  let tail = Promise.resolve()
+  createInterface({ input: process.stdin }).on('line', line => {
+    tail = tail.then(async () => {
+      if (line === 'start-pair') emit({ event: 'legacy-pair-ready', payload: (await pair()).payload })
+      else if (line === 'state') await state()
+      else if (/^revoke:[0-9a-f-]{36}$/.test(line)) {
+        emit({ event: 'legacy-revoked', result: await service.revokeDevice(line.slice(7)) })
+        await state()
+      } else throw new Error('unknown fixture command')
+    }).catch(() => emit({ event: 'fatal', message: 'legacy fixture command failed' }))
+  })
+  emit({ ready: true, payload: (await pair()).payload, relayUrl: endpoint, hostPublicKeyB64: publicKeyToB64(keys.publicKey) })
+}
+
 /** No sockets: real mirror producer and desktop command assembler checked by the Kotlin client. */
 async function runLaunchParity(): Promise<void> {
   const codexApprovalValues = codexApprovalValuesFrom(process.env.FIXTURE_CODEX_HELP)
@@ -627,7 +727,7 @@ const mode = process.argv[2]
 if (mode === 'never-ready') {
   setInterval(() => {}, 60_000)
 } else if (mode !== 'project-launch') {
-  ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : mode === 'launch-parity' ? runLaunchParity() : mode === 'pairing-network' ? runPairingNetwork() : runRelay()).catch((err) => {
+  ;(mode === 'pair' ? runPair() : mode === 'legacy-pairing' ? runLegacyPairing() : mode === 'ack-sweep' ? runAckSweep() : mode === 'launch-parity' ? runLaunchParity() : mode === 'pairing-network' ? runPairingNetwork() : runRelay()).catch((err) => {
     emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
     process.exit(1)
   })

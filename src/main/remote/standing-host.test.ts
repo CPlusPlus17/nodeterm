@@ -165,6 +165,18 @@ afterEach(() => {
 })
 
 describe('standing host presence peers', () => {
+  it('forwards the exact optional legacy pairing store into the real session factory', async () => {
+    const pairings: NonNullable<StandingHostOptions['legacyRelayPairings']> = {
+      inspect: vi.fn(async () => ({ status: 'unprovable' as const })),
+      associate: vi.fn(async () => ({ status: 'associated' as const }))
+    }
+    const host = makeHost({ legacyRelayPairings: pairings })
+    host.setEnabled(true); await settle()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0].opts.legacyRelayPairings).toBe(pairings)
+    expect(await sessions[0].opts.legacyRelayPairings!.inspect('fixture-id', 'fixture-peer')).toEqual({ status: 'unprovable' })
+    expect(pairings.inspect).toHaveBeenCalledWith('fixture-id', 'fixture-peer')
+  })
   it('a bridged relay client joins as a cursorless phone peer and leaves when the socket drops', async () => {
     const host = makeHost()
     host.setEnabled(true)

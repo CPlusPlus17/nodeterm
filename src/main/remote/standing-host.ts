@@ -40,6 +40,7 @@ import {
   type HostBridgeDeps,
   type HostSession
 } from './host-service'
+import type { LegacyRelayPairings } from './relay-pairing-proof'
 import { currentCanvas, initHostCanvasHub, subscribeCanvas } from './host-canvas-hub'
 import { hostIdFromPublicKeyB64 } from './relay-id'
 import { removeRelayAdvertisement, writeRelayAdvertisement } from './relay-advertise'
@@ -174,6 +175,7 @@ export function resetRevokedPhonesForTests(): void {
 }
 
 export interface StandingHostOptions {
+  legacyRelayPairings?: LegacyRelayPairings
   /**
    * An unpinned phone completed the handshake: pin its key and answer true when a listed pairing
    * recorded it (pairing-service.ts `approvePairedRelayKey`, A07-late), so the handshake is approved
@@ -426,6 +428,7 @@ export function initStandingHost(
         denyTimer: null
       }
       pooled.session = connectHostSession({
+        legacyRelayPairings: options.legacyRelayPairings,
         url: RELAY_URL,
         token: token.pairingToken,
         ourKeys: keys,

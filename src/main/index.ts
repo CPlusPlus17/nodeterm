@@ -4134,6 +4134,7 @@ app.whenReady().then(async () => {
   // this Mac from anywhere. Honors settings.phoneAccessEnabled internally. Revoking a phone reaches
   // its open sessions via `killStandingHostSessionsByPeerKey` (peerRevoker, remote/peer-revoker.ts).
   const standingHost = initStandingHost(win, ptyManager, () => settingsStore.get(), listProjectsOutput, hostBridge, {
+    legacyRelayPairings: pairingService.legacyRelayPairings,
     // A paired phone that adopted the relay after the scan is approved by its pairing record, not by
     // a dialog at a desk it has left (A07-late).
     pinPairedPhone: (pub) => pairingService.approvePairedRelayKey(pub)

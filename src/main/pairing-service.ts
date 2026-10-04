@@ -44,7 +44,10 @@ import {
   type RelayPairingBlock
 } from './pairing-core'
 import type { DeviceRevokeResult, DeviceRevokeServerOutcome, Settings } from '../shared/types'
-import { renameAtomic, tempNameFor } from '../core/fs-atomic'
+import { renameAtomic, renameAtomicSync, tempNameFor } from '../core/fs-atomic'
+import { legacyPairingEntryVersion, readLegacyPairingKey, readOwnedRegularFile } from './pairing-legacy-key'
+import type { LegacyRelayPairings, LegacyRelayPairingTarget, LegacyRelayPairingInspection } from './remote/relay-pairing-proof'
+import { RELAY_PAIRING_KEY, RELAY_PAIRING_UUID, type RelayPairingProofResult } from '../shared/relay-pairing-proof'
 import { publicKeyToB64, deriveSharedKey, encrypt, decrypt, type KeyPair } from './remote/e2ee'
 import { hostIdFromPublicKeyB64 } from './remote/relay-id'
 import type { RevokeResult } from './remote/revocation'
@@ -267,6 +270,8 @@ export type PairingDone = {
 }
 
 export interface PairingService {
+  /** Exact retained SSH proof repairs a legacy association; never grants approval or changes pins. */
+  readonly legacyRelayPairings: LegacyRelayPairings
   /** Read this computer's current IPv4 adapters, without guessing phone reachability. */
   listNetworks(): PairingNetworkChoice[]
   /** Begin pairing; resolves once the listener is up. `onDone` fires exactly once later. */
@@ -547,6 +552,59 @@ export function createPairingService(
       throw e
     }
     await fs.chmod(AGENT_JSON_PATH, 0o600).catch(() => {})
+  }
+
+  /** Only migration uses this staged publication: the final admission and rename are synchronous.
+   * The queue fences this service's pair/revoke writers, not another process or manual file edits. */
+  async function writeLegacyAssociation(obj: Record<string, unknown>, admitted: () => boolean): Promise<boolean> {
+    const tmp = tempNameFor(AGENT_JSON_PATH)
+    try {
+      await fs.writeFile(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 })
+      await fs.chmod(tmp, 0o600)
+      if (!admitted()) return false
+      // No await between the current approved-session fence and publication.
+      renameAtomicSync(tmp, AGENT_JSON_PATH)
+      return true
+    } finally { await fs.rm(tmp, { force: true }).catch(() => {}) }
+  }
+
+  const inspectLegacy = (obj: Record<string, unknown>, pairingId: string, peerKey: string): LegacyRelayPairingInspection => {
+    if (!RELAY_PAIRING_UUID.test(pairingId) || !RELAY_PAIRING_KEY.test(peerKey)) return { status: 'unprovable' }
+    const matches = readDevices(obj).filter(entry => entry?.id === pairingId)
+    if (!matches.length) return { status: 'gone' }
+    if (matches.length !== 1) return { status: 'unprovable' }
+    const entry = matches[0]
+    if (entry.relayBoxKey) return { status: entry.relayBoxKey === peerKey ? 'associated' : 'conflict' }
+    if (entry.ssh === false || typeof entry.token !== 'string' || !entry.token || !Number.isFinite(entry.pairedAt)) return { status: 'unprovable' }
+    const sshPublicKeyB64 = readLegacyPairingKey(AUTH_KEYS_PATH, pairingId)
+    return sshPublicKeyB64 ? { status: 'eligible', target: { pairingId, sshPublicKeyB64,
+      entryVersion: legacyPairingEntryVersion(entry) } } : { status: 'unprovable' }
+  }
+  const legacyRelayPairings: LegacyRelayPairings = {
+    inspect: (pairingId, peerKey) => serialize(async () => inspectLegacy(await readAgentJson(), pairingId, peerKey)),
+    associate: (target: LegacyRelayPairingTarget, peerKey, current) => serialize(async (): Promise<RelayPairingProofResult> => {
+      if (!current()) return { status: 'expired' }
+      const obj = await readAgentJson()
+      if (!current()) return { status: 'expired' }
+      const found = inspectLegacy(obj, target.pairingId, peerKey)
+      if (found.status !== 'eligible') return found
+      if (found.target.entryVersion !== target.entryVersion || found.target.sshPublicKeyB64 !== target.sshPublicKeyB64) return { status: 'unprovable' }
+      let refused: RelayPairingProofResult = { status: 'expired' }
+      const published = await writeLegacyAssociation({ ...obj, devices: readDevices(obj).map(entry =>
+        entry.id === target.pairingId ? { ...entry, relayBoxKey: peerKey } : entry) }, () => {
+        // Re-attest captured entry/key after staging. Refuse replacement/manual edits instead of
+        // publishing a stale whole-file snapshot. This final bounded read never escapes the host.
+        const snapshot = readOwnedRegularFile(AGENT_JSON_PATH, 4 * 1024 * 1024)
+        if (!snapshot) { refused = { status: 'unprovable' }; return false }
+        const fresh = JSON.parse(snapshot.toString('utf8')) as Record<string, unknown>
+        const next = inspectLegacy(fresh, target.pairingId, peerKey)
+        if (next.status !== 'eligible') { refused = next; return false }
+        if (next.target.entryVersion !== target.entryVersion || next.target.sshPublicKeyB64 !== target.sshPublicKeyB64 ||
+            JSON.stringify(fresh) !== JSON.stringify(obj)) { refused = { status: 'unprovable' }; return false }
+        return current()
+      })
+      return published ? { status: 'associated' } : refused
+    })
   }
 
   /** Persist a device into agent.json, preserving all other fields the host agent wrote. */
@@ -1118,5 +1176,5 @@ export function createPairingService(
     }
   }
 
-  return { start, stop, listNetworks: () => pairingNetworkChoices(interfaces()), listDevices, revokeDevice, probeSsh, approvePairedRelayKey }
+  return { start, stop, listNetworks: () => pairingNetworkChoices(interfaces()), listDevices, revokeDevice, probeSsh, approvePairedRelayKey, legacyRelayPairings }
 }

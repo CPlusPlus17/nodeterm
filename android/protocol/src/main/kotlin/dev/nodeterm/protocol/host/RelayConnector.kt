@@ -2,6 +2,7 @@ package dev.nodeterm.protocol.host
 
 import dev.nodeterm.protocol.crypto.BoxKeyPair
 import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.pairing.RelayPairingProof
 import dev.nodeterm.protocol.relay.OkHttpRelayTransport
 import dev.nodeterm.protocol.relay.RelaySocket
 import dev.nodeterm.protocol.relay.RelayTransportFactory
@@ -43,7 +44,9 @@ object RelayConnector {
         approvalPollMs: Long = 1_500,
         /** Give up with [RelayApprovalRequiredException] instead of waiting for an approval dialog
          *  (a background check: nobody is there to compare the code). See [RelayApprovalGate]. */
-        requireApproved: Boolean = false
+        requireApproved: Boolean = false,
+        /** Optional proof using only the captured pairing and the retained SSH seed. */
+        legacyPairing: RelayPairingProof.Context? = null,
     ): Connected {
         onStatus(RelayConnectStatus.Handshaking)
         val ready = CompletableDeferred<String>()
@@ -78,6 +81,15 @@ object RelayConnector {
                 }
                 try {
                     val snapshot = conn.listProjects()
+                    announced = false // Approval is proved; a later network close is not Deny.
+                    // Successful listing proves approval. An old/unprovable host still browses;
+                    // cancellation keeps the ordinary dial cleanup and lifetime guarantees.
+                    legacyPairing?.let { conn.proveLegacyPairing(it) }
+                    // RPC waiters can resume before onClosed completes our deferred. Read the
+                    // socket state too, so an optional proof cannot hand off a closed connection.
+                    if (!conn.isReady || closed.isCompleted) {
+                        throw HostException("The relay closed the connection while opening this computer.")
+                    }
                     conn.setOnClosed(null)
                     return Connected(conn, sas, snapshot)
                 } catch (e: HostException) {

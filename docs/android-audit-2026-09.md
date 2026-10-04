@@ -136,7 +136,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A114](#a114) | low | | small | phone/UX | ✅ fixed in `6b989e59`; 39 focused methods / 18 assertion mutants; physical pending · Dictation has no language picker |
 | [A115](#a115) | medium | | medium | phone/bug | ✅ fixed in `0a71c028`; 73 assertion mutants and one equivalent survivor; physical pending · Replaced records and late connections retain stale preferences/credentials |
 | [A116](#a116) | medium | | medium | pairing/UX | ✅ fixed in `a6b3e88b`; six real HTTP / five interop methods, 56 assertion mutants; physical pending · Multiadapter pairing/refresh has no network choice |
-| [A117](#a117) | medium | | small | pairing/bug | ✅ source fixed on this branch; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
+| [A117](#a117) | medium | | small | pairing/bug | ✅ fixed in `227a7262`; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
+| [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association source fixed on this branch; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 
 ## A01
 
@@ -3860,3 +3861,50 @@ The sealed field and Android production code are unchanged; the actual interop f
 with the producer. iOS @eneskirca should verify the existing anchor handling against the current
 host. Prepared beta 14 remains valid client source and is not installed. Physical checks remain
 pending; phone testing is paused and the ledger stays 10 Pass / 22 Partial / 32 Pending.
+
+## A118
+
+**Eligible older pairings cannot associate their existing relay key with a saved device (2026-10-04).**
+
+The standing phone host now offers `pairing.relayKeyChallengeV1 {pairingId}` and
+`pairing.relayKeyProofV1 {challengeId, signatureB64}` only after the normal relay approval gate.
+A legacy pairing is eligible only when its exact host-minted UUID has one unambiguous, canonical
+Ed25519 public key under the host's existing `nodeterm-ios-<id>` authorized_keys attribution.
+Missing, option-bearing, duplicate, malformed, replaced or unsafe files refuse proof; relative
+identity guesses and device names are never used.
+
+Each connection holds at most one ephemeral challenge and one in-flight inspection. It binds
+version, challenge UUID, pairing UUID, pinned host box key, authenticated peer box key, raw SSH
+public key, random nonce and expiry. All fields use the fixed newline encoding in
+`src/shared/relay-pairing-proof.ts` and Android `RelayPairingProof.Challenge.signingBytes`.
+Both wall and monotonic host time enforce 60 seconds. Every proof attempt consumes the challenge
+before awaiting publication, including malformed signatures; another session cannot use it.
+
+Android attempts the optional proof only after an approved first listing, using its existing
+encrypted SSH seed. It validates the captured host, peer and SSH keys before signing, checks the
+current record/lifetime around awaits, and never creates an identity, changes approval or tokens,
+or retries an uncertain proof. Missing identity, unsupported older hosts and ordinary optional
+errors preserve browsing; cancellation propagates. A socket closed during proof cannot be handed
+off as connected, and a later network close after proved approval is not reported as Deny.
+
+The actual host pairing queue stages a private association, then rechecks the bounded exact
+registry snapshot, attributed public key, approval, connection lifetime and expiry immediately
+before synchronous atomic publication. Existing same-key association is idempotent; conflicts and
+deleted/replaced entries refuse. This is a same-service queue, not a cross-process transaction.
+Normal revocation can then unpin/cut the exact proven last key; a sibling pairing still authorizing
+that key keeps the explicit retained outcome.
+
+Focused controls pass 87 host and 15 Android helper methods. Forty compiled host and 25 compiled
+helper mutation variants fail assertions. Seven real producer→Kotlin encrypted interop methods
+cover sealed legacy pairing, actual signature verification, exact publication/revoke, distinct and
+shared-key siblings, wrong SSH identity, cross-session/consumed challenges, old-host fallback,
+unapproved access and the close/callback ordering. Six additional interop variants fail assertions
+with passing controls/restored. The public-pin adapter, human decision, OS address and unused PTY
+are explicit fixture boundaries. Private evidence: `.nodeterm/android-legacy-relay-proof-2026-10-04/`.
+
+This is an additive host/Android contract. iOS @eneskirca needs the same retained-key signer and
+exact encoding to repair eligible legacy records; old iOS remains usable. A phone without its
+retained SSH seed, an attributable host key or SSH support still needs re-pairing. This proof never
+bypasses first SAS approval and does not solve hosted FCM or A93. New Android source needs a later
+APK than beta 14; no new installation or physical/live transport pass is claimed. Phone testing
+remains paused, beta 10/code 11 is last installed, and the ledger stays 10 Pass / 22 Partial / 32 Pending.

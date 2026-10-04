@@ -12,6 +12,7 @@ import dev.nodeterm.protocol.model.KanbanLabel
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.model.TerminalHistory
+import dev.nodeterm.protocol.pairing.RelayPairingProof
 import dev.nodeterm.protocol.relay.Frame
 import dev.nodeterm.protocol.relay.Framing
 import dev.nodeterm.protocol.relay.Op
@@ -58,6 +59,8 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
 
     override val kind = TransportKind.RELAY
     override val capabilities = LegRouting.RELAY_CAPABILITIES
+    /** Socket state changes before pending RPCs resume and before the close listener runs. */
+    internal val isReady: Boolean get() = socket.isReady
 
     private inner class Stream(val id: Long, override val fresh: Boolean, val sink: TerminalSink) : TerminalStream {
         private val snapshot = SnapshotReassembler()
@@ -161,6 +164,10 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         // address and SSH host keys, which only this authenticated channel may hand the phone.
         return ProjectsParser.parseBlob(body.s("output") ?: "").copy(lan = LanReport.parse(body["lan"]))
     }
+
+    /** Additive approved-relay migration; never changes this phone's tokens or pairing record. */
+    suspend fun proveLegacyPairing(context: RelayPairingProof.Context): RelayPairingProof.Outcome =
+        RelayPairingProof.afterApprovedListing(context, rpc = { method, params -> call(method, params, RelayPairingProof.TIMEOUT_MS) })
 
     override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream {
         // The relay creates an unknown id on the desktop socket. Phone-owned shells never live
