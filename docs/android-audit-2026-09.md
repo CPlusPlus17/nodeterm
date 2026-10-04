@@ -139,7 +139,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A117](#a117) | medium | | small | pairing/bug | ✅ fixed in `227a7262`; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 | [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
-| [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 actual methods and seven assertion mutants; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
+| [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods, seven assertion mutants and 28 native OpenSSH checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
 
 ## A01
 
@@ -4022,8 +4022,9 @@ They cover fingerprint/auth order, other/restricted keys, uncertainty/no replay,
 limits, own timeout versus external cancellation and socket closure. Offline app compilation passes.
 Seven isolated compiled semantic variants fail assertions, with 17 passing control/restored
 methods and exact integrated source hashes. Private proof: `.nodeterm/android-ssh-setup-2026-10-04/password-final/`.
-The full required gate verifies actual Gradle/JUnit method registration too. This is source/fixture proof;
-actual Android setup UX and OpenSSH/macOS runtime checks remain pending. Phone testing stays paused,
+The full required gate verifies actual Gradle/JUnit method registration too. This is source/fixture proof.
+Actual Android setup UX, ordinary PAM/account behavior and macOS runtime checks remain pending;
+the controlled native OpenSSH receipt below adds wire/exec evidence. Phone testing stays paused,
 with beta 10/code 11 last installed and **10 Pass / 22 Partial / 32 Pending**. Beta 15 excluded A119/A120;
 the subsequent beta-16 receipt below includes both. A25/A93 require the hosted-backend maintainers; A68 stays deferred and no PR opens.
 
@@ -4059,3 +4060,35 @@ question application remains unverified after provider HTTP 401. A25 FCM and A93
 relay recovery require the hosted-backend maintainers. For iOS, @eneskirca should adopt the saved
 profile/enrollment UX and review the earlier host protocol changes. No PR opened; A68 remains
 deferred until a PR is requested. Every push requires its own exact-head green Android workflow.
+
+## Native OpenSSH enrollment verification (2026-10-04)
+
+A120 now has an actual **OpenSSH 10.2p1** control run in addition to its MINA regressions.
+The actual protocol sources at `bac1aa7fe90416b07dd0de47ac95049e817ce8b5` were compiled privately;
+**28 distinct assertions / 40 passing assertion events** verify inspection against an independently
+measured public fingerprint, password login followed by fresh pinned key login and exec,
+retained unrelated keys, newline/mode handling, idempotence, consumed confirmation, rejected password
+and host pin, commented key text, restricted keys, symlink/nonregular targets, and closed client sockets.
+These are native fixture assertions, not additional Gradle/JUnit methods or physical checklist passes.
+
+The daemon ran as UID 1000 in a filesystem/user/PID sandbox exposing only read-only `/usr` and private
+account files/home. Its password and SSH identities were newly generated for this test. It listened
+only on loopback, with PAM, keyboard-interactive, forwarding, PTY and source penalties disabled.
+This Fedora build warns that `UsePAM no` is unsupported; the asserted crypt/password and public-key
+wire/exec flow nevertheless passes in that exact controlled configuration. This does not verify a
+normal PAM/account backend, MFA, macOS, Android setup UX/Keystore, native cancellation/timeouts,
+or profile/managed-session behavior. The earlier MINA tests retain their separate coverage.
+Both disposable daemon runs are closed; their generated passwords/private keys/account hashes were
+removed after the run. No host account, credential, SSH configuration, retained phone identity or
+phone state was changed. Private proof: `.nodeterm/android-beta-build-16/openssh-native/`.
+
+The stale SSH class comment now describes A111's host-owned managed New support; missing existing
+canvas sessions remain attach-only. It changes only KDoc, with the same source line count.
+The prepared beta-16 APK remains source `2723845e`, code 17 and the same retained signature/checksum;
+no new APK is built or installed for this verification/comment checkpoint. Fresh compilation in the
+same AGP graph confirms every protocol class byte matches the immutable beta-16 build. This byte
+comparison is a required gate before publishing the receipt. Required local gates and exact-head Android CI also remain mandatory.
+Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**, with beta 10/code 11 last installed.
+Actual Pixel setup/lifecycle, ordinary PAM accounts, macOS and live Claude checks remain open;
+A25/A93 still need hosted-backend maintainers, iOS follow-up stays with @eneskirca, and A68 remains
+deferred until a requested PR. No PR opened.

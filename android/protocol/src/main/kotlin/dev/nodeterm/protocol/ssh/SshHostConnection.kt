@@ -157,9 +157,9 @@ class NothingFoundException : HostException(SshHostConnection.NO_USER_DATA) {
 
 /**
  * [HostConnection] over direct SSH (the LAN leg a pairing installs a key for). Everything is POSIX
- * sh + tmux and typed Git on the computer. A live service advertised by the selected profile owns
- * Board writes and renderer nudges. Cold canvas registration still needs the desktop managed
- * launch path through the relay, never a guessed shell environment.
+ * sh + tmux and typed Git on the computer. The selected-profile service owns Board writes and
+ * Desktop renderer nudges, plus managed New on its enabled local POSIX tmux backend. Existing
+ * missing canvas sessions stay attach-only; creation uses host-owned launch settings.
  */
 class SshHostConnection private constructor(private val client: SSHClient, private val profilePath: String?) : HostConnection {
     override val kind = TransportKind.SSH
