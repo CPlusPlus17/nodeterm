@@ -235,7 +235,7 @@ class RelayPairingProofTest {
         assertEquals(2, calls); assertTrue(cancelled)
     }
 
-    @Test fun `outer timeout is not mistaken for the optional migration deadline`() = runBlocking {
+    @Test fun `outer timeout is not mistaken for the optional migration deadline`() = runBlocking<Unit> {
         assertFailsWith<CancellationException> {
             withTimeout(20) { RelayPairingProof.afterApprovedListing(context(), rpc = { _, _ -> awaitCancellation() }, timeoutMs = 500) }
         }

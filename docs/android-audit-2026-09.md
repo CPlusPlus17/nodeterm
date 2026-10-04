@@ -3948,3 +3948,19 @@ this APK and current host source, checks saved key/pin survival and the expanded
 then restores rotation and removes only owned QA host state. A25/A93 still require hosted-backend
 maintainers; iOS @eneskirca owes the new proof contract and earlier mirror/verb/v2-answer adoption.
 No PR is opened; A68 stays deferred until requested PR preparation.
+
+## A118 JUnit registration follow-up (2026-10-04)
+
+The focused Kotlin runner exercised all 15 helper methods, but the initial Gradle/JUnit run
+registered only 14: the outer-timeout coroutine test inferred an exception-valued return.
+Its explicit `runBlocking<Unit>` signature now lets JUnit discover it. Actual offline Gradle
+controls register all 15 with no failures/errors/skips. Removing the signature compiles and
+passes 14 methods, then fails the exact method-registration assertion; restoration passes 15.
+The seven actual host/Android interop methods were already registered. Private evidence:
+`.nodeterm/android-legacy-relay-proof-2026-10-04/junit-registration/`.
+
+The required local gate now checks the actual JUnit helper inventory and the outer-timeout
+method explicitly. This correction changes only a protocol test and documentation after
+beta 15's `aa902d0a` source; its shipped Android runtime inputs and private APK are unchanged.
+The APK remains prepared and uninstalled, live Claude application remains unverified after
+provider HTTP 401, and the physical ledger stays 10 Pass / 22 Partial / 32 Pending.
