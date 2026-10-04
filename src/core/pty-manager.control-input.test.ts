@@ -233,6 +233,37 @@ describe('controlInput — ssh', () => {
   })
 })
 
+describe('controlInput — never through a tmux CLIENT', () => {
+  // The routing half of the security boundary. pane-input.realtmux.test.ts proves what the plans
+  // MEAN on a real tmux (the prefix reaches the app, never tmux), but it runs the plans directly and
+  // cannot see which route PtyManager picks. This pins the pick: a tmux-backed session's client pty
+  // — the owner's painter, or a watcher's own read-only client — is never written into; the bytes
+  // travel as `send-keys -H` text on `source-file -`'s stdin (a paste as `load-buffer -`).
+  it("the owner's painter, a watcher's own client and an SSH session: keys and a paste reach the pane through tmux, never the client's pty", async () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{}, '/usr/bin/tmux'],
+      [{ watcherClient: true }, '/usr/bin/tmux'],
+      [{ sshRemote: SSH_REMOTE }, '/usr/bin/ssh']
+    ]
+    for (const [session, file] of cases) {
+      calls.length = 0
+      const { mgr, write } = await manager(session)
+      expect(await mgr.controlInput('sess-1', { kind: 'keys', data: '\x02s' }), JSON.stringify(session)).toBe(true)
+      expect(await mgr.controlInput('sess-1', { kind: 'paste', text: 'echo hi\n' }), JSON.stringify(session)).toBe(true)
+      expect(write, JSON.stringify(session)).not.toHaveBeenCalled()
+      expect(calls.map((c) => c.file), JSON.stringify(session)).toEqual([file, file])
+      expect(calls[0].input).toBe(keysCommandText(NAME, '\x02s'))
+      expect(calls[0].input).toContain('-H 02 73')
+      expect(calls[1].input).toBe('echo hi\n')
+      // Never a payload on a command line, local or remote: argv is readable by every user (`ps`).
+      const argv = calls.flatMap((c) => c.args).join(' ')
+      expect(argv, JSON.stringify(session)).not.toContain('02 73')
+      expect(argv, JSON.stringify(session)).not.toContain('\x02')
+      expect(argv, JSON.stringify(session)).not.toContain('echo hi')
+    }
+  })
+})
+
 describe('controlInput — the ordinary write path', () => {
   it('plain shell: keys are written to the pty as they are', async () => {
     const { mgr, write } = await manager({ tmuxBacked: false, persistKey: undefined })

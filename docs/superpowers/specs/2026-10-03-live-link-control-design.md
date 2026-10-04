@@ -79,7 +79,9 @@ are a commenter: they watch and may chat.
   by itself, and those answers are not typing. `isTerminalReport` (`core/terminal-reports.ts`) is the
   filter. Without it every connected controller would answer every query again into the pane.
 - **Rate:** a token bucket per viewer, 64 KB/s, 256 KB burst. Over budget is dropped and the viewer is
-  told once ("Typing too fast — some input was dropped").
+  told, at most once per 10 s, with `watch:control {controlling, dropped}`. The same notice covers a
+  delivery to the pane that failed (an SSH host without tmux, a session that ended), so the page's
+  copy names no cause: "Some of your input didn't reach the terminal."
 - **Delivered to the PANE, never through a tmux client's key table.** This is the security boundary of
   the role.
   - **Why.** Typed into a tmux client (the owner's, or a watcher client), the tmux prefix reaches
@@ -89,18 +91,27 @@ are a commenter: they watch and may chat.
   - **Requirement.** Arbitrary bytes (UTF-8, escape sequences, bracketed-paste frames) reach the
     node's pane exactly. No key binding and no client is involved. The owner's own client keeps
     working.
-  - **Candidate.** `load-buffer -b <unique> -` from stdin, then `paste-buffer -d -r -b <unique> -t =nt-<id>:` (no `-p`:
-    the viewer's xterm already frames a paste when the app asked for it), batched over ~20 ms. Local
-    through the app's tmux; SSH over the project's ControlMaster, stdin piped (never argv).
+  - **Built** (the first task measured it on tmux 3.4 and 3.7b; `docs/live-links.md` has the table).
+    Keys and pastes travel apart. Keys go as `tmux source-file -` with the command text on stdin: a
+    mode cancel (`copy-mode -q` when the pane is in a mode), then `send-keys -t =nt-<id>: -H <hex>`
+    lines, so every byte reaches the pane as itself. A paste goes as `load-buffer -b <unique> -` from
+    stdin, the same mode cancel, then `paste-buffer -d -p -r -b <unique> -t =nt-<id>:`: **with `-p`**,
+    so tmux frames it only when the pane's application asked for bracketed paste. The spec's first
+    candidate, `paste-buffer` for everything, fails on tmux 3.7, which vis(3)-encodes control bytes
+    in a paste buffer (an arrow key arrives as the text `^[[A`, Ctrl-C as `^C`). The viewer frames
+    every paste itself and the host splits keys from pastes on those frames (§5). Input is batched
+    over ~20 ms. Local through the app's tmux; SSH over the project's ControlMaster, stdin piped
+    (never argv).
   - **The plan's first task measures it on real tmux** before anything is built on it: bytes arrive
     exactly, `C-b s` typed by a controller does NOT open the chooser, copy mode, latency (local, and
     over a 50 ms RTT ssh), and a burst. If the candidate fails, the plan picks another that meets the
     requirement and records why.
 - **Backends.**
   - **tmux, local and SSH:** supported, by pane delivery.
-  - **Windows session host and the plain-shell fallback:** supported. There is no multiplexer key
-    table there; input goes to the session the viewer is joined to through PtyManager's ordinary
-    write.
+  - **Windows session host, a direct Windows pane and the plain-shell fallback:** supported. There is
+    no multiplexer key table there. Keys go through PtyManager's ordinary write. A paste goes through
+    the session host's (or the pane's) no-Enter text path, which frames it only when the
+    application asked; a plain shell gets it unframed.
   - **Zellij:** control is **refused**. Its keybindings are session-wide (unlock on Ctrl-Alt-g), and
     there is no pane delivery that bypasses them. A Control link on a Zellij node behaves as a
     Commenter link, and both the dialog and the viewer say why.
@@ -219,8 +230,12 @@ per-connection state; the policy only knows the role.
   - The header shows "You can type" and a **Release** button that stops sending input.
   - Errors say what happened: wrong password, too many attempts (locked), control is off, try again in
     a moment.
-- **Paste** works through xterm's own paste path, so bracketed paste is framed by xterm when the app
-  asked for it.
+- **Paste:** while typing, the page handles every paste itself. It keeps bracketed paste on in its
+  own xterm whatever the stream says (the tmux client's `?2004h` is constant, so the page's mode says
+  nothing about the application in the pane), removes the paste markers and every ESC from the text,
+  and frames it. The host splits keys from pastes on those frames and delivers the paste with
+  `paste-buffer -p`, so the pane gets brackets only when its application asked for them (§2.4).
+  An emulator's answer to a query travels as a cast of its own, which the host drops whole.
 - **Mouse tracking stays swallowed:** no mouse input is sent, and selection stays local.
 - **Typing indicator:** "Mert is typing…" under the terminal header, from `watch:typing`.
 - **No change for Viewer and Commenter links.**

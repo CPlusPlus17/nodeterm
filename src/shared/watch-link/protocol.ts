@@ -20,7 +20,30 @@ export const WATCH_EVENT = {
 export const WATCH_CHAT_CAST = 'watch:chat'
 /** Control links only: `{ name, password }`. Answered to that viewer alone with `watch:control`. */
 export const WATCH_UNLOCK_CAST = 'watch:unlock'
-/** Control links only, from a controlling viewer: `{ data }`, at most `INPUT_MAX` UTF-16 units. */
+/**
+ * Control links only, from a controlling viewer: `{ data }`, at most `INPUT_MAX` UTF-16 units.
+ *
+ * THE PASTE-FRAMING CONTRACT. Both ends keep it; the host trusts nothing else.
+ *  - A controlling viewer forces bracketed paste ON in its OWN emulator (`?2004h`, put back after
+ *    any reset the stream applies) and frames EVERY paste it sends as `ESC[200~` … `ESC[201~`. It
+ *    never decides from the emulator's mode: what the viewer renders is a tmux CLIENT's output,
+ *    whose `?2004h` is constant, so that mode says nothing about the application in the pane.
+ *  - Before framing, the page removes both paste markers and every ESC from the paste's content: a
+ *    paste is text, and a marker inside it would end the frame early and turn the rest into typed
+ *    keys.
+ *  - The host splits keys from pastes on those frames alone. Everything outside a frame is KEYS,
+ *    typed byte for byte (tmux `send-keys -H`). The content of a frame is a PASTE, delivered with
+ *    tmux `paste-buffer -p`, so tmux frames it for the pane only when the pane's application asked
+ *    for bracketed paste. Where there is no tmux (the Windows session host, a direct Windows pane, a
+ *    plain shell) the backend's own path decides the same way, or sends it unframed.
+ *  - An emulator's answer to a query in the stream (DA, CPR, an OSC colour) travels ALONE, as its
+ *    own cast, never merged with typed input: the host drops a cast that is entirely a terminal
+ *    report, and only a whole one.
+ *  - Input from a connection that stopped controlling within the last 5 s (it released, or the
+ *    owner turned typing off or changed the password, or the link locked) is dropped silently:
+ *    keystrokes in flight when control ended are not a breach. After that, or from a connection that
+ *    never controlled, input is a policy breach and the host closes the connection.
+ */
 export const WATCH_INPUT_CAST = 'watch:input'
 /** Control links only: drop the sender back to watching. No arguments. */
 export const WATCH_RELEASE_CAST = 'watch:release'

@@ -1859,6 +1859,37 @@ describe('createLinkHost — control', () => {
       expect(delivered(t)).toEqual(['s1:keys:a'])
     })
 
+    it('every chunk re-reads the record: typing turned off in the record mid-batch stops the rest, even before the host is told', async () => {
+      // The control period (`controlGen`) does not move until the host is told; the record is read
+      // live. A chunk must not go out on the strength of the period alone.
+      const held = holdFirst()
+      const { t, clock, vs } = await controllers(['Ada'], { input: held.input })
+      await type(vs[0], `a${PASTE_START}P${PASTE_END}b`, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(1))
+      t.record.control!.enabled = false // no controlChanged(): the host has not been told yet
+      held.release()
+      await clock.flush()
+      await settleReal()
+      expect(delivered(t)).toEqual(['s1:keys:a'])
+    })
+
+    it('the bucket holds across batches: after a whole burst was delivered, more input in the same second is dropped until it refills', async () => {
+      // The pending-batch cap alone bounds ONE batch; only the bucket bounds the rate across batches.
+      const { t, clock, vs } = await controllers(['Ada'])
+      for (let sent = 0; sent < INPUT_BURST; sent += INPUT_MAX) await type(vs[0], 'a'.repeat(INPUT_MAX), clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs.reduce((n, [, c]) => n + (c.kind === 'keys' ? c.data.length : 0), 0)).toBe(INPUT_BURST))
+      expect(dropped(vs[0])).toEqual([])
+      // INPUT_BATCH_MS later the bucket holds ~1.3 KiB: 16 KiB more is over budget.
+      await type(vs[0], 'b'.repeat(INPUT_MAX), clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await settleReal()
+      expect(delivered(t).some((d) => d.startsWith('s1:keys:b'))).toBe(false)
+      expect(dropped(vs[0])).toEqual([{ state: 'controlling', reason: 'dropped' }])
+      expect(vs[0].log.closed).toBe(0)
+    })
+
     it('a batch queued from before a release is not delivered after the same viewer unlocks again', async () => {
       const held = holdFirst()
       const { t, clock, vs } = await controllers(['Ada', 'Bob'], {
