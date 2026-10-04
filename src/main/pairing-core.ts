@@ -180,13 +180,33 @@ export interface DeviceEntry {
 /** The device shape safe to expose to the renderer (no `token`). */
 export type PublicDevice = Omit<DeviceEntry, 'token'>
 
-/** Default device name when the phone didn't send one (or sent blank). */
-export function normalizeDeviceName(name: unknown): string {
+/** The comment the shipped iOS app puts on the key it generates (nodeterm-ios PairingService). */
+export const IOS_APP_KEY_COMMENT = 'nodeterm-ios'
+
+/** A phone-sent name is shown in Settings and sent as the relay label; keep it one short line. */
+export const DEVICE_NAME_MAX = 64
+
+/** The comment part of a public-key line (everything after type + blob), whitespace-collapsed. */
+export function keyCommentOf(publicKey: string): string {
+  return normalizeAuthorizedKeysLine(publicKey).split(' ').slice(2).join(' ')
+}
+
+/**
+ * The name a paired phone is listed (and relay-labelled) under.
+ *
+ * The name the phone sends wins — Android sends one. Control characters and newlines collapse to
+ * single spaces and the result is capped at DEVICE_NAME_MAX code points (never splitting an emoji).
+ * With no usable name the fallback is the neutral 'Phone' — EXCEPT for the iOS app, which has
+ * never sent a name: it is recognised by its fixed key comment and keeps the 'iPhone' every iPhone
+ * paired so far was given. Without that branch every newly paired iPhone would silently become
+ * "Phone".
+ */
+export function normalizeDeviceName(name: unknown, publicKey = ''): string {
   if (typeof name === 'string') {
-    const trimmed = name.trim()
-    if (trimmed) return trimmed
+    const flat = name.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim()
+    if (flat) return Array.from(flat).slice(0, DEVICE_NAME_MAX).join('').trim()
   }
-  return 'iPhone'
+  return keyCommentOf(publicKey) === IOS_APP_KEY_COMMENT ? 'iPhone' : 'Phone'
 }
 
 /**

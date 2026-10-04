@@ -6,6 +6,9 @@ import {
   LEGACY_DEVICE_KEY_COMMENT_PREFIX,
   deviceCommentFor,
   deviceCommentsFor,
+  DEVICE_NAME_MAX,
+  IOS_APP_KEY_COMMENT,
+  keyCommentOf,
   filterAuthorizedKeys,
   isValidEd25519PublicKey,
   normalizeAuthorizedKeysLine,
@@ -279,15 +282,50 @@ describe('filterAuthorizedKeys', () => {
   })
 })
 
+describe('keyCommentOf', () => {
+  it('returns everything after type + blob, whitespace-collapsed', () => {
+    expect(keyCommentOf('ssh-ed25519 AAAA nodeterm-ios')).toBe('nodeterm-ios')
+    expect(keyCommentOf('  ssh-ed25519   AAAA   a  b \n')).toBe('a b')
+    expect(keyCommentOf('ssh-ed25519 AAAA')).toBe('')
+    expect(keyCommentOf('')).toBe('')
+  })
+})
+
 describe('normalizeDeviceName', () => {
-  it('trims a provided name', () => {
+  it('honours the name the phone sends, trimmed', () => {
     expect(normalizeDeviceName("  Enes's iPhone  ")).toBe("Enes's iPhone")
+    expect(normalizeDeviceName('Android', 'ssh-ed25519 AAAA nodeterm-android')).toBe('Android')
+    expect(normalizeDeviceName('Pixel 9 Pro', 'ssh-ed25519 AAAA nodeterm-ios')).toBe('Pixel 9 Pro')
   })
 
-  it('defaults to iPhone for missing / blank / non-string names', () => {
-    expect(normalizeDeviceName(undefined)).toBe('iPhone')
-    expect(normalizeDeviceName('   ')).toBe('iPhone')
-    expect(normalizeDeviceName(42)).toBe('iPhone')
+  it('falls back to the neutral "Phone" for missing / blank / non-string names', () => {
+    expect(normalizeDeviceName(undefined)).toBe('Phone')
+    expect(normalizeDeviceName('   ')).toBe('Phone')
+    expect(normalizeDeviceName(42)).toBe('Phone')
+    expect(normalizeDeviceName(undefined, 'ssh-ed25519 AAAA nodeterm-android')).toBe('Phone')
+  })
+
+  it('keeps "iPhone" for the iOS app, which sends no name but always the nodeterm-ios comment', () => {
+    expect(IOS_APP_KEY_COMMENT).toBe('nodeterm-ios')
+    expect(normalizeDeviceName(undefined, 'ssh-ed25519 AAAA nodeterm-ios')).toBe('iPhone')
+    expect(normalizeDeviceName('  ', '  ssh-ed25519   AAAA   nodeterm-ios\n')).toBe('iPhone')
+    // Exact match only: a different or extended comment is not the iOS app.
+    expect(normalizeDeviceName(undefined, 'ssh-ed25519 AAAA nodeterm-ios-x')).toBe('Phone')
+    expect(normalizeDeviceName(undefined, 'ssh-ed25519 AAAA phone@ios')).toBe('Phone')
+  })
+
+  it('flattens control characters and newlines into single spaces', () => {
+    expect(normalizeDeviceName('My\nPhone\t\u0007 2')).toBe('My Phone 2')
+    expect(normalizeDeviceName('\u0000\u001b')).toBe('Phone')
+  })
+
+  it(`caps at ${64} code points without splitting a surrogate pair`, () => {
+    expect(DEVICE_NAME_MAX).toBe(64)
+    expect(normalizeDeviceName('x'.repeat(5000))).toBe('x'.repeat(64))
+    const emoji = '📱'.repeat(70)
+    const out = normalizeDeviceName(emoji)
+    expect(Array.from(out)).toHaveLength(64)
+    expect(out).toBe('📱'.repeat(64))
   })
 })
 

@@ -149,7 +149,7 @@ function gateReads(watched: string[]): void {
 }
 
 /** A key line the phone could really have sent: OpenSSH wire format the validator decodes. */
-function freshEd25519Line(): string {
+function freshEd25519Line(comment = 'phone@ios'): string {
   const name = Buffer.from('ssh-ed25519', 'ascii')
   const len = (n: number): Buffer => {
     const b = Buffer.alloc(4)
@@ -157,7 +157,7 @@ function freshEd25519Line(): string {
     return b
   }
   const blob = Buffer.concat([len(name.length), name, len(32), randomBytes(32)])
-  return `ssh-ed25519 ${blob.toString('base64')} phone@ios`
+  return `ssh-ed25519 ${blob.toString('base64')} ${comment}`
 }
 
 /** POST /pair the way the phone does (plaintext branch — no host key, so no `epk` envelope). */
@@ -413,5 +413,54 @@ describe('pairing remembers the phone’s relay device id', () => {
     } finally {
       service.stop()
     }
+  })
+})
+
+describe('pairing names the phone platform-neutrally', () => {
+  const nameOf = (id: string): string | undefined =>
+    ((agentJson().devices as DeviceEntry[] | undefined) ?? []).find((d) => d.id === id)?.name
+
+  async function pairWith(body: Record<string, unknown>): Promise<string> {
+    const service = createPairingService()
+    try {
+      const started = await service.start(() => {})
+      const { token, pairPort } = JSON.parse(started.payload) as { token: string; pairPort: number }
+      const respText = await post(pairPort, { token, ...body })
+      return (JSON.parse(respText) as { deviceId: string }).deviceId
+    } finally {
+      service.stop()
+    }
+  }
+
+  it('an iOS app pairing (no deviceName, nodeterm-ios key) is still listed as iPhone', async () => {
+    const deviceId = await pairWith({ publicKey: freshEd25519Line('nodeterm-ios') })
+    expect(nameOf(deviceId)).toBe('iPhone')
+    // ...and its key is stamped with the NEW comment, not the phone's own one.
+    expect(authKeys()).toContain(`nodeterm-mobile-${deviceId}`)
+    expect(authKeys()).not.toContain(`nodeterm-ios-${deviceId}`)
+  })
+
+  it('an Android pairing keeps the name it sent', async () => {
+    const deviceId = await pairWith({
+      publicKey: freshEd25519Line('nodeterm-android'),
+      deviceName: 'Android'
+    })
+    expect(nameOf(deviceId)).toBe('Android')
+  })
+
+  it('a nameless pairing from an unknown client is "Phone", never "iPhone"', async () => {
+    const deviceId = await pairWith({ publicKey: freshEd25519Line('someone@else') })
+    expect(nameOf(deviceId)).toBe('Phone')
+  })
+
+  it('a hostile multi-line name lands as one capped line', async () => {
+    const deviceId = await pairWith({
+      publicKey: freshEd25519Line('nodeterm-android'),
+      deviceName: `Evil\nName\r\n${'y'.repeat(500)}`
+    })
+    const stored = nameOf(deviceId) ?? ''
+    expect(stored).not.toMatch(/[\r\n]/)
+    expect(Array.from(stored).length).toBeLessThanOrEqual(64)
+    expect(stored.startsWith('Evil Name y')).toBe(true)
   })
 })
