@@ -9,7 +9,8 @@ describe('desktop SSH action service lifecycle', () => {
     const start = source.indexOf('sshActionsService = await startSshActionsService(')
     expect(start).toBeGreaterThan(0)
     expect(source.slice(source.lastIndexOf('await workspaceStore.load(', start), start)).toContain('sideline: false')
-    expect(source.slice(start, source.indexOf('\n', start))).toContain('corePlatform.userDataDir, workspaceStore, hostBridge.nodeActions')
+    const call = source.slice(start, source.indexOf(')', start) + 1)
+    expect(call).toMatch(/corePlatform\.userDataDir,\s*workspaceStore,\s*hostBridge\.nodeActions,\s*true,\s*managedTerminals/)
   })
   it('retires queued file-service writes after confirmed quit and before PTY/master teardown', () => {
     const quit = source.slice(source.indexOf("app.on('before-quit', (e) =>"))
