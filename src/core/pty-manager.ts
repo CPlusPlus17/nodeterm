@@ -1,4 +1,7 @@
 import type { TextDeliveryResult } from '../shared/text-delivery'
+import type { ManagedPaneReceipt } from '../shared/managed-terminal'
+import { MANAGED_CREATION_UUID } from '../shared/managed-terminal'
+import { MANAGED_PANE_FORMAT, managedCreateFlags, managedLaunchPlan, parseManagedPane, readManagedProcessBirth, sameManagedPane } from './managed-pane'
 import os from 'os'
 import fs from 'fs'
 import path from 'path'
@@ -1105,6 +1108,7 @@ export class PtyManager {
    *  uses `child_process` (see tmux-control-client.ts); tests inject a fake spawner. */
   private readonly controlSpawn: ControlSpawn | undefined
   private readonly confirmedProcessRun: ConfirmedProcessRun
+  private readonly managedLaunchRun: typeof runWithStdin
   /** Injectable only so Windows-only routing stays behavior-testable on every CI host. */
   private readonly runtimePlatform: NodeJS.Platform
 
@@ -1112,11 +1116,13 @@ export class PtyManager {
     deps: {
       controlSpawn?: ControlSpawn
       confirmedProcessRun?: ConfirmedProcessRun
+      managedLaunchRun?: typeof runWithStdin
       runtimePlatform?: NodeJS.Platform
     } = {}
   ) {
     this.controlSpawn = deps.controlSpawn
     this.confirmedProcessRun = deps.confirmedProcessRun ?? runAsync
+    this.managedLaunchRun = deps.managedLaunchRun ?? runWithStdin
     this.runtimePlatform = deps.runtimePlatform ?? os.platform()
   }
 
@@ -2119,6 +2125,116 @@ export class PtyManager {
     return this.create(0, options)
   }
 
+  private readonly managedPanes = new Map<string, {
+    receipt: ManagedPaneReceipt; sessionId: string; session: Session; attempted: boolean
+  }>()
+
+  supportsManagedCreation(): boolean {
+    return (process.platform === 'linux' || process.platform === 'darwin') &&
+      !!this.tmuxPath && this.getSettings().tmuxEnabled
+  }
+
+  /** A host-owned New operation may only create. It cannot adopt a raced warm generation. */
+  async createManagedHeadless(options: PtyCreateOptions, creationId: string, current: () => boolean): Promise<ManagedPaneReceipt> {
+    const key = options.persistKey
+    if (!current() || !this.supportsManagedCreation() || !MANAGED_CREATION_UUID.test(creationId) ||
+        !key || !/^term-[a-z0-9]+-[a-z0-9]{1,16}$/.test(key) || !options.ownerProjectId ||
+        !options.cwd || !fs.statSync(options.cwd).isDirectory() || options.sshRemote || options.requireRemote ||
+        this.liveSessionForPersistKey(key) || this.inflight.has(key) || this.managedPanes.has(creationId))
+      throw new Error('This host cannot create that managed terminal')
+    const spawn = this.spawnNew(0, options, { creationId, current })
+    this.inflight.set(key, spawn)
+    let sessionId: string | undefined
+    let createdSession: Session | undefined
+    try {
+      const result = await spawn
+      sessionId = result.sessionId
+      const session = this.sessions.get(sessionId)
+      createdSession = session
+      if (!session || !result.fresh || !result.persistent || result.accountFallback || !current())
+        throw new Error('Managed terminal creation could not be confirmed')
+      // Wait for the actual new-session command to reach tmux, never infer readiness from a PTY id.
+      const deadline = Date.now() + 2500
+      let receipt: ManagedPaneReceipt | undefined
+      while (Date.now() < deadline && this.sessions.get(sessionId) === session && current()) {
+        receipt = await this.readManagedPane(options, creationId).catch(() => undefined)
+        if (receipt) break
+        await new Promise<void>((resolve) => setTimeout(resolve, 25))
+      }
+      if (!receipt || !current() || this.sessions.get(sessionId) !== session)
+        throw new Error('Managed terminal creation could not be confirmed')
+      this.managedPanes.set(creationId, { receipt, sessionId, session, attempted: false })
+      recordFreshSpawnOwner(key, options.ownerProjectId)
+      return receipt
+    } catch (error) {
+      // Detach only OUR synthetic client. Never kill a same-name backend on an uncertain create.
+      if (sessionId && createdSession && this.sessions.get(sessionId) === createdSession) this.kill(0, sessionId)
+      throw error
+    } finally {
+      if (this.inflight.get(key) === spawn) this.inflight.delete(key)
+    }
+  }
+
+  private async readManagedPane(options: Pick<PtyCreateOptions, 'persistKey' | 'ownerProjectId'>, creationId: string): Promise<ManagedPaneReceipt> {
+    if (!this.tmuxPath || !options.persistKey || !options.ownerProjectId) throw new Error('Managed pane unavailable')
+    const session = sessionName(options.persistKey)
+    const args = ['-L', TMUX_SOCKET, 'list-panes', '-s', '-t', `=${session}`, '-F', MANAGED_PANE_FORMAT]
+    const { stdout } = await runAsync(this.tmuxPath, args, { timeout: 1500 })
+    const identity = parseManagedPane(stdout, { creationId, session })
+    if (!identity) throw new Error('Managed pane identity changed')
+    const paneBirth = await readManagedProcessBirth(identity.panePid)
+    const after = await runAsync(this.tmuxPath, args, { timeout: 1500 })
+    if (after.stdout !== stdout) throw new Error('Managed pane identity changed')
+    return { version: 1, creationId, nodeId: options.persistKey, projectId: options.ownerProjectId,
+      socket: TMUX_SOCKET, session, ...identity, paneBirth }
+  }
+
+  /** Read-only confirmation requires this process's live generation, never just saved markers. */
+  async verifyManagedPane(receipt: ManagedPaneReceipt, current: () => boolean): Promise<boolean> {
+    const held = this.managedPanes.get(receipt.creationId)
+    if (!held || !sameManagedPane(held.receipt, receipt) || !current()) return false
+    const valid = (): boolean => current() && this.sessions.get(held.sessionId) === held.session &&
+      this.liveSessionForPersistKey(receipt.nodeId) === held.session
+    if (!valid()) return false
+    try {
+      const actual = await this.readManagedPane({ persistKey: receipt.nodeId, ownerProjectId: receipt.projectId }, receipt.creationId)
+      return sameManagedPane(actual, receipt) && valid()
+    } catch { return false }
+  }
+
+  /** Consumes the runtime launch permit before any await. A lost write result is never replayed. */
+  async deliverManagedLaunch(receipt: ManagedPaneReceipt, command: string, current: () => boolean): Promise<boolean> {
+    const held = this.managedPanes.get(receipt.creationId)
+    if (!held || held.attempted || !sameManagedPane(held.receipt, receipt) || !current()) return false
+    held.attempted = true
+    const valid = (): boolean => current() && this.sessions.get(held.sessionId) === held.session &&
+      this.liveSessionForPersistKey(receipt.nodeId) === held.session
+    try {
+      const deadline = Date.now() + 2500
+      let ready = false
+      while (Date.now() < deadline && valid()) {
+        const owner = await this.paneOwner(receipt.nodeId)
+        if (owner?.paneId === receipt.paneId && owner.panePid === receipt.panePid &&
+            owner.pids?.length === 1 && owner.pids[0] === receipt.panePid && isShellCommand(owner.command)) {
+          ready = true
+          break
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 25))
+      }
+      if (!ready || !valid()) return false
+      const actual = await this.readManagedPane({ persistKey: receipt.nodeId, ownerProjectId: receipt.projectId }, receipt.creationId)
+      if (!sameManagedPane(actual, receipt) || !valid() || !this.tmuxPath) return false
+      const plan = managedLaunchPlan(receipt, command)
+      try {
+        const result = await this.managedLaunchRun(this.tmuxPath, plan.args, plan.body) as { stdout?: string }
+        return result.stdout?.trim() === 'nt-managed-delivered' && valid()
+      } catch {
+        void runAsync(this.tmuxPath, plan.cleanup).catch(() => {})
+        return false
+      }
+    } catch { return false }
+  }
+
   private async create(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
     const key = options.persistKey
     if (!key) return this.spawnNew(clientId, options)
@@ -2319,7 +2435,7 @@ export class PtyManager {
   }
 
   /** Spawn a brand-new session for this client (the non-co-attach path). */
-  private async spawnNew(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
+  private async spawnNew(clientId: ClientId, options: PtyCreateOptions, exclusive?: { creationId: string; current: () => boolean }): Promise<PtyCreateResult> {
     // This node runs on a remote host and we cannot reach it: spawn NOTHING. Everything below
     // (and `spawnSession`'s program resolution) falls through to the LOCAL tmux/plain branches
     // when `sshRemote` is absent or `ssh` is missing — a silent local shell wearing a remote
@@ -2393,6 +2509,8 @@ export class PtyManager {
         : tmuxBacked
         ? !(await this.tmuxSessionExists(options.persistKey as string))
         : true
+    if (exclusive && (!fresh || !exclusive.current() || !this.supportsManagedCreation()))
+      throw new Error('Managed terminal name already exists or creation is no longer current')
     // Ensure the login-shell PATH is resolved (prewarmed in init(); usually already settled)
     // so the session env below picks it up — awaiting keeps the event loop free either way.
     await resolveShellPath()
@@ -2441,7 +2559,9 @@ export class PtyManager {
         : null
     let sessionId: string
     try {
-      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides)
+      if (exclusive && (!exclusive.current() || !this.supportsManagedCreation() || this.liveSessionForPersistKey(options.persistKey as string)))
+        throw new Error('Managed terminal creation is no longer current')
+      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides, exclusive?.creationId)
     } catch (err) {
       // A spawn that never happened must not hold a slot until the settle deadline — the next node
       // in the queue is waiting on it.
@@ -2455,7 +2575,7 @@ export class PtyManager {
     // someone else spawned (incl. an app-restart re-attach) leaves the pane UNPROVEN, so a second
     // project that merely opens another's node id cannot claim it. The owner is the renderer's
     // machine-local project id, never the git-shared file id. See `agents/pane-ownership.ts`.
-    if (shouldRecordOwnership(fresh, options.persistKey, options.ownerProjectId))
+    if (!exclusive && shouldRecordOwnership(fresh, options.persistKey, options.ownerProjectId))
       recordFreshSpawnOwner(options.persistKey as string, options.ownerProjectId)
     if (warmWindowsBackend === 'tmux') {
       // The first strict probe deliberately preceded profile resolution. Recheck after launching
@@ -3048,7 +3168,8 @@ export class PtyManager {
     warmWindowsBackend?: 'session-host' | 'tmux',
     /** What the OWNING project contributes (see `projectSpawnOverrides`) — already resolved,
      *  because this function is synchronous. Null on every path with no proven project owner. */
-    overrides?: ProjectSpawnOverrides | null
+    overrides?: ProjectSpawnOverrides | null,
+    managedCreationId?: string
   ): string {
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
@@ -3225,6 +3346,7 @@ export class PtyManager {
     // instead of pointing claude at a dead dir; the node then behaves like an unbound one.
     // `accountFallback` is surfaced to the renderer (warning chip) via the create() result.
     if (accountDir && !fs.existsSync(accountDir)) {
+      if (managedCreationId) throw new Error('The selected managed account is no longer available')
       console.warn(`[accounts] config dir missing for ${options.accountId}, using system default`)
       accountDir = null
       accountFallback = true
@@ -3580,7 +3702,7 @@ export class PtyManager {
         ...Object.keys(customEnvMerged),
         ...Object.keys(projectEnv ?? {})
       ])
-      const attachFlags = tmuxAttachFlags(!!sinks, besideRelay)
+      const attachFlags = managedCreationId ? managedCreateFlags(managedCreationId) : tmuxAttachFlags(!!sinks, besideRelay)
       args = [
         '-L',
         TMUX_SOCKET,
@@ -3903,6 +4025,9 @@ export class PtyManager {
    *  which is only set for tmux-PERSISTED sessions) so a plain-shell node is un-indexed too. */
   private forget(sessionId: string, session: Session): void {
     session.nativeWindowsPane?.dispose()
+    for (const [creationId, held] of this.managedPanes) {
+      if (held.sessionId === sessionId && held.session === session) this.managedPanes.delete(creationId)
+    }
     this.sessions.delete(sessionId)
     if (session.indexKey && this.byPersistKey.get(session.indexKey) === sessionId)
       this.byPersistKey.delete(session.indexKey)
