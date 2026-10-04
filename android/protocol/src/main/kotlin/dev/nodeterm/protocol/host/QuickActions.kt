@@ -38,16 +38,9 @@ import dev.nodeterm.protocol.model.QuestionChoices
  * session ([Result.OPEN_SESSION]): whether it was handled is not known, and the session shows what is
  * really on screen. A ticket keeps its node-state fallback: the host refuses a ticket whose hold ended.
  *
- * There is deliberately NO "Always allow" here (audit A56), although iOS types `2` for it
- * (docs/hook-reply-approvals.md, "Digit `2`/Always allow keeps using send-keys"). That line is the
- * only place the repo states the digit: no desktop code types it, and no captured prompt pins it.
- * What option 2 IS depends on the ask. Read from the Claude Code 2.1.283 bundle (not run against a
- * live prompt): the Bash prompt is `Yes`, then a "don't ask again" row only when Claude offers one
- * (it is withheld when `suppressAlwaysAllowRule` is set, and feature-gated), then an optional
- * "Yes, and switch to auto mode", then `No`. So a blind `2` can DENY the request or switch the
- * whole session to auto mode, and a ticketed approval has no prompt on screen to type into at all.
- * The phone cannot see the prompt, and a guess must degrade to nothing: docs/android.md "Known
- * gaps" names the layout-independent route (the hook's `updatedPermissions`).
+ * A v2 hook ticket exposes only concrete host-supplied allow-rule suggestions and complete question
+ * schemas. These use the original held JSON, not numbered prompt choices. Older and unheld prompts
+ * retain the legacy paths above; unsupported schema or an expired hold opens the session.
  */
 object QuickActions {
     /**
@@ -55,6 +48,30 @@ object QuickActions {
      * open, so the prompt is on screen in the session — open it (with an explanation).
      */
     enum class Result { SENT, ALREADY_HANDLED, OPEN_SESSION, EXPIRED }
+
+    suspend fun rememberApproval(conn: HostConnection, event: InboxEvent, suggestionIndex: Int): Result {
+        if (event.kind != InboxKind.APPROVAL || event.pendingId == null || event.permissionSuggestions.none { it.index == suggestionIndex })
+            return Result.OPEN_SESSION
+        val fresh = freshCard(conn.listProjects(), event) ?: return Result.OPEN_SESSION
+        if (fresh.resolved) return Result.ALREADY_HANDLED
+        if (fresh.pendingId != event.pendingId || fresh.permissionSuggestions != event.permissionSuggestions) return Result.OPEN_SESSION
+        return hookOutcome(conn, event, conn.rememberApproval(event, suggestionIndex))
+    }
+
+    suspend fun answerQuestions(conn: HostConnection, event: InboxEvent, selections: List<List<Int>>): Result {
+        if (event.kind != InboxKind.QUESTION || event.questionPendingId == null ||
+            !dev.nodeterm.protocol.model.HookReplies.validSelections(event.questions, selections)) return Result.OPEN_SESSION
+        val fresh = freshCard(conn.listProjects(), event) ?: return Result.OPEN_SESSION
+        if (fresh.resolved) return Result.ALREADY_HANDLED
+        if (fresh.questionPendingId != event.questionPendingId || fresh.questions != event.questions) return Result.OPEN_SESSION
+        return hookOutcome(conn, event, conn.answerQuestions(event, selections))
+    }
+
+    private suspend fun hookOutcome(conn: HostConnection, event: InboxEvent, outcome: ApprovalOutcome): Result = when (outcome) {
+        ApprovalOutcome.SENT -> Result.SENT
+        ApprovalOutcome.GONE -> if (freshCard(conn.listProjects(), event)?.resolved == true) Result.ALREADY_HANDLED else Result.EXPIRED
+        ApprovalOutcome.ALREADY_HANDLED, ApprovalOutcome.UNSUPPORTED -> Result.OPEN_SESSION
+    }
 
     suspend fun answerApproval(conn: HostConnection, event: InboxEvent, allow: Boolean): Result {
         if (event.kind != InboxKind.APPROVAL) return Result.OPEN_SESSION
@@ -74,7 +91,7 @@ object QuickActions {
         event.kind == InboxKind.APPROVAL && (event.pendingId != null || event.agentId == "claude")
 
     /**
-     * AskUserQuestion: choices are digits on screen (a hook cannot inject an answer value). Only a
+     * Legacy unheld AskUserQuestion: choices are digits on screen. Only a
      * question [QuestionChoices] lists as [QuestionChoices.Answer] is typed, the rule the Inbox card
      * draws its buttons by. A multi-select question is shown read-only and answered in the session
      * (audit A57): how its picker toggles and submits has not been measured, so it gets no keys.

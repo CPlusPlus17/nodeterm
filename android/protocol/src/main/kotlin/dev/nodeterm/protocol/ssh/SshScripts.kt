@@ -456,6 +456,42 @@ object SshScripts {
         """.trimIndent()
     }
 
+    /** Bounded exact request + checksum. Never read another node's ticket by a path alias. */
+    fun readHookRequest(nodeId: String, pendingId: String): String {
+        require(dev.nodeterm.protocol.model.HookReplies.belongsToNode(nodeId, pendingId))
+        return """
+            r="${'$'}HOME/.nodeterm/pending/$pendingId.json"
+            [ -f "${'$'}r" ] || { echo gone; exit 0; }
+            [ ! -L "${'$'}r" ] || exit 2
+            [ "${'$'}(head -c ${dev.nodeterm.protocol.model.HookReplies.MAX_BYTES + 1} "${'$'}r" | wc -c)" -le ${dev.nodeterm.protocol.model.HookReplies.MAX_BYTES} ] || exit 2
+            c=${'$'}(cksum < "${'$'}r") || exit 2
+            [ "${'$'}{c#* }" -le ${dev.nodeterm.protocol.model.HookReplies.MAX_BYTES} ] || exit 2
+            body=${'$'}(head -c ${dev.nodeterm.protocol.model.HookReplies.MAX_BYTES + 1} "${'$'}r") || exit 2
+            [ "${'$'}c" = "${'$'}(cksum < "${'$'}r")" ] || exit 2
+            printf '%s\n%s' "${'$'}c" "${'$'}body"
+        """.trimIndent()
+    }
+
+    fun answerHook(nodeId: String, pendingId: String, checksum: String): String {
+        require(dev.nodeterm.protocol.model.HookReplies.belongsToNode(nodeId, pendingId))
+        require(Regex("^[0-9]+ [0-9]+$").matches(checksum))
+        return """
+            d="${'$'}HOME/.nodeterm/pending"
+            r="${'$'}d/$pendingId.json"
+            [ -f "${'$'}r" ] || { echo gone; exit 0; }
+            [ ! -L "${'$'}r" ] || exit 2
+            [ "${'$'}(cksum < "${'$'}r")" = ${q(checksum)} ] || exit 2
+            umask 077
+            t="${'$'}d/$pendingId.answer.tmp.${'$'}${'$'}"
+            trap 'rm -f "${'$'}t"' 0 HUP INT TERM
+            cat > "${'$'}t" || exit 2
+            [ -f "${'$'}r" ] || { echo gone; exit 0; }
+            [ ! -L "${'$'}r" ] || exit 2
+            [ "${'$'}(cksum < "${'$'}r")" = ${q(checksum)} ] || exit 2
+            mv -f "${'$'}t" "${'$'}d/$pendingId.answer" && echo sent
+        """.trimIndent()
+    }
+
     /** The read-ack the host's ack sweep consumes (src/core/ack-sweep.ts): content = event id,
      *  atomic, umask 077. The node id becomes a file name, so it is held to the tmux-name alphabet. */
     fun ackRead(nodeId: String, eventId: String): String {

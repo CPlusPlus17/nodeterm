@@ -13,6 +13,8 @@ export interface RemoteAtomicWriteOptions {
   chmod600?: boolean
   /** False when the caller already created and permissioned the parent directory. */
   makeParent?: boolean
+  /** Trusted caller-owned shell check after stdin is written, immediately before publication. */
+  beforePublish?: string
 }
 
 function remoteDirname(path: string): string {
@@ -55,9 +57,10 @@ export function remoteAtomicWrite(
   const parent = options.makeParent === false
     ? ''
     : `mkdir -p -- ${quoteRemotePath(parentPath)} && `
+  const check = options.beforePublish ? ` && ( ${options.beforePublish} )` : ''
   const protect = options.chmod600 ? ` && chmod 600 -- ${temporary}` : ''
   const command =
-    `${prefix}${parent}{ cat > ${temporary}${protect} && mv -f -- ${temporary} ${target}; ` +
+    `${prefix}${parent}{ cat > ${temporary}${protect}${check} && mv -f -- ${temporary} ${target}; ` +
     `nt_status=$?; ` +
     `rm -f -- ${temporary}; exit "$nt_status"; }`
   return { command, temporaryPath }

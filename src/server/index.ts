@@ -56,6 +56,7 @@ import { armServerNodeIdentity } from './node-identity-arm'
 import { wireServerCodexSharedIdentity } from './codex-shared-identity'
 import {
   writePendingAnswerLocal,
+  answerPendingHookLocal,
   startPendingSweep,
   isValidPendingId,
   syntheticAnsweredEvent
@@ -66,6 +67,7 @@ import {
   initAgentStatusMirror,
   flush as flushAgentStatusMirror,
   recordAgentEvent,
+  hookTicketStillOpen,
   ackDone,
   mirrorOwnsNode,
   setMirrorSettingsProvider,
@@ -510,17 +512,20 @@ export async function startServer(
   // three-surfaces degrade. pendingId is validated before it becomes a path.
   platform.handle(
     IPC.agentAnswerPermission,
-    async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' }) => {
-      const { nodeId, pendingId, decision } = payload ?? ({} as typeof payload)
+    async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' | 'allow-always'; suggestionIndex?: number }) => {
+      const { nodeId, pendingId, decision, suggestionIndex } = payload ?? ({} as typeof payload)
       if (!isValidPendingId(pendingId)) return false
-      if (decision !== 'allow' && decision !== 'deny') return false
+      if (decision !== 'allow' && decision !== 'deny' && decision !== 'allow-always') return false
       // An SSH-project node has no reachable ControlMaster here (v1): answer only local nodes.
       if (workspaceStore.sshProjectIdForNode(nodeId)) return false
-      const ok = await writePendingAnswerLocal(pendingId, decision, os.homedir())
+      const ok = decision === 'allow-always'
+        ? !!workspaceStore.getNode(nodeId) && hookTicketStillOpen(nodeId, pendingId, 'approval') &&
+          await answerPendingHookLocal(nodeId, pendingId, { kind: 'allow-always', suggestionIndex: suggestionIndex ?? -1 }, os.homedir()) === 'sent'
+        : await writePendingAnswerLocal(pendingId, decision, os.homedir())
       // Optimistic flip (parity with desktop): emit the synthetic "answered" transition so the
       // browser canvas NEEDS YOU badge clears instantly, ahead of the held hook's second POST (an
       // idempotent duplicate). See docs/hook-reply-approvals.md.
-      if (ok) {
+      if (ok && decision !== 'allow-always') {
         const ev = syntheticAnsweredEvent(nodeId, pendingId, decision)
         if (ev) {
           platform.broadcast(IPC.agentStatus, ev)

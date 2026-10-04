@@ -144,3 +144,44 @@ describe('inbox.ack', () => {
     expect(b.responses[0].ok).toBe(false)
   })
 })
+
+
+describe('structured hook answer verbs', () => {
+  it('routes a remembered rule by index rather than accepting client-supplied rules', async () => {
+    const { handlers, responses, inbox } = makeFakes()
+    handlers.onRpc({ id: 'remember', method: 'approvals.answer', params: { nodeId: 'n', pendingId: 'n-1-1', decision: 'allow-always', suggestionIndex: 2 } })
+    await flush()
+    expect(inbox.answerPermission).toHaveBeenCalledWith('n', 'n-1-1', 'allow-always', 2)
+    expect(responses[0]).toEqual({ id: 'remember', ok: true, body: { answered: true } })
+  })
+  it.each([-1, 32, 1.2, undefined, '1'])('rejects invalid suggestion index %s', async suggestionIndex => {
+    const { handlers, responses, inbox } = makeFakes()
+    handlers.onRpc({ id: 'bad', method: 'approvals.answer', params: { nodeId: 'n', pendingId: 'n-1-1', decision: 'allow-always', suggestionIndex } })
+    await flush()
+    expect(inbox.answerPermission).not.toHaveBeenCalled()
+    expect(responses[0].ok).toBe(false)
+  })
+  it('submits every question selection in one call and preserves a gone result', async () => {
+    const answerQuestion = vi.fn(async () => 'gone' as const)
+    const { handlers, responses } = makeFakes({ answerQuestion })
+    handlers.onRpc({ id: 'question', method: 'questions.answer', params: { nodeId: 'n', pendingId: 'n-1-1', selections: [[0, 1], [1]] } })
+    await flush()
+    expect(answerQuestion).toHaveBeenCalledWith('n', 'n-1-1', [[0, 1], [1]])
+    expect(responses[0]).toEqual({ id: 'question', ok: true, body: { answered: false, reason: 'gone' } })
+  })
+  it.each([[], [[]], [[-1]], [[4]], [[0.5]], [[0, 1, 2, 3, 0]], [[0], [0], [0], [0], [0]], [['1']]].map(selections => ({ selections })))('rejects malformed question selections $selections', async ({ selections }) => {
+    const answerQuestion = vi.fn(async () => 'sent' as const)
+    const { handlers, responses } = makeFakes({ answerQuestion })
+    handlers.onRpc({ id: 'bad-q', method: 'questions.answer', params: { nodeId: 'n', pendingId: 'n-1-1', selections } })
+    await flush()
+    expect(answerQuestion).not.toHaveBeenCalled()
+    expect(responses[0].ok).toBe(false)
+  })
+  it('honestly refuses the new verb on an older injected host', async () => {
+    const { handlers, responses } = makeFakes()
+    handlers.onRpc({ id: 'old', method: 'questions.answer', params: { nodeId: 'n', pendingId: 'n-1-1', selections: [[0]] } })
+    await flush()
+    expect(responses[0].ok).toBe(false)
+    expect(responses[0].body.message).toMatch(/not served/)
+  })
+})

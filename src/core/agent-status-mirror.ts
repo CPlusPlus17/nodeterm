@@ -7,6 +7,7 @@ import type { AgentId } from '@shared/agents/config'
 import type { AgentState, NormalizedAgentEvent } from '@shared/agents/normalize'
 import type { ObservedClaudeAccount } from '@shared/types'
 import { WORKING_STALE_MS, isStaleWorking } from '@shared/agents/stale'
+import { hookQuestions, type HookQuestion, type PermissionSuggestion } from '@shared/hook-answers'
 
 /**
  * Mirrors the live per-node agent status to a small JSON file so an EXTERNAL reader (the
@@ -436,6 +437,9 @@ export interface InboxEvent {
    *  `~/.nodeterm/pending/<pendingId>.answer` to answer it. Rides the mirror to the phone; dropped
    *  from the push-notify body (the phone re-reads the mirror before acting). Absent = legacy prompt. */
   pendingId?: string
+  permissionSuggestions?: PermissionSuggestion[]
+  questionPendingId?: string
+  questions?: HookQuestion[]
 }
 export interface InboxNodeNow {
   /** ≤80 chars — "Editing foo.ts", "Running npm test", "Reading bar.ts". */
@@ -1070,6 +1074,8 @@ function fireNodeNowChange(c: NodeNowChange): void {
 // time-guarded (STASH_MAX_AGE_MS) so a stash that was never consumed (e.g. a picker that
 // auto-resolved) can't be picked up by a genuinely unrelated later needs-you in the same turn.
 interface QuestionStash {
+  questionPendingId?: string
+  questions?: HookQuestion[]
   /** AskUserQuestion picker: ≤4 labels, each ≤60 chars. Its PRESENCE marks a real question. */
   options?: string[]
   /** The first question's prompt text, clipped to INBOX_TITLE_MAX. Absent if not present/parseable. */
@@ -1685,6 +1691,13 @@ function produceInboxFromState(
     // the picker directly. That held PermissionRequest (if any) simply times out after 45s and the
     // picker shows anyway (acceptable). See docs/hook-reply-approvals.md.
     const pendingId = kind === 'approval' ? ev.pendingId : undefined
+    const questionPendingId = kind === 'question' ? stash?.questionPendingId : undefined
+    const questions = questionPendingId ? stash?.questions : undefined
+    const permissionSuggestions = kind === 'approval' ? ev.permissionSuggestions : undefined
+    // Old phones must not type numbered keys before this held picker is painted. The full v2
+    // schema is additive; an old consumer sees Open session until the hook releases/times out.
+    const legacyOptions = questionPendingId ? undefined : options
+    const legacyMultiSelect = questionPendingId ? undefined : multiSelect
     // needsYou live-update on the EDGE into the needs-you state (a re-assert of the SAME state
     // keeps the activity live). Carries the classified kind + options (question) / pendingId
     // (approval) so the Live Activity renders straight from this same code path
@@ -1702,7 +1715,8 @@ function produceInboxFromState(
       ? inboxEvents.find(e => e.nodeId === nodeId && e.kind === 'approval' && !e.resolved && e.pendingId === ev.pendingId)
       : newestUnresolved(inboxEvents.filter(e =>
         !(e.kind === 'approval' && e.pendingId && keepApprovalIds.includes(e.pendingId))), nodeId)
-    const sameTitle = !!dup && dup.title === title
+    const sameTitle = !!dup && dup.title === title &&
+      (!questionPendingId || dup.questionPendingId === questionPendingId)
     const freshDup = sameTitle && dup ? now - dup.ts < QUESTION_DEDUP_WINDOW_MS : false
     const newAsk = !freshDup
     // The needs-you live-update fires on the edge INTO needs-you — and also whenever the ASK
@@ -1718,8 +1732,8 @@ function produceInboxFromState(
         state: 'needsYou',
         kind,
         message: headline,
-        ...(options ? { options } : {}),
-        ...(multiSelect ? { multiSelect: true } : {}),
+        ...(legacyOptions ? { options: legacyOptions } : {}),
+        ...(legacyMultiSelect ? { multiSelect: true } : {}),
         ...(pendingId ? { pendingId } : {})
       })
     }
@@ -1733,9 +1747,11 @@ function produceInboxFromState(
         kind,
         title,
         ...(detail ? { detail } : {}),
-        ...(options ? { options } : {}),
-        ...(multiSelect ? { multiSelect: true } : {}),
-        ...(pendingId ? { pendingId } : {})
+        ...(legacyOptions ? { options: legacyOptions } : {}),
+        ...(legacyMultiSelect ? { multiSelect: true } : {}),
+        ...(pendingId ? { pendingId } : {}),
+        ...(permissionSuggestions?.length ? { permissionSuggestions } : {}),
+        ...(questionPendingId ? { questionPendingId, ...(questions ? { questions } : {}) } : {})
       })
     }
     return { kind, pendingId }
@@ -1838,6 +1854,8 @@ export function recordRawToolEvent(nodeId: string, payload: Record<string, unkno
       const opts = extractQuestionOptions(toolInput)
       if (opts)
         pendingQuestions.set(nodeId, {
+          ...(payload.nodeterm_hook_reply === 2 && typeof payload.nodeterm_pending_id === 'string' && payload.nodeterm_pending_id
+            ? { questionPendingId: payload.nodeterm_pending_id, ...(hookQuestions(payload) ? { questions: hookQuestions(payload)! } : {}) } : {}),
           options: opts,
           question: extractQuestionText(toolInput),
           multiSelect: extractQuestionMultiSelect(toolInput),
@@ -2234,4 +2252,11 @@ export function _snapshot(): Record<string, MirrorEntry> {
 /** Snapshot the in-memory inbox. Test-only. */
 export function _inboxSnapshot(): MirrorInbox {
   return { events: inboxEvents.map((e) => ({ ...e })), nodes: Object.fromEntries(inboxNodes) }
+}
+
+/** Structured answers require the exact still-open card, never just the node's current badge. */
+export function hookTicketStillOpen(nodeId: string, pendingId: string, kind: 'approval' | 'question'): boolean {
+  return inboxEvents.some(e => e.nodeId === nodeId && e.kind === kind && !e.resolved &&
+    (kind === 'approval' ? e.pendingId === pendingId && !!e.permissionSuggestions?.length
+      : e.questionPendingId === pendingId && !!e.questions?.length))
 }

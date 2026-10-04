@@ -236,7 +236,9 @@ export interface HostInboxOps {
    * the hold had already ended (the hook timed out, or another surface answered) so nothing was
    * written; `failed` = the write could not happen. See `PendingAnswerResult`.
    */
-  answerPermission(nodeId: string, pendingId: string, decision: 'allow' | 'deny'): Promise<PendingAnswerResult>
+  answerPermission(nodeId: string, pendingId: string, decision: 'allow' | 'deny' | 'allow-always', suggestionIndex?: number): Promise<PendingAnswerResult>
+  /** v2 held AskUserQuestion: indexes for every question, validated against the live request. */
+  answerQuestion?(nodeId: string, pendingId: string, selections: number[][]): Promise<PendingAnswerResult>
   /** The phone READ a finished session: resolve its done event(s) and clear the desktop unread. */
   ackRead(nodeId: string): void
 }
@@ -870,15 +872,34 @@ export function createHostHandlers(
       return
     }
     const pendingId = str(p.pendingId) ?? ''
+    if (req.method === 'questions.answer') {
+      if (!isValidPendingId(pendingId) || !Array.isArray(p.selections) || p.selections.length < 1 || p.selections.length > 4 ||
+          p.selections.some(row => !Array.isArray(row) || row.length < 1 || row.length > 4 || row.some(n => !Number.isInteger(n) || n < 0 || n > 3))) {
+        socket.respond(req.id, false, { message: 'questions.answer requires a live ticket and bounded option indexes.' })
+        return
+      }
+      if (!inbox.answerQuestion) {
+        socket.respond(req.id, false, { message: 'questions.answer is not served on this host.' })
+        return
+      }
+      void inbox.answerQuestion(nodeId, pendingId, p.selections as number[][])
+        .then(result => socket.respond(req.id, true, result === 'sent' ? { answered: true } : { answered: false, reason: result }))
+        .catch(() => socket.respond(req.id, true, { answered: false, reason: 'failed' }))
+      return
+    }
     const decision = p.decision
-    if (!isValidPendingId(pendingId) || (decision !== 'allow' && decision !== 'deny')) {
+    const suggestionIndex = typeof p.suggestionIndex === 'number' ? p.suggestionIndex : undefined
+    if (!isValidPendingId(pendingId) || (decision !== 'allow' && decision !== 'deny' && decision !== 'allow-always') ||
+        (decision === 'allow-always' && (!Number.isInteger(suggestionIndex) || suggestionIndex! < 0 || suggestionIndex! > 31))) {
       socket.respond(req.id, false, {
         message: 'approvals.answer requires a pendingId and a decision of allow or deny.'
       })
       return
     }
-    void inbox
-      .answerPermission(nodeId, pendingId, decision)
+    const operation = decision === 'allow-always'
+      ? inbox.answerPermission(nodeId, pendingId, decision, suggestionIndex)
+      : inbox.answerPermission(nodeId, pendingId, decision)
+    void operation
       .then((result) =>
         socket.respond(req.id, true, result === 'sent' ? { answered: true } : { answered: false, reason: result })
       )
@@ -1128,6 +1149,7 @@ export function createHostHandlers(
           handleSendKeys(req)
           break
         case 'approvals.answer':
+        case 'questions.answer':
         case 'inbox.ack':
           handleInbox(req)
           break

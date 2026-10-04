@@ -17,6 +17,7 @@ import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.InboxEvent
+import dev.nodeterm.protocol.model.HookReplies
 import dev.nodeterm.protocol.model.J
 import dev.nodeterm.protocol.model.J.b
 import dev.nodeterm.protocol.model.J.o
@@ -187,7 +188,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * reported through `onClosed` (so the owner reconnects) and surfaces as a [HostException] —
      * never as a raw sshj exception a caller would have to know about.
      */
-    internal fun run(script: String, timeoutSec: Long = 20): Pair<Int?, String> {
+    internal fun run(script: String, timeoutSec: Long = 20, stdin: String? = null): Pair<Int?, String> {
         // A REAL deadline (audit A31): the read below waits on the channel with no timeout of its
         // own, so a peer that vanished mid-command (laptop asleep, IP or VPN change) blocked it for
         // as long as TCP took to give up — ~15 minutes. When the deadline passes, the connection is
@@ -201,6 +202,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         try {
             client.startSession().use { session ->
                 val cmd = session.exec("/bin/sh -c " + SshScripts.q(script))
+                if (stdin != null) cmd.outputStream.use { it.write(stdin.toByteArray(Charsets.UTF_8)) }
                 val out = cmd.inputStream.readBytes()
                 cmd.join(5, TimeUnit.SECONDS)
                 if (timedOut) throw java.util.concurrent.TimeoutException("no answer within ${timeoutSec}s")
@@ -651,6 +653,36 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             "sent" -> ApprovalOutcome.SENT
             "gone" -> ApprovalOutcome.GONE
             else -> throw HostException("Couldn't write the answer on the computer.")
+        }
+    }
+
+    override suspend fun rememberApproval(event: InboxEvent, suggestionIndex: Int): ApprovalOutcome =
+        answerHook(event, event.pendingId) { HookReplies.remember(it, suggestionIndex) }
+
+    override suspend fun answerQuestions(event: InboxEvent, selections: List<List<Int>>): ApprovalOutcome =
+        answerHook(event, event.questionPendingId) { HookReplies.answerQuestions(it, selections) }
+
+    private suspend fun answerHook(event: InboxEvent, ticket: String?, build: (JsonObject) -> String?): ApprovalOutcome = withContext(Dispatchers.IO) {
+        ensureListed()
+        refuseRemoteNode(event.nodeId)
+        if (ticket == null || !HookReplies.belongsToNode(event.nodeId, ticket)) return@withContext ApprovalOutcome.UNSUPPORTED
+        val (code, out) = run(SshScripts.readHookRequest(event.nodeId, ticket))
+        if (code != 0) throw HostException("Couldn't read the held question or approval.")
+        if (out.trim() == "gone") return@withContext ApprovalOutcome.GONE
+        val split = out.indexOf('\n')
+        if (split < 0) throw HostException("The computer sent an invalid held request.")
+        val checksum = out.substring(0, split)
+        val raw = out.substring(split + 1)
+        if (!Regex("^[0-9]+ [0-9]+$").matches(checksum) || raw.toByteArray(Charsets.UTF_8).size > HookReplies.MAX_BYTES)
+            throw HostException("The held request exceeds the supported limit.")
+        val request = J.obj(J.parse(raw)) ?: throw HostException("The computer sent an invalid held request.")
+        val reply = build(request) ?: return@withContext ApprovalOutcome.UNSUPPORTED
+        val (writeCode, result) = run(SshScripts.answerHook(event.nodeId, ticket, checksum), stdin = reply)
+        if (writeCode != 0) throw HostException("Couldn't write the answer on the computer.")
+        when (result.trim()) {
+            "sent" -> ApprovalOutcome.SENT
+            "gone" -> ApprovalOutcome.GONE
+            else -> throw HostException("The computer did not confirm the answer.")
         }
     }
 

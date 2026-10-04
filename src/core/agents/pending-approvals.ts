@@ -9,10 +9,12 @@
 // pendingId or an fs error resolves false / logs, never throws.
 
 import fs from 'fs'
+import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
-import { writeFileAtomic } from '../fs-atomic'
+import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { normalizeClaude, type NormalizedAgentEvent } from '../../shared/agents/normalize'
+import { buildHookReply, HOOK_REQUEST_MAX_BYTES, type HookAnswer } from '../../shared/hook-answers'
 
 /** pendingId shape the script generates (`<node>-<ms>-<pid>`) and the ONLY thing we interpolate
  *  into a filename. Validated everywhere a pendingId becomes a path so a forged value can't
@@ -41,6 +43,42 @@ export function pendingDir(homeDir: string = os.homedir()): string {
  * session", the other "try again" (audit A06/A35).
  */
 export type PendingAnswerResult = 'sent' | 'gone' | 'failed'
+
+/** The script appends its timestamp and PID to THIS node, not an arbitrary valid filename. */
+export function pendingBelongsToNode(nodeId: string, pendingId: string): boolean {
+  return /^[A-Za-z0-9_-]{1,200}$/.test(nodeId) && isValidPendingId(pendingId) &&
+    pendingId.startsWith(`${nodeId}-`) && /^\d+-\d+$/.test(pendingId.slice(nodeId.length + 1))
+}
+
+/** Structured v2 answers are derived from the live request; clients never send hook output. */
+export async function answerPendingHookLocal(
+  nodeId: string, pendingId: string, answer: HookAnswer, homeDir: string = os.homedir()
+): Promise<PendingAnswerResult> {
+  if (!pendingBelongsToNode(nodeId, pendingId)) return 'failed'
+  const dir = pendingDir(homeDir)
+  const request = path.join(dir, `${pendingId}.json`)
+  let temporary: string | undefined
+  try {
+    const before = await fs.promises.lstat(request)
+    if (!before.isFile() || before.isSymbolicLink() || before.size > HOOK_REQUEST_MAX_BYTES) return 'failed'
+    const bytes = await fs.promises.readFile(request)
+    if (bytes.length > HOOK_REQUEST_MAX_BYTES) return 'failed'
+    const reply = buildHookReply(JSON.parse(bytes.toString('utf8')), answer)
+    if (!reply) return 'failed'
+    temporary = path.join(dir, `.reply-${randomUUID()}.tmp`)
+    await fs.promises.writeFile(temporary, reply, { mode: 0o600, flag: 'wx' })
+    // Check AFTER the complete reply is written: a timeout during that write must not publish.
+    const after = await fs.promises.lstat(request)
+    if (!after.isFile() || after.isSymbolicLink() || before.ino !== after.ino || before.dev !== after.dev ||
+        before.mtimeMs !== after.mtimeMs || before.size !== after.size) return 'failed'
+    await renameAtomic(temporary, path.join(dir, `${pendingId}.answer`))
+    return 'sent'
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'gone' : 'failed'
+  } finally {
+    if (temporary) await fs.promises.unlink(temporary).catch(() => {})
+  }
+}
 
 /**
  * Answer a held permission hook: check its request file still exists, then write the one-line answer

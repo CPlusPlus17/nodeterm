@@ -29,6 +29,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.runBlocking
 import org.apache.sshd.server.Environment
 import org.apache.sshd.server.ExitCallback
@@ -1241,6 +1243,57 @@ class SshTransportTest {
             assertEquals(ApprovalOutcome.GONE, conn.answerApproval(event, allow = true))
             conn.ackRead("term-a-1", "e1")
             assertEquals("e1", File(home, ".nodeterm/acks/term-a-1.seen").readText())
+        }
+    }
+
+    @Test
+    fun `structured hook replies use exact original rules and complete multi select input over real SSH stdin`() = runBlocking<Unit> {
+        val pending = File(home, ".nodeterm/pending").apply { mkdirs() }
+        val id = "term-a-1-1700000000000-100"
+        val held = File(pending, "$id.json")
+        val event = InboxEvent("e2", 1, "term-a-1", "claude", null, InboxKind.APPROVAL, "Approve", null, false, false, emptyList(), false, id)
+        val json = kotlinx.serialization.json.Json
+        val permission = """{"hook_event_name":"PermissionRequest","tool_name":"Bash","permission_suggestions":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"npm test"}]}]}"""
+        held.writeText(permission)
+        connect().use { conn ->
+            assertEquals(ApprovalOutcome.SENT, conn.rememberApproval(event, 0))
+            val remembered = File(pending, "$id.answer").readText()
+            assertTrue(remembered.startsWith(dev.nodeterm.protocol.model.HookReplies.MARKER + "\n"))
+            assertEquals(json.parseToJsonElement(permission).jsonObject["permission_suggestions"],
+                json.parseToJsonElement(remembered.substringAfter('\n')).jsonObject["hookSpecificOutput"]!!.jsonObject["decision"]!!.jsonObject["updatedPermissions"])
+            File(pending, "$id.answer").delete()
+            val large = "x".repeat(70_000)
+            val request = """{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"extra":"$large","questions":[{"question":"Which?","header":"Pick","multiSelect":true,"options":[{"label":"α","description":""},{"label":"β","description":""}]}]}}"""
+            held.writeText(request)
+            val question = event.copy(kind = InboxKind.QUESTION, pendingId = null, questionPendingId = id)
+            assertEquals(ApprovalOutcome.SENT, conn.answerQuestions(question, listOf(listOf(0, 1))))
+            val input = json.parseToJsonElement(File(pending, "$id.answer").readText().substringAfter('\n')).jsonObject["hookSpecificOutput"]!!.jsonObject["updatedInput"]!!.jsonObject
+            assertEquals(large, input["extra"]!!.jsonPrimitive.content)
+            assertEquals("α, β", input["answers"]!!.jsonObject["Which?"]!!.jsonPrimitive.content)
+            held.delete()
+            assertEquals(ApprovalOutcome.GONE, conn.answerQuestions(question, listOf(listOf(0))))
+        }
+        pending.deleteRecursively()
+    }
+
+    @Test
+    fun `structured reply refuses a changed held request and an unconfirmed command status`() = runBlocking<Unit> {
+        val pending = File(home, ".nodeterm/pending").apply { mkdirs() }
+        val id = "term-a-1-1700000000000-101"
+        val held = File(pending, "$id.json")
+        val request = """{"hook_event_name":"PermissionRequest","tool_name":"Bash","permission_suggestions":[{"type":"addRules","behavior":"allow","destination":"session","rules":[{"toolName":"Bash","ruleContent":"npm test"}]}]}"""
+        val event = InboxEvent("e3", 1, "term-a-1", "claude", null, InboxKind.APPROVAL, "Approve", null, false, false, emptyList(), false, id)
+        connect().use { conn ->
+            conn.listProjects()
+            try {
+                held.writeText(request)
+                onCommand = { command, _ -> if (command.contains("cat >")) held.writeText(request.replace("npm test", "npm changed")) }
+                assertFailsWith<HostException> { conn.rememberApproval(event, 0) }
+                assertFalse(File(pending, "$id.answer").exists())
+                held.writeText(request)
+                onCommand = { command, cmd -> if (command.contains("cat >")) cmd.omitExitStatus = true }
+                assertFailsWith<HostException> { conn.rememberApproval(event, 0) }
+            } finally { onCommand = null; pending.deleteRecursively() }
         }
     }
 

@@ -3674,7 +3674,7 @@ export interface NodeTerminalApi {
    *  local project, or the remote host over the project's ControlMaster for an SSH project. Resolves
    *  `true` when the file was written, `false` on any failure (invalid pendingId, unknown node,
    *  unsupported project, fs/exec error). */
-  answerPermission(payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' }): Promise<boolean>
+  answerPermission(payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' | 'allow-always'; suggestionIndex?: number }): Promise<boolean>
   /** Notify the core that the user READ a finished (done) session on this surface (the unread-clear
    *  funnel calls it when the node's latest state is `done`). The core marks the node's done inbox
    *  event(s) resolved (phone Inbox archives the card) and re-sends an 'end' live-update so the

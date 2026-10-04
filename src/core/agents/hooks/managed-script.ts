@@ -109,7 +109,7 @@ import { HOOK_ENDPOINT_FALLBACK_SH } from '../hook-endpoint-failover-sh'
  *     and any session the PHONE spawns on that host, which runs the host's installed script — stay
  *     `legacy` until the project reconnects.
  */
-export const MANAGED_SCRIPT_REVISION = 4
+export const MANAGED_SCRIPT_REVISION = 5
 /** The first revision that reads NODETERM_NODE_TOKEN_DIR and sends the node token (PR #195). */
 export const MIN_TOKEN_AWARE_REVISION = 3
 /* rev 4 (issue #384): the token read moved to the shared resolver in `node-token-sh.ts`, which
@@ -231,7 +231,7 @@ export function buildManagedScript(
     '    fi',
     '    ;;',
     'esac',
-    '# Deterministic-approval request: only for a PermissionRequest hook while the wait is armed.',
+    '# Hold a Claude PermissionRequest or parent AskUserQuestion only while the wait is armed.',
     '# `nt_pending` stays empty otherwise, so the POST tag and the poll loop below are both inert.',
     'nt_pending=""',
     'nt_pending_file=""',
@@ -250,8 +250,16 @@ export function buildManagedScript(
     ...(agentId === 'claude'
       ? [
           'if [ -n "$NODETERM_PERM_WAIT_SECS" ] && [ "$NODETERM_PERM_WAIT_SECS" -gt 0 ] 2>/dev/null; then',
+          '  nt_pending_kind=',
           '  case "$payload" in',
           '    *\'"hook_event_name":"PermissionRequest"\'*|*\'"hook_event_name": "PermissionRequest"\'*)',
+          '      nt_pending_kind=permission ;;',
+          '    *\'"hook_event_name":"PreToolUse"\'*|*\'"hook_event_name": "PreToolUse"\'*)',
+          '      case "$payload" in *\'"tool_name":"AskUserQuestion"\'*|*\'"tool_name": "AskUserQuestion"\'*) nt_pending_kind=question ;; esac ;;',
+          '  esac',
+          '  # Child question events are ignored by the parent status reducer; never hold one without a card.',
+          '  if [ "$nt_pending_kind" = question ] && printf %s "$payload" | grep -Eq \'"agent_id"[[:space:]]*:[[:space:]]*"[^"[:space:]][^"]*"\'; then nt_pending_kind=; fi',
+          '  if [ -n "$nt_pending_kind" ]; then',
           '      nt_node=$(printf %s "$NODETERM_NODE_ID" | tr -c \'A-Za-z0-9_-\' \'_\')',
           '      nt_ms=$(date +%s%3N 2>/dev/null)',
           '      case "$nt_ms" in \'\'|*[!0-9]*) nt_ms=$(date +%s) ;; esac',
@@ -260,8 +268,7 @@ export function buildManagedScript(
           '      (umask 077; mkdir -p "$nt_dir") 2>/dev/null || :',
           '      nt_pending_file="$nt_dir/$nt_pending.json"',
           '      (umask 077; printf %s "$payload" > "$nt_pending_file") 2>/dev/null || :',
-          '      ;;',
-          '  esac',
+          '  fi',
           'fi'
         ]
       : [
@@ -289,6 +296,7 @@ export function buildManagedScript(
     '      --data-urlencode "version=${NODETERM_HOOK_VERSION}" \\',
     '      --data-urlencode "nodeterm_context_window=${nt_context_window}" \\',
     '      --data-urlencode "nodeterm_pending_id=${nt_pending}" \\',
+    '      --data-urlencode "nodeterm_hook_reply=2" \\',
     '      --data-urlencode "payload@${nt_payload_arg}" 2>/dev/null) || return 1',
     '  elif [ -n "$NODETERM_HOOK_PORT" ]; then',
     '    nt_code=$(nt_hook_headers |',
@@ -299,6 +307,7 @@ export function buildManagedScript(
     '      --data-urlencode "version=${NODETERM_HOOK_VERSION}" \\',
     '      --data-urlencode "nodeterm_context_window=${nt_context_window}" \\',
     '      --data-urlencode "nodeterm_pending_id=${nt_pending}" \\',
+    '      --data-urlencode "nodeterm_hook_reply=2" \\',
     '      --data-urlencode "payload@${nt_payload_arg}" 2>/dev/null) || return 1',
     '  else',
     '    return 1',
@@ -372,6 +381,18 @@ export function buildManagedScript(
     '  while [ "$nt_i" -lt "$nt_max" ]; do',
     '    if [ -f "$nt_answer" ]; then',
     '      nt_decision=$(cat "$nt_answer" 2>/dev/null)',
+    '      nt_output=',
+    '      if [ "$(printf %s "$nt_decision" | sed -n \'1p\')" = nodeterm-hook-reply-v2 ]; then',
+    '        nt_output=$(printf %s "$nt_decision" | sed \'1d\')',
+    '        case "$nt_pending_kind:$nt_output" in',
+    '          permission:\'{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":\'*) nt_decision=allow ;;',
+    '          question:\'{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":\'*) nt_decision=allow ;;',
+    '          *) nt_decision=; nt_output= ;;',
+    '        esac',
+    '      elif [ "$nt_pending_kind" = question ]; then',
+    '        # A legacy permission answer is not an answer to a structured question.',
+    '        nt_decision=',
+    '      fi',
     '      rm -f "$nt_answer" "$nt_pending_file" 2>/dev/null || :',
     '      # Fire-and-forget "answered" signal so the canvas/phone NEEDS YOU badge flips to working the',
     '      # instant we read a valid answer, instead of sticking until the agent\'s next hook (which,',
@@ -412,7 +433,11 @@ export function buildManagedScript(
     '      fi',
     '      if [ "$nt_payload_owned" != 1 ]; then rm -f "$nt_payload_file" 2>/dev/null || :; fi',
     '      if [ "$nt_decision" = "allow" ]; then',
+    '        if [ -n "$nt_output" ]; then',
+    '          printf \'%s\\n\' "$nt_output"',
+    '        else',
     '        printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}\'',
+    '        fi',
     '      elif [ "$nt_decision" = "deny" ]; then',
     '        printf \'%s\\n\' \'{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from nodeterm."}}}\'',
     '      fi',

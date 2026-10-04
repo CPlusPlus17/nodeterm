@@ -445,6 +445,38 @@ class RelayInteropTest {
     }
 
     @Test
+    fun `new hook capabilities and complete answers interoperate with the real host producer and verbs`() = runBlocking<Unit> {
+        val h = start(extra = mapOf("FIXTURE_STRUCTURED_HOOKS" to "1"))
+        connect(h).connection.use { conn ->
+            val feed = conn.listProjects().status!!.inbox!!.events
+            val permission = feed.single { it.kind == InboxKind.APPROVAL }
+            assertEquals("Bash(npm test) — localSettings", permission.permissionSuggestions.single().label)
+            assertEquals(QuickActions.Result.SENT, QuickActions.rememberApproval(conn, permission, 0))
+            val remembered = h.awaitEvent("answer")
+            assertEquals("allow-always", remembered.str("decision"))
+            assertEquals("0", remembered.str("suggestionIndex"))
+            val question = feed.single { it.kind == InboxKind.QUESTION }
+            assertTrue(question.options.isEmpty(), "an old consumer must not receive numbered actions")
+            assertEquals(2, question.questions.size)
+            assertEquals(QuickActions.Result.SENT, QuickActions.answerQuestions(conn, question, listOf(listOf(0, 1), listOf(1))))
+            val answer = h.awaitEvent("question-answer")
+            assertEquals("term-question-1-1700000000000-43", answer.str("pendingId"))
+            assertEquals("[[0,1],[1]]", answer["selections"].toString())
+            assertEquals(dev.nodeterm.protocol.host.ApprovalOutcome.GONE,
+                conn.answerQuestions(question.copy(questionPendingId = "term-question-1-1700000000000-44-expired"), listOf(listOf(0), listOf(1))))
+        }
+    }
+
+    @Test
+    fun `an older host without structured questions never falls back to typing before the held picker paints`() = runBlocking<Unit> {
+        val h = start(extra = mapOf("FIXTURE_STRUCTURED_HOOKS" to "1", "FIXTURE_NO_STRUCTURED_QUESTIONS" to "1"))
+        connect(h).connection.use { conn ->
+            val event = conn.listProjects().status!!.inbox!!.events.single { it.kind == InboxKind.QUESTION }
+            assertEquals(QuickActions.Result.OPEN_SESSION, QuickActions.answerQuestions(conn, event, listOf(listOf(0), listOf(1))))
+        }
+    }
+
+    @Test
     fun `an answer that arrives after the hold ended opens the session instead of claiming success`() = runBlocking<Unit> {
         // A06/A35 against the desktop's real verb: `{answered:false, reason:"gone"}`, and the node is
         // still blocked, so the prompt is on screen now.

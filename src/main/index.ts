@@ -127,6 +127,7 @@ import { askpassServer, ensureAskpassScript } from './remote-ssh/ssh-askpass'
 import { appSshAgent } from './remote-ssh/ssh-agent'
 import {
   answerPendingLocal,
+  answerPendingHookLocal,
   startPendingSweep,
   isValidPendingId,
   syntheticAnsweredEvent,
@@ -165,6 +166,7 @@ import {
   onMirrorFlush,
   flush as flushAgentStatusMirror,
   recordAgentEvent,
+  hookTicketStillOpen,
   recordQuestionResult,
   ignoreQuestionHook,
   ackDone,
@@ -2776,10 +2778,20 @@ app.whenReady().then(async () => {
   async function answerPermission(
     nodeId: string,
     pendingId: string,
-    decision: 'allow' | 'deny'
+    decision: 'allow' | 'deny' | 'allow-always',
+    suggestionIndex?: number
   ): Promise<PendingAnswerResult> {
     if (!isValidPendingId(pendingId)) return 'failed'
-    if (decision !== 'allow' && decision !== 'deny') return 'failed'
+    if (decision !== 'allow' && decision !== 'deny' && decision !== 'allow-always') return 'failed'
+    if (decision === 'allow-always') {
+      if (!workspaceStore.getNode(nodeId) || !hookTicketStillOpen(nodeId, pendingId, 'approval')) return 'gone'
+      const answer = { kind: 'allow-always' as const, suggestionIndex: suggestionIndex ?? -1 }
+      const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
+      const result = sshProjectId ? await sshProjectManager?.answerPendingHook(sshProjectId, nodeId, pendingId, answer) ?? 'failed'
+        : await answerPendingHookLocal(nodeId, pendingId, answer, homedir())
+      // Only the hook's consumed-answer POST settles a remembered-rule card.
+      return result
+    }
     const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
     const result: PendingAnswerResult = sshProjectId
       ? sshProjectManager
@@ -2798,9 +2810,9 @@ app.whenReady().then(async () => {
   }
   corePlatform.handle(
     IPC.agentAnswerPermission,
-    async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' }) => {
-      const { nodeId, pendingId, decision } = payload ?? ({} as typeof payload)
-      return (await answerPermission(nodeId, pendingId, decision)) === 'sent'
+    async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' | 'allow-always'; suggestionIndex?: number }) => {
+      const { nodeId, pendingId, decision, suggestionIndex } = payload ?? ({} as typeof payload)
+      return (await answerPermission(nodeId, pendingId, decision, suggestionIndex)) === 'sent'
     }
   )
   // Read-a-finished-session ack (this feature): the renderer's unread-clear funnel calls it when the
@@ -4060,6 +4072,13 @@ app.whenReady().then(async () => {
     // plus the desktop unread clear, WITHOUT a re-ack (the external-clear channel).
     inbox: {
       answerPermission,
+      answerQuestion: async (nodeId: string, pendingId: string, selections: number[][]) => {
+        if (!workspaceStore.getNode(nodeId) || !hookTicketStillOpen(nodeId, pendingId, 'question')) return 'gone'
+        const answer = { kind: 'question' as const, selections }
+        const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
+        return sshProjectId ? await sshProjectManager?.answerPendingHook(sshProjectId, nodeId, pendingId, answer) ?? 'failed'
+          : answerPendingHookLocal(nodeId, pendingId, answer, homedir())
+      },
       ackRead: (nodeId: string) => {
         ackDone(nodeId)
         sendToMain(IPC.agentUnreadClear, nodeId)

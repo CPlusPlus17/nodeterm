@@ -217,7 +217,10 @@ object ProjectsParser {
                 resolved = e.b("resolved") == true,
                 options = e.strings("options"),
                 multiSelect = e.b("multiSelect") == true,
-                pendingId = e.s("pendingId")
+                pendingId = e.s("pendingId"),
+                permissionSuggestions = HookReplies.permissionSuggestions(e["permissionSuggestions"]),
+                questionPendingId = e.s("questionPendingId"),
+                questions = HookReplies.questions(e["questions"]) ?: emptyList()
             )
         }
         val nodes = LinkedHashMap<String, InboxNodeNow>()

@@ -5,17 +5,13 @@ package dev.nodeterm.protocol.model
  * [dev.nodeterm.protocol.host.QuickActions.answerQuestion] answers by, so the card never offers an
  * answer the action would refuse.
  *
- * A single-select AskUserQuestion is answered from the card: row N types the digit N into the picker.
- * A MULTI-select one (`multiSelect`, which the desktop publishes beside the options so the phone can
- * show them: src/core/agent-status-mirror.ts, src/core/push-notify.ts) is NOT. Nothing in this repo
- * measures how Claude Code's multi-select picker toggles an option or submits the selection, and a
- * guessed key sequence typed into a picker the phone cannot see could submit the wrong set, or none.
- * Its options are still shown, numbered and read-only, under a line that says the question takes
- * several and is answered in the session: before this the card showed only "Open session", so it
- * did not say what was being asked. Answering from the Inbox waits for the picker's keys to be
- * measured on a live CLI, and would keep the still-waiting re-check `QuickActions` does before typing.
+ * Held v2 questions expose the complete schema and explicit selections to the hook. A malformed
+ * held schema never falls back to digits. Legacy unheld single-select prompts retain numbered
+ * actions; legacy multi-select prompts remain read-only because their terminal keys are unmeasured.
  */
 sealed interface QuestionChoices {
+    /** A live held v2 picker: explicit selections for every question, never terminal digits. */
+    data class Held(val ticket: String, val questions: List<HookQuestion>) : QuestionChoices
     /** Each row is a quick answer: tapping row i types the digit i + 1 (`QuickActions.answerQuestion`). */
     data class Answer(val rows: List<String>) : QuestionChoices
 
@@ -30,6 +26,8 @@ sealed interface QuestionChoices {
         const val SEVERAL_NOTE = "Choose several — answer in the session."
 
         fun of(event: InboxEvent): QuestionChoices {
+            if (event.kind == InboxKind.QUESTION && event.questionPendingId != null)
+                return if (event.questions.isNotEmpty()) Held(event.questionPendingId, event.questions) else None
             if (event.kind != InboxKind.QUESTION || event.options.isEmpty()) return None
             // Numbered in the order the question lists them (the desktop keeps that order).
             val rows = event.options.mapIndexed { i, option -> "${i + 1}. $option" }

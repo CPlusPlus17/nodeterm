@@ -74,7 +74,8 @@ import { appSshAgent } from './ssh-agent'
 import { probeAgentSockToPin } from '../../core/remote-ssh/agent-probe'
 import { sessionName } from '../../core/tmux-naming'
 import { remoteAtomicWrite } from '../remote-atomic-write'
-import type { PendingAnswerResult } from '../../core/agents/pending-approvals'
+import { pendingBelongsToNode, type PendingAnswerResult } from '../../core/agents/pending-approvals'
+import { buildHookReply, HOOK_REQUEST_MAX_BYTES, type HookAnswer } from '../../shared/hook-answers'
 
 /** The remote answer command's exit status for "the hook's hold already ended" (no request file).
  *  ssh itself uses 255 and tmux/sh 1/2/126/127, so 3 cannot be mistaken for a transport failure. */
@@ -1884,6 +1885,34 @@ export class SshProjectManager {
     decision: 'allow' | 'deny'
   ): Promise<boolean> {
     return (await this.answerPending(projectId, pendingId, decision)) === 'sent'
+  }
+
+  /** Structured reply: read the exact remote hold, derive its decision, and recheck before write. */
+  async answerPendingHook(projectId: string, nodeId: string, pendingId: string, answer: HookAnswer): Promise<PendingAnswerResult> {
+    const c = this.conns.get(projectId)
+    if (!c || !pendingBelongsToNode(nodeId, pendingId)) return 'failed'
+    const dir = c.remoteHome ? `${c.remoteHome}/.nodeterm/pending` : '~/.nodeterm/pending'
+    const request = quoteRemotePath(`${dir}/${pendingId}.json`)
+    try {
+      const read = await this.r.run(childArgs(c.conn, c.controlPath,
+        `[ -f ${request} ] || exit ${PENDING_GONE_EXIT}; [ ! -L ${request} ] || exit 2; ` +
+        `[ "$(head -c ${HOOK_REQUEST_MAX_BYTES + 1} ${request} | wc -c)" -le ${HOOK_REQUEST_MAX_BYTES} ] || exit 2; nt_c=$(cksum < ${request}) || exit 2; [ "${'${nt_c#* }'}" -le ${HOOK_REQUEST_MAX_BYTES} ] || exit 2; nt_body=$(head -c ${HOOK_REQUEST_MAX_BYTES + 1} ${request}) || exit 2; ` +
+        `[ "$nt_c" = "$(cksum < ${request})" ] || exit 2; printf '%s\\n%s' "$nt_c" "$nt_body"`))
+      if (read.code !== 0) return read.code === PENDING_GONE_EXIT ? 'gone' : 'failed'
+      const newline = read.stdout.indexOf('\n')
+      const checksum = read.stdout.slice(0, newline)
+      const raw = read.stdout.slice(newline + 1)
+      if (newline < 0 || !/^\d+ \d+$/.test(checksum) || Buffer.byteLength(raw) > HOOK_REQUEST_MAX_BYTES) return 'failed'
+      const reply = buildHookReply(JSON.parse(raw), answer)
+      if (!reply || this.conns.get(projectId) !== c) return 'failed'
+      const stillHeld = `[ -f ${request} ] || exit ${PENDING_GONE_EXIT}; [ ! -L ${request} ] || exit 2; ` +
+        `[ "$(cksum < ${request})" = ${posixQuote(checksum)} ] || exit 2`
+      const write = remoteAtomicWrite(`${dir}/${pendingId}.answer`, { restrictPermissions: true, makeParent: false, beforePublish: stillHeld }).command
+      const result = await this.r.run(childArgs(c.conn, c.controlPath,
+        `[ -f ${request} ] || exit ${PENDING_GONE_EXIT}; [ ! -L ${request} ] || exit 2; ` +
+        `[ "$(cksum < ${request})" = ${posixQuote(checksum)} ] || exit 2; ${write}`), reply)
+      return result.code === 0 ? 'sent' : result.code === PENDING_GONE_EXIT ? 'gone' : 'failed'
+    } catch { return 'failed' }
   }
 
   /**

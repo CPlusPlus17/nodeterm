@@ -104,6 +104,10 @@ interface HostConnection : Closeable {
      * when the prompt is actually on screen.
      */
     suspend fun answerApproval(event: InboxEvent, allow: Boolean): ApprovalOutcome
+    /** Remember only a concrete rule supplied by this exact held approval. No keystroke fallback. */
+    suspend fun rememberApproval(event: InboxEvent, suggestionIndex: Int): ApprovalOutcome = ApprovalOutcome.UNSUPPORTED
+    /** Answer all held questions atomically, using option indexes from their full schema. */
+    suspend fun answerQuestions(event: InboxEvent, selections: List<List<Int>>): ApprovalOutcome = ApprovalOutcome.UNSUPPORTED
 
     /** Tell the computer this phone READ a finished session (clears its unread, archives the card). */
     suspend fun ackRead(nodeId: String, eventId: String?)

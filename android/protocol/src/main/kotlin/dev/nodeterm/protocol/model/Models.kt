@@ -260,7 +260,10 @@ data class InboxEvent(
     val options: List<String>,
     val multiSelect: Boolean,
     /** The hook-reply ticket (docs/hook-reply-approvals.md): answer by writing the `.answer` file. */
-    val pendingId: String?
+    val pendingId: String?,
+    val permissionSuggestions: List<PermissionSuggestion> = emptyList(),
+    val questionPendingId: String? = null,
+    val questions: List<HookQuestion> = emptyList()
 ) {
     val actionable: Boolean get() = !resolved && (kind == InboxKind.APPROVAL || kind == InboxKind.QUESTION)
 }

@@ -3,6 +3,8 @@ package dev.nodeterm.android.ui
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,6 +22,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -63,6 +70,7 @@ import dev.nodeterm.protocol.model.UsageAccount
 import dev.nodeterm.protocol.model.UsageLimit
 import dev.nodeterm.protocol.model.UsagePace
 import dev.nodeterm.protocol.ssh.NothingFoundException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -107,6 +115,7 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
     val scope = rememberCoroutineScope()
     // Saveable, so an open archive stays open after a terminal opened from it (audit A43).
     var showArchive by rememberSaveable { mutableStateOf(false) }
+    var pendingActions by remember { mutableStateOf(emptySet<Pair<String, String>>()) }
 
     // Each card under ITS computer: a merged feed holds several, and two can mint the same event id.
     LaunchedEffect(feed.actionable.map { it.key }) {
@@ -116,7 +125,10 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
     fun openOn(from: ComputerListing, nodeId: String) =
         nav.push(Route.Terminal(from.computer.hostId, nodeId, feedTitle(from.snapshot, nodeId)))
 
-    fun runOn(from: ComputerListing, label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String) {
+    fun runOn(from: ComputerListing, label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String, eventId: String) {
+        val actionKey = from.computer.hostId to eventId
+        if (actionKey in pendingActions) return
+        pendingActions = pendingActions + actionKey
         // The card's own computer, whichever screen shows it.
         val session = graph.connections.session(from.computer.hostId)
         scope.launch {
@@ -140,9 +152,13 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
                     }
                 }
                 session.refreshNow()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val text = (e as? NothingFoundException)?.said(session.relayLeg()) ?: e.message ?: "Couldn't reach ${from.computer.label}."
                 Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            } finally {
+                pendingActions = pendingActions - actionKey
             }
         }
     }
@@ -165,8 +181,9 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
             ) {
                 EventActions(
                     ev,
+                    busy = (item.from.computer.hostId to ev.id) in pendingActions,
                     open = { nodeId -> openOn(item.from, nodeId) },
-                    run = { label, block, nodeId -> runOn(item.from, label, block, nodeId) }
+                    run = { label, block, nodeId -> runOn(item.from, label, block, nodeId, ev.id) }
                 )
             }
         }
@@ -215,25 +232,84 @@ internal fun InboxFeedList(nav: Navigator, feed: InboxFeed, showComputer: Boolea
 @Composable
 private fun EventActions(
     ev: InboxEvent,
+    busy: Boolean,
     open: (nodeId: String) -> Unit,
     run: (label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String) -> Unit
 ) {
     if (ev.kind == InboxKind.APPROVAL) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
+            Button(enabled = !busy, onClick = {
                 run("Approved.", { c -> QuickActions.answerApproval(c, ev, allow = true) }, ev.nodeId)
             }) { Text("Approve") }
-            OutlinedButton(onClick = {
+            OutlinedButton(enabled = !busy, onClick = {
                 run("Denied.", { c -> QuickActions.answerApproval(c, ev, allow = false) }, ev.nodeId)
             }) { Text("Deny") }
             TextButton(onClick = { open(ev.nodeId) }) { Text("Open") }
         }
+        if (ev.pendingId != null && ev.permissionSuggestions.isNotEmpty()) {
+            var rememberDialog by remember(ev.id, ev.pendingId) { mutableStateOf(false) }
+            var selectedRule by remember(ev.id, ev.pendingId) { mutableStateOf<Int?>(null) }
+            TextButton(enabled = !busy, onClick = { rememberDialog = true }) { Text("Always allow…") }
+            if (rememberDialog) AlertDialog(
+                onDismissRequest = { rememberDialog = false },
+                title = { Text("Allow and remember a rule") },
+                text = {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        Text("Choose the rule and where it applies. This does not change the session's permission mode.")
+                        ev.permissionSuggestions.forEach { suggestion ->
+                            Row(Modifier.fillMaxWidth().clickable { selectedRule = suggestion.index }, verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = selectedRule == suggestion.index, onClick = { selectedRule = suggestion.index })
+                                Text(suggestion.label)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(enabled = !busy && selectedRule != null, onClick = {
+                        val index = selectedRule ?: return@TextButton
+                        rememberDialog = false
+                        run("Approval sent.", { c -> QuickActions.rememberApproval(c, ev, index) }, ev.nodeId)
+                    }) { Text("Allow and remember") }
+                },
+                dismissButton = { TextButton(onClick = { rememberDialog = false }) { Text("Cancel") } }
+            )
+        }
     } else {
         // One rule for what the card offers and what the answer path accepts (audit A57).
         when (val choices = QuestionChoices.of(ev)) {
+            is QuestionChoices.Held -> {
+                var selected by remember(ev.id, choices.ticket) { mutableStateOf(List(choices.questions.size) { emptySet<Int>() }) }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    choices.questions.forEachIndexed { qi, question ->
+                        Text(question.question, fontWeight = FontWeight.SemiBold)
+                        if (question.multiSelect) Text("Choose one or more", style = MaterialTheme.typography.labelSmall)
+                        question.options.forEachIndexed { oi, option ->
+                            fun toggle() {
+                                selected = selected.mapIndexed { i, set ->
+                                    if (i != qi) set else if (!question.multiSelect) setOf(oi)
+                                    else if (oi in set) set - oi else set + oi
+                                }
+                            }
+                            Row(Modifier.fillMaxWidth().clickable { toggle() }, verticalAlignment = Alignment.CenterVertically) {
+                                if (question.multiSelect) Checkbox(checked = oi in selected[qi], onCheckedChange = { toggle() })
+                                else RadioButton(selected = oi in selected[qi], onClick = { toggle() })
+                                Column {
+                                    Text(option.label)
+                                    if (option.description.isNotBlank()) Text(option.description, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                    Button(enabled = !busy && selected.all { it.isNotEmpty() }, onClick = {
+                        val answer = selected.map { it.sorted() }
+                        run("Answered.", { c -> QuickActions.answerQuestions(c, ev, answer) }, ev.nodeId)
+                    }) { Text("Send answers") }
+                    TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
+                }
+            }
             is QuestionChoices.Answer -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 choices.rows.forEachIndexed { i, row ->
-                    OutlinedButton(onClick = {
+                    OutlinedButton(enabled = !busy, onClick = {
                         run("Answered.", { c -> QuickActions.answerQuestion(c, ev, i) }, ev.nodeId)
                     }, modifier = Modifier.fillMaxWidth()) { Text(row, maxLines = 2) }
                 }

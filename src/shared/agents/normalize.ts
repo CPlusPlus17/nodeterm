@@ -1,5 +1,6 @@
 import type { AgentId } from './config'
 import type { ObservedClaudeAccount } from '../types'
+import { permissionSuggestions, type PermissionSuggestion } from '../hook-answers'
 
 export type AgentState = 'working' | 'waiting' | 'blocked' | 'done'
 
@@ -61,6 +62,10 @@ export interface NormalizedAgentEvent {
   // `nodeterm_pending_id` (merged into the payload by the hook server) so the phone/canvas can
   // answer the held hook. Absent = no held hook (legacy prompt path). See docs/hook-reply-approvals.md.
   pendingId?: string
+  /** v2 held AskUserQuestion ticket, distinct from a permission approval. */
+  questionPendingId?: string
+  /** Concrete rule scopes supplied by the exact held PermissionRequest. */
+  permissionSuggestions?: PermissionSuggestion[]
   // needs-you (blocked/waiting) only: how the shell classified this ask AFTER the mirror's
   // stash-priority reclassification (see agent-status-mirror.recordAgentEvent). 'question' = an
   // AskUserQuestion picker (its `pendingId` is stripped — approve/deny on a question is wrong UX);
@@ -149,6 +154,7 @@ interface ClaudePayload {
   /** Deterministic-approval ticket the managed hook script added to its POST body and the hook
    *  server merged into this payload (PermissionRequest only). */
   nodeterm_pending_id?: string
+  nodeterm_hook_reply?: number
   /** Deterministic-approval "answered" signal: the managed hook fired a second POST the instant it
    *  read a valid allow/deny answer file, tagged nodeterm_answered=<decision>, merged into this
    *  payload by the hook server. It rides alongside the original PermissionRequest payload, so it is
@@ -206,7 +212,9 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
       ...base,
       kind: 'state',
       state: 'working',
-      ...(p.nodeterm_pending_id ? { pendingId: p.nodeterm_pending_id } : {})
+      ...(p.tool_name === 'AskUserQuestion' && p.hook_event_name === 'PreToolUse'
+        ? { answeredQuestionId: p.tool_use_id }
+        : p.nodeterm_pending_id ? { pendingId: p.nodeterm_pending_id } : {})
     }
   }
   const ev = p.hook_event_name
@@ -215,7 +223,8 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
   if (ev === 'PreToolUse' || ev === 'PostToolUse') {
     if (tool === 'AskUserQuestion' && p.tool_use_id) {
       return ev === 'PreToolUse'
-        ? { ...base, kind: 'state', state: 'waiting', questionId: p.tool_use_id }
+        ? { ...base, kind: 'state', state: 'waiting', questionId: p.tool_use_id,
+          ...(p.nodeterm_hook_reply === 2 && p.nodeterm_pending_id ? { questionPendingId: p.nodeterm_pending_id } : {}) }
         : { ...base, kind: 'state', state: 'working', answeredQuestionId: p.tool_use_id }
     }
     if (SUBAGENT_TOOLS.has(tool)) {
@@ -318,7 +327,8 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
       ...(tool && tool !== 'AskUserQuestion' ? { askKind: 'approval' as const } : {}),
       lastMessage: p.last_assistant_message,
       // Deterministic-approval ticket (present only when the wait-branch of the managed hook ran).
-      ...(p.nodeterm_pending_id ? { pendingId: p.nodeterm_pending_id } : {})
+      ...(p.nodeterm_pending_id ? { pendingId: p.nodeterm_pending_id } : {}),
+      ...(p.nodeterm_hook_reply === 2 && p.nodeterm_pending_id ? { permissionSuggestions: permissionSuggestions(p) } : {})
     }
   }
   if (ev === 'Notification') {

@@ -299,6 +299,35 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         }
     }
 
+    override suspend fun rememberApproval(event: InboxEvent, suggestionIndex: Int): ApprovalOutcome {
+        val ticket = event.pendingId ?: return ApprovalOutcome.UNSUPPORTED
+        return answerHook("approvals.answer", buildJsonObject {
+            put("nodeId", event.nodeId); put("pendingId", ticket)
+            put("decision", "allow-always"); put("suggestionIndex", suggestionIndex)
+        })
+    }
+
+    override suspend fun answerQuestions(event: InboxEvent, selections: List<List<Int>>): ApprovalOutcome {
+        val ticket = event.questionPendingId ?: return ApprovalOutcome.UNSUPPORTED
+        return answerHook("questions.answer", buildJsonObject {
+            put("nodeId", event.nodeId); put("pendingId", ticket)
+            put("selections", JsonArray(selections.map { row -> JsonArray(row.map(::JsonPrimitive)) }))
+        })
+    }
+
+    private suspend fun answerHook(verb: String, params: JsonObject): ApprovalOutcome {
+        val body = try { J.obj(call(verb, params)) } catch (e: HostException) {
+            if (e.message?.contains("not served") == true || e.message?.startsWith("Unknown method") == true) return ApprovalOutcome.UNSUPPORTED
+            throw e
+        }
+        if (body?.b("answered") == true) return ApprovalOutcome.SENT
+        return when (body?.s("reason")) {
+            "gone" -> ApprovalOutcome.GONE
+            "failed" -> throw HostException("The computer couldn't write the answer. Try again, or open the session.")
+            else -> ApprovalOutcome.ALREADY_HANDLED
+        }
+    }
+
     override suspend fun ackRead(nodeId: String, eventId: String?) {
         try {
             call("inbox.ack", buildJsonObject { put("nodeId", nodeId) })

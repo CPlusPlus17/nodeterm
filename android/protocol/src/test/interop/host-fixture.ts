@@ -202,16 +202,24 @@ async function seedDesktopState(settings: Partial<MirrorSettings> = {}): Promise
     transcript_path: path.join(claudeConfigDirFor('acct-1'), 'projects', '-demo', 's-1.jsonl'),
     cwd: workspace.projects[0].cwd
   }
-  const hook = (payload: Record<string, unknown>): void => {
-    recordRawToolEvent(nodeId, payload)
-    const ev = normalizeFor('claude', { nodeId, agentId: 'claude', payload })
+  const hook = (payload: Record<string, unknown>, id = nodeId): void => {
+    recordRawToolEvent(id, payload)
+    const ev = normalizeFor('claude', { nodeId: id, agentId: 'claude', payload })
     const account = observedClaudeAccount('claude', payload)
     if (ev) recordAgentEvent({ ...ev, ...(account ? { account } : {}) })
   }
   const bash = { tool_name: 'Bash', tool_input: { command: 'npm test' } }
   hook({ ...session, hook_event_name: 'PreToolUse', ...bash })
   // A held hook-reply approval: the managed hook's deterministic ticket.
-  hook({ ...session, hook_event_name: 'PermissionRequest', ...bash, nodeterm_pending_id: 'term-abc-1-1700000000000-42' })
+  hook({ ...session, hook_event_name: 'PermissionRequest', ...bash, nodeterm_pending_id: 'term-abc-1-1700000000000-42',
+    ...(process.env.FIXTURE_STRUCTURED_HOOKS === '1' ? { nodeterm_hook_reply: 2, permission_suggestions: [
+      { type: 'addRules', behavior: 'allow', destination: 'localSettings', rules: [{ toolName: 'Bash', ruleContent: 'npm test' }] }
+    ] } : {}) })
+  if (process.env.FIXTURE_STRUCTURED_HOOKS === '1') hook({ ...session, hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion',
+    tool_use_id: 'question-tool', nodeterm_hook_reply: 2, nodeterm_pending_id: 'term-question-1-1700000000000-43', tool_input: { questions: [
+      { question: 'Languages?', header: 'Languages', multiSelect: true, options: [{ label: 'Kotlin', description: 'Phone' }, { label: 'TypeScript', description: 'Host' }] },
+      { question: 'Where?', header: 'Place', multiSelect: false, options: [{ label: 'Here', description: '' }, { label: 'There', description: '' }] }
+    ] } }, 'term-question-1')
   setNodeSessionName(nodeId, 'fix bug')
   await flushMirror()
   return store
@@ -403,9 +411,12 @@ async function runRelay(): Promise<void> {
     inbox: {
       // A pendingId ending in `-expired` stands for a hold that already ended (the real writer finds
       // no request file and answers `gone`, audit A06).
-      answerPermission: async (nodeId, pendingId, decision) => (
-        emit({ event: 'answer', nodeId, pendingId, decision }), pendingId.endsWith('-expired') ? 'gone' : 'sent'
+      answerPermission: async (nodeId, pendingId, decision, suggestionIndex) => (
+        emit({ event: 'answer', nodeId, pendingId, decision, ...(suggestionIndex !== undefined ? { suggestionIndex } : {}) }), pendingId.endsWith('-expired') ? 'gone' : 'sent'
       ),
+      ...(process.env.FIXTURE_NO_STRUCTURED_QUESTIONS === '1' ? {} : { answerQuestion: async (nodeId: string, pendingId: string, selections: number[][]): Promise<'gone' | 'sent'> => (
+        emit({ event: 'question-answer', nodeId, pendingId, selections }), pendingId.endsWith('-expired') ? 'gone' : 'sent'
+      ) }),
       ackRead: (nodeId) => emit({ event: 'ack', nodeId })
     },
     // A09/A12: which nodes belong to one of the desktop's SSH projects. `ssh-*` ids do, reached over
