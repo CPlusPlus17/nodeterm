@@ -82,7 +82,7 @@ type Mgr = {
   released: Map<string, unknown>
   getSettings: () => typeof DEFAULT_SETTINGS
   watcherInputRoute(id: string): string
-  controlInput(id: string, chunk: unknown): Promise<boolean>
+  controlInput(id: string, chunk: unknown, isCurrent?: () => boolean): Promise<boolean>
   nodeControlSupport(persistKey: string): string
 }
 
@@ -376,6 +376,70 @@ describe('controlInput — refusals and order', () => {
     mgr.sessions.set('sess-2', { persistKey: 'node-2', tmuxBacked: true, proc: { write: vi.fn() } })
     void mgr.controlInput('sess-1', { kind: 'keys', data: 'a' })
     expect(await mgr.controlInput('sess-2', { kind: 'keys', data: 'b' })).toBe(true)
+  })
+})
+
+// Final review, Minor 3: a chunk already handed over waits in the session's chain (behind a slow step
+// of another link, say). Its sender may lose control meanwhile — a stop, a demotion — and the link host
+// can no longer recall it. `isCurrent`, asked right before the step spawns (or writes), drops it there.
+describe('controlInput — isCurrent, asked right before the step runs', () => {
+  it('a chunk whose sender stopped controlling while it waited behind a slow step never runs; the chain moves on', async () => {
+    let release!: () => void
+    const held = new Promise<{ stdout: string }>((r) => (release = () => r({ stdout: '' })))
+    let n = 0
+    script.answer = () => (++n === 1 ? held : { stdout: '' })
+    const { mgr } = await manager({})
+    let current = true
+    let asked = 0
+    const first = mgr.controlInput('sess-1', { kind: 'keys', data: 'a' })
+    const keys = mgr.controlInput('sess-1', { kind: 'keys', data: 'b' }, () => (asked++, current))
+    const paste = mgr.controlInput('sess-1', { kind: 'paste', text: 'p' }, () => (asked++, current))
+    const later = mgr.controlInput('sess-1', { kind: 'keys', data: 'c' }, () => true)
+    for (let i = 0; i < 5; i++) await flush()
+    expect(calls).toHaveLength(1)
+    expect(asked).toBe(0) // not asked at hand-over: only when its turn comes
+    current = false // the owner turned typing off, or the link stopped, while they waited
+    release()
+    expect(await first).toBe(true)
+    expect(await keys).toBe(false)
+    expect(await paste).toBe(false)
+    expect(await later).toBe(true)
+    expect(asked).toBe(2)
+    expect(calls.map((c) => c.input)).toEqual([keysCommandText(NAME, 'a'), keysCommandText(NAME, 'c')])
+  })
+
+  it('a predicate that throws reads as not current (fail closed)', async () => {
+    const { mgr } = await manager({})
+    expect(
+      await mgr.controlInput('sess-1', { kind: 'keys', data: 'a' }, () => {
+        throw new Error('boom')
+      })
+    ).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('every route honours it: ssh, the plain-shell write, the session host and a direct Windows pane', async () => {
+    const sendText = vi.fn(async () => true)
+    for (const session of [
+      { sshRemote: SSH_REMOTE },
+      { tmuxBacked: false },
+      { sessionHost: true },
+      { nativeWindowsPane: { sendText }, tmuxBacked: false, persistKey: undefined }
+    ]) {
+      const { mgr, write } = await manager(session)
+      expect(await mgr.controlInput('sess-1', { kind: 'keys', data: 'a' }, () => false), JSON.stringify(session)).toBe(false)
+      expect(await mgr.controlInput('sess-1', { kind: 'paste', text: 'p' }, () => false)).toBe(false)
+      expect(write).not.toHaveBeenCalled()
+    }
+    expect(calls).toEqual([])
+    expect(hostSendKeys).not.toHaveBeenCalled()
+    expect(sendText).not.toHaveBeenCalled()
+  })
+
+  it('a current chunk runs as before', async () => {
+    const { mgr } = await manager({})
+    expect(await mgr.controlInput('sess-1', { kind: 'keys', data: 'a' }, () => true)).toBe(true)
+    expect(calls.map((c) => c.input)).toEqual([keysCommandText(NAME, 'a')])
   })
 })
 

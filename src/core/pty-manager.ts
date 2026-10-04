@@ -5000,14 +5000,19 @@ export class PtyManager {
    * waited 15 s behind a slow one has 5 s), answers false when it runs out (a late delivery may still
    * land, as with any timed-out one), and a chunk with nothing left when its turn comes is dropped
    * undelivered: whoever handed it over has given up on it.
+   *
+   * `isCurrent` (the link host's: its sender still controls, in the period it typed in) is asked right
+   * before the step runs — after any wait behind a slow step, immediately before the spawn or the
+   * write, nothing awaited in between: false (or a throw) and the chunk is never delivered (false).
+   * A chunk handed over while its sender controlled must not land after a stop or a demotion.
    */
-  controlInput(sessionId: string, chunk: ControlInputChunk): Promise<boolean> {
+  controlInput(sessionId: string, chunk: ControlInputChunk, isCurrent?: () => boolean): Promise<boolean> {
     const handedAt = Date.now()
     const prev = this.controlInputChains.get(sessionId) ?? Promise.resolve(true)
     const step = prev
       .then(() => {
         const left = PANE_INPUT_DEADLINE_MS - (Date.now() - handedAt)
-        return left <= 0 ? false : settleWithin(this.deliverControlInput(sessionId, chunk), left)
+        return left <= 0 ? false : settleWithin(this.deliverControlInput(sessionId, chunk, isCurrent), left)
       })
       .catch(() => false)
     this.controlInputChains.set(sessionId, step)
@@ -5020,7 +5025,11 @@ export class PtyManager {
   /** The tail of each session's `controlInput` chain; deleted when the tail settles. */
   private readonly controlInputChains = new Map<string, Promise<boolean>>()
 
-  private async deliverControlInput(sessionId: string, chunk: ControlInputChunk): Promise<boolean> {
+  private async deliverControlInput(
+    sessionId: string,
+    chunk: ControlInputChunk,
+    isCurrent?: () => boolean
+  ): Promise<boolean> {
     // The chunk arrives from a viewer over the network: its shape is checked, not assumed.
     const c = chunk as { kind?: unknown; data?: unknown; text?: unknown } | null
     const keys = c?.kind === 'keys' && typeof c.data === 'string'
@@ -5033,6 +5042,17 @@ export class PtyManager {
     // a paste that sanitizes to nothing has nothing to do.
     if (keys && (c.data as string).length === 0) return false
     if (paste && sanitizePasteText(c.text as string).length === 0) return true
+    // Right before the spawn or the write (synchronous from here to it, on every route): a sender that
+    // stopped controlling while this chunk waited never gets it delivered. A throw reads as not current.
+    if (isCurrent) {
+      let current = false
+      try {
+        current = isCurrent() === true
+      } catch {
+        current = false
+      }
+      if (!current) return false
+    }
     try {
       switch (route) {
         case 'tmux': {

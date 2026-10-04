@@ -15,7 +15,7 @@ import {
 } from './service'
 import { WatchLinkStore, WatchLinkStoreUnreadable, type WatchLinkRecord, type SaveOutcome } from './store'
 import type { WatchLinkApi as ApiClient } from './api'
-import type { LinkHost, LinkHostDeps, LinkRuntimeStatus, LinkViewer, WatchPty } from './link-host'
+import { WRONG_PER_LINK, type LinkHost, type LinkHostDeps, type LinkRuntimeStatus, type LinkViewer, type WatchPty } from './link-host'
 import type { WatchChatMessage } from '../../shared/watch-link/protocol'
 import type { ControlSupport, WatchLinkNotice, WatchLinkView } from '../../shared/watch-link-types'
 import { hashControlPassword, verifyControlPassword, type ControlPasswordHash } from './password'
@@ -1022,7 +1022,7 @@ describe('createWatchLinkService — creating a Control link', () => {
     expect(text).not.toContain(Buffer.from(PW).toString('base64'))
     expect(text).not.toContain(Buffer.from(PW).toString('hex'))
     const [loaded] = await t.store.load()
-    expect(Object.keys(loaded.control ?? {}).sort()).toEqual(['enabled', 'hash', 'locked', 'salt'])
+    expect(Object.keys(loaded.control ?? {}).sort()).toEqual(['enabled', 'hash', 'locked', 'salt', 'wrong'])
     expect(loaded.control).toMatchObject({ enabled: true, locked: false })
     expect(await verifyControlPassword(PW, loaded.control!)).toBe(true)
     const h = t.hosts.made[0]
@@ -1169,6 +1169,77 @@ describe('createWatchLinkService — the Control host seams', () => {
     warn.mockRestore()
   })
 
+  // Final review, Minor 2: the link-wide wrong count is persisted beside `locked`, so an app restart
+  // no longer resets it toward the lock (with Unlimited links that was 9 fresh guesses per restart).
+  it('each wrong attempt puts the link-wide count on the record and writes it — at most 10 writes, the 10th rides the lock', async () => {
+    const written: (WatchLinkRecord['control'] | undefined)[] = []
+    const f = fakeStore({
+      save: async (recs) => {
+        written.push(recs[0]?.control ? { ...recs[0].control } : undefined)
+        return 'saved'
+      }
+    })
+    const t = service({ store: f.store, hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    expect(h.record.control?.wrong).toBe(0)
+    const saves = f.saves.length
+    for (let n = 1; n <= WRONG_PER_LINK; n++) {
+      h.deps.onWrongAttempt(n)
+      expect(h.record.control?.wrong).toBe(n) // synchronously: the record is the count's home
+      if (n === WRONG_PER_LINK) h.deps.onControlLocked() // what the host does at the 10th
+    }
+    await flush()
+    expect(f.saves.length - saves).toBe(WRONG_PER_LINK)
+    expect(written.slice(saves).map((c) => c?.wrong)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(written.at(-1)).toMatchObject({ wrong: WRONG_PER_LINK, locked: true })
+  })
+
+  it('a count outside 0..10 is clamped onto the record (the store would refuse to write it)', async () => {
+    const t = service({ hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    h.deps.onWrongAttempt(99)
+    expect(h.record.control?.wrong).toBe(WRONG_PER_LINK)
+    h.deps.onWrongAttempt(-3)
+    expect(h.record.control?.wrong).toBe(0)
+    h.deps.onWrongAttempt(Number.NaN)
+    expect(h.record.control?.wrong).toBe(0)
+    await flush()
+    expect((await t.store.load())[0].control?.wrong).toBe(0)
+  })
+
+  it('the count survives a restart: a host resumed from the saved record starts from it', async () => {
+    const t = service({ hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    for (let n = 1; n <= 9; n++) t.hosts.made[0].deps.onWrongAttempt(n)
+    await flush()
+    expect((await t.store.load())[0].control?.wrong).toBe(9)
+    await t.s.shutdown()
+    const again = service({ store: new WatchLinkStore({ file: t.file }) })
+    await again.s.init()
+    expect(again.hosts.made[0].record.control?.wrong).toBe(9)
+  })
+
+  it('a new password and Allow control again reset the count, on the record and on disk', async () => {
+    const t = service({ hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    for (let n = 1; n <= 5; n++) h.deps.onWrongAttempt(n)
+    expect(await t.s.setPassword(r.link.linkId, NEW_PW)).toBe(true)
+    expect(h.record.control?.wrong).toBe(0)
+    expect((await t.store.load())[0].control?.wrong).toBe(0)
+    for (let n = 1; n <= WRONG_PER_LINK; n++) h.deps.onWrongAttempt(n)
+    h.deps.onControlLocked()
+    expect(await t.s.allowControl(r.link.linkId)).toBe(true)
+    expect(h.record.control).toMatchObject({ locked: false, wrong: 0 })
+    expect((await t.store.load())[0].control).toMatchObject({ locked: false, wrong: 0 })
+  })
+
   it('a viewer taking control tells the owner, under the name it gave (bidi stripped)', async () => {
     const t = service()
     const r = await t.s.create(ctlReq())
@@ -1251,50 +1322,119 @@ describe('createWatchLinkService — the owner controls a Control link', () => {
     expect(await t.s.allowControl('Nope000000000000000000')).toBe(false)
   })
 
-  it('a change whose write fails is undone in memory and at the host, and answers false; a lock is never undone', async () => {
+  // THE BRAKE HOLDS (final review, Important 1): a change that NARROWS access is the owner's emergency
+  // brake. It stays in force whatever the disk does, and the owner is told 'unsaved' (applied now, gone
+  // at a restart); the next write that lands carries it. A widening still changes nothing on a failure.
+  function snapStore(o: { save: () => Promise<SaveOutcome> }) {
+    /** What each write carried for the first record, copied AT CALL TIME (the store snapshots then). */
+    const written: (WatchLinkRecord['control'] | undefined)[] = []
+    const f = fakeStore({
+      save: (recs) => {
+        written.push(recs[0]?.control ? { ...recs[0].control } : undefined)
+        return o.save()
+      }
+    })
+    return { ...f, written }
+  }
+
+  it("typing OFF whose write fails stays off at the host and in memory, answers 'unsaved', and the next write that lands carries it", async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let outcome: SaveOutcome = 'saved'
-    const f = fakeStore({ save: async () => outcome })
-    const t = service({ store: f.store })
+    const f = snapStore({ save: async () => outcome })
+    const t = service({ store: f.store, hashPassword: fastHash })
     const r = await t.s.create(ctlReq())
     if (!r.ok) throw new Error(r.error)
     const id = r.link.linkId
     const h = t.hosts.made[0]
     outcome = 'failed'
     const saves = f.saves.length
-    expect(await t.s.setControl(id, false)).toBe(false)
-    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
-    expect(h.hooks).toEqual(['controlChanged', 'controlChanged']) // told, then told it is back
-    expect(f.saves.length).toBe(saves + 2) // the write that failed, and the corrected list behind it
-    expect(f.saves.at(-1)?.[0].control?.enabled).toBe(true)
-    h.hooks.length = 0
-    expect(await t.s.setPassword(id, NEW_PW)).toBe(false)
-    expect(h.hooks).toEqual(['passwordChanged', 'passwordChanged'])
-    expect(await h.deps.verifyPassword(PW)).toBe(true)
-    expect(await h.deps.verifyPassword(NEW_PW)).toBe(false)
-    h.hooks.length = 0
-    h.deps.onControlLocked() // its own write fails too: the lock holds
-    expect(await t.s.allowControl(id)).toBe(false)
-    expect(h.hooks).toEqual([]) // a widening the write refused never reached the host
-    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: true })
-    const c = h.record.control!
+    expect(await t.s.setControl(id, false)).toBe('unsaved')
+    // Never undone: the record the host reads, the owner's view, and the host told once.
+    expect(h.record.control?.enabled).toBe(false)
+    expect(t.s.list()[0].control).toEqual({ enabled: false, locked: false })
+    expect(h.hooks).toEqual(['controlChanged'])
+    expect(f.saves.length).toBe(saves + 1) // no "corrected" list queued behind it
+    expect(f.written.at(-1)?.enabled).toBe(false)
+    // The next write that lands (any change: here a second link) carries the narrowed state.
+    outcome = 'saved'
+    const other = await t.s.create(req({ nodeId: 'n2' }))
+    expect(other.ok).toBe(true)
+    expect(f.written.at(-1)?.enabled).toBe(false)
+    expect(t.s.list().find((l) => l.linkId === id)?.control).toEqual({ enabled: false, locked: false })
+    expect(allLogged([warn])).not.toMatch(new RegExp(PW.replace(/[+/=]/g, '\\$&')))
+    warn.mockRestore()
+  })
+
+  it("a new password whose write fails is in force — the old one refused, the new one opens — answers 'unsaved', and the next write that lands carries its hash", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let outcome: SaveOutcome = 'saved'
+    const f = snapStore({ save: async () => outcome })
+    const t = service({ store: f.store })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const id = r.link.linkId
+    const h = t.hosts.made[0]
+    const before = { ...h.record.control! }
+    outcome = 'failed'
+    expect(await t.s.setPassword(id, NEW_PW)).toBe('unsaved')
+    expect(h.hooks).toEqual(['passwordChanged']) // every controller demoted, never re-told
+    expect(await h.deps.verifyPassword(PW)).toBe(false)
+    expect(await h.deps.verifyPassword(NEW_PW)).toBe(true)
+    const now = h.record.control!
+    expect(now.hash).not.toBe(before.hash)
+    outcome = 'saved'
+    h.deps.onControlLocked() // any later write: this one is the lock's
+    await flush()
+    expect(f.written.at(-1)).toMatchObject({ salt: now.salt, hash: now.hash, locked: true })
     expect(allLogged([warn])).not.toMatch(
-      new RegExp([PW, NEW_PW, c.salt, c.hash].map((x) => x.replace(/[+/=]/g, '\\$&')).join('|'))
+      new RegExp([PW, NEW_PW, now.salt, now.hash].map((x) => x.replace(/[+/=]/g, '\\$&')).join('|'))
     )
     warn.mockRestore()
   })
 
-  it('a change whose write does not answer is bounded: undone, false', async () => {
-    const held = deferred<SaveOutcome>()
-    let hang = false
-    const f = fakeStore({ save: () => (hang ? held.promise : Promise.resolve('saved')) })
+  it("a narrowing whose write HANGS is bounded: 'unsaved' at the bound, still in force, and the next write that lands carries it", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let held: ReturnType<typeof deferred<SaveOutcome>> | null = null
+    const f = snapStore({ save: () => (held ? held.promise : Promise.resolve('saved')) })
     const t = service({ store: f.store, persistTimeoutMs: 20, hashPassword: fastHash })
     const r = await t.s.create(ctlReq())
     if (!r.ok) throw new Error(r.error)
-    hang = true
-    expect(await t.s.setControl(r.link.linkId, false)).toBe(false)
-    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
-    held.resolve('saved')
+    const id = r.link.linkId
+    const h = t.hosts.made[0]
+    held = deferred<SaveOutcome>()
+    expect(await t.s.setControl(id, false)).toBe('unsaved')
+    expect(h.record.control?.enabled).toBe(false)
+    expect(h.hooks).toEqual(['controlChanged'])
+    expect(await t.s.setPassword(id, NEW_PW)).toBe('unsaved')
+    expect(h.hooks).toEqual(['controlChanged', 'passwordChanged'])
+    const after = { ...h.record.control! }
+    expect(t.s.list()[0].control).toEqual({ enabled: false, locked: false })
+    // The disk answers again: the hung writes land, and the next write carries both changes.
+    const d = held
+    held = null
+    d.resolve('failed')
+    await flush()
+    const other = await t.s.create(req({ nodeId: 'n2' }))
+    expect(other.ok).toBe(true)
+    expect(f.written.at(-1)).toMatchObject({ enabled: false, salt: after.salt, hash: after.hash })
+    expect(h.record.control).toMatchObject({ enabled: false, salt: after.salt, hash: after.hash })
+  })
+
+  it('a widening whose write fails changes nothing and answers false; a lock is never undone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let outcome: SaveOutcome = 'saved'
+    const f = fakeStore({ save: async () => outcome })
+    const t = service({ store: f.store, hashPassword: fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const id = r.link.linkId
+    const h = t.hosts.made[0]
+    outcome = 'failed'
+    h.deps.onControlLocked() // its own write fails too: the lock holds
+    expect(await t.s.allowControl(id)).toBe(false)
+    expect(h.hooks).toEqual([]) // a widening the write refused never reached the host
+    expect(t.s.list()[0].control).toEqual({ enabled: true, locked: true })
+    warn.mockRestore()
   })
 })
 

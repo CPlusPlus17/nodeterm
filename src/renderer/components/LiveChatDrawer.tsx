@@ -6,7 +6,7 @@ import { CHAT_TEXT_MAX } from '@shared/watch-link/protocol'
 import { isTopDialog, nextDialogId, popDialog, pushDialog } from './dialog-stack'
 import { ControlHold, ControlSection, hasChat, kickViewer, type ControlHoldKind } from './LiveLinkControls'
 import { IconClose, IconPin } from './icons'
-import { CHAT_NOT_SENT_MESSAGE, KICK_NOTE, ROLE_NAME, statusLine, viewerName, waitingViewers } from '../lib/liveLink'
+import { CHAT_NOT_SENT_MESSAGE, kickNote, ROLE_NAME, statusLine, viewerName, waitingViewers } from '../lib/liveLink'
 import { chatClock, chatNameColor, nearBottom, newMessagesLabel } from '../lib/liveChatLook'
 import { chatLinkOptionLabels, inLiveChatDrawer, LIVE_CHAT_DRAWER_ATTR, pickChatLink } from '../lib/liveChatPin'
 import { useLinkThread, useWatchLinks } from '../state/watchLinks'
@@ -268,7 +268,7 @@ function People({ link, only }: { link: WatchLinkView; only: boolean }): React.J
               <button
                 type="button"
                 className="confirm__btn live-pop__btn live-pop__kick"
-                title={KICK_NOTE}
+                title={kickNote(v)}
                 onClick={() => kickViewer(api, link.linkId, v.viewerId, setError)}
               >
                 Kick

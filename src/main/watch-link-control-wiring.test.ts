@@ -31,8 +31,11 @@ describe('live-link Control wiring', () => {
       const block = blockAfter(read(shell), 'watchLinks = createWatchLinkService({', '  ')
       expect(block).toMatch(/controlSupport: \(nodeId\) =>/)
       expect(block).toMatch(/ptyManager\.nodeControlSupport\(nodeId\)/)
-      // A node of an SSH project runs in its HOST's tmux: the local backend choice says nothing about it.
-      expect(block).toMatch(/workspaceStore\.sshProjectIdForNode\(nodeId\) \? 'ok' : ptyManager\.nodeControlSupport\(nodeId\)/)
+      // A node in a HOST's tmux (an SSH project's, or a remote-tmux node in a local project — core's
+      // `watchRemoteFor`, the rule the join uses): the local backend choice says nothing about it.
+      expect(block).toMatch(/watchRemote\(nodeId\)\.requireRemote \? 'ok' : ptyManager\.nodeControlSupport\(nodeId\)/)
+      expect(block).toMatch(/pty: createWatchPty\(ptyManager, watchRemote\)/)
+      expect(read(shell)).toMatch(/const watchRemote = \(nodeId: string\): WatchRemote =>\s*watchRemoteFor\(nodeId, watchRemoteRecords\(workspaceStore, /)
     })
   }
 
@@ -65,6 +68,7 @@ describe('live-link Control wiring', () => {
   it('the pty seam hands joins their input route and input to the pane, from PtyManager', () => {
     const seam = read('src/core/watch-link/pty-seam.ts')
     expect(seam).toMatch(/input: pty\.watcherInputRoute\(res\.sessionId\)/)
-    expect(seam).toMatch(/input: \(sessionId, chunk\) => pty\.controlInput\(sessionId, chunk\)/)
+    // The link host's `isCurrent` rides along: PtyManager asks it right before the step runs.
+    expect(seam).toMatch(/input: \(sessionId, chunk, isCurrent\) => pty\.controlInput\(sessionId, chunk, isCurrent\)/)
   })
 })

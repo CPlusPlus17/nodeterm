@@ -39,7 +39,10 @@
 // at boot and links sealed earlier stay on disk, and a link no longer in the list is still dropped.
 //
 // A CONTROL LINK (role 'controller') carries `control`: whether typing is on, the password's scrypt
-// salt and hash (./password.ts — never the plaintext), and whether wrong attempts locked it. It is
+// salt and hash (./password.ts — never the plaintext), whether wrong attempts locked it, and the
+// link-wide count of wrong attempts toward that lock (`wrong`, 0..CONTROL_WRONG_MAX — persisted, so an
+// app restart does not hand an attacker who holds the link fresh guesses; a file written before the
+// count existed reads as 0). It is
 // written as it is, not sealed: the hash is scrypt'd, and anyone who can read this 0600 file under
 // userData is already this user. `control` is present IFF the role is 'controller', and a load drops
 // any entry that breaks that rule: a hand-edited file cannot give a viewer link a password, and a
@@ -55,12 +58,18 @@ import { LINK_ID_RE } from '../../shared/watch-link/link'
 import type { WatchLinkRole } from '../../shared/watch-link/protocol'
 import { isSafeNodeId } from '../../shared/safe-id'
 
+/** Wrong unlock attempts across a Control link that lock it (link-host.ts `WRONG_PER_LINK`). */
+export const CONTROL_WRONG_MAX = 10
+
 /** A Control link's typing state. The salt and hash are base64 (16 and 32 bytes). */
 export interface WatchLinkControlRecord {
   enabled: boolean
   salt: string
   hash: string
   locked: boolean
+  /** Wrong unlock attempts across the link since the last reset (a new password, Allow control
+   *  again): an integer 0..CONTROL_WRONG_MAX. */
+  wrong: number
 }
 
 export interface WatchLinkRecord {
@@ -145,13 +154,16 @@ function isB64Of(v: unknown, bytes: number): v is string {
   return b.length === bytes && b.toString('base64') === v
 }
 
-/** A Control link's `control`, rebuilt from its four fields (nothing else is carried), or null. */
+/** A Control link's `control`, rebuilt from its five fields (nothing else is carried), or null. An
+ *  absent `wrong` is 0 (a file written before the count was persisted); a present one must be an
+ *  integer 0..CONTROL_WRONG_MAX. */
 function readControl(v: unknown): WatchLinkControlRecord | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
-  const { enabled, salt, hash, locked } = v as Record<string, unknown>
+  const { enabled, salt, hash, locked, wrong = 0 } = v as Record<string, unknown>
   if (typeof enabled !== 'boolean' || typeof locked !== 'boolean') return null
   if (!isB64Of(salt, CONTROL_SALT_BYTES) || !isB64Of(hash, CONTROL_HASH_BYTES)) return null
-  return { enabled, salt, hash, locked }
+  if (!Number.isInteger(wrong) || (wrong as number) < 0 || (wrong as number) > CONTROL_WRONG_MAX) return null
+  return { enabled, salt, hash, locked, wrong: wrong as number }
 }
 
 export class WatchLinkStore {
@@ -339,9 +351,10 @@ export class WatchLinkStore {
           }
           sealedNext.set(r.linkId, { digest, sealed: secret })
         }
-        // Only the four control fields are written: nothing else that rides on the object reaches disk.
-        const c = r.control
-        const control = c ? { control: { enabled: c.enabled, salt: c.salt, hash: c.hash, locked: c.locked } } : {}
+        // Only the five control fields are written (as `readControl` read them above): nothing else that
+        // rides on the object reaches disk.
+        const c = r.control ? readControl(r.control) : null
+        const control = c ? { control: c } : {}
         links.push({
           linkId: r.linkId, nodeId: r.nodeId, role: r.role, label: r.label, title: r.title,
           createdAt: r.createdAt, expiresAt: r.expiresAt, ...control, secret, sealed: !!this.o.seal

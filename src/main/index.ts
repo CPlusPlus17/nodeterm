@@ -119,7 +119,7 @@ import {
 } from '../core/watch-link/service'
 import { createWatchLinkApi } from '../core/watch-link/api'
 import { WatchLinkStore } from '../core/watch-link/store'
-import { createWatchPty } from '../core/watch-link/pty-seam'
+import { createWatchPty, watchRemoteFor, watchRemoteRecords, type WatchRemote } from '../core/watch-link/pty-seam'
 import { SshStore } from './ssh-store'
 import { GitService } from '../core/git-service'
 import { ProjectTrustStore } from '../core/project-trust-store'
@@ -3275,6 +3275,9 @@ app.whenReady().then(async () => {
   // broadcast, never a pause ticket); the pty seam and the node-gone rule are core's, shared with the
   // Server Edition. `init()` decides nothing before the boot workspace load (R40): an empty answer
   // while the index is still being read is not evidence that a node is gone.
+  // Where a watcher join goes (core's ONE rule, over this machine's records and its live masters).
+  const watchRemote = (nodeId: string): WatchRemote =>
+    watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, (connectionId) => sshProjectManager?.refForProject(connectionId)))
   watchLinks = createWatchLinkService({
     api: createWatchLinkApi({ apiBase: RELAY_API_BASE }),
     relayUrl: RELAY_URL,
@@ -3298,21 +3301,15 @@ app.whenReady().then(async () => {
       // → presenceHub.leave (a no-op for an id that never joined) and PtyManager.dropClient.
       detach: (id) => unregisterPeerSink(id)
     },
-    // A node of an SSH project is watched on ITS host over that project's master, or not at all:
-    // `requireRemote` for every such node, and the remote fields from this machine's own records.
-    pty: createWatchPty(ptyManager, (nodeId) => {
-      const projectId = workspaceStore.sshProjectIdForNode(nodeId)
-      if (!projectId) return {}
-      const ref = sshProjectManager?.refForProject(projectId)
-      return {
-        requireRemote: true,
-        ...(ref ? { sshRemote: { conn: ref.conn, controlPath: ref.controlPath, remoteCwd: ref.remoteCwd ?? '~' } } : {})
-      }
-    }),
-    // Can a Control link type into this node? A node of an SSH project runs in its HOST's tmux (Zellij
-    // is a local-only backend), so this machine's backend choice says nothing about it: 'ok' (a host
+    // A node whose session lives in a HOST's tmux — every node of an SSH project, and a remote-tmux node
+    // in a LOCAL project (`ssh` + `sshRemoteTmux`, served by the project's host attachment) — is watched
+    // on that host over the master this machine holds for it, or not at all: `requireRemote` for every
+    // such node, the remote fields from this machine's own records (core's `watchRemoteFor`).
+    pty: createWatchPty(ptyManager, watchRemote),
+    // Can a Control link type into this node? A node in a HOST's tmux (the same `watchRemoteFor` answer:
+    // Zellij is a local-only backend) is not decided by this machine's backend choice: 'ok' (a host
     // with no tmux at all answers every keystroke false, which the link host reports as dropped).
-    controlSupport: (nodeId) => (workspaceStore.sshProjectIdForNode(nodeId) ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
+    controlSupport: (nodeId) => (watchRemote(nodeId).requireRemote ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
     emit: (channel, ...args) => sendToOwners(corePlatform, channel, ...args)
   })
   registerWatchLinkIpc(corePlatform, watchLinks)

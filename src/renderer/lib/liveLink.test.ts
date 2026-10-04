@@ -43,7 +43,11 @@ import {
   passwordProblemText,
   ROLE_NAME,
   typingNames,
-  UNLIMITED_NOTE
+  UNLIMITED_NOTE,
+  CONTROL_CHANGE_UNSAVED_MESSAGE,
+  KICK_CONTROLLER_NOTE,
+  KICK_NOTE,
+  kickNote
 } from './liveLink'
 import type { CreateWatchLinkError, WatchLinkView } from '@shared/watch-link-types'
 import { DEFAULT_WATCH_LINK_TTL, WATCH_LINK_TTLS } from '@shared/watch-link-types'
@@ -502,6 +506,20 @@ describe('control notices', () => {
   })
 })
 
+describe('final review copy', () => {
+  it("an owner's narrowing change that could not be saved: applied, undone by a restart, Stop ends it", () => {
+    expect(CONTROL_CHANGE_UNSAVED_MESSAGE).toBe(
+      "Applied, but couldn't be saved — it will undo when nodeterm restarts. Stop the link to end it for good."
+    )
+  })
+
+  it('the Kick note of a viewer who is controlling says they can unlock again, and how to keep them out', () => {
+    expect(KICK_CONTROLLER_NOTE).toBe('They can unlock again — change the password or turn typing off to keep them out.')
+    expect(kickNote({ controlling: false })).toBe(KICK_NOTE)
+    expect(kickNote({ controlling: true })).toBe(`${KICK_NOTE} ${KICK_CONTROLLER_NOTE}`)
+  })
+})
+
 describe('liveLinkNoticeEffect', () => {
   const CONSENT = { notifyOnClaudeDone: true, notifyConsentAsked: true }
   const taken = (linkId = 'L') =>
@@ -522,17 +540,25 @@ describe('liveLinkNoticeEffect', () => {
     expect(liveLinkNoticeEffect({ kind: 'from-a-newer-core' } as never, CONSENT, 0, new Map())).toEqual({ strip: null, os: null })
   })
 
-  it('control-taken also raises an OS notification, under the agent-done consent gate', () => {
+  // Final review, Minor 7: someone taking control of a terminal is a SECURITY event, not an agent
+  // finishing: it notifies once the one-time notification question was answered, whatever the
+  // agent-done preference says.
+  it('control-taken also raises an OS notification, gated on the notification consent only', () => {
     const text = 'Someone using the name “Mert” can now type in api-server.'
     expect(liveLinkNoticeEffect(taken(), CONSENT, 0, new Map())).toEqual({
       strip: { text, sticky: false },
       os: { title: 'Live link', body: text, nodeId: 'n' }
     })
-    for (const prefs of [
-      { notifyOnClaudeDone: false, notifyConsentAsked: true },
-      { notifyOnClaudeDone: true, notifyConsentAsked: false },
-      {}
-    ]) {
+    // The agent-done preference off: still notified (the caller hands over the whole settings).
+    const agentDoneOff = { notifyOnClaudeDone: false, notifyConsentAsked: true }
+    expect(liveLinkNoticeEffect(taken(), agentDoneOff, 0, new Map()).os).toEqual({
+      title: 'Live link',
+      body: text,
+      nodeId: 'n'
+    })
+    // The consent question not answered yet: no OS notification (it would raise the OS prompt out of
+    // nowhere), whatever the preference says.
+    for (const prefs of [{ notifyOnClaudeDone: true, notifyConsentAsked: false }, {}]) {
       const fx = liveLinkNoticeEffect(taken(), prefs, 0, new Map())
       expect(fx.os, JSON.stringify(prefs)).toBeNull()
       expect(fx.strip?.text).toBe(text)

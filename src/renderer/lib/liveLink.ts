@@ -64,6 +64,13 @@ export const LIVE_LINK_EXPOSURE =
 export const LIVE_LINK_WARNING = `${LIVE_LINK_EXPOSURE} They can't type or resize it.`
 export const KICK_NOTE =
   'Kick ends this connection; anyone with the link can rejoin. Stop sharing to end it for everyone.'
+/** After `KICK_NOTE` for a viewer who is controlling: a kicked controller who has the password unlocks
+ *  again as soon as it rejoins. */
+export const KICK_CONTROLLER_NOTE = 'They can unlock again — change the password or turn typing off to keep them out.'
+/** What Kick does to THIS viewer (the button's title, and the list's note while anyone controls). */
+export function kickNote(v: { controlling: boolean }): string {
+  return v.controlling ? `${KICK_NOTE} ${KICK_CONTROLLER_NOTE}` : KICK_NOTE
+}
 
 /**
  * The create dialog's typing warning while Control is picked — spec §2.7, with the machine named
@@ -105,6 +112,10 @@ export const CONTROL_LOCKED_TEXT = 'Control locked after 10 wrong passwords.'
 export const PASSWORD_CHANGE_NOTE = 'Anyone typing now goes back to watching until they unlock with the new password.'
 /** `setControl` / `allowControl` answered false, or did not answer. */
 export const CONTROL_CHANGE_FAILED_MESSAGE = "That change didn't take — try again."
+/** A NARROWING change (typing off, a new password) answered 'unsaved': it is in force, but the next
+ *  launch would not have it — beside Stop sharing, which ends the link for good. */
+export const CONTROL_CHANGE_UNSAVED_MESSAGE =
+  "Applied, but couldn't be saved — it will undo when nodeterm restarts. Stop the link to end it for good."
 /** `setPassword` answered false, or did not answer: the old password still works. */
 export const PASSWORD_CHANGE_FAILED_MESSAGE = "The password wasn't changed — try again. The old one still works."
 /** How long a password save may hold the popover open before it lets go (`PASSWORD_UNCONFIRMED_MESSAGE`). */
@@ -484,21 +495,22 @@ export interface LiveLinkNoticeEffect {
  * cooldown are tested here rather than inside Canvas. Sticky: `not-persistent` (shown after every
  * create while links cannot be saved) and `control-locked` (nobody can unlock until the owner
  * allows it again). `control-taken` — someone can now type in this terminal — also raises an OS
- * notification, under the SAME consent the agent-done notification uses (`notifyOnClaudeDone &&
- * notifyConsentAsked`; main shows it only while the window is unfocused) and at most once per link
- * per 5 s. `lastOsAt` is the caller's per-link cooldown record; it is written only when a
- * notification is raised.
+ * notification. It is a SECURITY event, not an agent finishing, so it is gated on the notification
+ * consent alone (`notifyConsentAsked`: the one-time question was answered, so no OS prompt comes out of
+ * nowhere), never on the agent-done preference (`notifyOnClaudeDone`); main shows it only while the
+ * window is unfocused, and at most once per link per 5 s. `lastOsAt` is the caller's per-link cooldown
+ * record; it is written only when a notification is raised.
  */
 export function liveLinkNoticeEffect(
   n: WatchLinkNotice,
-  prefs: { notifyOnClaudeDone?: boolean; notifyConsentAsked?: boolean },
+  prefs: { notifyConsentAsked?: boolean },
   now: number,
   lastOsAt: Map<string, number>
 ): LiveLinkNoticeEffect {
   const text = noticeText(n)
   if (text === null) return { strip: null, os: null }
   const strip = { text, sticky: n.kind === 'not-persistent' || n.kind === 'control-locked' }
-  if (n.kind !== 'control-taken' || !(prefs.notifyOnClaudeDone && prefs.notifyConsentAsked)) return { strip, os: null }
+  if (n.kind !== 'control-taken' || prefs.notifyConsentAsked !== true) return { strip, os: null }
   for (const [id, at] of lastOsAt) if (now - at >= NOTIFY_COOLDOWN_MS) lastOsAt.delete(id)
   if (lastOsAt.has(n.linkId)) return { strip, os: null }
   lastOsAt.set(n.linkId, now)

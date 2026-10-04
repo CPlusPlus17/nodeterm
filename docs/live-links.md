@@ -168,10 +168,18 @@ so it has its own two-line policy rather than a row in a table built for teammat
 **Why no argument comes from the viewer.** The host joins the node's session itself, and a
 controller's input goes to the session the HOST joined, through ids the host chose:
 `joinAsWatcher(clientId, {persistKey: nodeId, viewerId: v-<8 hex>})` with `joinOnly: true` and
-`sizeVote: false` forced after any spread, and for an SSH-project node `requireRemote: true` plus the
-`sshRemote` of that project's own ControlMaster from THIS machine's records (a downed master must not
-let the local strict probe attach a same-named local orphan). The hosted Viewer path strips a
-peer-supplied `sshRemote`; here there is nothing to strip, because nothing is taken.
+`sizeVote: false` forced after any spread, and for a node whose session lives in a HOST's tmux
+`requireRemote: true` plus the `sshRemote` of the master THIS machine holds for it, from its own
+records (a downed master must not let the local strict probe attach a same-named local orphan). Such a
+node is every node of an SSH project (that project's own ControlMaster) AND a remote-tmux node in a
+LOCAL project (`ssh` + `sshRemoteTmux` on the node, any persisted copy; its master is the one the canvas
+spawns it over, `sshConnectionIdForProject` — the project's host attachment). One rule for both,
+`watchRemoteFor` (`core/watch-link/pty-seam.ts`); with the master down the join is `requireRemote` with
+no master, so an unheld such node never joins the LOCAL socket. Both shells build its records the same
+way (`watchRemoteRecords`; the Server Edition has no masters, so such a node is joinable there only while
+that core holds its session), and both shells' `controlSupport` asks the same rule (a node in a host's
+tmux is not decided by this machine's Zellij choice). The hosted Viewer
+path strips a peer-supplied `sshRemote`; here there is nothing to strip, because nothing is taken.
 
 ## Backpressure and the stream filter
 
@@ -370,19 +378,24 @@ reason?}`. In order:
    or over 128 code points) counts as wrong and is never verified: an over-long password never
    reaches scrypt.
 5. A wrong password counts. **3 wrong on one connection end it** (`watch:end attempts`; it may
-   reconnect through the link). **10 wrong across the link LOCK control** (`locked` is persisted in
-   the record; the count is in memory, so an app restart resets the count, never the lock). The lock
-   demotes every controller and tells every viewer; the 11th attempt is answered `locked` unverified.
-   The link keeps working as a Commenter link. Only the owner's **Allow control again** clears the
-   lock, and it resets the count.
+   reconnect through the link). **10 wrong across the link LOCK control.** Both the lock and the
+   link-wide count are persisted in the record (`control.locked`, `control.wrong` 0–10): the host
+   starts from the record's count and reports each new one (`onWrongAttempt`), which the service puts
+   on the record and writes — at most 10 writes per link, the 10th riding the lock's own write — so an
+   app restart resets neither (a file written before the count existed reads as 0). The lock demotes
+   every controller and tells every viewer; the 11th attempt is answered `locked` unverified. The link
+   keeps working as a Commenter link. Only the owner's **Allow control again** clears the lock, and it
+   resets the count; a **new password** resets the count too.
 6. A check is re-checked after its await. An ended viewer, a stopped host, or any change to control
    meanwhile (typing off, a new password, the lock: the control epoch) voids it, uncounted (`too-soon`,
    or the new state).
 7. A right password: the viewer is controlling under the name it gave, `{controlling}` is sent, and the
    owner gets the `control-taken` notice ("Someone using the name “Mert” can now type in
-   api-server.") and an OS notification, with the existing notification consent, at most one per link
-   per 5 s, and only while the window is unfocused (main's rule). The name is a claim and is quoted
-   as one.
+   api-server.") and an OS notification. That is a SECURITY event, not an agent finishing, so the
+   notification is gated on the notification consent alone (`notifyConsentAsked`: the one-time
+   question was answered), never on the agent-done preference (`notifyOnClaudeDone`); at most one per
+   link per 5 s, and only while the window is unfocused (main's rule). The name is a claim and is
+   quoted as one.
 
 **What ends control:** the viewer's Release (`watch:release`), its disconnect, a kick, the owner
 turning typing off, a password change, the lock, or a rejoin whose terminal cannot take input. Every
@@ -418,13 +431,23 @@ host closes the connection.
   `INPUT_BATCH_MS` (20 ms) after its first input into ONE delivery chain per link. A connection has at
   most one batch in the chain; while it waits there, new input keeps collecting, so a slow pane
   coalesces input instead of piling up deliveries. Adjacent keys merge, up to `INPUT_MAX`.
+- **A batch holds at most `INPUT_CHUNKS_MAX` (64) chunks.** Every chunk is one pane delivery (one tmux
+  spawn), and a paste/keys alternation would otherwise cost one per chunk. Past the cap the rest of
+  THAT batch is dropped in whole chunks (a paste is never cut; what the splitter still holds — an open
+  paste, a held prefix — is discarded with it), later input is dropped until the batch is flushed, and
+  the viewer gets the rate-limited `dropped` notice. The next batch starts clean.
 - **Order**: a connection's input reaches the pane in the order it was typed, and every batch arrives
   whole (no other controller's chunk inside it). Across controllers it is roughly flush order.
 - **Every chunk is re-checked before it goes**: the same control period (`controlGen`, bumped by every
   loss of control), still controlling (the record is read live, so typing turned off reaches a batch
-  mid-way even before the host is told), and still the session it was typed at. A false, a rejection,
-  or no answer within `PANE_INPUT_DEADLINE_MS` (20 s, counted from hand-over, the same constant in
-  `PtyManager.controlInput`) stops the batch with the `dropped` notice, and the chain moves on.
+  mid-way even before the host is told), and still the session it was typed at. **The same check rides
+  the chunk into PtyManager** as `isCurrent`, asked right before the step spawns (or writes), after any
+  wait in the per-session chain: a chunk handed over while its sender controlled, still waiting behind a
+  slow step (another link's, say) when control ends — Stop, typing off, a new password, the lock, a
+  release, a kick — is never delivered (a throwing predicate reads as not current). A false, a
+  rejection, or no answer within `PANE_INPUT_DEADLINE_MS` (20 s, counted from hand-over, the same
+  constant in `PtyManager.controlInput`) stops the batch with the `dropped` notice, and the chain moves
+  on.
 - A session that ends drops the pending batch and discards an open paste (the viewer is told). Input is
   never held for a later session.
 - Nothing typed is ever logged. The path's three warnings carry an error's name or a fixed sentence
@@ -563,8 +586,10 @@ and the drawer put a typing dot on that viewer's row and "can type" on every con
 ### The owner's controls
 
 Per link, in the chip's popover and in the Live chat drawer (one `ControlSection` for both):
-**Typing** on/off, **Change password…**, and **Allow control again** while locked. Per viewer: Kick.
-Stop ends everything.
+**Typing** on/off, **Change password…**, and **Allow control again** while locked. Per viewer: Kick
+(on a viewer who is controlling, its note adds "They can unlock again — change the password or turn
+typing off to keep them out.": a kicked controller with the password rejoins and unlocks). Stop ends
+everything.
 
 - **A change that NARROWS access applies at once; one that WIDENS it applies only after the write.**
   Turning typing off and a new password reach the record and the link host immediately (a leaked
@@ -572,11 +597,19 @@ Stop ends everything.
   on and Allow control again are written first, from a copy of the record, and reach the record and
   the host only once that write has landed: nobody can unlock and type during a write the owner is then
   told failed. A later change to the same field supersedes one still being written.
-- **A failed write answers false, and the owner is told.** A narrowing change is undone when its write
-  fails or does not answer within 10 s. **A failed save of a new password rolls back to the OLD
-  password**: the old one unlocks again, and the popover says "The password wasn't changed — try
-  again. The old one still works." Controllers demoted by the attempt stay demoted and unlock again
-  with the old password.
+- **A narrowing change is the owner's brake, and it never fails open.** It is NEVER undone by a write
+  that fails or does not answer within 10 s: typing stays off, the new password stays in force (the old
+  one is refused). The call answers `'unsaved'` (`ControlChangeResult`), and the popover and the drawer
+  say "Applied, but couldn't be saved — it will undo when nodeterm restarts. Stop the link to end it for
+  good." with **Stop sharing** right there (the drawer has no Stop of its own otherwise). A new password
+  answered `'unsaved'` is shown once like a saved one. Every write carries the whole list as memory
+  holds it, so the next write that lands — any change, a lock, another link — saves the narrowed state,
+  and the notice goes with the next change the owner makes that is saved. A **widening** change whose
+  write fails answers `false` and changes nothing ("That change didn't take — try again."). A new
+  password `false` (refused by the rule, or its hash failed) says "The password wasn't changed — try
+  again. The old one still works."
+- The done step of a **Control** link's create dialog ignores a click on the scrim until **Copy
+  password** was pressed (it holds the only copy of the password); Escape and Done still close it.
 - A password save in flight holds the popover open (an outside click and Escape do nothing) for up to
   30 s; after that the owner sees "Couldn't confirm the new password. Check the link before sharing it."
 - The lock is set on the record synchronously when the host asks for it, written, and never undone by
@@ -1002,12 +1035,17 @@ Found while building them:
   until the broker ends the bridge at its token's lifetime (unverified, item 15). Stop ends it at once.
   A keygen outage fails open: a lapse during it is noticed once keygen answers again (re-asked every
   10 min).
-- **The wrong-attempt count lives in memory**: an app restart resets it toward the lock (the lock itself
-  is persisted). Each connection is still held to 1 attempt per 2 s and 3 wrong.
+- **The wrong-attempt count is persisted with the lock**, so an app restart no longer resets it (it used
+  to: with Unlimited links, nine fresh guesses per restart). What remains: a write of the count that
+  fails (logged) or a crash inside the write leaves the disk one count behind, and a new password starts
+  the count over by design. Each connection is still held to 1 attempt per 2 s and 3 wrong.
 - **The hash is not sealed by the keychain**: a person who can read userData can guess offline at scrypt
   speed. A generated password (~80 bits) is out of reach of that; a typed 8-character one may not be.
-- **A failed save of a new password rolls back to the OLD password** (possibly the leaked one); the
-  owner is told the change failed. Turning typing off is the narrowing that never waits on the disk.
+- **A narrowing change that could not be saved holds until a restart, not beyond it.** Typing off and a
+  new password are applied at once and never undone by a failed or hung write (the owner is told
+  `'unsaved'`), but if no later write lands before nodeterm restarts, the restart brings back the state
+  on disk: typing on, or the OLD (possibly leaked) password. The notice says so and puts Stop at hand,
+  which ends the link for good.
 - **The grace**: a connection that lost control has 5 s in which its input is dropped silently rather
   than treated as a breach. A malicious ex-controller gets 5 s of discarded input instead of a
   disconnect.
@@ -1106,9 +1144,9 @@ The Control role, Unlimited links and the Live chat drawer. From the spec (§9):
 
 35. **Mac, a shell:** create a Control link to a shell node, open it in a browser on a second
     computer, Take control with the password, type `ls` and Enter. Expect: the command runs in the
-    owner's terminal, every viewer sees the output, the owner gets the "can now type" strip and, with
-    notifications enabled (`notifyOnClaudeDone` on and its one-time consent answered) and the window
-    unfocused, an OS notification.
+    owner's terminal, every viewer sees the output, the owner gets the "can now type" strip and, once the
+    one-time notification question has been answered (whatever the agent-done preference says) and with
+    the window unfocused, an OS notification.
 36. **Mac, a Claude session:** the same on a Claude node: type a prompt and Enter, then press Esc while
     it works. Expect: the prompt is submitted, Esc interrupts the turn within one batch (no second key
     needed).
@@ -1279,3 +1317,28 @@ The Live chat drawer:
     (stop the last link: the entry is gone).
 91. An unpinned drawer open on the last link: stop that link. Expect: the drawer stays open and says "No
     live links." (only a PINNED drawer disappears with the last link), and × still closes it.
+
+The final review's fixes:
+
+92. **The brake holds on a failing disk:** make `watch-links.json`'s directory read-only (or the disk
+    full), then, with a controller connected, turn Typing off and Change password…. Expect: the
+    controller drops back to watching at once, the old password is refused and the new one opens, and
+    both the popover and the drawer show "Applied, but couldn't be saved — it will undo when nodeterm
+    restarts. Stop the link to end it for good." with a Stop sharing button that stops the link. Make
+    the directory writable again and change anything (another link): the notice goes with the next
+    saved change, and a restart keeps typing off and the new password.
+93. **The count survives a restart:** from a viewer, 3 wrong passwords, reconnect, 3 more, reconnect, 3
+    more (9), quit nodeterm and start it again. Expect: the 10th wrong attempt locks the link.
+94. **A remote-tmux node in a local project:** in a LOCAL project attach a terminal to an SSH host
+    (remote tmux), share it as a Viewer link, then switch the project away so the node is not held, and
+    open the link. Expect: the viewer watches the HOST's session (over the attachment's master); with the
+    master down the viewer waits, and no `nt-<id>` session appears on the local `node-terminal` socket.
+95. **Kick a controller:** the Kick button's tooltip on a controlling viewer (popover and drawer) and the
+    popover's note under the list read "… Stop sharing to end it for everyone. They can unlock again —
+    change the password or turn typing off to keep them out."; a watcher's Kick reads the first part only.
+96. **The done step of a Control link:** after Create, click outside the dialog. Expect: it stays open;
+    after Copy password, a click outside closes it; Escape and Done close it at any time.
+97. **A paste/keys flood:** as a controller, send a cast alternating 100 one-key presses and 100 short
+    pastes in under 20 ms (a script on the viewer page). Expect: the first 64 chunks land, the rest of that
+    batch does not, the viewer sees "Some of your input didn't reach the terminal.", and typing right after
+    works.

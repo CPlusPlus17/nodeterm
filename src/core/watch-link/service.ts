@@ -40,14 +40,19 @@
 // through ONE FIFO gate of SCRYPT_SLOTS (each run is ~32 MiB and ~80 ms on libuv's 4-thread pool, and
 // unlock attempts arrive from strangers): a run waits for a slot, it is never refused. The lock the
 // link host asks for (`onControlLocked`) is set on the record synchronously — the host reads the record
-// live — and is never undone by a failed write. The owner's changes go by DIRECTION. One that NARROWS
-// access (typing off, a new password) reaches the record and the host at once — a leaked password or
-// an unwanted typist must not wait on the disk — and is undone when its write fails or does not answer
-// within PERSIST_TIMEOUT_MS. One that WIDENS it (typing on, allow again) is written first, from a copy
-// of the record, and reaches the record and the host only once that write landed: nobody can unlock
-// and type during a write the owner is then told failed. Either way a failed write answers false: the
-// owner is never told a change was kept that the next launch would not have. A later change to the
-// same field supersedes an earlier one still being written (its undo or its late apply is skipped).
+// live — and is never undone by a failed write. So is the link-wide count of wrong attempts the host
+// reports (`onWrongAttempt`): it goes on the record and is written, at most WRONG_PER_LINK writes per
+// link (the last rides the lock's), so an app restart does not reset it; a new password and Allow
+// control again reset it. The owner's changes go by DIRECTION. One that NARROWS access (typing off, a
+// new password) is the owner's brake: it reaches the record and the host at once — a leaked password or
+// an unwanted typist must not wait on the disk — and is NEVER undone: a write that fails or does not
+// answer within PERSIST_TIMEOUT_MS answers 'unsaved' (in force now, undone by a restart unless a later
+// write lands — every write carries the whole list from memory, so the next one that lands saves it;
+// Stop ends it for good). One that WIDENS it (typing on, allow again) is written first, from a copy of
+// the record, and reaches the record and the host only once that write landed: nobody can unlock and
+// type during a write the owner is then told failed, which answers false. The owner is never told a
+// change was kept that the next launch would not have. A later change to the same field supersedes an
+// earlier one still being written (its late apply is skipped).
 //
 // AN UNLIMITED LINK (`ttlSeconds` 0) has `expiresAt: null`: no expiry timer, no expiry check on a host
 // change, never pruned for time at launch. It ends like any link otherwise, and when its owner's Pro
@@ -73,6 +78,7 @@ import {
   WATCH_LINK_TTLS,
   stripBidiControls,
   type ControlSupport,
+  type ControlChangeResult,
   type CreateWatchLinkError,
   type CreateWatchLinkRequest,
   type CreateWatchLinkResult,
@@ -83,7 +89,7 @@ import {
 } from '../../shared/watch-link-types'
 import { controlPasswordProblem } from '../../shared/watch-link-password'
 import type { HostTokenResult, WatchLinkApi as WatchLinkApiClient } from './api'
-import { createLinkHost, type LinkHost, type QuietClients, type WatchPty } from './link-host'
+import { WRONG_PER_LINK, createLinkHost, type LinkHost, type QuietClients, type WatchPty } from './link-host'
 import { hashControlPassword, verifyControlPassword, type ControlPasswordHash } from './password'
 import {
   WatchLinkStoreUnreadable,
@@ -161,12 +167,14 @@ export interface WatchLinkService {
   onWorkspaceChanged(): void
   /** After the license layer reports a change: re-arm every host the API refused. */
   onEntitlementChanged(): void
-  /** A live Control link: turn typing on or off. False for any other link, or when it could not be
-   *  saved (then nothing changed). */
-  setControl(linkId: string, enabled: boolean): Promise<boolean>
-  /** A live Control link: replace its password (every controller drops back to watching). False for
-   *  a password `controlPasswordProblem` refuses, any other link, or a change that could not be saved. */
-  setPassword(linkId: string, pw: string): Promise<boolean>
+  /** A live Control link: turn typing on or off (`ControlChangeResult`). False for any other link, or
+   *  typing ON that could not be saved (then nothing changed); 'unsaved' for typing OFF that could not
+   *  be saved (it holds all the same). */
+  setControl(linkId: string, enabled: boolean): Promise<ControlChangeResult>
+  /** A live Control link: replace its password (every controller drops back to watching, the link-wide
+   *  wrong count starts over). False for a password `controlPasswordProblem` refuses, any other link,
+   *  or a hash that failed; 'unsaved' for a new password in force that could not be saved. */
+  setPassword(linkId: string, pw: string): Promise<ControlChangeResult>
   /** A live Control link locked by wrong passwords: allow unlocking again. False as setControl. */
   allowControl(linkId: string): Promise<boolean>
   /** Whether this node's terminal can take a Control link's input (the create dialog asks). */
@@ -511,7 +519,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       captureVisible: (sessionId) => deps.pty.captureVisible(sessionId),
       syncSize: (sessionId) => deps.pty.syncSize(sessionId),
       alive: (sessionId) => deps.pty.alive(sessionId),
-      input: (sessionId, chunk) => deps.pty.input(sessionId, chunk)
+      input: (sessionId, chunk, isCurrent) => deps.pty.input(sessionId, chunk, isCurrent)
     }
   }
 
@@ -580,6 +588,18 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           }
           notice({ kind: 'control-locked', linkId: r.linkId, nodeId: r.nodeId, title: stripBidiControls(r.title) })
           emitState()
+        },
+        onWrongAttempt: (count) => {
+          // On the record SYNCHRONOUSLY (a later write snapshots it), as an integer 0..WRONG_PER_LINK:
+          // the store refuses to write anything else.
+          if (!r.control || typeof count !== 'number' || Number.isNaN(count)) return
+          r.control.wrong = Math.min(WRONG_PER_LINK, Math.max(0, Math.floor(count)))
+          // The count that locks rides the lock's own write (`onControlLocked`, which follows): at most
+          // WRONG_PER_LINK writes per link between resets.
+          if (r.control.wrong >= WRONG_PER_LINK || records.get(r.linkId) !== r) return
+          void persist().then((saved) => {
+            if (!saved) warn("a Control link's wrong-attempt count could not be saved; an app restart would reset it")
+          })
         }
       })
     } catch (err) {
@@ -701,8 +721,9 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     }
   }
 
-  /** Each owner change (and a lock) takes a TURN on the field it touches; an earlier change to the
-   *  same field still being written sees it lost its turn and neither undoes nor applies anything. */
+  /** Each owner change (and a lock) takes a TURN on the field it touches; an earlier WIDENING of the
+   *  same field still being written sees it lost its turn and does not apply (a narrowing applies at
+   *  once and is never undone, so it has nothing to skip). */
   type ControlField = 'enabled' | 'locked' | 'password'
   const turns = new WeakMap<WatchLinkRecord, Record<ControlField, number>>()
   function takeTurn(r: WatchLinkRecord, f: ControlField): number {
@@ -713,31 +734,25 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   const hasTurn = (r: WatchLinkRecord, f: ControlField, n: number): boolean => turns.get(r)?.[f] === n
 
   /**
-   * An owner's change that NARROWS access (typing off, a new password): applied in memory and told to
-   * the host AT ONCE, then written. A write that fails, or does not answer within PERSIST_TIMEOUT_MS,
-   * undoes the change — only while it still holds the field's turn, and `undo` restores only what is
-   * still this change's own value — tells the host again, queues the corrected list behind the write,
-   * and answers false.
+   * An owner's change that NARROWS access (typing off, a new password): the owner's BRAKE. Applied in
+   * memory and told to the host AT ONCE, then written — and NEVER undone. A write that fails, or does
+   * not answer within PERSIST_TIMEOUT_MS, answers 'unsaved': the change holds until nodeterm quits, and
+   * the next write that lands (every write carries the whole list as memory holds it) saves it. Undoing
+   * it instead would hand typing back, or re-open a possibly leaked password, because a disk hiccuped.
    */
   async function narrowControl(
     r: ControlRecord,
     field: ControlField,
-    o: { apply(): void; undo(): void; host(h: LinkHost): void; undoHost(h: LinkHost): void }
-  ): Promise<boolean> {
-    const turn = takeTurn(r, field)
+    o: { apply(): void; host(h: LinkHost): void }
+  ): Promise<true | 'unsaved'> {
+    takeTurn(r, field) // a widening of this field still being written must not land over it
     o.apply()
     tellHost(r.linkId, o.host)
     emitState()
     const written = await within(persist(), persistTimeoutMs)
     if (written === true) return true
-    if (hasTurn(r, field, turn)) {
-      o.undo()
-      tellHost(r.linkId, o.undoHost)
-    }
-    if (records.get(r.linkId) === r) void persist()
-    emitState()
-    warn("an owner's change to a Control link could not be saved; it was undone")
-    return false
+    warn("an owner's change to a Control link could not be saved; it holds until nodeterm quits")
+    return 'unsaved'
   }
 
   /**
@@ -815,7 +830,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
             return fail('unsupported')
           }
           parsed.password = null
-          control = { enabled: true, locked: false, salt: h.salt, hash: h.hash }
+          control = { enabled: true, locked: false, wrong: 0, salt: h.salt, hash: h.hash }
         }
         const secret = newWatchLinkSecret()
         const joinKeyHash = await sha256Hex(deriveWatchLinkKeys(secret).joinKey)
@@ -981,11 +996,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
         apply: () => {
           c.enabled = false
         },
-        undo: () => {
-          if (c.enabled === false) c.enabled = true
-        },
-        host: (h) => h.controlChanged(),
-        undoHost: (h) => h.controlChanged()
+        host: (h) => h.controlChanged()
       })
     },
 
@@ -1002,21 +1013,15 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       const r = liveControl(linkId)
       if (!r) return false
       const c = r.control
-      const before = { salt: c.salt, hash: c.hash }
       return narrowControl(r, 'password', {
         apply: () => {
           c.salt = h.salt
           c.hash = h.hash
+          // A new password starts the link-wide wrong count over (the host resets its own).
+          c.wrong = 0
         },
-        undo: () => {
-          if (c.hash !== h.hash) return // a later password replaced this one meanwhile
-          c.salt = before.salt
-          c.hash = before.hash
-        },
-        // Either way every controller drops back to watching: one that unlocked with the new password
-        // during the write must unlock again with the one that holds.
-        host: (x) => x.passwordChanged(),
-        undoHost: (x) => x.passwordChanged()
+        // Every controller drops back to watching and must unlock with the new password.
+        host: (x) => x.passwordChanged()
       })
     },
 
@@ -1030,6 +1035,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       return widenControl(r, 'locked', {
         change: (x) => {
           x.locked = false
+          x.wrong = 0 // the count starts over with the lock (the host resets its own)
         },
         host: (h) => h.allowControl()
       })

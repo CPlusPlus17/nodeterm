@@ -4,11 +4,12 @@
 // as React TEXT; a new password lives only in `ControlSection`'s state and goes with it.
 import { createContext, useContext, useEffect, useId, useRef, useState } from 'react'
 import type { NodeTerminalApi } from '@shared/types'
-import type { WatchLinkControlView, WatchLinkRole } from '@shared/watch-link-types'
+import type { ControlChangeResult, WatchLinkControlView, WatchLinkRole } from '@shared/watch-link-types'
 import { newControlPassword, PasswordField, useCopied } from './LiveLinkPassword'
 import { Switch } from '../ui/Switch'
 import {
   CONTROL_CHANGE_FAILED_MESSAGE,
+  CONTROL_CHANGE_UNSAVED_MESSAGE,
   CONTROL_LOCKED_TEXT,
   KICK_FAILED_MESSAGE,
   KICK_NOT_DONE_MESSAGE,
@@ -18,7 +19,8 @@ import {
   PASSWORD_SEPARATE_NOTE,
   PASSWORD_SHOWN_ONCE,
   PASSWORD_UNCONFIRMED_MESSAGE,
-  passwordProblemText
+  passwordProblemText,
+  STOP_FAILED_MESSAGE
 } from '../lib/liveLink'
 
 /**
@@ -71,6 +73,11 @@ export function kickViewer(
  *
  * The switch shows core's state (the next push), never an optimistic one: a change core refused must
  * not look applied. A typed or new password lives only in this component's state and goes with it.
+ *
+ * A NARROWING change (typing off, a new password) that core answered 'unsaved' is in force but would be
+ * undone by a restart: the section says so, with Stop sharing right there — the one thing that ends it
+ * for good — in the popover and the drawer alike (the drawer has no Stop of its own). The notice stays
+ * until a later change is saved (every write carries the whole list, so that one saved this one too).
  */
 export function ControlSection({ linkId, control }: { linkId: string; control: WatchLinkControlView }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
@@ -80,6 +87,10 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
   /** A password save is in flight: the surface holds open, Save reads "Saving…". */
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** A narrowing change is in force but unsaved (`ControlChangeResult` 'unsaved'). */
+  const [unsaved, setUnsaved] = useState(false)
+  /** The unsaved notice's Stop did not reach nodeterm. */
+  const [stopFailed, setStopFailed] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [shown, setShown] = useState<string | null>(null)
@@ -113,16 +124,29 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
   )
   /** Which save is current: a late answer to an older one is not shown. */
   const saveGen = useRef(0)
-  const run = (call: () => Promise<boolean>, failed: string): void => {
+  /** Core's answer to a change: saved clears an earlier unsaved notice (that write carried it too),
+   *  'unsaved' raises it, anything else is a change that did not take. */
+  const settled = (r: ControlChangeResult, failed: string): void => {
+    if (r === 'unsaved') setUnsaved(true)
+    else if (r === true) setUnsaved(false)
+    else setError(failed)
+  }
+  const run = (call: () => Promise<ControlChangeResult>, failed: string): void => {
     setBusy(true)
     setError(null)
     void Promise.resolve()
       .then(call)
       .then(
-        (ok) => !ok && setError(failed),
+        (r) => settled(r, failed),
         () => setError(failed)
       )
       .finally(() => setBusy(false))
+  }
+  /** The notice's Stop: what the popover's Stop sharing does (the desktop's stop is immediate, and the
+   *  state push removes the link); the Server Edition rejects when its socket is down — say so. */
+  const stopLink = (): void => {
+    setStopFailed(false)
+    api.revoke(linkId).catch(() => setStopFailed(true))
   }
   /**
    * Save a new password, holding the surface (popover or drawer) open until the answer is in and, on
@@ -167,6 +191,8 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
           settle()
           if (!current) return
           if (ok) {
+            // In force either way: shown once. 'unsaved' adds that a restart would undo it.
+            setUnsaved(ok === 'unsaved')
             setError(null)
             setShown(next)
             setDraft('')
@@ -297,6 +323,17 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
           >
             Change password…
           </button>
+        </div>
+      )}
+      {unsaved && (
+        <div className="live-pop__unsaved" role="alert">
+          <p className="live-pop__error">{CONTROL_CHANGE_UNSAVED_MESSAGE}</p>
+          <div className="live-pop__actions">
+            <button type="button" className="confirm__btn danger live-pop__btn" onClick={stopLink}>
+              Stop sharing
+            </button>
+          </div>
+          {stopFailed && <p className="live-pop__error">{STOP_FAILED_MESSAGE}</p>}
         </div>
       )}
       {error && (

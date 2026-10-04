@@ -5808,10 +5808,13 @@ one is Pro and the backend is the gate. Reference: **`docs/live-links.md`**. Inv
   on a real tmux: `pane-input.realtmux.test.ts`.
 - The Control password is a scrypt hash only (no plaintext kept or logged anywhere; every scrypt run in
   one FIFO gate of 2; `timingSafeEqual`). Host throttles: 1 attempt per 2 s per viewer, 3 wrong end the
-  connection, 10 wrong across the link lock it (lock persisted, count in memory, only Allow control
-  again clears it). Owner changes go by direction: narrowing (typing off, a new password) applies at
-  once, widening (typing on, allow again) only after the write; a failed new-password save rolls back to
-  the OLD password and the owner is told.
+  connection, 10 wrong across the link lock it (lock AND count persisted in the record, so a restart
+  resets neither; only Allow control again clears the lock; it and a new password reset the count).
+  Owner changes go by direction: narrowing (typing off, a new password) applies at once and is NEVER
+  undone by a failed or hung write — the brake must not fail open; the owner is told `'unsaved'` (holds
+  until a restart unless a later write lands; Stop ends it for good) — widening (typing on, allow again)
+  only after the write. A chunk handed to `PtyManager.controlInput` carries `isCurrent`, asked right
+  before it spawns, so it never lands after control ended; a batch holds at most 64 chunks.
 - Unlimited = `ttlSeconds: 0` → `expiresAt: null`: no expiry timer, never pruned for time. The backend
   grants it only with no TTL cap and asks the license's liveness at host-token at most once per 24 h per
   license (dead → 402 → the host stops minting, the view reads `refused`; keygen unreachable fails

@@ -560,6 +560,49 @@ describe('LiveLinkDialog — Control', () => {
     expect(document.querySelector<HTMLInputElement>('.live-dialog__url input')!.value).toBe('https://nodeterm.dev/s/abc#1.k')
   })
 
+  // Final review, Minor 6: a stray click beside the done step must not throw away the only copy of a
+  // Control link's password. The scrim does nothing until Copy password was pressed; Escape and Done
+  // still close (deliberate gestures).
+  it('the done step of a Control link ignores the scrim until Copy password is pressed', async () => {
+    api.create.mockImplementation(async (r) => createWith(r))
+    const { onClose } = mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    click(btn('Create live link'))
+    await flush()
+    click(document.querySelector('.confirm-overlay')!)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(pwInput()!.value).toBe('longenough1')
+    click(btn('Copy password'))
+    click(document.querySelector('.confirm-overlay')!)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the done step of a Control link: Escape still closes before the password was copied', async () => {
+    api.create.mockImplementation(async (r) => createWith(r))
+    const { onClose } = mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    typeInto(pwInput()!, 'longenough1')
+    click(btn('Create live link'))
+    await flush()
+    escape()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the done step of a watch link closes on the scrim as before', async () => {
+    const { onClose } = mount()
+    await flush()
+    setLabel('Ada')
+    click(btn('Create live link'))
+    await flush()
+    click(document.querySelector('.confirm-overlay')!)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('closing drops the password: nothing on screen keeps it, nothing stored it', async () => {
     api.create.mockImplementation(async (r) => createWith(r))
     const { onClose } = mount()

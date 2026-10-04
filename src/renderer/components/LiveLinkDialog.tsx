@@ -381,6 +381,23 @@ export function LiveLinkDialog({
     onClose()
   }, [onClose])
 
+  // A Control link's done step holds the ONLY copy of its password (core keeps a hash): a stray click
+  // beside the dialog must not throw it away. The scrim does nothing there until Copy password was
+  // pressed; Escape and Done still close — those are deliberate.
+  const passwordCopiedRef = useRef(false)
+  const scrimClick = useCallback(() => {
+    const s = stateRef.current
+    if (s.phase === 'done' && s.role === 'controller' && !passwordCopiedRef.current) return
+    dismiss()
+  }, [dismiss])
+  const onCopyPassword = useCallback(
+    (pw: string) => {
+      passwordCopiedRef.current = true
+      copyPassword(pw)
+    },
+    [copyPassword]
+  )
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && isTop()) dismiss()
@@ -444,7 +461,7 @@ export function LiveLinkDialog({
   }
 
   return createPortal(
-    <div className="confirm-overlay" ref={panelRef} onClick={dismiss}>
+    <div className="confirm-overlay" ref={panelRef} onClick={scrimClick}>
       <LiveLinkDialogBody
         title={title}
         whileOpenNote={whileOpenOnly ? watchWhileOpenNote() : null}
@@ -456,7 +473,7 @@ export function LiveLinkDialog({
         onClose={dismiss}
         onStop={(id) => void stop(id)}
         onCopy={copy}
-        onCopyPassword={copyPassword}
+        onCopyPassword={onCopyPassword}
         copied={copied}
         passwordCopied={passwordCopied}
         onUpgrade={onUpgrade}

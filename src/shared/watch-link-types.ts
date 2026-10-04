@@ -152,6 +152,18 @@ export type ControlSupport = 'ok' | 'unsupported' | 'unknown'
  */
 export type RevokeAllOutcome = 'stopped' | 'no-entitlement' | 'failed' | 'unsupported'
 
+/**
+ * What an owner's change to a Control link did:
+ *  - `true` — applied and saved;
+ *  - `false` — refused, nothing changed (not a live Control link, a password the rule refuses, a hash
+ *    that failed, or a WIDENING change — typing on, allow again — whose write failed);
+ *  - `'unsaved'` — a NARROWING change (typing off, a new password) that is in force now but could not
+ *    be saved: it is never undone on a failed write (the owner's brake must not fail open), so it holds
+ *    until nodeterm quits and would be undone by a restart unless a later write lands first. Stopping
+ *    the link ends it for good.
+ */
+export type ControlChangeResult = boolean | 'unsaved'
+
 /** `window.nodeTerminal.watchLink`. Desktop: real (preload). Server Edition: real bridge, and create
  *  answers `unsupported` until that edition has a license layer. Relay tab: an inert stub. */
 export interface WatchLinkApi {
@@ -164,11 +176,12 @@ export interface WatchLinkApi {
   /** A Commenter link's owner reply; null when the link is not a Commenter link or the text is empty. */
   sendChat(linkId: string, text: string): Promise<WatchChatMessage | null>
   chatHistory(linkId: string): Promise<WatchChatMessage[]>
-  /** A Control link: turn typing on or off. False when the link is not a live Control link or the
-   *  change could not be saved. */
-  setControl(linkId: string, enabled: boolean): Promise<boolean>
-  /** A Control link: replace its password (every current controller drops back to watching). */
-  setPassword(linkId: string, password: string): Promise<boolean>
+  /** A Control link: turn typing on or off (`ControlChangeResult`: off is a narrowing change, on a
+   *  widening one). */
+  setControl(linkId: string, enabled: boolean): Promise<ControlChangeResult>
+  /** A Control link: replace its password (every current controller drops back to watching, and the
+   *  link-wide wrong count starts over). A narrowing change: `ControlChangeResult`. */
+  setPassword(linkId: string, password: string): Promise<ControlChangeResult>
   /** A Control link locked by wrong passwords: allow unlocking again (and reset the count). */
   allowControl(linkId: string): Promise<boolean>
   /** Whether this node's terminal can take a Control link's input (the dialog asks once on open). */

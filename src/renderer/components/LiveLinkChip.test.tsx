@@ -15,6 +15,8 @@ import {
   KICK_FAILED_MESSAGE,
   KICK_NOT_DONE_MESSAGE,
   KICK_NOTE,
+  KICK_CONTROLLER_NOTE,
+  CONTROL_CHANGE_UNSAVED_MESSAGE,
   PASSWORD_SEPARATE_NOTE,
   PASSWORD_SHOWN_ONCE,
   STOP_FAILED_MESSAGE
@@ -61,8 +63,8 @@ const api = {
     from: 'sharer'
   })),
   chatHistory: vi.fn(async (_l: string): Promise<WatchChatMessage[]> => []),
-  setControl: vi.fn(async (_l: string, _on: boolean) => true),
-  setPassword: vi.fn(async (_l: string, _pw: string) => true),
+  setControl: vi.fn(async (_l: string, _on: boolean): Promise<boolean | 'unsaved'> => true),
+  setPassword: vi.fn(async (_l: string, _pw: string): Promise<boolean | 'unsaved'> => true),
   allowControl: vi.fn(async (_l: string) => true)
 }
 const writeText = vi.fn()
@@ -628,6 +630,88 @@ describe('LiveLinkPopover — a Control link', () => {
     click(off)
     await flush()
     expect(api.setControl).toHaveBeenLastCalledWith('L', true)
+  })
+
+  // Final review, Important 1: a narrowing change is in force even when it could not be saved. The
+  // owner is told so — it undoes at a restart — with Stop at hand to end it for good.
+  it("typing OFF answered 'unsaved': says it applied but will undo at a restart, with Stop sharing at hand", async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    api.setControl.mockImplementationOnce(async () => 'unsaved')
+    click(pop()!.querySelector('[role="switch"]')!)
+    await flush()
+    const notice = pop()!.querySelector<HTMLElement>('.live-pop__unsaved')!
+    expect(notice.getAttribute('role')).toBe('alert')
+    expect(notice.textContent).toContain(CONTROL_CHANGE_UNSAVED_MESSAGE)
+    expect(pop()!.textContent).not.toMatch(/didn't take/)
+    const stop = [...notice.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Stop sharing')!
+    click(stop)
+    await flush()
+    expect(api.revoke).toHaveBeenCalledWith('L')
+  })
+
+  it("a stop from the unsaved notice that did not reach nodeterm says so", async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    api.setControl.mockImplementationOnce(async () => 'unsaved')
+    click(pop()!.querySelector('[role="switch"]')!)
+    await flush()
+    api.revoke.mockImplementationOnce(async () => {
+      throw new Error('socket down')
+    })
+    click([...pop()!.querySelectorAll<HTMLButtonElement>('.live-pop__unsaved button')].find((b) => b.textContent === 'Stop sharing')!)
+    await flush()
+    expect(pop()!.querySelector('.live-pop__unsaved')!.textContent).toContain(STOP_FAILED_MESSAGE)
+  })
+
+  it("the unsaved notice goes once a later change is saved", async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    api.setControl.mockImplementationOnce(async () => 'unsaved')
+    click(pop()!.querySelector('[role="switch"]')!)
+    await flush()
+    expect(pop()!.querySelector('.live-pop__unsaved')).not.toBeNull()
+    setLinks([controller({ control: { enabled: false, locked: false } })])
+    // A widening that fails changes nothing: the earlier change is still unsaved.
+    api.setControl.mockImplementationOnce(async () => false)
+    click(pop()!.querySelector('[role="switch"]')!)
+    await flush()
+    expect(pop()!.querySelector('.live-pop__unsaved')).not.toBeNull()
+    // One that lands writes everything memory holds: nothing is unsaved any more.
+    click(pop()!.querySelector('[role="switch"]')!)
+    await flush()
+    expect(pop()!.querySelector('.live-pop__unsaved')).toBeNull()
+  })
+
+  it("a new password answered 'unsaved' is in force: it is shown once, with the unsaved notice", async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    typeInto(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!, 'longenough1')
+    api.setPassword.mockImplementationOnce(async () => 'unsaved')
+    click(button('Save'))
+    await flush()
+    expect(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!.value).toBe('longenough1')
+    expect(pop()!.textContent).toContain(PASSWORD_SHOWN_ONCE)
+    expect(pop()!.querySelector('.live-pop__unsaved')!.textContent).toContain(CONTROL_CHANGE_UNSAVED_MESSAGE)
+    expect(pop()!.textContent).not.toMatch(/wasn't changed/)
+  })
+
+  it('the Kick of a viewer who is controlling says they can unlock again; a watcher\'s does not', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller({ viewers: [typist('a', 'Mert'), { viewerId: 'c', name: 'Dee', joinedAt: 0, waiting: false, controlling: false, typing: false }] })])
+    click(chip()!)
+    const kicks = [...pop()!.querySelectorAll<HTMLButtonElement>('.live-pop__kick')]
+    expect(kicks[0].title).toBe(`${KICK_NOTE} ${KICK_CONTROLLER_NOTE}`)
+    expect(kicks[1].title).toBe(KICK_NOTE)
+    // The note under the list says it too while someone controls.
+    expect(pop()!.querySelector('.live-pop__viewers .live-pop__note')!.textContent).toBe(`${KICK_NOTE} ${KICK_CONTROLLER_NOTE}`)
+    setLinks([controller({ viewers: [{ viewerId: 'c', name: 'Dee', joinedAt: 0, waiting: false, controlling: false, typing: false }] })])
+    expect(pop()!.querySelector('.live-pop__viewers .live-pop__note')!.textContent).toBe(KICK_NOTE)
   })
 
   it('a change that did not take says so', async () => {

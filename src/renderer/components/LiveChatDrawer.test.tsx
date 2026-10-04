@@ -7,7 +7,14 @@ import { CHAT_TEXT_MAX } from '@shared/watch-link/protocol'
 import { LiveChatDrawer } from './LiveChatDrawer'
 import { liveChipSig, useWatchLinks } from '../state/watchLinks'
 import { openDialogCount, popDialog, pushDialog, resetDialogStack } from './dialog-stack'
-import { CHAT_NOT_SENT_MESSAGE, CONTROL_LOCKED_TEXT, KICK_NOT_DONE_MESSAGE } from '../lib/liveLink'
+import {
+  CHAT_NOT_SENT_MESSAGE,
+  CONTROL_CHANGE_UNSAVED_MESSAGE,
+  CONTROL_LOCKED_TEXT,
+  KICK_CONTROLLER_NOTE,
+  KICK_NOT_DONE_MESSAGE,
+  KICK_NOTE
+} from '../lib/liveLink'
 import { chatNameColor } from '../lib/liveChatLook'
 
 // Spied, with the real implementation: how often the message list was RENDERED (one call per line).
@@ -52,8 +59,8 @@ const api = {
     from: 'sharer'
   })),
   chatHistory: vi.fn(async (_l: string): Promise<WatchChatMessage[]> => []),
-  setControl: vi.fn(async (_l: string, _on: boolean) => true),
-  setPassword: vi.fn(async (_l: string, _pw: string) => true),
+  setControl: vi.fn(async (_l: string, _on: boolean): Promise<boolean | 'unsaved'> => true),
+  setPassword: vi.fn(async (_l: string, _pw: string): Promise<boolean | 'unsaved'> => true),
   allowControl: vi.fn(async (_l: string) => true)
 }
 
@@ -345,6 +352,39 @@ describe('LiveChatDrawer', () => {
     await flush()
     expect(api.allowControl).toHaveBeenCalledWith('L')
     expect(button('Change password…')).toBeTruthy()
+  })
+
+  // Final review, Important 1: the drawer carries the same owner controls, so the same notice — and,
+  // since the drawer has no Stop of its own, the notice brings Stop sharing with it.
+  it("typing OFF answered 'unsaved': the drawer says it applied but will undo at a restart, with Stop sharing at hand", async () => {
+    setLinks([link({ role: 'controller', control: { enabled: true, locked: false } })])
+    render(props())
+    api.setControl.mockImplementationOnce(async () => 'unsaved')
+    click(drawer().querySelector<HTMLButtonElement>('[role="switch"]')!)
+    await flush()
+    const notice = drawer().querySelector<HTMLElement>('.live-pop__unsaved')!
+    expect(notice.getAttribute('role')).toBe('alert')
+    expect(notice.textContent).toContain(CONTROL_CHANGE_UNSAVED_MESSAGE)
+    click([...notice.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Stop sharing')!)
+    await flush()
+    expect(api.revoke).toHaveBeenCalledWith('L')
+  })
+
+  it('the Kick of a viewer who is controlling says they can unlock again', () => {
+    setLinks([
+      link({
+        role: 'controller',
+        control: { enabled: true, locked: false },
+        viewers: [
+          { viewerId: 'v1', name: 'Mert', joinedAt: 1, waiting: false, controlling: true, typing: false },
+          { viewerId: 'v2', name: null, joinedAt: 2, waiting: false, controlling: false, typing: false }
+        ]
+      })
+    ])
+    render(props())
+    const kicks = [...drawer().querySelectorAll<HTMLButtonElement>('.live-chat__people li button')]
+    expect(kicks[0].title).toBe(`${KICK_NOTE} ${KICK_CONTROLLER_NOTE}`)
+    expect(kicks[1].title).toBe(KICK_NOTE)
   })
 
   it('mounting on a link reads it: markRead, so the chip\'s unread count clears; what lands while shown is read too', async () => {

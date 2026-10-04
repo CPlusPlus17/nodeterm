@@ -32,6 +32,7 @@ import {
   DROPPED_NOTICE_MIN_MS,
   INPUT_BATCH_MS,
   INPUT_BURST,
+  INPUT_CHUNKS_MAX,
   INPUT_DELIVERY_TIMEOUT_MS,
   INPUT_GRACE_MS,
   INPUT_RATE,
@@ -118,6 +119,8 @@ interface SetupOpts {
   verifyPassword?: (pw: string) => Promise<boolean>
   /** Replaces the service's lock (which sets `record.control.locked`); still counted in `locks()`. */
   onControlLocked?: () => void
+  /** Replaces the service's record of the link-wide wrong count; still recorded in `wrongs`. */
+  onWrongAttempt?: (count: number) => void
   join?: (clientId: number, nodeId: string, viewerId: string) => Promise<JoinAnswer | null> | JoinAnswer | null
   capture?: (sid: string) => Promise<VisibleCapture> | VisibleCapture
   alive?: (sid: string) => boolean
@@ -149,6 +152,10 @@ function setup(o: SetupOpts = {}) {
   const joinTimes: number[] = []
   /** Every `pty.input` call, in order: [sessionId, chunk]. */
   const inputs: [string, ControlInputChunk][] = []
+  /** Every `pty.input` call's `isCurrent` predicate, in the same order. */
+  const currents: ((() => boolean) | undefined)[] = []
+  /** Every link-wide wrong count the host reported (`onWrongAttempt`), in order. */
+  const wrongs: number[] = []
   let mints = 0
   let changes = 0
   let verifies = 0
@@ -179,8 +186,9 @@ function setup(o: SetupOpts = {}) {
       return true
     },
     alive: (sid) => (o.alive ? o.alive(sid) : true),
-    input: async (sid, chunk) => {
+    input: async (sid, chunk, isCurrent) => {
       inputs.push([sid, chunk])
+      currents.push(isCurrent)
       return o.input ? o.input(sid, chunk) : true
     }
   }
@@ -233,11 +241,17 @@ function setup(o: SetupOpts = {}) {
       locks++
       if (o.onControlLocked) o.onControlLocked()
       else if (record.control) record.control.locked = true
+    },
+    // What the service does: the count goes on the record (and to disk).
+    onWrongAttempt: (count) => {
+      wrongs.push(count)
+      if (o.onWrongAttempt) o.onWrongAttempt(count)
+      else if (record.control) record.control.wrong = count
     }
   })
   hosts.push(host)
   return {
-    record, host, peers, sinks, left, calls, joinArgs, joinTimes, inputs, chats, joined, gone,
+    record, host, peers, sinks, left, calls, joinArgs, joinTimes, inputs, currents, wrongs, chats, joined, gone,
     keys: deriveWatchLinkKeys(secret),
     mints: () => mints,
     /** How many times the host reported a change to the registry (`onChange`). */
@@ -1105,7 +1119,7 @@ describe('createLinkHost — control', () => {
   beforeAll(async () => {
     HASH = await hashControlPassword(PW)
   })
-  const ctl = (over: Partial<WatchLinkControlRecord> = {}): WatchLinkControlRecord => ({ enabled: true, locked: false, ...HASH, ...over })
+  const ctl = (over: Partial<WatchLinkControlRecord> = {}): WatchLinkControlRecord => ({ enabled: true, locked: false, wrong: 0, ...HASH, ...over })
   const controlOf = (v: Viewer | RawPeer): WatchControlEvent[] => v.named(WATCH_EVENT.control) as WatchControlEvent[]
   const metaOf = (v: Viewer, n = 0): WatchMeta => v.named(WATCH_EVENT.meta)[n] as WatchMeta
   /** Send one cast and wait for the `watch:control` that answers it. */
@@ -1449,6 +1463,68 @@ describe('createLinkHost — control', () => {
     expect(t.locks()).toBe(1)
     await clock.advance(UNLOCK_MIN_INTERVAL_MS)
     expect(await unlock(watcher, 'Ada', PW)).toEqual({ state: 'controlling' })
+  })
+
+  // Final review, Minor 2: the link-wide wrong count is the service's to keep (persisted beside
+  // `locked`), so an app restart no longer hands out nine fresh guesses. The host starts from the
+  // record's count and reports every new one.
+  it('the link-wide count starts from the record: a host built from a record at 9 (a restart) locks on its next wrong attempt', async () => {
+    const clock = manualClock()
+    const t = controller({ clock, control: ctl({ wrong: WRONG_PER_LINK - 1 }), verifyPassword: async (pw) => pw === PW })
+    t.host.start()
+    const v = await openViewer(t, 0)
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    const before = controlOf(v).length
+    expect(v.c.unlock('Eve', WRONG)).toBe(true)
+    await vi.waitFor(() => expect(controlOf(v).slice(before)).toEqual([
+      { state: 'available', reason: 'wrong' },
+      { state: 'locked', reason: 'locked' }
+    ]))
+    expect(t.locks()).toBe(1)
+    expect(t.wrongs).toEqual([WRONG_PER_LINK])
+  })
+
+  it('every wrong attempt reports the new link-wide count, from the one the record holds', async () => {
+    const clock = manualClock()
+    const t = controller({ clock, control: ctl({ wrong: 4 }), verifyPassword: async (pw) => pw === PW })
+    t.host.start()
+    const v = await openViewer(t, 0)
+    for (let i = 0; i < 2; i++) {
+      await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+      expect(await unlock(v, 'Eve', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    }
+    // A malformed attempt counts too.
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Eve', '')).toEqual({ state: 'available', reason: 'wrong' })
+    expect(t.wrongs).toEqual([5, 6, 7])
+    expect(t.record.control!.wrong).toBe(7)
+    expect(t.locks()).toBe(0)
+  })
+
+  it('a password change resets the link-wide count: a host at 9 does not lock on the next wrong attempt', async () => {
+    const clock = manualClock()
+    const t = controller({ clock, control: ctl({ wrong: WRONG_PER_LINK - 1 }), verifyPassword: async (pw) => pw === PW })
+    t.host.start()
+    const v = await openViewer(t, 0)
+    t.record.control!.wrong = 0 // what the service does with the new hash
+    t.host.passwordChanged()
+    await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+    expect(await unlock(v, 'Eve', WRONG)).toEqual({ state: 'available', reason: 'wrong' })
+    expect(t.locks()).toBe(0)
+    expect(t.wrongs).toEqual([1])
+  })
+
+  it('a record count outside 0..10 (a hand edit) is read as the nearest bound, never as more guesses', async () => {
+    for (const [wrong, next] of [[-5, 1], [Number.NaN, 1], [1.5, 2], [99, WRONG_PER_LINK]] as const) {
+      const clock = manualClock()
+      const t = controller({ clock, control: ctl({ wrong }), verifyPassword: async (pw) => pw === PW })
+      t.host.start()
+      const v = await openViewer(t, 0)
+      await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+      await unlock(v, 'Eve', WRONG)
+      expect(t.wrongs, String(wrong)).toEqual([next])
+      t.host.stop('revoked')
+    }
   })
 
   // --- release and the owner's changes ----------------------------------------------------------------
@@ -2375,6 +2451,88 @@ describe('createLinkHost — control', () => {
       expect(clock.pending()).toBeLessThan(before)
       await clock.advance(INPUT_BATCH_MS * 10)
       expect(t.inputs).toEqual([])
+    })
+
+    // Final review, Minor 3: a chunk already handed to PtyManager waits in its per-session chain (a
+    // slow step of another link, say). The host gives it a predicate PtyManager asks right before it
+    // spawns: false from the moment its sender stops controlling, so it never lands after control ended.
+    it('every chunk handed to the pane carries a predicate that turns false the moment control ends', async () => {
+      for (const end of ['record-off', 'off', 'release', 'password', 'lock', 'kick', 'stop'] as const) {
+        const held = holdFirst()
+        const { t, clock, vs } = await controllers(['Ada'], { input: held.input })
+        await type(vs[0], 'a', clock)
+        await clock.advance(INPUT_BATCH_MS)
+        await vi.waitFor(() => expect(t.currents).toHaveLength(1))
+        const isCurrent = t.currents[0]
+        expect(typeof isCurrent, end).toBe('function')
+        expect(isCurrent!(), end).toBe(true)
+        if (end === 'record-off') t.record.control!.enabled = false // read live, before the host is told
+        else if (end === 'off') {
+          t.record.control!.enabled = false
+          t.host.controlChanged()
+        } else if (end === 'release') expect(await ask(vs[0], () => vs[0].c.release())).toEqual({ state: 'available' })
+        else if (end === 'password') t.host.passwordChanged()
+        else if (end === 'lock') {
+          t.record.control!.locked = true
+          t.host.controlChanged()
+        } else if (end === 'kick') expect(t.host.kick(t.host.viewers()[0].viewerId)).toBe(true)
+        else t.host.stop('revoked')
+        expect(isCurrent!(), end).toBe(false)
+        held.release()
+        t.host.stop('revoked')
+      }
+    })
+
+    it('a predicate never answers true for a sender that unlocked AGAIN: the period it was typed in is over', async () => {
+      const held = holdFirst()
+      const { t, clock, vs } = await controllers(['Ada'], { input: held.input })
+      await type(vs[0], 'a', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.currents).toHaveLength(1))
+      const isCurrent = t.currents[0]!
+      expect(await ask(vs[0], () => vs[0].c.release())).toEqual({ state: 'available' })
+      await clock.advance(UNLOCK_MIN_INTERVAL_MS)
+      expect(await unlock(vs[0], 'Ada', PW)).toEqual({ state: 'controlling' })
+      expect(isCurrent()).toBe(false)
+      held.release()
+    })
+
+    // Final review, Minor 8: a paste/keys alternation costs one pane delivery (one tmux spawn) per
+    // chunk. A batch holds at most INPUT_CHUNKS_MAX; the rest of THAT batch is dropped in whole chunks
+    // (a paste is never cut), with the rate-limited dropped notice, and the next batch works.
+    it(`a batch holds at most INPUT_CHUNKS_MAX (${INPUT_CHUNKS_MAX}) chunks: the rest of it is dropped whole, with one notice`, async () => {
+      const { t, clock, vs } = await controllers(['Ada'])
+      const pair = (i: number): string => `k${i}${PASTE_START}p${i}${PASTE_END}`
+      const flood = Array.from({ length: INPUT_CHUNKS_MAX }, (_, i) => pair(i)).join('')
+      expect(flood.length).toBeLessThanOrEqual(INPUT_MAX)
+      await type(vs[0], flood, clock) // 2 × INPUT_CHUNKS_MAX chunks in one cast
+      // More of the same batch, before it flushes: a paste opened here and closed in the next cast…
+      await type(vs[0], `late${PASTE_START}half`, clock)
+      await type(vs[0], `-of-a-paste${PASTE_END}tail`, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(INPUT_CHUNKS_MAX))
+      await clock.flush()
+      await settleReal()
+      const want = Array.from({ length: INPUT_CHUNKS_MAX / 2 }, (_, i) => [`s1:keys:k${i}`, `s1:paste:p${i}`]).flat()
+      expect(delivered(t)).toEqual(want)
+      // …is dropped whole: no part of the late paste, nothing typed after it in that batch.
+      expect(delivered(t).some((d) => /late|half|tail/.test(d))).toBe(false)
+      expect(dropped(vs[0])).toEqual([{ state: 'controlling', reason: 'dropped' }])
+      expect(vs[0].log.closed).toBe(0)
+      // The next batch is a new one.
+      await type(vs[0], 'x', clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(delivered(t).at(-1)).toBe('s1:keys:x'))
+    })
+
+    it('a batch of exactly INPUT_CHUNKS_MAX chunks is delivered whole, with no notice', async () => {
+      const { t, clock, vs } = await controllers(['Ada'])
+      const flood = Array.from({ length: INPUT_CHUNKS_MAX / 2 }, (_, i) => `k${i}${PASTE_START}p${i}${PASTE_END}`).join('')
+      await type(vs[0], flood, clock)
+      await clock.advance(INPUT_BATCH_MS)
+      await vi.waitFor(() => expect(t.inputs).toHaveLength(INPUT_CHUNKS_MAX))
+      await settleReal()
+      expect(dropped(vs[0])).toEqual([])
     })
   })
 })

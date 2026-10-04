@@ -24,8 +24,10 @@
 // (`watch:control`), and every throttle is here: one attempt per UNLOCK_MIN_INTERVAL_MS per viewer and
 // one verification in flight per link (both `too-soon`, not counted); a malformed attempt counts as
 // wrong and is never verified, so an over-long password never reaches scrypt; WRONG_PER_CONN wrong
-// attempts end that connection (`attempts`), WRONG_PER_LINK across the link lock it. The link count
-// lives in memory and only `allowControl` resets it. A verification is re-checked after its await: an
+// attempts end that connection (`attempts`), WRONG_PER_LINK across the link lock it. The link count is
+// the record's: the host starts from `record.control.wrong` and reports every new count to the service
+// (`onWrongAttempt`), which writes it — an app restart does not reset it. `allowControl` and a password
+// change reset it. A verification is re-checked after its await: an
 // ended viewer, a stopped host, or any change to control meanwhile (off, locked, a new password — the
 // control epoch) voids it, uncounted. A join whose input route is `none` (Zellij, an unknown session;
 // also what a missing or unknown route reads as) makes that viewer's state `off`/`unsupported`: its
@@ -37,7 +39,10 @@
 // bucket (INPUT_RATE / INPUT_BURST, UTF-8 bytes), a session to type into, and a batch the panes have
 // not taken yet holding at most INPUT_BURST decide; dropped input still goes through the splitter's
 // `discard` (a paste any part of which was dropped is discarded whole), and the viewer is told
-// `{controlling, dropped}` at most once per DROPPED_NOTICE_MIN_MS. Accepted data goes through the
+// `{controlling, dropped}` at most once per DROPPED_NOTICE_MIN_MS. A batch holds at most
+// INPUT_CHUNKS_MAX chunks (each chunk is one pane delivery — a tmux spawn — and a paste/keys alternation
+// would otherwise cost one per chunk): past it, the rest of THAT batch is dropped in whole chunks, the
+// same way and with the same notice. Accepted data goes through the
 // connection's SPLITTER (control-input.ts: keys vs a bracketed paste) into its BATCH; the batch flushes
 // INPUT_BATCH_MS after its first input into ONE flush CHAIN per link host, through `pty.input`
 // (PtyManager's pane delivery, never a tmux client's key table). A connection has at most one batch in
@@ -47,7 +52,10 @@
 // flush order — a connection whose previous batch is still in the chain re-enters only when that batch
 // finishes, behind whatever other controllers flushed meanwhile. Each chunk is re-checked before it
 // goes — same control period (`controlGen`, bumped by every loss of control), still controlling,
-// still the session it was typed at — and a false, a rejection, or no answer within
+// still the session it was typed at. The same check rides the chunk as a predicate (`isCurrent`), which
+// PtyManager asks right before the step spawns: a chunk handed over and still waiting in its per-session
+// chain (behind a slow step) never lands after its sender stopped controlling. A false, a rejection, or
+// no answer within
 // INPUT_DELIVERY_TIMEOUT_MS stops the batch with the `dropped` notice (an SSH host without tmux answers
 // false on every chunk: never silence) and the chain moves on. Input is never held for a later
 // session: a session that ends drops the pending batch and discards an open paste (told either way).
@@ -165,7 +173,7 @@ import {
   watcherAccess,
   wrapWatcherSink
 } from './watcher-policy'
-import type { WatchLinkRecord } from './store'
+import { CONTROL_WRONG_MAX, type WatchLinkRecord } from './store'
 
 export const MAX_VIEWERS_PER_LINK = 10
 /** While the link is full (no idle listener, so no mint), how often the API is asked whether the link
@@ -192,12 +200,15 @@ export const VIEWER_BACKLOG_CLOSE = 8 * 1024 * 1024
  *  10 wrong across the link lock control until the owner allows it again. */
 export const UNLOCK_MIN_INTERVAL_MS = 2_000
 export const WRONG_PER_CONN = 3
-export const WRONG_PER_LINK = 10
+export const WRONG_PER_LINK = CONTROL_WRONG_MAX
 /** A controller's input budget (UTF-8 bytes): its own token bucket, separate from the stream's. */
 export const INPUT_RATE = 64 * 1024
 export const INPUT_BURST = 256 * 1024
 /** Input is collected this long per connection, then delivered as one batch. */
 export const INPUT_BATCH_MS = 20
+/** At most this many chunks in one batch: each is a pane delivery (a tmux spawn). Past it, the rest of
+ *  that batch is dropped (whole chunks: a paste is never cut) with the `dropped` notice. */
+export const INPUT_CHUNKS_MAX = 64
 /** The typing set is recomputed (and sent, when it changed) at most this often. */
 export const TYPING_EVENT_MIN_MS = 1000
 /** A viewer is told its input was dropped at most this often. */
@@ -246,8 +257,10 @@ export interface WatchPty {
   /** The session is still known to the pty layer (an exit can race the join or a capture — R30). */
   alive(sessionId: string): boolean
   /** Deliver one chunk of a controller's input to the session's PANE (`PtyManager.controlInput`, never
-   *  a tmux client's key table). Whether it was delivered; a rejection counts as false. */
-  input(sessionId: string, chunk: ControlInputChunk): Promise<boolean>
+   *  a tmux client's key table). Whether it was delivered; a rejection counts as false. `isCurrent` is
+   *  asked right before the delivery runs (the chunk may wait behind a slow one): false — its sender no
+   *  longer controls, in the period it typed in — and it is never delivered. */
+  input(sessionId: string, chunk: ControlInputChunk, isCurrent?: () => boolean): Promise<boolean>
 }
 export interface QuietClients {
   attach(sink: UiSink): number
@@ -275,6 +288,10 @@ export interface LinkHostDeps {
   /** WRONG_PER_LINK wrong attempts across the link. The service sets `record.control.locked = true`
    *  before it returns (the host reads the record live and never writes it). */
   onControlLocked(): void
+  /** A wrong unlock attempt: the link-wide count is now `count` (1..WRONG_PER_LINK). The service puts it
+   *  on `record.control.wrong` and writes it (the 10th rides the lock's own write), so a restart does
+   *  not reset it. Called before `onControlLocked`. */
+  onWrongAttempt(count: number): void
 }
 export type LinkRuntimeStatus = 'live' | 'reconnecting' | 'refused'
 export interface LinkViewer {
@@ -303,7 +320,8 @@ export interface LinkHost {
   /** The service changed `record.control.enabled` (or cleared `locked`): off or locked demotes every
    *  controller, and every joined viewer is told its state. */
   controlChanged(): void
-  /** The password was replaced: every controller is demoted and must unlock with the new one. */
+  /** The password was replaced: every controller is demoted and must unlock with the new one, and the
+   *  link-wide wrong count starts over (the service resets the record's). */
   passwordChanged(): void
   /** The owner cleared the lock: the link-wide wrong count starts over, then as `controlChanged`. */
   allowControl(): void
@@ -340,6 +358,8 @@ interface Conn {
   inputBucket: TokenBucket
   /** Input collected since the last flush: its chunks, the session it was typed at, its UTF-8 bytes. */
   batch: ControlInputChunk[]
+  /** The batch reached INPUT_CHUNKS_MAX: the rest of it is dropped until it is flushed. */
+  batchFull: boolean
   batchSession: string | null
   batchBytes: number
   batchTimer: unknown
@@ -377,6 +397,13 @@ interface Conn {
   rejoinAttempt: number
   rejoinTimer: unknown
   warned: Set<string>
+}
+
+/** One connection's batch in the flush chain: its chunks, the session typed at, the control period. */
+interface Batch {
+  chunks: ControlInputChunk[]
+  session: string
+  gen: number
 }
 
 interface CaptureSlot {
@@ -425,6 +452,14 @@ function readUnlock(p: unknown): { name: string; password: string } | null {
   return { name, password }
 }
 
+/** The link-wide wrong count a record holds, as an integer 0..WRONG_PER_LINK: a hand edit cannot buy
+ *  guesses (the store refuses anything else on load; this is the host's own belt). */
+function storedWrong(r: WatchLinkRecord): number {
+  const n = r.control?.wrong
+  if (typeof n !== 'number' || Number.isNaN(n)) return 0
+  return Math.min(WRONG_PER_LINK, Math.max(0, Math.floor(n)))
+}
+
 function normalizeCapture(c: unknown): VisibleCapture {
   if (!c || typeof c !== 'object' || typeof (c as VisibleCapture).screen !== 'string') return unavailableCapture()
   if ((c as VisibleCapture).unavailable === true) return unavailableCapture()
@@ -446,8 +481,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   let syncTimer: unknown = null
   let stopped = false
   const warnedHost = new Set<string>()
-  /** Wrong unlock attempts across the link (in memory: only the lock is persisted, by the service). */
-  let linkWrong = 0
+  /** Wrong unlock attempts across the link, starting from the record's (the service persists every new
+   *  count, so an app restart does not reset it). */
+  let linkWrong = storedWrong(record)
   /** A password check is in flight: one per link. */
   let verifying = false
   /** Bumped by every change to control (off/on, a new password, the lock, allowControl): a check that
@@ -964,6 +1000,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   function wrongAttempt(c: Conn): void {
     c.wrong++
     linkWrong++
+    // The service records (and writes) the link-wide count before any lock below.
+    const count = Math.min(linkWrong, WRONG_PER_LINK)
+    safe('onWrongAttempt', () => deps.onWrongAttempt(count))
     sendControl(c, { state: controlStateFor(c).state, reason: 'wrong' })
     if (linkWrong >= WRONG_PER_LINK) lockLink()
     if (c.wrong >= WRONG_PER_CONN) endConn(c, 'attempts')
@@ -1017,6 +1056,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     clearTimer(c.batchTimer)
     c.batchTimer = null
     c.batch = []
+    c.batchFull = false
     c.batchBytes = 0
     c.batchSession = null
   }
@@ -1059,10 +1099,11 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     if (isTerminalReport(data)) return
     const bytes = Buffer.byteLength(data, 'utf8')
     const sid = c.sessionId
-    // No session to type into (waiting), or over budget — the bucket, or a batch the panes have not
-    // taken yet already holding a burst: dropped, and the viewer told. Input is never held for a
-    // later session. The splitter still sees it, so a paste it belonged to is discarded whole.
-    if (sid === null || c.batchBytes + bytes > INPUT_BURST || !c.inputBucket.take(bytes)) {
+    // No session to type into (waiting), or over budget — a batch already holding INPUT_CHUNKS_MAX
+    // chunks, the bucket, or a batch the panes have not taken yet already holding a burst: dropped, and
+    // the viewer told. Input is never held for a later session. The splitter still sees it, so a paste
+    // it belonged to is discarded whole.
+    if (sid === null || c.batchFull || c.batchBytes + bytes > INPUT_BURST || !c.inputBucket.take(bytes)) {
       c.splitter.discard(data)
       noteDropped(c)
       return
@@ -1080,14 +1121,27 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       }, INPUT_BATCH_MS)
     }
   }
-  /** Adjacent keys merge (up to INPUT_MAX units): one pane delivery per run of typing, not per cast. */
+  /** Adjacent keys merge (up to INPUT_MAX units): one pane delivery per run of typing, not per cast. A
+   *  batch holds at most INPUT_CHUNKS_MAX chunks: the first chunk past it ends the batch's intake. */
   function appendChunks(c: Conn, chunks: ControlInputChunk[]): void {
     for (const ch of chunks) {
+      if (c.batchFull) return
       const last = c.batch[c.batch.length - 1]
       if (ch.kind === 'keys' && last?.kind === 'keys' && last.data.length + ch.data.length <= INPUT_MAX) {
         c.batch[c.batch.length - 1] = { kind: 'keys', data: last.data + ch.data }
+      } else if (c.batch.length >= INPUT_CHUNKS_MAX) {
+        batchFilled(c)
+        return
       } else c.batch.push(ch)
     }
+  }
+  /** The batch is full: this chunk and the rest of the batch are dropped, in whole chunks — what the
+   *  splitter still holds belongs to that rest (an open paste is discarded whole, a held prefix is never
+   *  keys), and later input is dropped until the batch is flushed. The viewer is told. */
+  function batchFilled(c: Conn): void {
+    c.batchFull = true
+    c.splitter.discard('')
+    noteDropped(c)
   }
   /** Hand the connection's batch to the host-wide chain. While its previous batch is still there, this
    *  one waits (and keeps collecting) and follows it the moment it finishes: one batch per connection
@@ -1099,6 +1153,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     const chunks = c.batch
     const session = c.batchSession
     c.batch = []
+    c.batchFull = false
     c.batchBytes = 0
     c.batchSession = null
     if (chunks.length === 0 || session === null) return
@@ -1109,19 +1164,22 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       .then(() => deliverBatch(c, batch))
       .catch((err) => warn(null, 'the input chain failed', err instanceof Error ? err.name : 'not an Error'))
   }
+  /** The batch's sender still controls, in the control period it typed in. */
+  const stillControls = (c: Conn, b: Batch): boolean =>
+    !stopped && !c.ended && c.controlGen === b.gen && controlStateFor(c).state === 'controlling'
   /** Deliver one batch whole, chunk by chunk, re-checking before each that its sender still controls,
    *  under the same control period, the session it typed at. A false (or a rejection) stops it. */
-  async function deliverBatch(c: Conn, b: { chunks: ControlInputChunk[]; session: string; gen: number }): Promise<void> {
+  async function deliverBatch(c: Conn, b: Batch): Promise<void> {
     try {
       for (const chunk of b.chunks) {
         // Control ended since it was typed (and the viewer was told its new state): void, silently.
-        if (stopped || c.ended || c.controlGen !== b.gen || controlStateFor(c).state !== 'controlling') return
+        if (!stillControls(c, b)) return
         // The session it was typed at is gone: what is left did not reach the terminal.
         if (c.sessionId !== b.session) {
           noteDropped(c)
           return
         }
-        const ok = await deliverChunk(c, b.session, chunk)
+        const ok = await deliverChunk(c, b, chunk)
         if (!ok) {
           noteDropped(c)
           return
@@ -1137,7 +1195,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
   /** One chunk to the pane, answered within INPUT_DELIVERY_TIMEOUT_MS. A rejection, a throw, or no
    *  answer in time is false; an answer after that is ignored. `ended` settles it at once (false), so a
    *  pane that never answers cannot hold the link's chain beyond its deadline. */
-  function deliverChunk(c: Conn, session: string, chunk: ControlInputChunk): Promise<boolean> {
+  function deliverChunk(c: Conn, b: Batch, chunk: ControlInputChunk): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false
       const slot: { timer: unknown; settle(ok: boolean): void } = {
@@ -1162,8 +1220,11 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
         warn(c, 'delivering input failed', err instanceof Error ? err.name : 'not an Error')
         slot.settle(false)
       }
+      // The same check as before this chunk, asked again by PtyManager right before it runs: a chunk
+      // still waiting in its per-session chain when its sender stops controlling never lands.
+      const isCurrent = (): boolean => stillControls(c, b) && c.sessionId === b.session
       try {
-        void Promise.resolve(deps.pty.input(session, chunk)).then((ok) => slot.settle(ok === true), failed)
+        void Promise.resolve(deps.pty.input(b.session, chunk, isCurrent)).then((ok) => slot.settle(ok === true), failed)
       } catch (err) {
         failed(err)
       }
@@ -1233,6 +1294,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       splitter: createInputSplitter(),
       inputBucket: createTokenBucket({ ratePerSec: INPUT_RATE, burst: INPUT_BURST, now: deps.now }),
       batch: [],
+      batchFull: false,
       batchSession: null,
       batchBytes: 0,
       batchTimer: null,
@@ -1495,6 +1557,8 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     },
     passwordChanged() {
       if (stopped || record.role !== 'controller') return
+      // A new password starts the link-wide count over (the service resets the record's too).
+      linkWrong = 0
       controlEpoch++
       for (const c of joinedConns()) {
         if (!c.controlling) continue

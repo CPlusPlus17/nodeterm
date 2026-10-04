@@ -528,7 +528,7 @@ describe('a keychain that stops sealing mid-run (R45)', () => {
 describe('controller records and unlimited expiry', () => {
   const SALT = b64(new Uint8Array(16).fill(1))
   const HASH = b64(new Uint8Array(32).fill(2))
-  const control = { enabled: true, salt: SALT, hash: HASH, locked: false }
+  const control = { enabled: true, salt: SALT, hash: HASH, locked: false, wrong: 0 }
   const ctl = (over: Partial<WatchLinkRecord> = {}) => rec({ role: 'controller', control, expiresAt: null, ...over })
 
   it('round-trips a controller record with no expiry through save and a fresh store', async () => {
@@ -538,7 +538,7 @@ describe('controller records and unlimited expiry', () => {
       expect(await new WatchLinkStore({ file: f, ...opts }).load()).toEqual([ctl()])
     }
     const f = file()
-    const locked = ctl({ control: { enabled: false, salt: SALT, hash: HASH, locked: true } })
+    const locked = ctl({ control: { enabled: false, salt: SALT, hash: HASH, locked: true, wrong: 10 } })
     expect(await new WatchLinkStore({ file: f, seal, unseal }).save([locked])).toBe('saved')
     expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([locked])
   })
@@ -577,14 +577,36 @@ describe('controller records and unlimited expiry', () => {
       { ...control, enabled: 1 },
       { ...control, locked: 'false' },
       { salt: SALT, hash: HASH, locked: false },
-      { enabled: true, salt: SALT, hash: HASH }
+      { enabled: true, salt: SALT, hash: HASH },
+      // The link-wide wrong count (final review, Minor 2): an integer 0..10 when present.
+      { ...control, wrong: 11 },
+      { ...control, wrong: -1 },
+      { ...control, wrong: 1.5 },
+      { ...control, wrong: '3' },
+      { ...control, wrong: null },
+      { ...control, wrong: Number.MAX_SAFE_INTEGER }
     ]
     const f = file()
     writeLinks(f, [...bad.map((c, i) => rawEntry({ linkId: id(i), role: 'controller', control: c, expiresAt: null })), rawEntry()])
     expect(await new WatchLinkStore({ file: f }).load()).toEqual([rec()])
   })
 
-  it('keeps only the four control fields: an extra one is not loaded or carried', async () => {
+  // Final review, Minor 2: the link-wide wrong-attempt count is persisted beside `locked`, so an app
+  // restart no longer resets it. A file written before it existed has no `wrong`: it reads as 0.
+  it('round-trips the link-wide wrong count, and reads a control written without one (an older file) as 0', async () => {
+    for (const opts of [{ seal, unseal }, {}]) {
+      const f = file()
+      const seven = ctl({ control: { ...control, wrong: 7 } })
+      expect(await new WatchLinkStore({ file: f, ...opts }).save([seven])).toBe('saved')
+      expect(await new WatchLinkStore({ file: f, ...opts }).load()).toEqual([seven])
+    }
+    const f = file()
+    const older = { enabled: true, salt: SALT, hash: HASH, locked: false }
+    writeLinks(f, [rawEntry({ role: 'controller', expiresAt: null, control: older })])
+    expect(await new WatchLinkStore({ file: f }).load()).toEqual([ctl()])
+  })
+
+  it('keeps only the five control fields: an extra one is not loaded or carried', async () => {
     const f = file()
     writeLinks(f, [rawEntry({ role: 'controller', expiresAt: null, control: { ...control, password: 'hunter22' } })])
     const s = new WatchLinkStore({ file: f })
@@ -593,7 +615,7 @@ describe('controller records and unlimited expiry', () => {
     expect(readFileSync(f, 'utf8')).not.toContain('hunter22')
   })
 
-  it('writes only the four control fields of a record', async () => {
+  it('writes only the five control fields of a record', async () => {
     const f = file()
     const withExtra = ctl({ control: { ...control, password: 'hunter22' } as WatchLinkRecord['control'] })
     expect(await new WatchLinkStore({ file: f, seal, unseal }).save([withExtra])).toBe('saved')
@@ -615,7 +637,10 @@ describe('controller records and unlimited expiry', () => {
       ctl({ control: { ...control, salt: b64(new Uint8Array(15).fill(1)) } }),
       ctl({ control: { ...control, hash: 'not base64!' } }),
       ctl({ control: { ...control, enabled: 'yes' } as unknown as WatchLinkRecord['control'] }),
-      ctl({ control: { ...control, locked: undefined } as unknown as WatchLinkRecord['control'] })
+      ctl({ control: { ...control, locked: undefined } as unknown as WatchLinkRecord['control'] }),
+      ctl({ control: { ...control, wrong: 11 } }),
+      ctl({ control: { ...control, wrong: -1 } }),
+      ctl({ control: { ...control, wrong: 2.5 } })
     ]
     for (const r of broken) {
       expect(await s.save([rec({ linkId: 'OtherLinkIjKlMnOpQrStU' }), r]), JSON.stringify(r.control ?? r.role)).toBe('failed')
@@ -629,7 +654,7 @@ describe('controller records and unlimited expiry', () => {
   it('never writes the plaintext password: the file holds only its salt and scrypt hash', async () => {
     const password = 'correct horse battery staple'
     const h = await hashControlPassword(password)
-    const r = ctl({ control: { enabled: true, salt: h.salt, hash: h.hash, locked: false } })
+    const r = ctl({ control: { enabled: true, salt: h.salt, hash: h.hash, locked: false, wrong: 0 } })
     for (const opts of [{ seal, unseal }, {}]) {
       const f = file()
       expect(await new WatchLinkStore({ file: f, ...opts }).save([r])).toBe('saved')

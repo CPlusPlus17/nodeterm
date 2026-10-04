@@ -3653,7 +3653,8 @@ export function Canvas() {
   // that runs the terminal. Started ONCE per Canvas mount; without it the store stays empty and no
   // LIVE chip ever appears. What a notice does is lib/liveLink's `liveLinkNoticeEffect` (tested
   // there): the info strip — `not-persistent` and `control-locked` stay on screen — and, for
-  // `control-taken`, an OS notification under the agent-done consent, once per link per 5 s.
+  // `control-taken` (a security event), an OS notification under the notification consent alone — not
+  // the agent-done preference — once per link per 5 s.
   const liveNotifyAtRef = useRef(new Map<string, number>())
   useEffect(
     () =>

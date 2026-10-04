@@ -13,7 +13,7 @@ import {
   commentFromChat,
   formatClock,
   formatRemaining,
-  KICK_NOTE,
+  kickNote,
   ROLE_LABEL,
   ROLE_NAME,
   statusLine,
@@ -286,7 +286,7 @@ const LinkBlock = memo(function LinkBlock({
                   <button
                     type="button"
                     className="confirm__btn live-pop__btn live-pop__kick"
-                    title={KICK_NOTE}
+                    title={kickNote(v)}
                     onClick={() => kickViewer(api, link.linkId, v.viewerId, setError)}
                   >
                     Kick
@@ -294,7 +294,8 @@ const LinkBlock = memo(function LinkBlock({
                 </li>
               ))}
             </ul>
-            <p className="live-pop__muted live-pop__note">{KICK_NOTE}</p>
+            {/* While anyone controls, the note also says a kicked controller can unlock again. */}
+            <p className="live-pop__muted live-pop__note">{kickNote({ controlling: link.viewers.some((v) => v.controlling) })}</p>
           </>
         )}
       </div>
