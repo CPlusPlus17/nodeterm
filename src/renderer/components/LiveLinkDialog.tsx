@@ -10,9 +10,10 @@
 // A Control link's PASSWORD is plaintext only in this component's state: typed or generated in the
 // form, shown once in the done step, and dropped on every close (`dismiss`) and with the component.
 // It is never written to localStorage, settings, a log or a notice; core keeps only its hash.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDialogStack } from './dialog-stack'
+import { newControlPassword, PasswordField, useCopied } from './LiveLinkPassword'
 import {
   capUnits,
   CONTROL_UNSUPPORTED_REASON,
@@ -45,38 +46,6 @@ import {
   type WatchLinkRole,
   type WatchLinkTtl
 } from '@shared/watch-link-types'
-import { PASSWORD_MAX } from '@shared/watch-link/protocol'
-import { generateControlPassword } from '@shared/watch-link-password'
-
-/** Generate: 16 symbols from the platform CSPRNG (spec §2.2). */
-export function newControlPassword(): string {
-  return generateControlPassword((n) => crypto.getRandomValues(new Uint8Array(n)))
-}
-
-/** The password field shared by the form and the done step (and, read-only, the popover's change). */
-export function PasswordField(p: {
-  value: string
-  readOnly?: boolean
-  disabled?: boolean
-  onChange?: (v: string) => void
-  label?: string
-}): React.JSX.Element {
-  return (
-    <input
-      className="confirm__input"
-      type="text"
-      autoComplete="off"
-      spellCheck={false}
-      maxLength={PASSWORD_MAX}
-      aria-label={p.label ?? 'Password'}
-      value={p.value}
-      readOnly={p.readOnly}
-      disabled={p.disabled}
-      onFocus={p.readOnly ? (e) => e.currentTarget.select() : undefined}
-      onChange={p.onChange ? (e) => p.onChange?.(e.target.value) : undefined}
-    />
-  )
-}
 
 /** Spec §2.7's typing warning, its "and" stressed. Text only: the machine is our own wording. */
 function ControlWarning({ machine }: { machine: string }): React.JSX.Element {
@@ -109,14 +78,14 @@ export type DialogState =
     }
   | {
       phase: 'done'
+      /** The link's role: the done step reads Control off THIS, never off whether a password is set. */
+      role: WatchLinkRole
       url: string
       linkId: string
       /** null: an Unlimited link. */
       expiresAt: number | null
       /** A Control link's password, shown this once (core keeps only its hash). Absent otherwise. */
       password?: string
-      copied?: boolean
-      passwordCopied?: boolean
       stopping?: boolean
       error?: string | null
     }
@@ -130,6 +99,9 @@ export function LiveLinkDialogBody(p: {
   onStop: (linkId: string) => void
   onCopy?: (url: string) => void
   onCopyPassword?: (password: string) => void
+  /** The "Copied!" flashes of the link's and the password's Copy buttons. */
+  copied?: boolean
+  passwordCopied?: boolean
   onUpgrade?: () => void
   /** `watchLink.controlSupport` said this node's terminal cannot take typed input (a Zellij session):
    *  Control is shown disabled, with its reason. Absent / false: offered (unknown is offered too). */
@@ -144,9 +116,13 @@ export function LiveLinkDialogBody(p: {
   now?: number
 }): React.JSX.Element {
   const s = p.state
+  // Ids for aria-describedby: the password's validation line, and why Control is disabled.
+  const invalidId = useId()
+  const reasonId = useId()
   // The title is the node's own (git-shared, hand-editable): shown as TEXT, bidi controls stripped.
   const title = stripBidiControls(p.title)
   if (s.phase === 'done') {
+    const control = s.role === 'controller'
     return (
       <div className="confirm live-dialog" onClick={(e) => e.stopPropagation()}>
         <p className="confirm__msg live-dialog__title">Live link to {title}</p>
@@ -160,15 +136,15 @@ export function LiveLinkDialogBody(p: {
           />
           {/* Keyboard focus lands here once the link exists (D2/M3): Enter copies it. */}
           <button className="confirm__btn primary" data-autofocus="" onClick={() => p.onCopy?.(s.url)}>
-            {s.copied ? 'Copied!' : 'Copy'}
+            {p.copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
-        {s.password !== undefined && (
+        {control && (
           <>
             <div className="live-dialog__url live-dialog__password">
-              <PasswordField value={s.password} readOnly />
+              <PasswordField value={s.password ?? ''} readOnly />
               <button className="confirm__btn" onClick={() => p.onCopyPassword?.(s.password ?? '')}>
-                {s.passwordCopied ? 'Copied!' : 'Copy password'}
+                {p.passwordCopied ? 'Copied!' : 'Copy password'}
               </button>
             </div>
             <p className="live-dialog__note live-dialog__note--tight">{PASSWORD_SHOWN_ONCE}</p>
@@ -176,7 +152,7 @@ export function LiveLinkDialogBody(p: {
           </>
         )}
         <p className="live-dialog__note">
-          {s.password !== undefined
+          {control
             ? `Anyone with this link and the password can type until ${formatUntil(s.expiresAt, p.now ?? Date.now())}.`
             : `Anyone with this link can watch until ${formatUntil(s.expiresAt, p.now ?? Date.now())}.`}
         </p>
@@ -198,6 +174,8 @@ export function LiveLinkDialogBody(p: {
   }
   const control = s.role === 'controller'
   const problem = control ? passwordProblemText(s.password) : null
+  // Nothing nags an empty field: Create is disabled, which says enough until something is typed.
+  const showProblem = s.password !== '' && problem !== null
   return (
     <div className="confirm live-dialog" onClick={(e) => e.stopPropagation()}>
       <p className="confirm__msg live-dialog__title">Share a live link to {title}</p>
@@ -212,24 +190,38 @@ export function LiveLinkDialogBody(p: {
                 name="live-role"
                 checked={s.role === r}
                 disabled={off}
+                aria-describedby={off ? reasonId : undefined}
                 onChange={() => p.onChange({ ...s, role: r })}
               />{' '}
               {ROLE_NAME[r]} <span className="live-dialog__hint">· {ROLE_LABEL[r]}</span>
             </label>
           )
         })}
-        {p.controlUnsupported && <p className="live-dialog__reason">{CONTROL_UNSUPPORTED_REASON}</p>}
+        {p.controlUnsupported && (
+          <p className="live-dialog__reason" id={reasonId}>
+            {CONTROL_UNSUPPORTED_REASON}
+          </p>
+        )}
       </fieldset>
       {control && (
         <div className="live-dialog__pw">
           Password
           <div className="live-dialog__url live-dialog__password">
-            <PasswordField value={s.password} disabled={s.busy} onChange={(v) => p.onChange({ ...s, password: v })} />
+            <PasswordField
+              value={s.password}
+              disabled={s.busy}
+              describedBy={showProblem ? invalidId : undefined}
+              onChange={(v) => p.onChange({ ...s, password: v })}
+            />
             <button className="confirm__btn" disabled={s.busy} onClick={() => p.onChange({ ...s, password: newControlPassword() })}>
               Generate
             </button>
           </div>
-          {s.password !== '' && problem && <p className="live-dialog__invalid">{problem}</p>}
+          {showProblem && (
+            <p className="live-dialog__invalid" id={invalidId}>
+              {problem}
+            </p>
+          )}
         </div>
       )}
       <fieldset className="live-dialog__group" disabled={s.busy}>
@@ -329,8 +321,8 @@ export function LiveLinkDialog({
   const stateRef = useRef(state)
   stateRef.current = state
   const isTop = useDialogStack()
-  const copiedTimer = useRef<ReturnType<typeof setTimeout>>()
-  useEffect(() => () => clearTimeout(copiedTimer.current), [])
+  const [copied, copy] = useCopied()
+  const [passwordCopied, copyPassword] = useCopied()
   // R63: does THIS machine have a watcher client for this node? Read once from the local core (the
   // core that creates the link). Unknown — not read yet, or unreadable — says nothing.
   const [whileOpenOnly, setWhileOpenOnly] = useState(false)
@@ -427,6 +419,7 @@ export function LiveLinkDialog({
       if (r.ok) {
         setState({
           phase: 'done',
+          role: form.role,
           url: r.link.url,
           linkId: r.link.linkId,
           expiresAt: r.link.expiresAt,
@@ -450,24 +443,6 @@ export function LiveLinkDialog({
     if (ok) onClose()
   }
 
-  const copy = (url: string): void => {
-    window.nodeTerminal.clipboard.writeText(url)
-    setState((s) => (s.phase === 'done' ? { ...s, copied: true } : s))
-    clearTimeout(copiedTimer.current)
-    copiedTimer.current = setTimeout(() => setState((s) => (s.phase === 'done' ? { ...s, copied: false } : s)), 1500)
-  }
-  const passwordCopiedTimer = useRef<ReturnType<typeof setTimeout>>()
-  useEffect(() => () => clearTimeout(passwordCopiedTimer.current), [])
-  const copyPassword = (password: string): void => {
-    window.nodeTerminal.clipboard.writeText(password)
-    setState((s) => (s.phase === 'done' ? { ...s, passwordCopied: true } : s))
-    clearTimeout(passwordCopiedTimer.current)
-    passwordCopiedTimer.current = setTimeout(
-      () => setState((s) => (s.phase === 'done' ? { ...s, passwordCopied: false } : s)),
-      1500
-    )
-  }
-
   return createPortal(
     <div className="confirm-overlay" ref={panelRef} onClick={dismiss}>
       <LiveLinkDialogBody
@@ -482,6 +457,8 @@ export function LiveLinkDialog({
         onStop={(id) => void stop(id)}
         onCopy={copy}
         onCopyPassword={copyPassword}
+        copied={copied}
+        passwordCopied={passwordCopied}
         onUpgrade={onUpgrade}
         controlUnsupported={controlUnsupported}
         controlMachine={controlWarningMachine(sshTarget)}

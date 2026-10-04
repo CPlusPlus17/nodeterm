@@ -736,6 +736,90 @@ describe('LiveLinkPopover — a Control link', () => {
     expect(pop()).toBeNull()
   })
 
+  it('keyboard focus follows the Change password flow', async () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    const field = (): HTMLInputElement => pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!
+    // Entering the flow: the new field.
+    click(button('Change password…'))
+    expect(document.activeElement).toBe(field())
+    // Cancel: back to "Change password…".
+    click(button('Cancel'))
+    expect(document.activeElement).toBe(button('Change password…'))
+    // Saved: Copy password, the one thing to do next.
+    click(button('Change password…'))
+    typeInto(field(), 'longenough1')
+    click(button('Save'))
+    await flush()
+    expect(document.activeElement).toBe(button('Copy password'))
+    // Done: back to "Change password…".
+    click(button('Done'))
+    expect(document.activeElement).toBe(button('Change password…'))
+  })
+
+  it('the validation line is tied to the field (aria-describedby)', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    const field = pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!
+    typeInto(field, 'short')
+    const id = field.getAttribute('aria-describedby')!
+    expect(document.getElementById(id)!.textContent).toBe('Use at least 8 characters.')
+    typeInto(field, 'longenough1')
+    expect(field.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('the Typing switch stays focusable while a change is in flight, and ignores clicks then', async () => {
+    let answer!: (ok: boolean) => void
+    api.setControl.mockImplementationOnce(() => new Promise<boolean>((r) => (answer = r)))
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    const sw = (): HTMLButtonElement => pop()!.querySelector<HTMLButtonElement>('[role="switch"]')!
+    act(() => sw().focus())
+    click(sw())
+    await flush()
+    expect(sw().disabled).toBe(false)
+    expect(sw().getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(sw())
+    click(sw())
+    await flush()
+    expect(api.setControl).toHaveBeenCalledTimes(1)
+    await act(async () => answer(true))
+    expect(sw().hasAttribute('aria-disabled')).toBe(false)
+    click(sw())
+    await flush()
+    expect(api.setControl).toHaveBeenCalledTimes(2)
+  })
+
+  it('a password save that never settles lets the popover go after 30 s, and says what to check', async () => {
+    api.setPassword.mockImplementationOnce(() => new Promise<boolean>(() => {}))
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    typeInto(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!, 'longenough1')
+    vi.useFakeTimers()
+    try {
+      click(button('Save'))
+      await act(async () => {})
+      act(() => vi.advanceTimersByTime(29_999))
+      click(document.querySelector('.live-pop__scrim')!)
+      expect(pop()).not.toBeNull()
+      act(() => vi.advanceTimersByTime(1))
+      expect(pop()!.querySelector('[role="alert"]')!.textContent).toBe(
+        "Couldn't confirm the new password. Check the link before sharing it."
+      )
+      expect(button('Save')).toBeTruthy()
+      click(document.querySelector('.live-pop__scrim')!)
+      expect(pop()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a password core refused is not shown as set', async () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([controller()])

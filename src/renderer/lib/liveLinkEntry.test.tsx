@@ -7,6 +7,7 @@ import {
   liveLinkMenuRow,
   liveLinkNodeFor,
   liveLinkPrepare,
+  liveLinkRemoteFacts,
   liveLinkUnavailable,
   openLiveLink,
   stopAllConfirm,
@@ -331,5 +332,87 @@ describe('liveLinkCommands (palette)', () => {
     expect(manage).toHaveBeenCalledTimes(1)
     some[1].run()
     expect(confirmStopAll).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Where a node runs, for the create dialog: R63 (does the HOST's tmux give a viewer a client of its
+// own?) and the Control warning (on which machine would a controller's commands run?).
+describe('liveLinkRemoteFacts', () => {
+  const box = { user: 'ada', host: 'box.example', port: 22 }
+  const facts = (o: {
+    live?: { id: string; data?: Record<string, unknown> }[]
+    stored?: { id: string; [k: string]: unknown }[]
+    projectSsh?: unknown
+    active?: boolean
+  }) =>
+    liveLinkRemoteFacts({
+      nodeId: 'n1',
+      projectId: 'p',
+      activeProjectId: o.active === false ? 'other' : 'p',
+      live: o.live ?? [],
+      stored: o.stored,
+      projectSsh: o.projectSsh
+    })
+
+  it('a node on an SSH host attached to a LOCAL project: its own host, served by the host tmux', () => {
+    expect(facts({ live: [{ id: 'n1', data: { ssh: box, sshRemoteTmux: true } }] })).toEqual({
+      remoteNode: true,
+      sshTarget: { user: 'ada', host: 'box.example' }
+    })
+  })
+
+  it('a standalone ssh terminal node: its own host, but R63 stays local (ssh is a LOCAL pty program)', () => {
+    expect(facts({ live: [{ id: 'n1', data: { ssh: box } }] })).toEqual({
+      remoteNode: false,
+      sshTarget: { user: 'ada', host: 'box.example' }
+    })
+  })
+
+  it("an SSH project's node: the project's binding on its own host (how THIS user reaches it)", () => {
+    const server = { user: 'bob', host: 'box.example' }
+    // The node's `ssh` is a snapshot of whoever created it (sshConnectionIdForProject's rule).
+    expect(
+      facts({ live: [{ id: 'n1', data: { ssh: { user: 'alice', host: 'box.example' }, sshRemoteTmux: true } }], projectSsh: server })
+    ).toEqual({ remoteNode: true, sshTarget: { user: 'bob', host: 'box.example' } })
+    // No binding on the node: the project's.
+    expect(facts({ live: [{ id: 'n1', data: {} }], projectSsh: server })).toEqual({
+      remoteNode: true,
+      sshTarget: { user: 'bob', host: 'box.example' }
+    })
+    // A node attached to ANOTHER host inside the SSH project: that host.
+    expect(
+      facts({ live: [{ id: 'n1', data: { ssh: { user: 'cy', host: 'gpu.example' }, sshRemoteTmux: true } }], projectSsh: server })
+    ).toEqual({ remoteNode: true, sshTarget: { user: 'cy', host: 'gpu.example' } })
+  })
+
+  it('a local node in a local project: this machine', () => {
+    expect(facts({ live: [{ id: 'n1', data: {} }] })).toEqual({ remoteNode: false, sshTarget: null })
+    expect(facts({ live: [] })).toEqual({ remoteNode: false, sshTarget: null })
+  })
+
+  it("a non-active project's node is read from its stored copy", () => {
+    expect(facts({ active: false, stored: [{ id: 'n1', ssh: box, sshRemoteTmux: true }] })).toEqual({
+      remoteNode: true,
+      sshTarget: { user: 'ada', host: 'box.example' }
+    })
+    // The live canvas belongs to another project: never read for this one.
+    expect(facts({ active: false, live: [{ id: 'n1', data: { ssh: box } }], stored: [{ id: 'n1' }] })).toEqual({
+      remoteNode: false,
+      sshTarget: null
+    })
+  })
+
+  it('a malformed binding (hand-editable, git-shared input) claims nothing', () => {
+    for (const ssh of ['box', 5, null, { host: 5, user: 'a' }, { host: '', user: 'a' }, { user: 'a' }]) {
+      expect(facts({ live: [{ id: 'n1', data: { ssh, sshRemoteTmux: 'yes' } }] }), JSON.stringify(ssh)).toEqual({
+        remoteNode: false,
+        sshTarget: null
+      })
+    }
+    // A host with no usable user still names the host.
+    expect(facts({ live: [{ id: 'n1', data: { ssh: { host: 'box.example', user: 7 } } }] }).sshTarget).toEqual({
+      user: '',
+      host: 'box.example'
+    })
   })
 })

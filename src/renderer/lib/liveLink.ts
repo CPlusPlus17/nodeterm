@@ -107,6 +107,11 @@ export const PASSWORD_CHANGE_NOTE = 'Anyone typing now goes back to watching unt
 export const CONTROL_CHANGE_FAILED_MESSAGE = "That change didn't take — try again."
 /** `setPassword` answered false, or did not answer: the old password still works. */
 export const PASSWORD_CHANGE_FAILED_MESSAGE = "The password wasn't changed — try again. The old one still works."
+/** How long a password save may hold the popover open before it lets go (`PASSWORD_UNCONFIRMED_MESSAGE`). */
+export const PASSWORD_SAVE_TIMEOUT_MS = 30_000
+/** A password save with no answer after `PASSWORD_SAVE_TIMEOUT_MS`: whether the old or the new one
+ *  is in force is unknown, so the owner is told to check before handing either out. */
+export const PASSWORD_UNCONFIRMED_MESSAGE = "Couldn't confirm the new password. Check the link before sharing it."
 
 const PASSWORD_PROBLEM_TEXT: Record<ControlPasswordProblem, string> = {
   // Not reachable from a text field; named so a `Record` over the shared union compiles.
@@ -210,8 +215,19 @@ export function waitingViewers(links: readonly Pick<WatchLinkView, 'viewers'>[])
  * name is the one it unlocked with). Bidi-stripped; a nameless one is "Viewer N" like in the list.
  */
 export function typingNames(links: readonly Pick<WatchLinkView, 'viewers'>[]): string[] {
-  const out: string[] = []
-  for (const l of links) l.viewers.forEach((v, i) => v.typing && out.push(viewerName(v, i)))
+  return typingViewers(links).map((t) => t.name)
+}
+/** The typing viewers with whether the name is one the viewer GAVE itself (a claim, quoted in a
+ *  sentence) or our "Viewer N" placeholder (ours, never quoted). */
+function typingViewers(links: readonly Pick<WatchLinkView, 'viewers'>[]): { name: string; claimed: boolean }[] {
+  const out: { name: string; claimed: boolean }[] = []
+  for (const l of links) {
+    l.viewers.forEach((v, i) => {
+      if (!v.typing) return
+      const name = viewerName(v, i)
+      out.push({ name, claimed: v.name !== null && stripBidiControls(v.name).trim() !== '' })
+    })
+  }
   return out
 }
 
@@ -219,9 +235,10 @@ export function typingNames(links: readonly Pick<WatchLinkView, 'viewers'>[]): s
 function quoted(name: string): string {
   return `\u201c${name}\u201d`
 }
-/** "“A” is typing." / "“A” and “B” are typing." / "“A”, “B” and “C” are typing." */
-function typingSentence(names: readonly string[]): string {
-  const q = names.map(quoted)
+/** "“A” is typing." / "“A” and “B” are typing." / "“A”, “B” and “C” are typing." — a name the
+ *  viewer gave itself quoted, our "Viewer N" placeholder not. */
+function typingSentence(names: readonly { name: string; claimed: boolean }[]): string {
+  const q = names.map((n) => (n.claimed ? quoted(n.name) : n.name))
   if (q.length === 1) return `${q[0]} is typing.`
   return `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]} are typing.`
 }
@@ -252,7 +269,7 @@ export function chipView(links: readonly WatchLinkView[]): { label: string; tone
   if (waiting > 0) return { label: `LIVE · ${waiting} waiting`, tone: 'waiting', title: VIEWERS_WAITING_MESSAGE }
   const shared = links.length > 1 ? `This terminal is shared by ${links.length} live links` : 'This terminal is shared by a live link'
   const watching = viewers > 0 ? `${shared} — ${viewers} watching.` : `${shared}.`
-  const typing = typingNames(links)
+  const typing = typingViewers(links)
   if (typing.length > 0) {
     return {
       label: `LIVE · ${viewers} · ${typing.length} typing`,

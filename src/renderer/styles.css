@@ -11879,8 +11879,13 @@ button.pull-checks__name {
   min-width: 0;
   margin: 0;
   padding: 4px 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+/* A Control link's password, wherever it is typed or shown (create dialog, popover, drawer):
+   monospace, so a 0 and an o, or a 1 and an l, never read alike. One rule for every field. */
+.live-dialog__password .confirm__input,
+.live-pop__password .confirm__input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .live-pop p.live-pop__invalid {
   margin: 4px 0 0;
@@ -11995,9 +12000,6 @@ button.pull-checks__name {
 }
 .live-dialog__url.live-dialog__password {
   margin: 4px 0 10px;
-}
-.live-dialog__password .confirm__input {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .live-dialog__invalid {
   margin: -6px 0 10px;

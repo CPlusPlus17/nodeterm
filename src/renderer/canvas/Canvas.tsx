@@ -251,6 +251,7 @@ import {
   liveLinkCommands,
   liveLinkMenuItemsFor,
   liveLinkPrepare,
+  liveLinkRemoteFacts,
   openLiveLink,
   stopAllConfirm,
   stopAllLiveLinks,
@@ -3749,6 +3750,21 @@ export function Canvas() {
   /** R63: the create dialog's "only while open" note reads the LOCAL core's session protection — the
    *  core that hosts the link (never a relay tab's peer). Stable, so the dialog reads it once. */
   const readLocalPersistence = useCallback(() => localSession.api.pty.tmuxStatus(), [])
+  /** Where the dialog's node runs — R63 (`remoteNode`) and the machine the Control warning names
+   *  (`sshTarget`) — from the NODE's own SSH binding first, then its project's (lib/liveLinkEntry).
+   *  The node is read from the live canvas for the active project, else the stored copy. */
+  const liveLinkRemoteFor = useCallback((target: LiveLinkTarget) => {
+    const store = useProjects.getState()
+    const project = store.getProject(target.projectId)
+    return liveLinkRemoteFacts({
+      nodeId: target.nodeId,
+      projectId: target.projectId,
+      activeProjectId: store.activeProjectId,
+      live: nodesRef.current,
+      stored: project?.nodes,
+      projectSsh: project?.ssh?.server
+    })
+  }, [])
 
   /** R48: "Stop all" revokes every link of the LICENSE — other machines' included — and cannot be
    *  undone, so the palette asks first, with the same sentence and danger button as Settings. R62:
@@ -19321,11 +19337,10 @@ export function Canvas() {
                 ? 'relay'
                 : 'desktop'
           }
-          // R63: an SSH project's node runs in the HOST's tmux, which gives a viewer a client of its
-          // own — the "only while open" note is about this machine's local terminals.
-          remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}
-          // The Control warning names where a controller's commands run: the SSH host, else here.
-          sshTarget={useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh?.server ?? null}
+          // R63: a node in a HOST's tmux gets a viewer client of its own (the "only while open" note
+          // is about this machine's local terminals); the Control warning names where a
+          // controller's commands run. Both from where the NODE runs, not only its project.
+          {...liveLinkRemoteFor(liveLinkDialog)}
           readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
           // No license layer in the Server Edition (R43): never an Upgrade button there.

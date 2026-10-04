@@ -455,6 +455,20 @@ describe('who is typing', () => {
     })
   })
 
+  it('only a name the viewer gave itself is quoted: the "Viewer N" placeholder is ours, not a claim', () => {
+    const nameless = (id: string, name: string | null) => ({ ...viewer(id), name, controlling: true, typing: true })
+    expect(chipView([link({ viewers: [nameless('a', null)] })]).title).toBe(
+      'Viewer 1 is typing. This terminal is shared by a live link — 1 watching.'
+    )
+    expect(chipView([link({ viewers: [typing('a', 'Mert'), nameless('b', '  ')] })]).title).toBe(
+      '\u201cMert\u201d and Viewer 2 are typing. This terminal is shared by a live link — 2 watching.'
+    )
+    // A viewer who CALLS itself "Viewer 1" made a claim like any other: quoted.
+    expect(chipView([link({ viewers: [typing('a', 'Viewer 1')] })]).title).toBe(
+      '\u201cViewer 1\u201d is typing. This terminal is shared by a live link — 1 watching.'
+    )
+  })
+
   it('the worst state still wins: refused > offline > waiting > typing > count', () => {
     const t = typing('t', 'Mert')
     const w = { ...viewer('w'), waiting: true }

@@ -61,10 +61,16 @@ describe('Canvas live-link wiring', () => {
     expect(src).toContain('prepare={liveLinkPrepareFor(liveLinkDialog)}')
   })
 
-  it("R63: the dialog knows an SSH project's node from its project (the host's tmux serves its viewers)", () => {
-    expect(src).toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
-    // …and names that host in the Control warning (a controller's commands run there, not here).
-    expect(src).toContain('sshTarget={useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh?.server ?? null}')
+  it("R63 and the Control warning: where the NODE runs — its own SSH binding, then its project's", () => {
+    // One decision (lib/liveLinkEntry, behaviour-tested there) gives the dialog both facts: a node
+    // attached to an SSH host in a LOCAL project, or a standalone ssh node, is not "this machine".
+    expect(src).toContain('{...liveLinkRemoteFor(liveLinkDialog)}')
+    const remote = callback('liveLinkRemoteFor')
+    expect(remote).toContain('liveLinkRemoteFacts({')
+    expect(remote).toContain('live: nodesRef.current,')
+    expect(remote).toContain('stored: project?.nodes,')
+    expect(remote).toContain('projectSsh: project?.ssh?.server')
+    expect(src).not.toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
     // …and reads THIS machine's session protection from the local core, never a relay peer's.
     expect(src).toContain('readPersistence={readLocalPersistence}')
     expect(callback('readLocalPersistence')).toContain('localSession.api.pty.tmuxStatus()')

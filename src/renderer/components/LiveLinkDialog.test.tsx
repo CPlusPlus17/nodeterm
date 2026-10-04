@@ -49,7 +49,7 @@ describe('LiveLinkDialogBody', () => {
   it('shows the URL with Copy and Stop, and until when anyone with it can watch (H25)', () => {
     const expiresAt = new Date(2026, 9, 1, 15, 42, 0).getTime()
     const now = new Date(2026, 9, 1, 14, 42, 0).getTime()
-    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
+    const html = body({ phase: 'done', role: 'viewer', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
     expect(html).toContain('https://nodeterm.dev/s/x#1.y')
     expect(html).toContain('Copy')
     expect(html).toContain('Stop sharing')
@@ -60,7 +60,7 @@ describe('LiveLinkDialogBody', () => {
   it('names the day when the link ends on another day', () => {
     const now = new Date(2026, 9, 1, 15, 43, 0).getTime()
     const expiresAt = now + 24 * 3_600_000
-    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
+    const html = body({ phase: 'done', role: 'viewer', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
     expect(html).toContain(`Anyone with this link can watch until tomorrow ${formatClock(expiresAt)}.`)
   })
 
@@ -396,6 +396,29 @@ describe('LiveLinkDialog — Control', () => {
     expect(warnings()).toEqual([LIVE_LINK_WARNING])
   })
 
+  it('the validation line is tied to the password field (aria-describedby)', async () => {
+    mount()
+    await flush()
+    setLabel('Ada')
+    pick('Control')
+    expect(pwInput()!.hasAttribute('aria-describedby')).toBe(false)
+    typeInto(pwInput()!, 'short')
+    const id = pwInput()!.getAttribute('aria-describedby')!
+    expect(document.getElementById(id)!.textContent).toBe('Use at least 8 characters.')
+    expect(document.getElementById(id)!.className).toContain('live-dialog__invalid')
+    typeInto(pwInput()!, 'longenough1')
+    expect(pwInput()!.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('a disabled Control choice is described by its reason', async () => {
+    api.controlSupport.mockResolvedValue('unsupported')
+    mount()
+    await flush()
+    const id = radio('Control').getAttribute('aria-describedby')!
+    expect(document.getElementById(id)!.textContent).toBe(CONTROL_UNSUPPORTED_REASON)
+    expect(radio('Viewer').hasAttribute('aria-describedby')).toBe(false)
+  })
+
   it("an SSH project's node: the typing warning names the host its shell runs on", async () => {
     mount({ remoteNode: true, sshTarget: { user: 'ada', host: 'build.example' } })
     await flush()
@@ -595,8 +618,19 @@ describe('LiveLinkDialog — Unlimited', () => {
     )
   })
 
+  it('the done step tells Control apart by its ROLE', () => {
+    const done = { phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt: null } as const
+    const control = body({ ...done, role: 'controller', password: 'longenough1' })
+    expect(control).toContain('Anyone with this link and the password can type until you stop it.')
+    expect(control).toContain('live-dialog__password')
+    // A password on a non-Control state (none is ever built) shows nothing of it.
+    const watch = body({ ...done, role: 'viewer', password: 'longenough1' })
+    expect(watch).toContain('Anyone with this link can watch until you stop it.')
+    expect(watch).not.toContain('longenough1')
+  })
+
   it('the done step of an Unlimited watch link says until it is stopped', () => {
-    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt: null })
+    const html = body({ phase: 'done', role: 'viewer', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt: null })
     expect(html).toContain('Anyone with this link can watch until you stop it.')
     expect(html).not.toContain('live-dialog__password')
   })

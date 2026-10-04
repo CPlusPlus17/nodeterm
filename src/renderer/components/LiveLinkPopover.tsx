@@ -1,11 +1,11 @@
-import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { NodeTerminalApi } from '@shared/types'
 import type { WatchLinkControlView, WatchLinkRole, WatchLinkView } from '@shared/watch-link-types'
 import { stripBidiControls } from '@shared/watch-link-types'
 import { CHAT_TEXT_MAX, type WatchChatMessage } from '@shared/watch-link/protocol'
 import { useDialogStack } from './dialog-stack'
-import { newControlPassword, PasswordField } from './LiveLinkDialog'
+import { newControlPassword, PasswordField, useCopied } from './LiveLinkPassword'
 import { useMenuFlip } from '../ui/useMenuFlip'
 import { Switch } from '../ui/Switch'
 import {
@@ -20,6 +20,8 @@ import {
   KICK_NOTE,
   PASSWORD_CHANGE_FAILED_MESSAGE,
   PASSWORD_CHANGE_NOTE,
+  PASSWORD_SAVE_TIMEOUT_MS,
+  PASSWORD_UNCONFIRMED_MESSAGE,
   PASSWORD_SEPARATE_NOTE,
   PASSWORD_SHOWN_ONCE,
   passwordProblemText,
@@ -226,15 +228,10 @@ const LinkBlock = memo(function LinkBlock({
   requestClose: () => boolean
 }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
-  const [copied, setCopied] = useState(false)
+  const [copied, copy] = useCopied()
   const [error, setError] = useState<string | null>(null)
   const status = statusLine(link)
   const waiting = waitingViewers([link]) > 0
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(t)
-  }, [copied])
   return (
     <section className="live-pop__link" data-link-id={link.linkId}>
       <header className="live-pop__head">
@@ -256,10 +253,7 @@ const LinkBlock = memo(function LinkBlock({
         <button
           type="button"
           className="confirm__btn live-pop__btn"
-          onClick={() => {
-            window.nodeTerminal.clipboard.writeText(link.url)
-            setCopied(true)
-          }}
+          onClick={() => copy(link.url)}
         >
           {copied ? 'Copied!' : 'Copy link'}
         </button>
@@ -350,6 +344,7 @@ const LinkBlock = memo(function LinkBlock({
 export function ControlSection({ linkId, control }: { linkId: string; control: WatchLinkControlView }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const hold = useContext(PopoverHold)
+  const invalidId = useId()
   const [busy, setBusy] = useState(false)
   /** A password save is in flight: the popover holds open, Save reads "Saving…". */
   const [saving, setSaving] = useState(false)
@@ -357,30 +352,95 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [shown, setShown] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, copy] = useCopied()
+  // Keyboard focus follows the flow: the new field on entering it, Copy password once a new one is
+  // shown, "Change password…" again on Cancel or Done (whose button would otherwise take the focus
+  // with it as it unmounts). Applied after the render that mounts the target.
+  const [focusTo, setFocusTo] = useState<'field' | 'copy' | 'change' | null>(null)
+  const fieldRef = useRef<HTMLInputElement>(null)
+  const copyRef = useRef<HTMLButtonElement>(null)
+  const changeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(t)
-  }, [copied])
-  // A hold this section took and has not released — released on unmount too (the link went away).
+    if (!focusTo) return
+    const el = focusTo === 'field' ? fieldRef.current : focusTo === 'copy' ? copyRef.current : changeRef.current
+    el?.focus({ preventScroll: true })
+    setFocusTo(null)
+  }, [focusTo])
+  // A hold and a deadline this section took and has not given back — both go on unmount too (the
+  // link went away: nothing is owed for it).
   const releaseRef = useRef<(() => void) | null>(null)
-  useEffect(() => () => releaseRef.current?.(), [])
-  const run = (call: () => Promise<boolean>, failed: string, done?: () => void, settled?: () => void): void => {
+  const deadlineRef = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(
+    () => () => {
+      releaseRef.current?.()
+      clearTimeout(deadlineRef.current)
+    },
+    []
+  )
+  /** Which save is current: a late answer to an older one is not shown. */
+  const saveGen = useRef(0)
+  const run = (call: () => Promise<boolean>, failed: string): void => {
     setBusy(true)
     setError(null)
     void Promise.resolve()
       .then(call)
       .then(
-        (ok) => (ok ? done?.() : setError(failed)),
+        (ok) => !ok && setError(failed),
         () => setError(failed)
       )
-      .finally(() => {
-        setBusy(false)
-        settled?.()
-      })
+      .finally(() => setBusy(false))
+  }
+  /**
+   * Save a new password, holding the popover open until the answer is in and, on success, shown —
+   * its plaintext exists nowhere else. Bounded: with no answer after `PASSWORD_SAVE_TIMEOUT_MS` the
+   * hold is released and the owner is told the outcome is unknown. An answer that lands later still
+   * counts: a new password that did take is shown, one refused says so.
+   */
+  const save = (): void => {
+    const next = draft
+    const gen = ++saveGen.current
+    const release = hold?.() ?? null
+    releaseRef.current = release
+    let open = true
+    const settle = (): void => {
+      if (!open) return
+      open = false
+      clearTimeout(deadlineRef.current)
+      setSaving(false)
+      setBusy(false)
+      release?.()
+      if (releaseRef.current === release) releaseRef.current = null
+    }
+    setSaving(true)
+    setBusy(true)
+    setError(null)
+    deadlineRef.current = setTimeout(() => {
+      if (!open) return
+      settle()
+      setError(PASSWORD_UNCONFIRMED_MESSAGE)
+    }, PASSWORD_SAVE_TIMEOUT_MS)
+    void Promise.resolve()
+      .then(() => api.setPassword(linkId, next))
+      .then(
+        (ok) => {
+          settle()
+          if (gen !== saveGen.current) return
+          if (ok) {
+            setError(null)
+            setShown(next)
+            setDraft('')
+            setEditing(false)
+            setFocusTo('copy')
+          } else setError(PASSWORD_CHANGE_FAILED_MESSAGE)
+        },
+        () => {
+          settle()
+          if (gen === saveGen.current) setError(PASSWORD_CHANGE_FAILED_MESSAGE)
+        }
+      )
   }
   const problem = passwordProblemText(draft)
+  const showProblem = draft !== '' && problem !== null
   return (
     <div className="live-pop__control">
       {control.locked && (
@@ -405,10 +465,11 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
             {control.enabled ? 'Anyone with the password can type.' : 'Off: viewers can watch and chat.'}
           </span>
         </span>
+        {/* `pending`, not `disabled`: a switch the owner just toggled from the keyboard keeps the focus. */}
         <Switch
           checked={control.enabled}
           ariaLabel="Typing"
-          disabled={busy}
+          pending={busy}
           onChange={(on) => run(() => api.setControl(linkId, on), CONTROL_CHANGE_FAILED_MESSAGE)}
         />
       </div>
@@ -416,21 +477,21 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
         <>
           <div className="live-pop__password">
             <PasswordField value={shown} readOnly label="New password" />
-            <button
-              type="button"
-              className="confirm__btn live-pop__btn"
-              onClick={() => {
-                window.nodeTerminal.clipboard.writeText(shown)
-                setCopied(true)
-              }}
-            >
+            <button type="button" ref={copyRef} className="confirm__btn live-pop__btn" onClick={() => copy(shown)}>
               {copied ? 'Copied!' : 'Copy password'}
             </button>
           </div>
           <p className="live-pop__muted live-pop__note">{PASSWORD_SHOWN_ONCE}</p>
           <p className="live-pop__muted live-pop__note">{PASSWORD_SEPARATE_NOTE}</p>
           <div className="live-pop__actions">
-            <button type="button" className="confirm__btn live-pop__btn" onClick={() => setShown(null)}>
+            <button
+              type="button"
+              className="confirm__btn live-pop__btn"
+              onClick={() => {
+                setShown(null)
+                setFocusTo('change')
+              }}
+            >
               Done
             </button>
           </div>
@@ -438,12 +499,23 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
       ) : editing ? (
         <>
           <div className="live-pop__password">
-            <PasswordField value={draft} disabled={busy} onChange={setDraft} label="New password" />
+            <PasswordField
+              inputRef={fieldRef}
+              value={draft}
+              disabled={busy}
+              onChange={setDraft}
+              label="New password"
+              describedBy={showProblem ? invalidId : undefined}
+            />
             <button type="button" className="confirm__btn live-pop__btn" disabled={busy} onClick={() => setDraft(newControlPassword())}>
               Generate
             </button>
           </div>
-          {draft !== '' && problem && <p className="live-pop__invalid">{problem}</p>}
+          {showProblem && (
+            <p className="live-pop__invalid" id={invalidId}>
+              {problem}
+            </p>
+          )}
           <p className="live-pop__muted live-pop__note">{PASSWORD_CHANGE_NOTE}</p>
           <div className="live-pop__actions">
             <button
@@ -454,6 +526,7 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
                 setEditing(false)
                 setDraft('')
                 setError(null)
+                setFocusTo('change')
               }}
             >
               Cancel
@@ -462,26 +535,7 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
               type="button"
               className="confirm__btn primary live-pop__btn"
               disabled={busy || problem !== null}
-              onClick={() => {
-                const next = draft
-                // Hold the popover open until the answer is in and, on success, shown.
-                releaseRef.current = hold?.() ?? null
-                setSaving(true)
-                run(
-                  () => api.setPassword(linkId, next),
-                  PASSWORD_CHANGE_FAILED_MESSAGE,
-                  () => {
-                    setShown(next)
-                    setDraft('')
-                    setEditing(false)
-                  },
-                  () => {
-                    setSaving(false)
-                    releaseRef.current?.()
-                    releaseRef.current = null
-                  }
-                )
-              }}
+              onClick={save}
             >
               {saving ? 'Saving…' : 'Save'}
             </button>
@@ -489,7 +543,15 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
         </>
       ) : (
         <div className="live-pop__actions">
-          <button type="button" className="confirm__btn live-pop__btn" onClick={() => setEditing(true)}>
+          <button
+            type="button"
+            ref={changeRef}
+            className="confirm__btn live-pop__btn"
+            onClick={() => {
+              setEditing(true)
+              setFocusTo('field')
+            }}
+          >
             Change password…
           </button>
         </div>
