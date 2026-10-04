@@ -1093,14 +1093,20 @@ export function isNodeWatched(nodeId: string): boolean {
  * modal (a second, equally real way of opening a session — the canvas visibility observer says
  * nothing about it).
  *
- * Same park-surviving reason as `restartSubs`: no entry = nobody is mounted = nothing to wake.
+ * Same park-surviving reason as `restartSubs`: no entry means Canvas must use the guarded saved-project executor.
  */
 const wakeSubs = new Map<string, () => void>()
 
 /** Ask a node to resume its hibernated CLI. No-op if it is not mounted, or not hibernated (the
  *  node re-reads the flag itself — this is a nudge, never an assertion). */
-export function wakeHibernatedNode(nodeId: string): void {
-  wakeSubs.get(nodeId)?.()
+export function wakeHibernatedNode(nodeId: string, automatic = false): boolean {
+  if (automatic) {
+    const state = useAgentStatus.getState().byId[nodeId]
+    if (!shouldAutoWake(state?.hibernated, state?.paused)) return true
+  }
+  const trigger = wakeSubs.get(nodeId)
+  trigger?.()
+  return !!trigger
 }
 
 /**

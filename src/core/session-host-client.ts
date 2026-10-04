@@ -1545,6 +1545,14 @@ export class SessionHostClient {
     } catch { return false }
   }
 
+  async wakeSleeping(name: string, data: string, expected: PaneOwner): Promise<boolean> {
+    const generation = this.sessions.get(name)?.generation ?? this.sessionGenerations.get(name)
+    if (!generation) return false
+    try {
+      return await this.request<boolean>({ cmd: 'wakeSleepingV1', name, generation, data, expected }) === true
+    } catch { return false } // No ordinary write, opaque launch, retry, or legacy-host replacement.
+  }
+
   async capture(name: string, full: boolean): Promise<string> {
     const result = await this.request<CaptureResult>({ cmd: 'capture', name, full })
     return result.text

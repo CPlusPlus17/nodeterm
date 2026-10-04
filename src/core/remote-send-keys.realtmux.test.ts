@@ -16,6 +16,7 @@ import { execFileSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { remoteTmuxSendKeysArgs } from './remote-ssh/control-master'
+import type { PaneOwner } from '../shared/agents/pane-owner-predicate'
 import { makeTmuxTmpdir } from './tmux-test-socket'
 import { sendBackgroundTmuxKeys } from './pty-manager'
 
@@ -264,5 +265,39 @@ suite('REAL tmux: a local quick answer reaches the app rather than copy mode or 
     })).toBe(true)
     expect(drain(session, out, original)).toBe('2')
     expect(drain(session, otherOut, other)).toBe('')
+  })
+})
+
+
+suite('REAL tmux: offscreen wake keeps the previously verified pane identity', () => {
+  function identity(session: string): PaneOwner {
+    const [paneId, pid, command] = tmux(['-L', SOCKET, 'display-message', '-p', '-t', `=${session}:`, '#{pane_id} #{pane_pid} #{pane_current_command}']).trim().split(' ')
+    return { paneId, panePid: Number(pid), command, tty: '/dev/pts/1', argv: [] }
+  }
+  async function local(session: string, expected: PaneOwner): Promise<boolean> {
+    return sendBackgroundTmuxKeys(session, 'wake', async (args) => {
+      try { return { ok: true, body: tmux(['-L', SOCKET, ...args]).trimEnd().split('\n') } }
+      catch { return { ok: false, body: [] } }
+    }, undefined, expected)
+  }
+  it('remote delivery succeeds for the same tuple and refuses changed pid, command or pane', () => {
+    const session = 'nt-wake-remote'; const out = recorderPane(session)
+    const owner = identity(session)
+    const run = (expected: PaneOwner): boolean => {
+      try { runRemote(remoteTmuxSendKeysArgs(CONN, '/cm.sock', session, 'wake', expected).at(-1)!); return true }
+      catch { return false }
+    }
+    expect(run(owner)).toBe(true)
+    for (const changed of [{ ...owner, panePid: owner.panePid + 1 }, { ...owner, command: 'stale' }, { ...owner, paneId: '%999999' }]) expect(run(changed)).toBe(false)
+    expect(drain(session, out)).toBe('wake')
+  })
+  it('local delivery refuses the wrong final pid or command and sends nothing into that pane', async () => {
+    const session = 'nt-wake-local'; const out = recorderPane(session)
+    const owner = identity(session)
+    expect(await local(session, { ...owner, panePid: owner.panePid + 1 })).toBe(false)
+    expect(await local(session, { ...owner, command: 'stale' })).toBe(false)
+    expect(await local(session, { ...owner, paneId: '%999999' })).toBe(false)
+    expect(await local(session, owner)).toBe(true)
+    expect(drain(session, out)).toBe('wake')
   })
 })

@@ -1010,6 +1010,8 @@ export interface PtyApi {
    *  false if unavailable; `pasted-not-submitted` means input was accepted but Enter was not
    *  confirmed written. Surface it without automatically resending. True is not an app receipt. */
   sendText(persistKey: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult>
+  /** Resume only an existing generation whose freshly read pane still satisfies its saved wake proof. */
+  wakeSleeping(request: import('./agents/sleeping-wake').SleepingWakeRequest): Promise<import('./agents/sleeping-wake').SleepingWakeResult>
   /** Is tmux available on this host (else the silent plain-shell fallback), plus a suggested
    *  install command for the "tmux not found" banner. */
   tmuxStatus(): Promise<TmuxStatus>
@@ -3692,10 +3694,10 @@ export interface NodeTerminalApi {
   reportHibernated(nodeId: string, on: boolean): void
   /** Fires when the core asks this renderer to WAKE a hibernated node NOW (a phone viewer just
    *  attached to its session over the relay). A nudge with `wakeHibernatedNode`'s exact contract:
-   *  re-read the flag, no-op when not hibernated or not mounted. Returns unsubscribe.
+   *  re-read the flag, no-op when not hibernated; resolves saved offscreen nodes without switching projects. Returns unsubscribe.
    *  Desktop-only signal (the relay host lives in the desktop main process); the ws-bridge
    *  subscribes to nothing and returns a no-op unsubscribe. */
-  onAgentWake(listener: (nodeId: string) => void): () => void
+  onAgentWake(listener: (nodeId: string, automatic?: boolean) => void): () => void
   /** Fires with the CURRENT set of node ids that have a live relay (phone) viewer attached — the
    *  full set each change, never a delta. Feeds `isNodeWatched` so Eco cannot hibernate a session
    *  someone is watching from a phone. Desktop-only signal, like `onAgentWake`. */

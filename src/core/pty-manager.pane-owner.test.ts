@@ -11,6 +11,7 @@ import { fakePlatform } from './platform-fake'
 import { TMUX_SOCKET, sessionName } from './tmux-naming'
 import { PANE_OWNER_FMT } from './agents/pane-owner'
 import { RMT_TMUX_SOCKET } from './remote-ssh/control-master'
+import type { SleepingWakeRequest } from '../shared/agents/sleeping-wake'
 
 /** Every `runAsync` in pty-manager lands here. `answer` decides what each call resolves to. */
 const calls: Array<{ file: string; args: string[] }> = []
@@ -58,13 +59,15 @@ const NODE = 'node-1'
 const hostMessaging = vi.hoisted(() => ({
   owner: vi.fn(async () => null as unknown),
   pasteReady: vi.fn(async () => false),
-  send: vi.fn(async () => false)
+  send: vi.fn(async () => false),
+  wake: vi.fn(async () => false)
 }))
 vi.mock('./session-host-backend', async (original) => ({
   ...(await original<typeof import('./session-host-backend')>()),
   sessionHostMessageOwner: hostMessaging.owner,
   sessionHostMessagePasteReady: hostMessaging.pasteReady,
-  sessionHostMessageEnvelope: hostMessaging.send
+  sessionHostMessageEnvelope: hostMessaging.send,
+  sessionHostWakeSleeping: hostMessaging.wake
 }))
 const TARGET = sessionName(NODE)
 const TTY = '/dev/pts/7'
@@ -160,6 +163,45 @@ function healthy(file: string, args: string[]): { stdout: string } {
 }
 
 describe('PtyManager.paneOwner', () => {
+  it('wakes live and released session-host shells only through the generation-bound extension', async () => {
+    const mgr = await manager() as unknown as Pick<import('./pty-manager').PtyManager, 'wakeSleeping'> & {
+      sessions: Map<string, unknown>; byPersistKey: Map<string, string>; released: Map<string, unknown>
+    }
+    const rawWrite = vi.fn()
+    const expected = { panePid: 10, tty: 'win32-console:10', paneId: 'win32:host-generation:birth', command: 'pwsh', argv: ['pwsh'], pids: [10], processBirths: ['birth'] }
+    const request: SleepingWakeRequest = { nodeId: NODE, agentId: 'codex', command: 'codex resume saved', exitedByUs: true,
+      recorded: { command: 'pwsh', panePid: 10, paneId: expected.paneId } }
+    mgr.sessions.set('host-session', { persistKey: NODE, indexKey: NODE, sessionHost: true, proc: { write: rawWrite } })
+    mgr.byPersistKey.set(NODE, 'host-session')
+    hostMessaging.owner.mockResolvedValue(expected)
+    hostMessaging.wake.mockResolvedValueOnce(true)
+    expect(await mgr.wakeSleeping(request)).toEqual({ delivered: true, verdict: 'resume' })
+    expect(hostMessaging.wake).toHaveBeenCalledWith(TARGET, '\x1b' + request.command + '\r', expected)
+    hostMessaging.wake.mockClear()
+    expect(await mgr.wakeSleeping(request)).toEqual({ delivered: false, verdict: 'delivery-failed' })
+    expect(rawWrite).not.toHaveBeenCalled() // Unsupported/uncertain extension never falls back.
+    mgr.sessions.clear(); mgr.byPersistKey.clear()
+    mgr.released.set(NODE, { sessionId: 'host-session', remote: false, sessionHost: true })
+    hostMessaging.wake.mockResolvedValueOnce(true)
+    expect((await mgr.wakeSleeping(request)).delivered).toBe(true)
+    expect(hostMessaging.wake).toHaveBeenCalledTimes(2)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('uses the direct native birth-checked adapter instead of ordinary PTY input', async () => {
+    const mgr = await manager({ tmux: null }) as unknown as Pick<import('./pty-manager').PtyManager, 'wakeSleeping'> & {
+      sessions: Map<string, unknown>; byPersistKey: Map<string, string>
+    }
+    const owner = { panePid: 10, tty: 'win32-console:10', paneId: 'native:birth', command: 'pwsh', argv: ['pwsh'], pids: [10], processBirths: ['birth'] }
+    const write = vi.fn(), wakeSleeping = vi.fn(async () => true)
+    mgr.sessions.set('native', { indexKey: NODE, proc: { write }, nativeWindowsPane: { owner: async () => owner, wakeSleeping } })
+    mgr.byPersistKey.set(NODE, 'native')
+    const request: SleepingWakeRequest = { nodeId: NODE, agentId: 'codex', command: 'codex resume saved', exitedByUs: true,
+      recorded: { command: 'pwsh', panePid: 10, paneId: owner.paneId } }
+    expect((await mgr.wakeSleeping(request)).delivered).toBe(true)
+    expect(wakeSleeping).toHaveBeenCalledExactlyOnceWith('\x1b' + request.command + '\r', owner)
+    expect(write).not.toHaveBeenCalled()
+  })
   it('routes a persistent Windows generation exclusively through the host extension', async () => {
     const mgr = await manager() as unknown as {
       sessions: Map<string, unknown>

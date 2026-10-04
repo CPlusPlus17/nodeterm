@@ -3982,18 +3982,18 @@ app.whenReady().then(async () => {
     //    invisible to every attention predicate — the kanban-modal gap, one surface further out);
     //  - `agent:wake` fires on each attach, so a hibernated node someone just opened on their
     //    phone resumes its CLI — the same nudge contract as `wakeHibernatedNode` (re-reads the
-    //    flag, no-ops when not hibernated or not mounted).
+    //    flag and verifies the saved pane even when the project is not mounted).
     remoteViewer: (() => {
       const counts = new Map<string, number>()
-      const toRenderer = (channel: string, payload: unknown): void => {
-        if (!win.isDestroyed()) win.webContents.send(channel, payload)
+      const toRenderer = (channel: string, payload: unknown, automatic?: boolean): void => {
+        if (!win.isDestroyed()) win.webContents.send(channel, payload, automatic)
       }
       const broadcast = (): void => toRenderer(IPC.agentRemoteViewers, [...counts.keys()])
       return {
         attached(nodeId: string) {
           counts.set(nodeId, (counts.get(nodeId) ?? 0) + 1)
           broadcast()
-          toRenderer(IPC.agentWake, nodeId)
+          toRenderer(IPC.agentWake, nodeId, true)
         },
         detached(nodeId: string) {
           const n = (counts.get(nodeId) ?? 0) - 1

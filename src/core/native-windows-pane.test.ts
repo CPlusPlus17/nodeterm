@@ -22,6 +22,19 @@ function fixture(render = true) {
 afterEach(() => { for (const p of panes.splice(0)) p.dispose() })
 
 describe('native Windows envelope delivery', () => {
+  it('uses a fresh birth identity for one direct sleeping-shell wake', async () => {
+    const { pane, write, probe } = fixture()
+    const shell = { ...expected, command: 'pwsh', argv: ['pwsh'], pids: [10], processBirths: ['shell-birth'] }
+    probe.mockResolvedValue(shell)
+    expect(await pane.wakeSleeping('\x1bcodex resume saved\r', shell)).toBe(true)
+    expect(write.mock.calls).toEqual([['\x1bcodex resume saved\r']])
+    write.mockClear()
+    probe.mockResolvedValue({ ...shell, processBirths: ['replacement-same-pid'] })
+    expect(await pane.wakeSleeping('\x1bcodex resume saved\r', shell)).toBe(false)
+    probe.mockImplementationOnce(async () => { pane.dispose(); return shell })
+    expect(await pane.wakeSleeping('\x1bcodex resume saved\r', shell)).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+  })
   it('waits for split terminal-mode output, pastes one sanitized block, then Enter once it renders', async () => {
     const { pane, write } = fixture()
     pane.recordOutput('\x1b[?20')

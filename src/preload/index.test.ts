@@ -177,3 +177,20 @@ describe('preload same-core project updates', () => {
     expect(second).toEqual([project])
   })
 })
+
+
+describe('sleeping wake ownership boundary', () => {
+  it('invokes the narrow core request and preserves automatic versus explicit wake events', async () => {
+    const request = { nodeId: 'term-s', agentId: 'codex', command: 'codex resume s', exitedByUs: true, recorded: { panePid: 41, command: 'bash' } }
+    await api.pty.wakeSleeping(request)
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ptyWakeSleeping, request)
+    const listener = vi.fn()
+    const off = api.onAgentWake(listener)
+    h.emit(IPC.agentWake, 'term-s', true)
+    h.emit(IPC.agentWake, 'term-s')
+    h.emit(IPC.agentWake, 'term-s', 'true')
+    expect(listener.mock.calls).toEqual([['term-s', true], ['term-s', false], ['term-s', false]])
+    off(); h.emit(IPC.agentWake, 'term-s', true)
+    expect(listener).toHaveBeenCalledTimes(3)
+  })
+})

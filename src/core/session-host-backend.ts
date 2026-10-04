@@ -29,6 +29,10 @@ export async function sessionHostMessageEnvelope(
   return getClient().messageEnvelope(name, envelope, expected)
 }
 
+export async function sessionHostWakeSleeping(name: string, data: string, expected: PaneOwner): Promise<boolean> {
+  return getClient().wakeSleeping(name, data, expected)
+}
+
 let client: SessionHostClient | null = null
 
 function getClient(): SessionHostClient {

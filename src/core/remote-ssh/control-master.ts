@@ -19,6 +19,7 @@ import {
 } from '../tmux-naming'
 import { sanitizePasteText } from '../paste-injection'
 import { encodeSendKeysHex } from '../tmux-control'
+import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
 import { canControlCanvas } from '../../shared/agents/config'
 import { COMBINED_PANE_MARKER, PANE_OWNER_FMT, PS_FOREGROUND_FLAGS } from '../agents/pane-owner'
 // Dependency-free (no node-pty): safe to import from these pure builders.
@@ -365,12 +366,22 @@ export function remoteTmuxSendKeysArgs(
   conn: SshConnection,
   controlPath: string,
   sessionId: string,
-  data: string
+  data: string,
+  expectedOwner?: PaneOwner
 ): string[] {
   assertPasteTarget(sessionId)
   if (data.length === 0) throw new Error('remoteTmuxSendKeysArgs: no keys to send')
-  const pane = `=${sessionId}:`
-  const cmd =
+  const selected = `=${sessionId}:`
+  let pane = selected
+  let guard = ''
+  if (expectedOwner) {
+    if (!expectedOwner.paneId || !/^%[0-9]+$/.test(expectedOwner.paneId) || !Number.isSafeInteger(expectedOwner.panePid) || expectedOwner.panePid <= 0) throw new Error('remote wake: missing pane identity')
+    pane = expectedOwner.paneId
+    const tuple = `${pane} ${expectedOwner.panePid} ${expectedOwner.command}`
+    // A window switch or replaced session must not redirect a delayed wake into another pane.
+    guard = `[ "$(tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${posixQuote(selected)} ${posixQuote('#{pane_id} #{pane_pid} #{pane_current_command}')})" = ${posixQuote(tuple)} ] && `
+  }
+  const cmd = guard +
     `tmux -L ${RMT_TMUX_SOCKET} ` +
     `if-shell -F -t '${pane}' '#{pane_in_mode}' 'send-keys -t ${pane} -X cancel' ';' ` +
     encodeSendKeysHex(`'${pane}'`, data)

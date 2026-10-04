@@ -263,6 +263,7 @@ export function buildRealApi(
       client.request(IPC.ptyReadScrollback, persistKey) as Promise<string>,
     sendText: (persistKey, text, opts) =>
       client.request(IPC.ptySendText, persistKey, text, opts?.enter) as Promise<boolean>,
+    wakeSleeping: (request) => client.request(IPC.ptyWakeSleeping, request).catch(() => ({ delivered: false, verdict: 'delivery-failed' })) as Promise<import('../../shared/agents/sleeping-wake').SleepingWakeResult>,
     // A failed read is unknown, never evidence that persistence is available.
     tmuxStatus: () =>
       client

@@ -32,9 +32,8 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
  * A wake is offered over DIRECT SSH only. A relay attach tells the desktop that a phone opened the
  * node (host-service `remoteViewer.attached` → `agent:wake`), and the desktop wakes it itself, after
  * checking that the pane is still the one its CLI exited from. Offering the line on the phone as well
- * would type `--resume` into the CLI the desktop just started, where it arrives as a prompt. (The
- * desktop's wake does nothing for a node it has not mounted, a project other than the active one,
- * and the phone cannot tell that case apart: docs/android.md "Known gaps".) Over SSH nothing tells
+ * would type `--resume` into the CLI the desktop just started, where it arrives as a prompt. The
+ * desktop resolves saved offscreen nodes too, and refuses a missing or changed pane proof. Over SSH nothing tells
  * the desktop about the attach, which is why the phone offers it there.
  *
  * `paused`: the desktop never wakes a paused node on its own, but its own UI offers the explicit

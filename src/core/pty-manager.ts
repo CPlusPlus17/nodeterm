@@ -81,6 +81,7 @@ import {
   runPasteDelivery
 } from './tmux-naming'
 import { encodeSendKeysHex } from './tmux-control'
+import { deliverSleepingWake, type SleepingWakeRequest, type SleepingWakeResult } from '../shared/agents/sleeping-wake'
 import { releasePty, type ReleasablePty } from './pty-release'
 import { terminateWindowsProcessTree } from '../session-host/windows-process-tree'
 import { effectiveSize, type PtySize } from './pty-size'
@@ -144,6 +145,7 @@ import {
   sessionHostMessageOwner,
   sessionHostMessagePasteReady,
   sessionHostMessageEnvelope,
+  sessionHostWakeSleeping,
   sessionHostSendKeys,
   sessionHostSupported,
   SessionHostProtocolCompatibilityError
@@ -870,7 +872,8 @@ export async function sendBackgroundTmuxKeys(
   target: string,
   data: string,
   command: (args: string[]) => Promise<{ ok: boolean; body: string[] } | null>,
-  onUnconfirmed?: () => void
+  onUnconfirmed?: () => void,
+  expectedOwner?: PaneOwner
 ): Promise<boolean> {
   if (!data || !isSessionName(target)) return false
   // A pane target needs the trailing colon. Without '=', a missing node can prefix-match a
@@ -888,6 +891,11 @@ export async function sendBackgroundTmuxKeys(
     // Pin the resolved pane across awaits: somebody selecting a different pane/window on the
     // desktop between the probe and the answer must not redirect a phone's approval key.
     const pane = identity[1]
+    if (expectedOwner) {
+      if (!expectedOwner.paneId || pane !== expectedOwner.paneId) return false
+      const current = await command(['display-message', '-p', '-t', pane, '#{pane_pid} #{pane_current_command}'])
+      if (!current?.ok || current.body.length !== 1 || current.body[0] !== `${expectedOwner.panePid} ${expectedOwner.command}`) return false
+    }
     if (identity[2] === '1') {
       if (!(await command(['send-keys', '-t', pane, '-X', 'cancel']))?.ok) return false
     }
@@ -1072,7 +1080,7 @@ export class PtyManager {
    */
   private released = new Map<
     string,
-    { sessionId: string; size?: PtySize; remote: boolean; sessionHost?: boolean }
+    { sessionId: string; size?: PtySize; remote: boolean; sessionHost?: boolean; sshRemote?: NonNullable<PtyCreateOptions['sshRemote']> }
   >()
   /**
    * The ONE control-mode client this manager keeps for background WRITES, plus the node whose tmux
@@ -1092,7 +1100,7 @@ export class PtyManager {
   private sharedLinger: ReturnType<typeof setTimeout> | null = null
   /** Serialize complete background deliveries per node: probe/cancel/send must keep stream chunks
    * in arrival order. A slow pane must not hold up answers to unrelated nodes. */
-  private backgroundWrites = new Map<string, Promise<boolean>>()
+  private backgroundWrites = new Map<string, Promise<unknown>>()
   /** The child-process seam for shadow clients. Undefined in production, where `ControlModeClient`
    *  uses `child_process` (see tmux-control-client.ts); tests inject a fake spawner. */
   private readonly controlSpawn: ControlSpawn | undefined
@@ -1201,6 +1209,7 @@ export class PtyManager {
         sessionId,
         size: session.appliedSize,
         remote: !!session.sshRemote,
+        sshRemote: session.sshRemote,
         // Which backend still holds the session after this client goes. Agent messaging reaches a
         // released session by NAME, and must ask the backend that owns it (`sessionHostOwns`).
         sessionHost: !!session.sessionHost
@@ -1446,8 +1455,12 @@ export class PtyManager {
    */
   async backgroundWrite(persistKey: string, data: string): Promise<boolean> {
     if (!data) return false
-    const previous = this.backgroundWrites.get(persistKey) ?? Promise.resolve(false)
-    const writing = previous.then(() => this.backgroundWriteNow(persistKey, data)).catch(() => false)
+    return this.serializeBackgroundWrite(persistKey, () => this.backgroundWriteNow(persistKey, data)).catch(() => false)
+  }
+
+  private async serializeBackgroundWrite<T>(persistKey: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.backgroundWrites.get(persistKey) ?? Promise.resolve()
+    const writing = previous.then(action, action)
     this.backgroundWrites.set(persistKey, writing)
     try {
       return await writing
@@ -1456,13 +1469,51 @@ export class PtyManager {
     }
   }
 
-  private async backgroundWriteNow(persistKey: string, data: string): Promise<boolean> {
+  /** Wake an existing owned generation, including an offscreen SSH pane over its retained master. */
+  async wakeSleeping(request: SleepingWakeRequest): Promise<SleepingWakeResult> {
+    if (!request || typeof request.nodeId !== 'string') return { delivered: false, verdict: 'invalid-request' }
+    return this.serializeBackgroundWrite(request.nodeId, async () => {
+      const live = this.liveSessionForPersistKey(request.nodeId)
+      const released = !live ? this.released.get(request.nodeId) : undefined
+      const remote = live?.sshRemote ?? released?.sshRemote
+      const owned = (): boolean => live
+        ? this.liveSessionForPersistKey(request.nodeId) === live
+        : !!released && !this.liveSessionForPersistKey(request.nodeId) && this.released.get(request.nodeId) === released && (!released.remote || !!remote)
+      return deliverSleepingWake(request, {
+        owned,
+        owner: async () => {
+          if (!remote) return this.paneOwner(request.nodeId)
+          const ssh = findSsh()
+          if (!ssh) return null
+          try {
+            const { stdout } = await runAsync(ssh, remotePaneOwnerCombinedArgs(remote.conn, remote.controlPath, sessionName(request.nodeId)), { timeout: PROBE_TIMEOUT_MS })
+            return parseCombinedPaneOwner(stdout)
+          } catch { return null }
+        },
+        write: async (data, owner) => {
+          if (!owned()) return false
+          if (remote) return this.backgroundWriteOver(request.nodeId, data, remote, owner)
+          if (live?.nativeWindowsPane) return live.nativeWindowsPane.wakeSleeping(data, owner)
+          if (this.sessionHostOwns(request.nodeId, live)) return sessionHostWakeSleeping(sessionName(request.nodeId), data, owner)
+          // An ordinary direct POSIX PTY has no persisted offscreen generation/owner adapter.
+          if (live && !live.persistKey) return false
+          return this.backgroundWriteNow(request.nodeId, data, owner)
+        },
+        binaries: binariesFor(request.agentId, this.getSettings().customAgents),
+        platform: remote ? 'posix' : this.runtimePlatform
+      })
+    }).catch(() => ({ delivered: false, verdict: 'delivery-failed' }))
+  }
+
+  private async backgroundWriteNow(persistKey: string, data: string, expectedOwner?: PaneOwner): Promise<boolean> {
     // Nothing to type — and `encodeSendKeysHex` would build a `send-keys -H ` with no bytes after
     // it, which is a command line worth not sending.
     if (!data) return false
     const live = this.liveSessionForPersistKey(persistKey)
     if (live) {
-      if (live.sshRemote) return this.backgroundWriteOver(persistKey, data, live.sshRemote)
+      if (live.sshRemote) return expectedOwner
+        ? this.backgroundWriteOver(persistKey, data, live.sshRemote, expectedOwner)
+        : this.backgroundWriteOver(persistKey, data, live.sshRemote)
       if (live.persistKey && !live.sessionHost) {
         if (!this.tmuxPath) return false
         const tmuxPath = this.tmuxPath
@@ -1472,7 +1523,7 @@ export class PtyManager {
             timeout: PROBE_TIMEOUT_MS
           })
           return { ok: true, body: stdout.trimEnd().split('\n') }
-        })
+        }, undefined, expectedOwner)
       }
       try {
         live.proc.write(data)
@@ -1498,7 +1549,7 @@ export class PtyManager {
     // cannot produce anything else today — which is exactly why this stays cheap.
     if (!isSessionName(target)) return false
     const line = (args: string[]): string =>
-      args.map((arg) => (arg === '#{pane_id} #{pane_in_mode}' ? "'#{pane_id} #{pane_in_mode}'" : arg))
+      args.map((arg) => (arg.startsWith('#{') ? `'${arg}'` : arg))
         .join(' ')
     const shadow = this.shadows.get(persistKey)
     // ALIVE, not merely present: `dispose()` is silent (it fires no `onExit`), so a shadow retired
@@ -1513,7 +1564,8 @@ export class PtyManager {
         (args) => this.shadowCommand(persistKey, line(args)),
         () => {
           if (this.shadows.get(persistKey) === shadow) this.shadowDispose(persistKey)
-        }
+        },
+        expectedOwner
       )
     const client = this.sharedClientFor(persistKey)
     if (!client) return false
@@ -1521,7 +1573,8 @@ export class PtyManager {
       target,
       data,
       (args) => this.controlCommand(client, line(args), () => this.sharedDispose(client)),
-      () => this.sharedDispose(client)
+      () => this.sharedDispose(client),
+      expectedOwner
     )
   }
 
@@ -1902,6 +1955,7 @@ export class PtyManager {
     platform().handle(IPC.ptySendText, (persistKey: string, text: string, enter?: boolean) =>
       this.sendText(persistKey, text, enter === undefined ? undefined : { enter })
     )
+    platform().handle(IPC.ptyWakeSleeping, (request: SleepingWakeRequest) => this.wakeSleeping(request))
     platform().handle(IPC.ptyTmuxStatus, () => this.tmuxStatus())
     platform().handle(IPC.ptyPaneCommand, (persistKey: string) => this.paneCommand(persistKey))
     // Registered HERE, beside its name-only sibling, rather than in either shell: core owns both
@@ -2627,14 +2681,15 @@ export class PtyManager {
   async backgroundWriteOver(
     persistKey: string,
     data: string,
-    sshRemote: NonNullable<PtyCreateOptions['sshRemote']>
+    sshRemote: NonNullable<PtyCreateOptions['sshRemote']>,
+    expectedOwner?: PaneOwner
   ): Promise<boolean> {
     if (!data) return false
     const ssh = findSsh()
     if (!ssh) return false
     let args: string[]
     try {
-      args = remoteTmuxSendKeysArgs(sshRemote.conn, sshRemote.controlPath, sessionName(persistKey), data)
+      args = remoteTmuxSendKeysArgs(sshRemote.conn, sshRemote.controlPath, sessionName(persistKey), data, expectedOwner)
     } catch {
       return false
     }

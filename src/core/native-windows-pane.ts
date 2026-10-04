@@ -6,6 +6,7 @@ import { sendTextWhenSettled } from './settled-text'
 import type { PaneOwner } from '../shared/agents/pane-owner-predicate'
 import { sanitizePasteText } from './paste-injection'
 import { pasteThenSubmitWhenSettled, type SettleOptions } from './settled-submit'
+import { validSleepingWakeInput } from '../session-host/sleeping-wake'
 
 export { sameNativeProcess } from '../session-host/windows-pane-owner'
 
@@ -56,6 +57,15 @@ export class NativeWindowsPane {
   async pasteAware(): Promise<boolean> {
     await this.tail
     return this.alive && this.screen.bracketedPasteRequested()
+  }
+
+  async wakeSleeping(data: string, expected: PaneOwner): Promise<boolean> {
+    if (!this.alive || !validSleepingWakeInput(data)) return false
+    if (!sameNativeProcess(expected, await this.owner()) || !this.alive) return false
+    try {
+      this.proc.write(data)
+      return true
+    } catch { return false }
   }
 
   async sendEnvelope(envelope: string, expected?: PaneOwner): Promise<boolean> {

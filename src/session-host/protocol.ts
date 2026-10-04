@@ -98,6 +98,7 @@ export type SessionHostRequest =
   | { id: number; cmd: 'messageOwnerV1'; name: string }
   | { id: number; cmd: 'messagePasteReadyV1'; name: string }
   | { id: number; cmd: 'messageEnvelopeV1'; name: string; envelope: string; expected: PaneOwner }
+  | { id: number; cmd: 'wakeSleepingV1'; name: string; generation: string; data: string; expected: PaneOwner }
   | { id: number; cmd: 'capture'; name: string; full: boolean }
   | { id: number; cmd: 'historySearchV1'; name: string; generation: string; query: string }
   | {

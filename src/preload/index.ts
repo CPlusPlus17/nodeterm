@@ -97,6 +97,7 @@ const api: NodeTerminalApi = {
     readScrollback: (persistKey) => ipcRenderer.invoke(IPC.ptyReadScrollback, persistKey),
     sendText: (persistKey, text, opts) =>
       ipcRenderer.invoke(IPC.ptySendText, persistKey, text, opts?.enter),
+    wakeSleeping: (request) => ipcRenderer.invoke(IPC.ptyWakeSleeping, request),
     tmuxStatus: () => ipcRenderer.invoke(IPC.ptyTmuxStatus),
     paneCommand: (persistKey) => ipcRenderer.invoke(IPC.ptyPaneCommand, persistKey),
     paneOwner: (persistKey) => ipcRenderer.invoke(IPC.ptyPaneOwner, persistKey),
@@ -796,7 +797,7 @@ const api: NodeTerminalApi = {
   }, () => ipcRenderer.invoke(IPC.agentSubagentSnapshot), listener),
   reportHibernated: (nodeId, on) => ipcRenderer.send(IPC.agentHibernated, { nodeId, on }),
   onAgentWake: (listener) => {
-    const handler = (_e: unknown, nodeId: string) => listener(nodeId)
+    const handler = (_e: unknown, nodeId: string, automatic?: unknown) => listener(nodeId, automatic === true)
     ipcRenderer.on(IPC.agentWake, handler)
     return () => ipcRenderer.removeListener(IPC.agentWake, handler)
   },

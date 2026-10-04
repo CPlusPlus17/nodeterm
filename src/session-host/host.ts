@@ -16,6 +16,7 @@ import fs from 'fs'
 import net from 'net'
 import { hostMessagePane } from './message-pane'
 import { searchRetainedGeneration } from './history-search'
+import { hostSleepingWake } from './sleeping-wake'
 import path from 'path'
 import crypto from 'crypto'
 import { sessionHostPaths, currentProtocolVersion, type SessionHostState } from './paths'
@@ -893,6 +894,8 @@ async function main(): Promise<void> {
           ok: true,
           result: await hostMessagePane(() => sessions.get(req.name)).send(req.envelope, req.expected)
         }
+      case 'wakeSleepingV1':
+        return { ok: true, result: await hostSleepingWake(() => sessions.get(req.name))(req.generation, req.data, req.expected) }
       case 'capture': {
         const s = sessions.get(req.name)
         if (!s || s.exited) return { ok: true, result: { text: '' } satisfies CaptureResult }

@@ -7,6 +7,8 @@ import { fakePlatform, type FakePlatform } from './platform-fake'
 import { IPC } from '../shared/ipc'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import { TMUX_SOCKET, sessionName, isSessionName } from './tmux-naming'
+import type { PaneOwner } from '../shared/agents/pane-owner-predicate'
+import type { SleepingWakeRequest } from '../shared/agents/sleeping-wake'
 import type { ControlSpawn } from './tmux-control-client'
 
 /**
@@ -69,6 +71,8 @@ const tmuxCalls: string[][] = []
 let tmuxWriteFails = false
 let tmuxCopyMode = false
 let tmuxBytes = ''
+let wakeOwnerReply = '41 bash'
+let remoteOwnerOutput = ''
 const paneIds = new Map<string, string>()
 const paneId = (target: string): string => {
   const id = paneIds.get(target) ?? `%${paneIds.size + 1}`
@@ -81,7 +85,11 @@ vi.mock('child_process', () => {
   const execFile = (file: string, args: string[], a?: unknown, b?: unknown): unknown => {
     const cb = (typeof a === 'function' ? a : b) as Cb | undefined
     const ok = (stdout: string): void => cb?.(null, { stdout, stderr: '' })
-    if (args.includes('display-message') && args.includes('#{pane_id} #{pane_in_mode}')) {
+    if (file.endsWith('ssh') && remoteOwnerOutput && args.some((arg) => arg.includes('##NTPANE '))) {
+      ok(remoteOwnerOutput)
+    } else if (args.includes('display-message') && args.includes('#{pane_pid} #{pane_current_command}')) {
+      tmuxCalls.push(args); ok(wakeOwnerReply + '\n')
+    } else if (args.includes('display-message') && args.includes('#{pane_id} #{pane_in_mode}')) {
       tmuxCalls.push(args)
       const target = args[args.indexOf('-t') + 1].replace(/^=/, '').replace(/:$/, '')
       ok(`${paneId(target)} ${tmuxCopyMode ? '1' : '0'}\n`)
@@ -194,6 +202,7 @@ class FakeControlSpawn implements ControlSpawn {
       ? this.identities.get(target)
       : resolved ? this.panes?.get(resolved) : undefined
     if (this.panes && !pane) return { ok: false, body: 'no such pane\n' }
+    if (args[0] === 'display-message' && line.includes('#{pane_pid} #{pane_current_command}')) return { ok: true, body: wakeOwnerReply + '\n' }
     if (args[0] === 'display-message') {
       const id = paneId(name)
       if (pane) this.identities.set(id, pane)
@@ -246,6 +255,8 @@ describe('background writes into released sessions', () => {
     tmuxWriteFails = false
     tmuxCopyMode = false
     tmuxBytes = ''
+    wakeOwnerReply = '41 bash'
+    remoteOwnerOutput = ''
     paneIds.clear()
     control = new FakeControlSpawn()
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-bgwrite-'))
@@ -303,6 +314,63 @@ describe('background writes into released sessions', () => {
     '-t',
     sessionName(key)
   ]
+
+  const sleepingOwner: PaneOwner = { panePid: 41, paneId: '%1', command: 'bash', tty: '/dev/pts/1', argv: ['bash -i'], pids: [41] }
+  const sleepingRequest: SleepingWakeRequest = { nodeId: 'node-1', agentId: 'codex', command: 'codex resume s --ask-for-approval on-request', exitedByUs: true,
+    recorded: { panePid: 41, paneId: '%1', command: 'bash' } }
+
+  it('wakes a live and a released owned pane through the actual manager without spawning a view', async () => {
+    const m = await tmuxManager()
+    vi.spyOn(m, 'paneOwner').mockResolvedValue(sleepingOwner)
+    const { sessionId } = await create(ALICE, 'node-1')
+    expect(await fake.handlers[IPC.ptyWakeSleeping](sleepingRequest)).toEqual({ delivered: true, verdict: 'resume' })
+    expect(tmuxBytes).toBe('\x15' + sleepingRequest.command + '\r')
+    kill(ALICE, sessionId)
+    tmuxBytes = ''
+    expect((await m.wakeSleeping(sleepingRequest)).delivered).toBe(true)
+    expect(control.only.writes.some((line) => line.includes('#{pane_pid} #{pane_current_command}'))).toBe(true)
+    expect(spawned).toHaveLength(1)
+  })
+
+  it('refuses an unowned or a replaced generation before sending a wake', async () => {
+    const m = await tmuxManager()
+    const probe = vi.spyOn(m, 'paneOwner').mockResolvedValue(sleepingOwner)
+    expect((await m.wakeSleeping(sleepingRequest)).delivered).toBe(false)
+    expect(probe).not.toHaveBeenCalled()
+    await create(ALICE, 'node-1')
+    probe.mockImplementationOnce(async () => {
+      await m.destroySession(ALICE, 'node-1')
+      return sleepingOwner
+    })
+    expect((await m.wakeSleeping(sleepingRequest)).verdict).toBe('context-changed')
+    expect(tmuxBytes).toBe('')
+  })
+
+  it('pins the final tmux delivery to the verified pane pid and foreground before clearing any line', async () => {
+    const m = await tmuxManager()
+    await create(ALICE, 'node-1')
+    vi.spyOn(m, 'paneOwner').mockResolvedValue(sleepingOwner)
+    for (const stale of ['42 bash', '41 node']) {
+      wakeOwnerReply = stale
+      expect((await m.wakeSleeping(sleepingRequest)).delivered).toBe(false)
+      expect(tmuxBytes).toBe('')
+    }
+  })
+
+  it('wakes a released SSH project only over its retained actual master and remote pane proof', async () => {
+    const m = await tmuxManager()
+    const remote = { conn: { host: 'h1', user: 'u' }, controlPath: '/tmp/cm-owned', remoteCwd: '/srv/app' }
+    const created = await fake.handlers[IPC.ptyCreate](ALICE, { cols: 80, rows: 24, persistKey: 'node-r', sshRemote: remote }) as { sessionId: string }
+    kill(ALICE, created.sessionId)
+    remoteOwnerOutput = '##NTPANE 41|/dev/pts/1|bash|%1\n41 41 S+ bash -i\n'
+    const writer = vi.spyOn(m, 'backgroundWriteOver').mockResolvedValue(true)
+    const localProbe = vi.spyOn(m, 'paneOwner')
+    expect((await m.wakeSleeping({ ...sleepingRequest, nodeId: 'node-r' })).delivered).toBe(true)
+    expect(writer).toHaveBeenCalledWith('node-r', '\x15' + sleepingRequest.command + '\r', remote, expect.objectContaining({ panePid: 41, paneId: '%1', command: 'bash' }))
+    expect(localProbe).not.toHaveBeenCalled()
+    expect(tmuxCalls).toEqual([])
+    expect(spawned).toHaveLength(1)
+  })
 
   it('types into a released session over a control client — no pty, exact send-keys line', async () => {
     const m = await tmuxManager()
