@@ -58,7 +58,7 @@ tasks.test {
     // The desktop code the interop fixture bundles (the same dirs as android.yml's path filter). Without
     // them a desktop change, say to the projects.list assembly or the agent-status mirror the relay
     // tests read (audit A64), left the tests "up to date" locally and was never run against.
-    for (dir in listOf("src/core", "src/shared", "src/main")) {
+    for (dir in listOf("src/core", "src/shared", "src/main", "src/session-host")) {
         inputs.dir(rootDir.resolve("../../$dir")).withPathSensitivity(PathSensitivity.RELATIVE)
     }
     inputs.file(rootDir.resolve("../../tsconfig.json")).withPathSensitivity(PathSensitivity.RELATIVE)

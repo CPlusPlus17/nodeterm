@@ -12,6 +12,7 @@ name: Android
 #   src/core/**           bundled (pending-approvals, project-kanban-write, agent-status-mirror, and
 #                         since A64 projects-list-blob + workspace-store, which build the projects.list
 #                         blob, ...); also ack-sweep behind ~/.nodeterm/acks, which is not bundled
+#   src/session-host/**   imported by PtyManager in the managed-session producer fixture (A112)
 #   src/shared/**         bundled (types, agents/*, kanban-labels, ssh, ...); also pair-qr.ts (the
 #                         pairing QR envelope) and agents/pane.ts (read by ResumeOfferTest)
 #   src/main/*.ts         bundled: pairing-core, pairing-service, windows-ssh-keys, ssh-host-keys; also index.ts, which
@@ -45,6 +46,7 @@ on:
     paths:
       - 'android/**'
       - 'src/core/**'
+      - 'src/session-host/**'
       - 'src/shared/**'
       - 'src/main/*.ts'
       - 'src/main/remote/**'
@@ -65,6 +67,7 @@ on:
     paths:
       - 'android/**'
       - 'src/core/**'
+      - 'src/session-host/**'
       - 'src/shared/**'
       - 'src/main/*.ts'
       - 'src/main/remote/**'

@@ -10,6 +10,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Audit A63: `.github/workflows/android.yml` runs only when a changed file matches the `paths` filter
@@ -97,6 +98,35 @@ class WorkflowPathFilterTest {
         assertTrue("src/core/workspace-store.ts" in inputs, "fixture must run the actual save queue")
         val required = inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet()
         assertCovered(required, "bundled into ssh-actions-fixture.ts")
+    }
+
+    @Test
+    fun `every actual managed creation producer file runs the workflow`() {
+        assumeTrue(InteropHarness.available("managed-session"), "node + esbuild are needed for managed creation interop")
+        val inputs = Json.parseToJsonElement(InteropHarness.managedSessionBundleMeta.readText()).jsonObject
+            .getValue("inputs").jsonObject.keys
+        for (required in listOf("src/core/managed-terminal-plan.ts", "src/core/managed-terminals.ts",
+            "src/core/pty-manager.ts", "src/core/workspace-store.ts", "src/core/ssh-actions.ts")) {
+            assertTrue(required in inputs, "fixture must execute actual producer $required")
+        }
+        assertTrue("android/protocol/src/test/interop/managed-native.ts" in inputs,
+            "native recorder boundary must be explicit, rather than a saved receipt fixture")
+        assertCovered(inputs.map { if (it.startsWith("node_modules/")) "package-lock.json" else it }.toSortedSet(),
+            "bundled into managed-session-fixture.ts")
+    }
+
+    @Test
+    fun `managed creation producer inputs also invalidate Gradle protocol tests`() {
+        assumeTrue(InteropHarness.available("managed-session"), "node + esbuild are needed for managed creation interop")
+        val inputs = Json.parseToJsonElement(InteropHarness.managedSessionBundleMeta.readText()).jsonObject
+            .getValue("inputs").jsonObject.keys.filter { it.startsWith("src/") }
+        val build = File(root, "android/protocol/build.gradle.kts").readText()
+            .replace(Regex("//[^\n]*"), "")
+        val directoryLoop = Regex("""for\s*\(dir\s+in\s+listOf\(([^)]*)\)\)\s*\{\s*inputs\.dir\(rootDir\.resolve\("\.\./\.\./\${'$'}dir"\)\)\.withPathSensitivity\(PathSensitivity\.RELATIVE\)\s*}""")
+            .find(build) ?: fail("the protocol test task must declare its actual desktop source directories as Gradle inputs")
+        val directories = Regex("\"([^\"]+)\"").findAll(directoryLoop.groupValues[1]).map { it.groupValues[1] }.toSet()
+        val missed = inputs.filter { input -> directories.none { input.startsWith(it + "/") } }
+        assertTrue(missed.isEmpty(), "these actual managed producer inputs leave local Gradle tests up to date: $missed")
     }
 
     @Test
