@@ -130,7 +130,15 @@ describe('Canvas live-link wiring', () => {
   it('the drawer is lazy-loaded like the Explorer and mounted only while open', () => {
     const lazyImport = src.slice(0, src.indexOf("} from '../components/lazyPanels'"))
     expect(lazyImport.slice(lazyImport.lastIndexOf('import {'))).toContain('LiveChatDrawer')
-    expect(src).toMatch(/\{liveChatOpen && \(\s*<LiveChatDrawer/)
+    expect(src).toMatch(/\{liveChatShown\(liveChat, liveLinkCount\) && \(\s*<LiveChatDrawer/)
+  })
+
+  it('a pinned drawer is rendered only while a link is live (ruling, concern 3): Canvas reads the COUNT', () => {
+    // A primitive selector: a push about one link's viewers does not re-render the canvas.
+    expect(src).toContain('const liveLinkCount = useWatchLinks((s) => s.links.length)')
+    // `beside` follows the drawer actually on screen, not just the pin.
+    const mount = src.slice(src.indexOf('<LiveChatDrawer'))
+    expect(mount.slice(0, mount.indexOf('/>'))).toContain('beside={liveChat.pinned && explorerOpen && explorer.pinned}')
   })
 
   it('raised while a card modal is open, beside only when BOTH drawers are pinned', () => {

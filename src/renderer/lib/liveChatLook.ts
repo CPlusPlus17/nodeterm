@@ -1,13 +1,18 @@
 // The live-link viewer page's chat look, for the owner's Live chat drawer. COPIED from nodeterm-web
 // `src/lib/watch-viewer/chat-panel.ts` (chatNameColor, VIEWER_NAME_COLORS, nearBottom,
-// NEAR_BOTTOM_PX, newMessagesLabel, chatClock) — never imported across repositories. Keep the two in
-// step: a viewer must be drawn in the same colour on the owner's drawer as on every viewer's page
-// (`liveChatLook.test.ts` pins the hash against values computed with the web page's function).
+// NEAR_BOTTOM_PX, newMessagesLabel, chatClock) — never imported across repositories.
 //
-// The hex table is the web page's, kept verbatim so the colours match; the drawer hands a colour to
-// CSS as `--live-name`, where the light theme darkens it toward the ink (styles.css). The sharer's
-// colour is NOT copied: the drawer marks the owner's lines with a token and the "Sharer" badge, and —
-// as on the page — no viewer name is ever drawn in it (the badge is the host's word, never a name's).
+// WHY the drawer and the web page must match: the same viewer gets the same colour on both. The owner
+// reads a viewer as "the orange one" in the drawer while everyone watching sees that viewer's lines in
+// orange on the page; a drift splits one person into two colours. `liveChatLook.test.ts` pins the
+// hash against values computed with the web page's own function — change either side and re-run it.
+//
+// The hex table is a deliberate exception to "semantic tokens only" (CLAUDE.md, Semantic colours), the
+// same class as the agent brand colours: it is ANOTHER surface's palette, and copying it verbatim is
+// the point. The drawer hands a colour to CSS as `--live-name`, where the light theme darkens it toward
+// the ink (styles.css). The sharer's colour is NOT copied: the drawer marks the owner's lines with a
+// token and the "Sharer" badge, and — as on the page — no viewer name is ever drawn in it (the badge is
+// the host's word, never a name's).
 
 /** Viewer name colours, readable on the page's near-black. No green near the sharer's. */
 export const VIEWER_NAME_COLORS = [

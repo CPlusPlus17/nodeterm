@@ -8,6 +8,8 @@
 //   linkId    — the link the owner picked last (Open chat on a chip, the drawer's picker). The drawer
 //               shows it while it is live, else the most recent link (`pickChatLink`).
 import type { WatchLinkView } from '@shared/watch-link-types'
+import { stripBidiControls } from '@shared/watch-link-types'
+import { formatClock, ROLE_NAME } from './liveLink'
 
 export const LIVE_CHAT_PINNED_KEY = 'nodeterm.liveChatPinned'
 export const LIVE_CHAT_LINK_KEY = 'nodeterm.liveChatLink'
@@ -24,6 +26,16 @@ export type LiveChatAction = { kind: 'open'; linkId?: string } | { kind: 'toggle
 /** Pinned: shown unless dismissed. Unpinned: `open` is the modal flag. */
 export function liveChatIsOpen(s: LiveChatState): boolean {
   return s.pinned ? !s.dismissed : s.open
+}
+
+/**
+ * Whether the drawer is RENDERED. A pinned drawer is docked chrome: with no live link it would be an
+ * empty card taking canvas width (and inset every maximize for nothing), so it shows only while at
+ * least one link is live — the pin is kept and it comes back with the next link. An unpinned drawer
+ * the owner explicitly opened shows even with none ("No live links.").
+ */
+export function liveChatShown(s: LiveChatState, liveLinks: number): boolean {
+  return liveChatIsOpen(s) && (!s.pinned || liveLinks > 0)
 }
 
 export function nextLiveChat(s: LiveChatState, a: LiveChatAction): LiveChatState {
@@ -50,6 +62,52 @@ export function pickChatLink(links: readonly WatchLinkView[], wanted: string | n
   let best: WatchLinkView | null = null
   for (const l of links) if (!best || l.createdAt >= best.createdAt) best = l
   return best ? best.linkId : null
+}
+
+/**
+ * The picker's option per link, in list order — every one reads differently. "{title} · {role}"; two
+ * that read the same add the link's own label ("· shown as Ada" — the name viewers see for the
+ * owner, so only where it differs between them); still the same, the start time ("· since 14:05");
+ * still the same (started the same minute), a counter. Titles and labels are bidi-stripped.
+ */
+export function chatLinkOptionLabels(links: readonly WatchLinkView[]): string[] {
+  /** Within each group of identical labels, append `extra` — unless it is the same for the whole
+   *  group, where it would tell nothing apart. */
+  const disambiguate = (labels: string[], extra: (l: WatchLinkView) => string): string[] => {
+    const groups = new Map<string, Set<string>>()
+    labels.forEach((t, i) => groups.set(t, (groups.get(t) ?? new Set()).add(extra(links[i]))))
+    return labels.map((t, i) => {
+      const extras = groups.get(t)!
+      if (labels.filter((x) => x === t).length < 2 || extras.size < 2) return t
+      const more = extra(links[i])
+      return more ? `${t} · ${more}` : t
+    })
+  }
+  let labels = links.map((l) => `${stripBidiControls(l.title).trim() || 'Terminal'} · ${ROLE_NAME[l.role]}`)
+  labels = disambiguate(labels, (l) => {
+    const label = stripBidiControls(l.label).trim()
+    return label ? `shown as ${label}` : ''
+  })
+  labels = disambiguate(labels, (l) => `since ${formatClock(l.createdAt)}`)
+  const seen = new Map<string, number>()
+  return labels.map((t) => {
+    const n = (seen.get(t) ?? 0) + 1
+    seen.set(t, n)
+    return n === 1 ? t : `${t} (${n})`
+  })
+}
+
+/** The attribute that marks the drawer's root, so other surfaces can leave its keys alone. */
+export const LIVE_CHAT_DRAWER_ATTR = 'data-live-chat-drawer'
+
+/**
+ * Is this event target inside the Live chat drawer? The kanban card modal's capture-phase Escape asks:
+ * a raised, pinned drawer is not a dialog, so the card modal under it is the top dialog — and closed
+ * itself on an Escape the owner typed in the drawer's reply box.
+ */
+export function inLiveChatDrawer(target: EventTarget | null): boolean {
+  const el = target as { closest?: unknown } | null
+  return !!el && typeof el.closest === 'function' && (el as Element).closest(`[${LIVE_CHAT_DRAWER_ATTR}]`) !== null
 }
 
 const getStored = (key: string): string | null => localStorage.getItem(key)

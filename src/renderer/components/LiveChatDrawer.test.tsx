@@ -258,6 +258,25 @@ describe('LiveChatDrawer', () => {
     expect(onPickLink).toHaveBeenCalledWith('M')
   })
 
+  it('two links that would read the same are told apart in the picker (label, then start time)', () => {
+    setLinks([
+      link({ linkId: 'A', label: 'Ada', createdAt: Date.UTC(2026, 9, 3, 12, 5) }),
+      link({ linkId: 'B', label: 'Ada', createdAt: Date.UTC(2026, 9, 3, 13, 40) }),
+      link({ linkId: 'C', label: 'Team', createdAt: 9 })
+    ])
+    render(props({ linkId: 'A' }))
+    const texts = [...drawer().querySelectorAll('option')].map((o) => o.textContent)
+    expect(new Set(texts).size).toBe(3)
+    expect(texts[2]).toBe('build · Commenter · shown as Team')
+    expect(texts[0]).toMatch(/^build · Commenter · shown as Ada · since /)
+  })
+
+  it('marks itself as the Live chat drawer (the card modal leaves Escape typed inside it alone)', () => {
+    setLinks([link()])
+    render(props())
+    expect(drawer().hasAttribute('data-live-chat-drawer')).toBe(true)
+  })
+
   it('a link that is not live any more falls back to the most recent one', () => {
     setLinks([link({ linkId: 'A', createdAt: 1, title: 'old' }), link({ linkId: 'B', createdAt: 9, title: 'new' })])
     render(props({ linkId: 'gone' }))

@@ -8,7 +8,7 @@ import { ControlHold, ControlSection, hasChat, kickViewer } from './LiveLinkCont
 import { IconClose, IconPin } from './icons'
 import { CHAT_NOT_SENT_MESSAGE, KICK_NOTE, ROLE_NAME, statusLine, viewerName, waitingViewers } from '../lib/liveLink'
 import { chatClock, chatNameColor, nearBottom, newMessagesLabel } from '../lib/liveChatLook'
-import { pickChatLink } from '../lib/liveChatPin'
+import { chatLinkOptionLabels, LIVE_CHAT_DRAWER_ATTR, pickChatLink } from '../lib/liveChatPin'
 import { useLinkThread, useWatchLinks } from '../state/watchLinks'
 
 const EMPTY_CHAT: WatchChatMessage[] = []
@@ -28,7 +28,7 @@ export interface LiveChatDrawerProps {
   onGoToNode(nodeId: string): void
 }
 
-/** "build" for the picker and the head: the node title as viewers see it, never empty. */
+/** "build" for the head: the node title as viewers see it, never empty. */
 function linkTitle(l: Pick<WatchLinkView, 'title'>): string {
   return stripBidiControls(l.title).trim() || 'Terminal'
 }
@@ -129,6 +129,9 @@ export function LiveChatDrawer(p: LiveChatDrawerProps): React.JSX.Element {
         role={pinned ? undefined : 'dialog'}
         aria-label="Live chat"
         tabIndex={-1}
+        // The kanban card modal leaves an Escape typed in here alone (it may be the top dialog while
+        // this drawer is docked over it).
+        {...{ [LIVE_CHAT_DRAWER_ATTR]: '' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="drawer__head">
@@ -168,9 +171,9 @@ export function LiveChatDrawer(p: LiveChatDrawerProps): React.JSX.Element {
                       p.onPickLink(e.target.value)
                     }}
                   >
-                    {links.map((l) => (
-                      <option key={l.linkId} value={l.linkId}>
-                        {`${linkTitle(l)} · ${ROLE_NAME[l.role]}`}
+                    {chatLinkOptionLabels(links).map((text, i) => (
+                      <option key={links[i].linkId} value={links[i].linkId}>
+                        {text}
                       </option>
                     ))}
                   </select>

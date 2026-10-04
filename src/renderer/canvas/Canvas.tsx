@@ -439,7 +439,7 @@ import { opensInEditor } from '../lib/openTarget'
 import { displacedFilesPatch } from '../lib/filesNode'
 import { newEntryPath, parentDir } from '../lib/explorerCreate'
 import {
-  liveChatIsOpen,
+  liveChatShown,
   nextLiveChat,
   readLiveChatLink,
   readLiveChatPinned,
@@ -3674,7 +3674,9 @@ export function Canvas() {
     open: false,
     linkId: readLiveChatLink()
   }))
-  const liveChatOpen = liveChatIsOpen(liveChat)
+  // A primitive count, not the list: a push about one link's viewers must not re-render the canvas.
+  // A pinned drawer is rendered only while a link is live (`liveChatShown`); the pin is kept.
+  const liveLinkCount = useWatchLinks((s) => s.links.length)
   const liveChatRef = useRef(liveChat)
   liveChatRef.current = liveChat
   useEffect(() => {
@@ -19128,7 +19130,7 @@ export function Canvas() {
         />
       )}
 
-      {liveChatOpen && (
+      {liveChatShown(liveChat, liveLinkCount) && (
         <LiveChatDrawer
           linkId={liveChat.linkId}
           pinned={liveChat.pinned}

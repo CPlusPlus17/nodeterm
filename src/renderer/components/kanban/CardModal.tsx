@@ -60,6 +60,7 @@ import { ModalTerminal } from './ModalTerminal'
 import { BrowserSurface } from '../../nodes/BrowserSurface'
 import { BrowserDrivingIndicator } from '../../nodes/BrowserDrivingChip'
 import { NoteMarkdown } from '../NoteMarkdown'
+import { inLiveChatDrawer } from '../../lib/liveChatPin'
 import { relativeTime } from '../../lib/relativeTime'
 import { TerminalMarkdownView } from '../../nodes/TerminalMarkdownView'
 import { canChat } from '@shared/agents/config'
@@ -303,6 +304,10 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || !isTopDialog(id)) return
+      // An Escape typed in the Live chat drawer is the drawer's, never this modal's: docked over the
+      // modal (raised), the drawer is not a dialog, so this modal is still the top one. Not consumed —
+      // the drawer's own rule decides (unpinned: close the drawer; pinned: nothing).
+      if (inLiveChatDrawer(e.target) || inLiveChatDrawer(document.activeElement)) return
       // A rename in progress owns Esc first (cancel the edit, not the modal).
       if (editingTitleRef.current) {
         e.preventDefault()

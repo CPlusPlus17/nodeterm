@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WatchLinkView } from '@shared/watch-link-types'
+import { formatClock } from './liveLink'
 import {
+  chatLinkOptionLabels,
+  inLiveChatDrawer,
   LIVE_CHAT_LINK_KEY,
   LIVE_CHAT_PINNED_KEY,
   liveChatIsOpen,
+  liveChatShown,
   nextLiveChat,
   pickChatLink,
   readLiveChatLink,
@@ -43,6 +47,22 @@ describe('liveChatIsOpen', () => {
     expect(liveChatIsOpen(docked)).toBe(true)
     expect(liveChatIsOpen(dockedHidden)).toBe(false)
     expect(liveChatIsOpen(launchPinned)).toBe(true)
+  })
+})
+
+describe('liveChatShown (ruling on concern 3)', () => {
+  it('pinned: rendered only while at least one link is live — the pin is kept, the drawer comes back', () => {
+    expect(liveChatShown(docked, 0)).toBe(false)
+    expect(liveChatShown(launchPinned, 0)).toBe(false)
+    expect(liveChatShown(docked, 1)).toBe(true)
+    expect(liveChatShown(launchPinned, 3)).toBe(true)
+    // Dismissed stays hidden whatever the links.
+    expect(liveChatShown(dockedHidden, 2)).toBe(false)
+  })
+  it('unpinned: an explicit open shows even with no live link ("No live links.")', () => {
+    expect(liveChatShown(modal, 0)).toBe(true)
+    expect(liveChatShown(hidden, 0)).toBe(false)
+    expect(liveChatShown(hidden, 2)).toBe(false)
   })
 })
 
@@ -89,6 +109,77 @@ describe('pickChatLink', () => {
   it('nothing when no link is live', () => {
     expect(pickChatLink([], 'A')).toBeNull()
     expect(pickChatLink([], null)).toBeNull()
+  })
+})
+
+describe('chatLinkOptionLabels (ruling on concern 6: every option reads differently)', () => {
+  const l = (linkId: string, over: Partial<WatchLinkView> = {}): WatchLinkView => ({ ...link(linkId, 0), ...over })
+
+  it('a unique title and role reads "{title} · {role}"', () => {
+    expect(
+      chatLinkOptionLabels([
+        l('A', { title: 'build', role: 'commenter' }),
+        l('B', { title: 'build', role: 'controller' }),
+        l('C', { title: 'api-\u202Eserver', role: 'viewer' }),
+        l('D', { title: '  ', role: 'viewer' })
+      ])
+    ).toEqual(['build · Commenter', 'build · Control', 'api-server · Viewer', 'Terminal · Viewer'])
+  })
+
+  it('two that read the same are told apart by their own label, when that differs', () => {
+    expect(
+      chatLinkOptionLabels([
+        l('A', { title: 'build', label: 'Ada' }),
+        l('B', { title: 'build', label: 'Team \u202Edemo' })
+      ])
+    ).toEqual(['build · Commenter · shown as Ada', 'build · Commenter · shown as Team demo'])
+  })
+
+  it('still the same: the start time is appended ("· since 14:05")', () => {
+    const t1 = Date.UTC(2026, 9, 3, 12, 5)
+    const t2 = Date.UTC(2026, 9, 3, 13, 40)
+    expect(
+      chatLinkOptionLabels([
+        l('A', { title: 'build', label: 'Ada', createdAt: t1 }),
+        l('B', { title: 'build', label: 'Ada', createdAt: t2 }),
+        l('C', { title: 'logs', label: 'Ada', createdAt: t2 })
+      ])
+    ).toEqual([
+      // The same label tells nothing apart, so it is not added.
+      `build · Commenter · since ${formatClock(t1)}`,
+      `build · Commenter · since ${formatClock(t2)}`,
+      'logs · Commenter'
+    ])
+    // A label that differs AND a start time, where only the time separates two of three.
+    expect(
+      chatLinkOptionLabels([
+        l('A', { title: 'build', label: 'Ada', createdAt: t1 }),
+        l('B', { title: 'build', label: 'Ada', createdAt: t2 }),
+        l('C', { title: 'build', label: 'Team', createdAt: t2 })
+      ])
+    ).toEqual([
+      `build · Commenter · shown as Ada · since ${formatClock(t1)}`,
+      `build · Commenter · shown as Ada · since ${formatClock(t2)}`,
+      'build · Commenter · shown as Team'
+    ])
+  })
+
+  it('even started the same minute, every label is unique', () => {
+    const t = Date.UTC(2026, 9, 3, 12, 5)
+    const labels = chatLinkOptionLabels([l('A', { createdAt: t }), l('B', { createdAt: t }), l('C', { createdAt: t })])
+    expect(new Set(labels).size).toBe(3)
+    expect(labels).toEqual(['t · Commenter', 't · Commenter (2)', 't · Commenter (3)'])
+  })
+})
+
+describe('inLiveChatDrawer', () => {
+  it('anything inside the drawer, nothing outside; non-elements are outside', () => {
+    expect(inLiveChatDrawer(null)).toBe(false)
+    expect(inLiveChatDrawer({} as EventTarget)).toBe(false)
+    const inside = { closest: (sel: string) => (sel === '[data-live-chat-drawer]' ? {} : null) }
+    const outside = { closest: () => null }
+    expect(inLiveChatDrawer(inside as unknown as EventTarget)).toBe(true)
+    expect(inLiveChatDrawer(outside as unknown as EventTarget)).toBe(false)
   })
 })
 
