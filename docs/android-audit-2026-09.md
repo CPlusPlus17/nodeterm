@@ -69,7 +69,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | 🟡 private beta10/code11 installed from clean e3ce041c with verified signer/APK/non-debuggable metadata; desktop-issued pairing/relay survives same-signer update and real saved relay reconnect/input pass; A91/A94 full physical empty-host flow passes, 8/22/34 ledger and broader minified/device validation pending · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 🟡 private beta10/code11 installed from clean e3ce041c with verified signer/APK/non-debuggable metadata; desktop-issued pairing/relay survives same-signer update and real saved relay reconnect/input pass; A91/A94 full physical empty-host flow passes, 10 Pass / 22 Partial / 32 Pending ledger and broader minified/device validation pending · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -115,6 +115,10 @@ the audit's proposal, the handover's progress log says how and why.
 | [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; original same-desktop recovery succeeds; fresh-different-desktop failure remains open |
 | [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants and full689/67 pass, beta 10 delivered; full physical completed-empty End/recreate/open/End flow passes · Authoritative empty SSH listing remains labelled Loading sessions |
 | [A95](#a95) | medium | | small | desktop/interop | ✅ fixed in `ec12ea9a`; actual beta 10 phone move/remove/re-add/create-label updates reach rebuilt production desktop Board with unchanged page time origin and matching persisted state; item 36 Pass; nine suites/133 tests, full TypeScript and four mutants pass · Held desktop Board remained stale after phone moves/labels |
+| [A96](#a96) | low | | small | phone/UX | ✅ fixed in `f73633fb`; 12 bounded JVM checks / 21 isolated mutants and actual focused Gradle/app checks pass; final full checks and physical follow-up pending · Sessions have no local search |
+| [A97](#a97) | low | | small | parity/gap | ✅ fixed in `8443e71e`; isolated control/restored 25-method runs pass and 31 non-equivalent mutants are caught; final full checks and physical follow-up pending · All computers does not refresh live while visible (A55 residual) |
+| [A98](#a98) | low | | small | terminal/UX | ✅ fixed in `1b1872f1`; 9 bounded JVM checks / 13 isolated mutants and actual focused Gradle/app checks pass; final full checks and physical follow-up pending · Captured terminal output cannot be searched |
+| [A99](#a99) | low | | small | security/risk | ✅ fixed in `e07071e9`; actual Linux control/restored 19 tests / 16 isolated mutants and focused Android interop/app checks pass; final full checks and physical follow-up pending · SSH host-key discovery ignores recursive external Includes (A49 residual) |
 
 ## A01
 
@@ -1582,6 +1586,14 @@ Store (id, ts) pairs and trim by age, make markSeen @Synchronized, and use commi
 - Severity: **low**; claimed by auditor: medium; effort: small; area: security; kind: risk
 - Location: `android/protocol/src/main/kotlin/dev/nodeterm/protocol/ssh/SshHostConnection.kt:330`
 
+**Continuation status (2026-10-04):** the original authentication/pairing-anchor fix remains
+in place. The later key-discovery residual is tracked as [A99](#a99): recursive external
+`Include` discovery is fixed in `e07071e9`, with actual desktop/focused Android checks passing;
+final full checks and physical included-key pairing remain pending.
+Relative `HostKey` values, inaccessible configuration and a key without a readable public
+counterpart remain outside discovery. Relative `Include` values are a different case: they are
+resolved under the sshd configuration root. No first-use trust or mismatched-key override is added.
+
 **Evidence**
 
 The verifier pins whatever key answers first: `pinned == null -> { pin.pin(fp); true }` (line 330). This runs inside `client.connect()`, before `client.authPublickey(...)` (line 348). The catch block (lines 353-357) never undoes the pin, so an SSH server that REJECTS our key still becomes the pin (it is persisted via HostStore.update, ConnectionManager.kt:154-157). Pairing does not anchor the pin: `PairedHost.from` sets `sshHostKeyFingerprint = null` (PairedHost.kt:83), and neither the QR nor the sealed /pair response carries an SSH host key. Every non-Windows host advertises SSH whether or not sshd is running: pairing-service.ts:440 `directSsh = platform !== 'win32'` and line 652 only adds `ssh:false` on Windows. macOS ships with Remote Login off. For such a host the pin stays null and the phone keeps dialing the host's private LAN IP from whatever network it is on, including every 15 minutes from InboxWorker. Once pinned, a mismatch is a hard stop with no relay fallback: ConnectionManager.kt:88-93 rethrows HostKeyChangedException before the relay block.
@@ -1879,6 +1891,15 @@ Add a top-level Inbox/Usage screen that merges every paired computer's snapshot,
 **Verifier corrections and refinements** (these take precedence over the proposed fix where they disagree)
 
 > Refinements only; nothing in the claim is wrong. UsageTab is defined in the same file (InboxTab.kt:213), not in its own file. The Route list is at MainActivity.kt:28-34. HostScreen already computes a per-computer needs-you count (HostScreen.kt:70). The cheapest part of the fix is to lift that `count { it.actionable }` onto each HostsScreen row, using the session's cached snapshot. The merged Agents feed and Usages view also need each card and section to carry its hostId. The feed's Open, Approve and Answer actions have to call the right computer's `session.ensureConnected()`, because QuickActions is per-session today (InboxTab.kt:103-115).
+
+
+**Continuation status (2026-10-04):** the merged Inbox/Usage and computer labels were fixed in
+`71b592a`/`0772cbf`; the original evidence above describes the pre-fix screen. A remaining
+freshness gap persisted in the beta 10 source: opening All computers requested one refresh, but
+only individual host/terminal screens owned the live eight-second watcher. [A97](#a97) now adds
+STARTED-only per-host watching and serialized listing/publication in `8443e71e`. Final full
+checks and new physical multi-computer results are pending. The existing item 60
+ledger is unchanged.
 
 ## A56
 
@@ -3275,3 +3296,151 @@ Earlier rotation restoration belongs to the first test round; current final rest
 The isolated empty SSH service is stopped. Phone name/API and system night mode `yes` restoration
 are verified. No natural-periodic background Done watch has started and no result is claimed.
 The remaining phone cleanup and notification checks can continue when the correct Pixel returns.
+
+## A96
+
+**Sessions have no local search (2026-10-04).**
+
+- Severity: **low**; effort: small; area: phone UX; kind: feature gap
+- Status: **fixed in `f73633fb`; final shared checks and physical follow-up pending**.
+- Locations: `SessionsTab.kt`, protocol `model/SessionSearch.kt` and `SessionSearchTest.kt`.
+
+**Before:** the installed beta 10 source `e3ce041c` lists every open project's sessions in status
+buckets; finding a named session or folder requires scrolling. There is no query field or filter.
+**Implementation:** a native Search sessions field uses trimmed, case-insensitive literal matching
+against the displayed session name, visible agent label, project name/folder and node folder.
+Project matches retain the group; session matches retain only those original rows. Project order,
+status buckets, actions and the unavailable-New-session note remain intact. Loading, a completed
+empty host and no search matches have distinct labels. The host/tab's existing A43 saved-state
+holders preserve the query across terminal navigation and recreation; Clear search is labelled.
+
+**Bounded verification:** all 12 actual `SessionSearchTest` JVM methods pass using cached
+Kotlin 2.2/JDK 21 compilation: ten behavior tests and two native wiring guards. Twenty-one
+isolated-copy mutants are caught by assertions; restored tests pass and production inputs are
+unchanged. This is not a Gradle/Compose runtime or physical search result.
+Private proof: `/tmp/nodeterm-session-search-verify/results.json`.
+The subsequently coordinated actual eight-class focused Gradle run passes
+(`precommit-focused-protocol-2.log`), and the final callback-aware offline app compile passes
+(`precommit-app-compile-final.log`). The final full protocol/app gates against the completed
+feature set remain pending.
+
+**Follow-up:** add search/restoration checks alongside existing item 10's session-grouping checks,
+without replacing that item's required route/status evidence. New phone touch/keyboard proof is
+pending. No desktop/server host contract changes; the iOS search UI is separate UX work.
+
+## A97
+
+**All computers does not refresh live while visible (A55 residual, 2026-10-04).**
+
+- Severity: **low**; effort: small; area: parity; kind: freshness gap
+- Status: **fixed in `8443e71e`; bounded regression/mutation checks pass; final full checks and physical results pending**.
+- Locations: `AllComputersScreen.kt`, `conn/ConnectionManager.kt`, protocol
+  `host/ForegroundRefresh.kt`, `host/ConnectionUsers.kt` and `ForegroundRefreshTest.kt`.
+
+**Before:** the merged screen in `e3ce041c` refreshes each paired computer once on START and on
+explicit Refresh/Try again or an answer. Its Inbox and Usage can remain stale while open; the
+eight-second watcher is owned only by individual host/terminal screens. This is separate from
+the already-fixed merged-feed layout in A55.
+**Implementation:** each paired host has a keyed STARTED watcher, using AUTO initially and on
+later ticks. Denied/unanswered approval holds remain in place; only that host's Try again requests
+USER approval. The initial UI task yields so on-screen Inbox registration precedes listing and
+notification announcement. STOP/removal cancels that host's watcher. The last All-computers
+watcher requests closure only after in-flight users finish; a newer watcher supersedes an old
+deferred close. Individual host opening retains USER-first behavior and its quick-return policy.
+One per-host serial operation covers connect, listing, snapshot publication and announcement,
+including manual, pushed and polled refreshes. Pushed changes and delayed reconnect jobs are
+children of the current watcher, including while delayed or queued behind that serial operation.
+STOP cancels them; cancellation/current-connection guards prevent an old job from reopening a
+hidden host or moving to a replacement watcher. The poll job is assigned before its lazy start.
+
+**Verification:** `ForegroundRefreshTest` defines 19 methods (18 behavior, one native
+wiring), and the focused ownership run also includes six `ConnectionUsersTest` methods. They
+cover cadence, trigger gates, cancellation, ownership, serialized relisting, host removal and
+watcher-owned pushed/delayed work. Actual cached Kotlin 2.2/JDK 21 control/restored runs pass all
+25 methods. Thirty-one non-equivalent isolated-copy mutants are assertion-killed: 17 behavior
+and 14 native-wiring mutants. Ten source hashes remain unchanged and bind the receipt to
+`8443e71ee872db46da68380a9db1ab05748818d2`; an equivalent redundant-guard mutation is excluded.
+Private proof: `/tmp/nodeterm-all-computers-refresh-verify/results.json`. The earlier
+eight-class focused Gradle run passes 134 methods with zero failures, errors or skips; that run
+preceded final assertion-cleanup additions. The final offline app compile passes. Final full
+Gradle/app checks remain pending.
+Physical item 60 multi-computer
+freshness, notification suppression and lifecycle
+checks remain pending; no device-ledger promotion follows the source implementation.
+
+## A98
+
+**Captured terminal output cannot be searched (2026-10-04).**
+
+- Severity: **low**; effort: small; area: terminal UX; kind: feature gap
+- Status: **fixed in `1b1872f1`; final shared checks and physical follow-up pending**.
+- Locations: `TerminalScreen.kt` (`CopySheet`/Find chip), protocol `model/TerminalCopy.kt` and
+  `TerminalSearchTest.kt`.
+
+**Before:** `e3ce041c` already offers snapshot lines, link actions, line/range selection, Copy and
+Share, but no text search. **Implementation:** Find opens that same local captured-output sheet.
+A native query field highlights literal case-insensitive occurrences and moves Previous/Next
+through matches with wrapping navigation. UTF-16/exclusive offsets match Compose spans; rows and
+selected line identities stay unchanged. Query changes reset the cursor, Clear removes the query,
+and no-match/truncated counts are explicit. Matching is capped at 2,000 occurrences, with
+truncation reported only when another match exists. Whitespace in a nonblank query is significant.
+This searches the existing captured snapshot, including joined soft wraps; it does not fetch or
+search all remote tmux history, and no query is typed into the pane.
+
+**Bounded verification:** all nine actual `TerminalSearchTest` JVM methods and 13 isolated-copy
+mutants pass/catch as reported by the local verification run. Tests cover literal punctuation,
+Unicode offsets, empty/long queries, navigation, the exact cap, original copy order and native
+wiring. The coordinated actual eight-class focused Gradle run and final callback-aware offline
+app compile pass (`precommit-focused-protocol-2.log`, `precommit-app-compile-final.log`).
+Final full protocol/app checks and physical results remain pending.
+
+**Follow-up:** record the extra Find/query/selection checks beside existing Copy-sheet item 56,
+and keyboard-open layout/closing checks beside item 50. Preserve all of those items' original
+requirements and current statuses. No external protocol change; iOS UX parity can be considered
+separately by @eneskirca.
+
+## A99
+
+**SSH host-key discovery ignores recursive external Includes (A49 residual, 2026-10-04).**
+
+- Severity: **low**; effort: small; area: security; kind: discovery gap
+- Status: **fixed in `e07071e9`; final full shared checks and physical results pending**.
+- Locations: `src/main/ssh-host-keys.ts`/`.test.ts`,
+  `android/protocol/src/test/interop/host-fixture.ts` and `PairingInteropTest.kt`.
+
+**Before:** `e3ce041c` discovers standard public-key names and direct HostKey entries in the
+readable main config/drop-ins. A served key named only through an external/nested Include can be
+absent from the sealed pairing anchors; the phone correctly refuses that first SSH key, and
+pairing again repeats the incomplete discovery.
+**Implementation:** readable Includes are followed recursively, including quoted/multiple paths
+and lexically expanded glob components. Relative Includes resolve under the configuration root,
+including when the including file is external. Canonical paths stop cycles; discovery has
+depth/file/byte/directory/glob/public-file budgets, and nonregular/oversized/unreadable inputs are
+skipped. Reads are bounded and use nonblocking/no-follow plus opened-inode checks. Public-key
+fingerprinting retains the public-target guard; private HostKey paths named by the config are
+excluded from Include reads. Relative HostKey values remain unsupported; no new trust override
+or weakening of pin/anchor checks is introduced.
+HostKey paths are deduplicated per file/across configs, with at most 256 distinct configured
+paths canonicalized. Exhausting that budget stops further Include traversal so unresolved
+private-key aliases cannot become later configuration reads.
+
+**Source verification:** the actual Linux Vitest control/restored runs pass all 19 tests,
+including a real FIFO replacement boundary. Sixteen isolated-copy source mutants are caught by
+assertions, including repeated/unbounded key canonicalization and continuing after key overflow.
+Proof: `/tmp/nodeterm-ssh-include-root-verify/results.json`; the recorded inputs remain unchanged.
+Desktop regressions cover recursive/relative Includes, glob ordering, cycles, budgets and read
+boundaries. The Android fixture and new `PairingInteropTest` case use
+scratch configuration/public keys with the actual production pairing service: the returned
+sealed anchors are stored and used for an actual fixture SSH authentication. The actual
+eight-class focused Android Gradle run and final offline app compile pass
+(`precommit-focused-protocol-2.log`, `precommit-app-compile-final.log`). The final full shared
+checks remain pending.
+Physical included-key pairing is an item 11 follow-up, with the existing 64-item ledger unchanged.
+The pairing field and SSH-visible contracts are unchanged; @eneskirca should check that iOS uses
+the supplied anchors and presents the existing refusal/recovery messages consistently.
+
+**Current delivery boundary:** installed beta 10 / code 11 and its 10 Pass / 22 Partial /
+32 Pending ledger remain the device checkpoint. These four source additions are not yet
+physically verified. A proposed private beta 11 / code 12 has not yet been built or installed;
+required final checks, signed artifact and phone evidence must be recorded as
+separate results. No new device PASS or CI result is claimed by this draft.

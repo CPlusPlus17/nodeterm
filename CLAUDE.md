@@ -5473,6 +5473,18 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
   former Server-only no-op would discard every repaired core event. Keep actual outside-file
   conflict handling intact; this distinction changes no phone contract.
 
+  Android's merged All computers screen starts each foreground watcher with `Trigger.AUTO`,
+  preserving refused or unanswered relay approvals; opening an individual host keeps `USER`.
+  Serialize the full connect/list/publish/announce path per host. STOP cancels that watcher's poll
+  and reconnect/change work, while counted background users and another visible screen retain
+  the connection. An old cancelled watcher must never close a newer watcher’s connection.
+  Search remains local: SessionSearch preserves node ids/project groups, and TerminalCopy search
+  uses the captured rows' original UTF-16 offsets without changing selection or sending input.
+  SSH Include discovery reads bounded config files and public host-key files, with cycle, glob,
+  depth and shared work budgets; never open a private HostKey as an included config. Included
+  fingerprints still ride the sealed existing pairing/LAN fields, so the Android interop fixture
+  and anchor tests are owed with discovery changes; flag iOS verification for @eneskirca.
+
   **The canvas and the kanban board are TWO VIEWS of the same nodes — treat the board as a
   first-class surface, not an afterthought.** Every session/node feature you add to a canvas node
   (a header action, a context-menu item, a status badge, file drop, dictation, …) should be

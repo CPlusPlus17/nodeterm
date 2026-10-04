@@ -166,6 +166,12 @@ them while retaining unsaved canvas edits (`A95`). Keep `workspace:external-chan
 file edits: a dirty canvas may correctly ask the user to resolve those conflicts. Desktop preload
 must subscribe to the internal channel too; a Server-only or no-op bridge leaves Desktop stale.
 
+The Android All computers watcher uses automatic approval gating, serializes per-host refreshes,
+and cancels its poll/reconnect work on STOP without closing another screen or background user's
+connection. Keep session/output search local and retain original node/row identities. SSH anchor
+discovery follows bounded Includes and reads public keys only; changes require pairing/LAN interop
+coverage and an iOS follow-up for @eneskirca even when the field format stays the same.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

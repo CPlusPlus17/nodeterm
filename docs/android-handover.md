@@ -3,10 +3,17 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A95`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A99`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+- **Four additions are implemented after the beta-10 checkpoint (2026-10-04).** Sessions search,
+  live All computers refresh, Find in captured terminal output, and recursive SSH Include anchor
+  discovery are being prepared for beta 11/code 12. Full shared checks/build are in progress;
+  the Pixel still runs beta 10/code 11. Phone testing remains paused, including final rotation
+  restoration/fixture Forget and background notification checks. The current device ledger stays
+  10 Pass / 22 Partial / 32 Pending; new search/refresh/Include flows need physical verification.
 
 - **Beta 10/code 11 is installed; item 1 paired update passes (2026-10-04).** `0.1.0-beta.10` / code `11`,
   clean snapshot `e3ce041c752bdef11b378cf301c719a6e62f70ab`, is installed on the intended Pixel with the
@@ -1157,7 +1164,8 @@ section before starting, since the verifier corrections take precedence):
   `project.json` over SSH (`A26`). `A90` adds a separate phone-owned plain shell, without that
   registration write; it has focused Pixel plain-SSH proof on beta8/9 and beta 10 relay plain-shell creation/input/End; managed and cellular creation remain pending.
   No FCM push and no Live-Activity equivalent (`A25`). The All
-  computers screen is not polled; it refreshes on open, on Refresh and after an answer (`A55`).
+  computers screen now polls while visible, preserving automatic approval holds (`A55`); its new
+  lifecycle and notification behavior still need physical verification.
   Dictation uses the phone's own language with no picker (`A59`). "Add SSH server" has no one-time
   password bootstrap and does not offer the Server Edition install one-liner (`A27`).
 - **Desktop file-link follow-up (`A92`) is fixed in `127b6b28`.** `paragraphContaining` now reserves

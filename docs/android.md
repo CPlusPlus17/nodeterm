@@ -5,6 +5,18 @@ It speaks the protocol the desktop already serves to phones; the only desktop-si
 two relay verbs a relay-only phone was missing (below). This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Post-beta-10 additions (2026-10-04).** Sessions search filters displayed names, agent labels,
+project names/folders and phone-terminal folders while keeping the existing project/status groups.
+The saved query returns after opening a terminal. All computers now watches each paired host while
+visible, with automatic approval holds intact and serialized refreshes. Find opens the captured
+output Copy sheet: literal case-insensitive matches, UTF-16 highlighting and wrapping Previous/Next
+navigation preserve the original rows and copy selection. It searches the captured output, not the
+remote tmux history. SSH anchor discovery follows bounded recursive configuration Includes, including
+quoted paths, multiple patterns and relative paths rooted under `/etc/ssh`; relative HostKey paths
+remain unsupported. These are source additions for the next private beta; the installed beta 10
+and its 10 Pass / 22 Partial / 32 Pending device ledger are unchanged while phone checks are paused.
+Additional physical checks belong beside items 10/11/50/56/60; they do not inherit earlier Pass results.
+
 ## The two transports
 
 A phone reaches a paired computer one of two ways, and the app tries them in the iOS order:
@@ -1380,7 +1392,8 @@ what a lock screen shows is a device check.
 every 8 s while a computer was open, but only the 15-minute background check ever posted one; the
 in-app refresh only updated the listing. Now every listing that arrives (the 8 s refresh of the
 computer on screen, a change that computer pushes, the background check) runs the one announce path,
-so notifications are live for the computer whose screen is open. What the user is looking at is left
+so notifications are live for the computer whose screen is open. All computers now watches every
+paired host while visible, through the same announce path. What the user is looking at is left
 out and recorded as seen instead, so no later check announces it: every event while that computer's
 Inbox tab is on screen, and what a session's terminal shows while it is attached. That is recorded
 even with notifications off, so turning them on later does not announce it either. Recording is
@@ -1391,7 +1404,8 @@ offer, approval code, lost view) hides nothing; and one still connecting leaves 
 for a later listing, which the attach settles at once from the latest listing. Other computers are not
 polled while one is open, so theirs still come only from the background check, and the Settings
 text, the README and the notifier's comment now say exactly that. The All computers screen (`A55`)
-is not polled either: it re-lists every computer once when it opens (and on Refresh), and while its
+re-lists every paired computer every 8 seconds while visible; its first dial and subsequent polls
+use AUTO, preserving a refused or unanswered approval until that computer's Try again. While its
 Inbox tab is on screen every computer's Inbox counts as on screen. A computer the user just left is
 one of them: its connection can stay open until it drops or the background check closes it, and a
 change it pushes meanwhile is no longer re-listed (it used to be, and so announced live; the review

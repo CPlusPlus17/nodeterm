@@ -6,6 +6,12 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**New work after beta 10 (2026-10-04):** the branch adds Sessions search by name, agent and folder;
+live refresh on All computers while visible; and Find in the terminal's captured-output Copy sheet,
+with highlighted matches and Previous/Next. The computer now discovers SSH host-key anchors through
+recursive configuration Includes. These additions are being prepared for beta 11/code 12; the Pixel
+still runs beta 10/code 11. Phone checks remain paused, so none of these additions has a physical pass.
+
 > **Status (2026-10-04): beta 10/code 11 is installed; paired update passes.** Focused
 > plain-SSH creation/history/reconnect and exact End pass on the Pixel (item 32 Partial).
 > Fresh-desktop pairing received no relay credential after an observed backend refusal (A93);
@@ -644,11 +650,12 @@ Try again or open that computer.
 
 The iOS app is woken by APNs pushes the nodeterm backend sends. That backend has no Android (FCM)
 leg, so this app polls instead: checked about every 15 minutes in the background (WorkManager's
-floor), and live for the computer whose screen is open, which the app re-lists every 8 seconds.
-Other paired computers are not polled while you look at one, so their notifications still come from
+floor), and live while the computer or All computers is on screen. An individual computer or
+terminal refreshes its host every 8 seconds; All computers refreshes every paired host while visible.
+Other paired computers are not polled while you look at one individual computer, so their notifications still come from
 the background check only. That includes a computer you just left: the app may still hold its
-connection for a while, but no longer re-lists it when it pushes a change. The All computers screen
-is not polled either: it re-lists every computer once when you open it, and again on Refresh.
+connection for a while, but no longer re-lists it when it pushes a change. All computers stops its
+polls when it leaves the screen and closes connections after their last active user finishes.
 Real-time push on Android needs an FCM leg in the backend. A computer added by its SSH address is
 polled the same way, over SSH: the push a Server Edition gives an iOS phone is APNs-only.
 
