@@ -52,6 +52,12 @@ const BANNED_COPY: Record<string, string[]> = {
   'src/renderer/components/onboarding/OnboardingFlow.tsx': [
     'Get the iOS app',
     'Grab it from the App Store'
+  ],
+  'src/renderer/components/settings/sections/NotificationsSection.tsx': [
+    'label="Live Activities"',
+    'ariaLabel="Live Activities',
+    'Live Activities are never held',
+    'Lock Screen / Dynamic Island'
   ]
 }
 
@@ -81,5 +87,14 @@ describe('mobile store guard', () => {
       for (const phrase of phrases) if (src.includes(phrase)) offenders.push(`${rel}: ${phrase}`)
     }
     expect(offenders).toEqual([])
+  })
+
+  it('renames the label but keeps the persisted mobileLiveActivities key', () => {
+    const src = readFileSync(
+      join(REPO_ROOT, 'src/renderer/components/settings/sections/NotificationsSection.tsx'),
+      'utf8'
+    )
+    expect(src).toContain('label="Live updates on phone"')
+    expect(src).toContain('update({ mobileLiveActivities: on })')
   })
 })

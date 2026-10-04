@@ -2184,9 +2184,12 @@ export interface Settings {
   /** Push when an agent finishes a turn (the `done` kind). Default on. Sub-gate under
    *  `mobilePushEnabled` (the master switch). Toggle in Settings → Notifications. */
   mobilePushDone: boolean
-  /** Stream Live Activity updates (Lock Screen / Dynamic Island) to paired phones as a session's
-   *  state + activity + context% change (spec: interactive-push-live-activities). Default on.
-   *  Sub-gate under `mobilePushEnabled` (the master switch). Toggle in Settings → Notifications. */
+  /** Stream live status updates to paired phones as a session's state + activity + context%
+   *  change — an iOS Live Activity (Lock Screen / Dynamic Island) or an Android ongoing
+   *  notification (spec: interactive-push-live-activities). Default on. The KEY keeps its
+   *  iOS-era name because it is persisted in settings.json; the UI calls it "Live updates on
+   *  phone". Sub-gate under `mobilePushEnabled` (the master switch). Toggle in Settings →
+   *  Notifications. */
   mobileLiveActivities: boolean
   /** Hold phone ALERTS while you're actively at this computer, releasing them when you go idle or
    *  lock the screen (spec: presence-aware-push). Default on. Desktop-only (the Server Edition is
