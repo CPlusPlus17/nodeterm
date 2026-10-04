@@ -93,63 +93,104 @@ class SshTransportTest {
     /** Every public key the server was asked to accept, ours or not. */
     private val authAttempts = java.util.concurrent.atomic.AtomicInteger()
 
-    private fun actionsFixture() = InteropHarness.start("ssh-actions", InteropHarness.scratchHomeEnv(home) +
-        mapOf("FIXTURE_USERDATA" to File(home, ".config/node-terminal").path))
+    private fun actionsFixture(host: SshTestHost) = InteropHarness.start("ssh-actions", InteropHarness.scratchHomeEnv(host.home) +
+        mapOf("FIXTURE_USERDATA" to File(host.home, ".config/node-terminal").path))
+
+    /** The producer seeds a whole workspace, so it must never use this class's desktop profile. */
+    private inner class SshTestHost : AutoCloseable {
+        private val ownedRoot = ShortTmuxRoot.create("nt-actions", "tmux", "node-terminal")
+        val home = File(ownedRoot, "home").apply { mkdirs() }
+        private val tmuxDir = File(ownedRoot, "tmux").apply { mkdirs() }
+        private val server = SshServer.setUpDefaultServer()
+        @Volatile var onCommand: ((String, ShCommand) -> Unit)? = null
+
+        init {
+            try {
+                server.host = "127.0.0.1"
+                server.port = 0
+                server.keyPairProvider = SimpleGeneratorHostKeyProvider(File(ownedRoot, "hostkey.ser").toPath())
+                val expected = identity.keyPair.public.encoded
+                server.publickeyAuthenticator = org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator { user, key, _ ->
+                    user == "dev" && key.encoded.contentEquals(expected)
+                }
+                server.commandFactory = org.apache.sshd.server.command.CommandFactory { _, command ->
+                    ShCommand(command, home, childEnv(home, tmuxDir)).also { onCommand?.invoke(command, it) }
+                }
+                server.start()
+            } catch (e: Exception) {
+                runCatching { server.stop(true) }
+                ownedRoot.deleteRecursively()
+                throw e
+            }
+        }
+
+        fun connect() = SshHostConnection.connect("127.0.0.1", server.port, "dev", identity, MemoryPin())
+
+        override fun close() {
+            try { server.stop(true) } finally { ownedRoot.deleteRecursively() }
+        }
+    }
 
     @Test fun `actual selected-profile SSH service edits the board and delivers node actions without relay`() = runBlocking {
-        actionsFixture().use { fixture ->
-            connect().use { conn ->
-                val snapshot = conn.listProjects()
-                assertEquals(listOf("ssh-actions-project"), snapshot.projects.map { it.id })
-                assertTrue(conn.capabilities.boardWrites); assertTrue(conn.capabilities.nodeActions); assertTrue(conn.capabilities.git)
-                assertFalse(conn.capabilities.registerNode)
-                val columns = assertNotNull(conn.ensureBoard("ssh-actions-project"))
-                assertEquals(3, columns.size)
-                assertTrue(conn.setCardColumn("ssh-actions-project", "term-ssh-actions", columns[1].id))
-                val labels = assertNotNull(conn.editCardLabels("ssh-actions-project", "term-ssh-actions",
-                    CardLabelEdit(create = listOf("SSH α ' quoted" to "blue"))))
-                assertTrue(labels.edited); assertEquals(listOf("SSH α ' quoted"), labels.labels.map { it.name })
-                assertEquals(labels.labels.map { it.id }, labels.cardLabelIds)
-                conn.wake("term-ssh-actions"); conn.refresh("term-ssh-actions"); conn.rename("term-ssh-actions", "Typed α ' title")
-                fixture.command("snapshot")
-                val proof = fixture.awaitEvent("snapshot")
-                val board = proof.getValue("file").jsonObject.getValue("kanban").jsonObject
-                assertEquals(columns[1].id, board.getValue("assignments").jsonArray.single().jsonObject.getValue("columnId").jsonPrimitive.content)
-                assertEquals(labels.cardLabelIds, board.getValue("meta").jsonArray.single().jsonObject.getValue("labels").jsonArray.map { it.jsonPrimitive.content })
-                assertEquals(listOf("wake", "refresh", "rename"), proof.getValue("nudges").jsonArray.map { it.jsonObject.getValue("method").jsonPrimitive.content })
-                assertEquals("Typed α ' title", proof.getValue("nudges").jsonArray.last().jsonObject.getValue("title").jsonPrimitive.content)
-                assertFailsWith<HostException> { conn.registerNode("ssh-actions-project", NewNode("new-node", null, null, null)) }
-                assertFailsWith<NeedsRelayException> { conn.setCardColumn("another-profile", "term-ssh-actions", null) }
-                assertFailsWith<NeedsRelayException> { conn.wake("term-another-profile") }
+        SshTestHost().use { host ->
+            actionsFixture(host).use { fixture ->
+                host.connect().use { conn ->
+                    val snapshot = conn.listProjects()
+                    assertEquals(listOf("ssh-actions-project"), snapshot.projects.map { it.id })
+                    assertTrue(conn.capabilities.boardWrites); assertTrue(conn.capabilities.nodeActions); assertTrue(conn.capabilities.git)
+                    assertFalse(conn.capabilities.registerNode)
+                    val columns = assertNotNull(conn.ensureBoard("ssh-actions-project"))
+                    assertEquals(3, columns.size)
+                    assertTrue(conn.setCardColumn("ssh-actions-project", "term-ssh-actions", columns[1].id))
+                    val labels = assertNotNull(conn.editCardLabels("ssh-actions-project", "term-ssh-actions",
+                        CardLabelEdit(create = listOf("SSH α ' quoted" to "blue"))))
+                    assertTrue(labels.edited); assertEquals(listOf("SSH α ' quoted"), labels.labels.map { it.name })
+                    assertEquals(labels.labels.map { it.id }, labels.cardLabelIds)
+                    conn.wake("term-ssh-actions"); conn.refresh("term-ssh-actions"); conn.rename("term-ssh-actions", "Typed α ' title")
+                    fixture.command("snapshot")
+                    val proof = fixture.awaitEvent("snapshot")
+                    val board = proof.getValue("file").jsonObject.getValue("kanban").jsonObject
+                    assertEquals(columns[1].id, board.getValue("assignments").jsonArray.single().jsonObject.getValue("columnId").jsonPrimitive.content)
+                    assertEquals(labels.cardLabelIds, board.getValue("meta").jsonArray.single().jsonObject.getValue("labels").jsonArray.map { it.jsonPrimitive.content })
+                    assertEquals(listOf("wake", "refresh", "rename"), proof.getValue("nudges").jsonArray.map { it.jsonObject.getValue("method").jsonPrimitive.content })
+                    assertEquals("Typed α ' title", proof.getValue("nudges").jsonArray.last().jsonObject.getValue("title").jsonPrimitive.content)
+                    assertFailsWith<HostException> { conn.registerNode("ssh-actions-project", NewNode("new-node", null, null, null)) }
+                    assertFailsWith<NeedsRelayException> { conn.setCardColumn("another-profile", "term-ssh-actions", null) }
+                    assertFailsWith<NeedsRelayException> { conn.wake("term-another-profile") }
+                }
             }
         }
     }
 
     @Test fun `stopped SSH actions producer clears cached capability before any request is published`() = runBlocking {
-        actionsFixture().use { fixture ->
-            connect().use { conn ->
-                conn.listProjects(); assertTrue(conn.capabilities.boardWrites)
-                fixture.command("stop"); fixture.awaitEvent("stopped")
-                assertFailsWith<NeedsRelayException> { conn.ensureBoard("ssh-actions-project") }
-                assertFalse(conn.capabilities.boardWrites); assertTrue(conn.capabilities.git)
-                fixture.command("snapshot")
-                val file = fixture.awaitEvent("snapshot").getValue("file").jsonObject
-                assertNull(file["kanban"])
+        SshTestHost().use { host ->
+            actionsFixture(host).use { fixture ->
+                host.connect().use { conn ->
+                    conn.listProjects(); assertTrue(conn.capabilities.boardWrites)
+                    fixture.command("stop"); fixture.awaitEvent("stopped")
+                    assertFailsWith<NeedsRelayException> { conn.ensureBoard("ssh-actions-project") }
+                    assertFalse(conn.capabilities.boardWrites); assertTrue(conn.capabilities.git)
+                    fixture.command("snapshot")
+                    val file = fixture.awaitEvent("snapshot").getValue("file").jsonObject
+                    assertNull(file["kanban"])
+                }
             }
         }
     }
 
     @Test fun `an SSH action with a lost exit acknowledgement is uncertain even when the save happened`() = runBlocking {
-        actionsFixture().use { fixture ->
-            connect().use { conn ->
-                conn.listProjects()
-                var submissions = 0
-                onCommand = { command, channel -> if (command.contains("NT-ACTIONS-REPLY")) { submissions++; channel.omitExitStatus = true } }
-                assertFailsWith<HostUnansweredException> { conn.ensureBoard("ssh-actions-project") }
-                assertEquals(1, submissions)
-                fixture.command("snapshot")
-                assertEquals(3, fixture.awaitEvent("snapshot").getValue("file").jsonObject.getValue("kanban").jsonObject.getValue("columns").jsonArray.size)
-                assertFalse(conn.capabilities.boardWrites)
+        SshTestHost().use { host ->
+            actionsFixture(host).use { fixture ->
+                host.connect().use { conn ->
+                    conn.listProjects()
+                    var submissions = 0
+                    host.onCommand = { command, channel -> if (command.contains("NT-ACTIONS-REPLY")) { submissions++; channel.omitExitStatus = true } }
+                    assertFailsWith<HostUnansweredException> { conn.ensureBoard("ssh-actions-project") }
+                    assertEquals(1, submissions)
+                    fixture.command("snapshot")
+                    assertEquals(3, fixture.awaitEvent("snapshot").getValue("file").jsonObject.getValue("kanban").jsonObject.getValue("columns").jsonArray.size)
+                    assertFalse(conn.capabilities.boardWrites)
+                }
             }
         }
     }
@@ -160,7 +201,7 @@ class SshTransportTest {
     // own LANG through is what hid that bug.
     // Nor any NODETERM_* of the developer's (the review of A27a): the browse reads NODETERM_DATA_DIR,
     // so an exported one pointed these tests at a real Server Edition's data dir.
-    private fun childEnv(): Map<String, String> = System.getenv().filterKeys {
+    private fun childEnv(home: File = this.home, tmuxDir: File = this.tmuxDir): Map<String, String> = System.getenv().filterKeys {
         it != "TMUX" && it != "TMUX_PANE" && it != "LANG" && it != "LANGUAGE" && !it.startsWith("LC_") &&
             !it.startsWith("NODETERM_") && it !in setOf("ENV", "BASH_ENV", "INPUTRC", "SHELLOPTS", "BASHOPTS") &&
             !it.startsWith("BASH_FUNC_")
@@ -182,7 +223,11 @@ class SshTransportTest {
     /** Called with each command the server is asked to run, before it runs (and before sshj hears back). */
     @Volatile private var onCommand: ((String, ShCommand) -> Unit)? = null
 
-    private inner class ShCommand(private val command: String) : Command {
+    private inner class ShCommand(
+        private val command: String,
+        private val commandHome: File = home,
+        private val environment: Map<String, String> = childEnv()
+    ) : Command {
         private lateinit var input: InputStream
         private lateinit var output: OutputStream
         private lateinit var error: OutputStream
@@ -204,9 +249,9 @@ class SshTransportTest {
             val pty = env.env.containsKey("TERM")
             val argv = if (pty) ptyScript.argv("stty cols $cols rows $lines 2>/dev/null; $command")
             else listOf("/bin/sh", "-c", command)
-            val pb = ProcessBuilder(argv).directory(home)
+            val pb = ProcessBuilder(argv).directory(commandHome)
             pb.environment().clear()
-            pb.environment().putAll(childEnv())
+            pb.environment().putAll(environment)
             val p = pb.start()
             process = p
             fun pump(from: InputStream, to: OutputStream, closeTo: Boolean) = Thread {

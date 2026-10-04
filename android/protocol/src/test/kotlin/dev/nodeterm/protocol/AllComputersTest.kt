@@ -171,12 +171,16 @@ class AllComputersTest {
     }
 
     @Test
-    fun `the same event id on two computers is two cards, with two keys`() {
-        val a = listing("a", status(listOf(event("e1", 10))))
+    fun `event identity keeps different computers and requests on the same node separate`() {
+        val a = listing("a", status(listOf(event("e1", 10), event("e2", 30))))
         val b = listing("b", status(listOf(event("e1", 20))))
         val feed = AllComputers.feed(listOf(a, b))
-        assertEquals(2, feed.actionable.size)
-        assertEquals(listOf("b/e1", "a/e1"), feed.actionable.map { it.key })
+        assertEquals(3, feed.actionable.size)
+        assertEquals(listOf("a/e2", "b/e1", "a/e1"), feed.actionable.map { it.key })
+        assertEquals(listOf("a" to "e2", "b" to "e1", "a" to "e1"),
+            feed.actionable.map { it.from.computer.hostId to it.event.id })
+        assertEquals(setOf("n1"), feed.actionable.map { it.event.nodeId }.toSet(),
+            "admission must distinguish events even when every request targets the same node")
     }
 
     @Test
@@ -419,11 +423,39 @@ class AllComputersTest {
             "items(feed.actionable",
             "onOpen = { openOn(item.from, ev.nodeId) }",
             "open = { nodeId -> openOn(item.from, nodeId) }",
-            "run = { label, block, nodeId -> runOn(item.from, label, block, nodeId) }",
+            "run = { label, block, nodeId -> runOn(item.from, label, block, nodeId, ev.id) }",
             "items(feed.working",
             "openOn(live.from, nodeId)",
             "items(feed.archived",
             "onOpen = { openOn(item.from, ev.nodeId) }"
+        )
+    }
+
+    @Test
+    fun `merged answers admit and retire only their own host and event before launching work`() {
+        val list = AppSourcePins.blockAfter(AppSourcePins.ui("InboxTab.kt"), "internal fun InboxFeedList(")
+        assertTrue(list.contains("var pendingActions by remember { mutableStateOf(emptySet<Pair<String, String>>()) }"))
+        val run = AppSourcePins.blockAfter(list, "fun runOn(")
+        AppSourcePins.assertInOrder(
+            run,
+            "val actionKey = from.computer.hostId to eventId",
+            "if (actionKey in pendingActions) return",
+            "pendingActions = pendingActions + actionKey",
+            "val session = graph.connections.session(from.computer.hostId)",
+            "scope.launch {",
+            "block(session.ensureConnected())",
+            "catch (e: CancellationException)",
+            "throw e",
+            "catch (e: Exception)",
+            "finally {",
+            "pendingActions = pendingActions - actionKey"
+        )
+        val cards = AppSourcePins.blockAfter(list.substringAfter("items(feed.actionable,"), ") { item ->")
+        AppSourcePins.assertInOrder(
+            cards,
+            "val ev = item.event",
+            "busy = (item.from.computer.hostId to ev.id) in pendingActions",
+            "run = { label, block, nodeId -> runOn(item.from, label, block, nodeId, ev.id) }"
         )
     }
 
