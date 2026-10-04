@@ -78,6 +78,8 @@ import { sanitizeStationNotices } from '@shared/station-notice'
 import { sanitizeOutcomeRecords } from '@shared/station-outcome'
 import { sanitizeHandoverRecords } from '@shared/station-handover'
 import type {
+  ControlChangeResult,
+  ControlSupport,
   CreateWatchLinkResult,
   RevokeAllOutcome,
   WatchChatMessage,
@@ -1031,6 +1033,13 @@ export function buildWatchLinkApi(client: RpcClient): Pick<NodeTerminalApi, 'wat
         (client.request(IPC.watchLinkChatSend, linkId, text) as Promise<WatchChatMessage | null>).catch(() => null),
       chatHistory: (linkId) =>
         (client.request(IPC.watchLinkChatHistory, linkId) as Promise<WatchChatMessage[]>).catch(() => []),
+      setControl: (linkId, enabled) =>
+        (client.request(IPC.watchLinkSetControl, linkId, enabled) as Promise<ControlChangeResult>).catch(() => false),
+      setPassword: (linkId, password) =>
+        (client.request(IPC.watchLinkSetPassword, linkId, password) as Promise<ControlChangeResult>).catch(() => false),
+      allowControl: (linkId) => (client.request(IPC.watchLinkAllowControl, linkId) as Promise<boolean>).catch(() => false),
+      controlSupport: (nodeId) =>
+        (client.request(IPC.watchLinkControlSupport, nodeId) as Promise<ControlSupport>).catch((): ControlSupport => 'unknown'),
       onState: (cb) => client.subscribe(IPC.watchLinkState, ((links: WatchLinkView[]) => cb(links)) as Listener),
       onChat: (cb) =>
         client.subscribe(IPC.watchLinkChat, ((linkId: string, msg: WatchChatMessage) => cb(linkId, msg)) as Listener),

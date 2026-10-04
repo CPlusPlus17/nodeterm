@@ -280,6 +280,14 @@ export const IPC = {
   watchLinkChatSend: 'watchLink:chat-send',
   /** invoke: `(linkId)` → WatchChatMessage[] — this run's last messages (memory only). */
   watchLinkChatHistory: 'watchLink:chat-history',
+  /** invoke: `(linkId, enabled)` → boolean — a Control link: turn typing on or off. */
+  watchLinkSetControl: 'watchLink:set-control',
+  /** invoke: `(linkId, password)` → boolean — a Control link: replace its password. */
+  watchLinkSetPassword: 'watchLink:set-password',
+  /** invoke: `(linkId)` → boolean — a Control link locked by wrong passwords: allow unlocking again. */
+  watchLinkAllowControl: 'watchLink:allow-control',
+  /** invoke: `(nodeId)` → ControlSupport — whether the node's terminal can take a Control link's input. */
+  watchLinkControlSupport: 'watchLink:control-support',
   /** core → owner clients only: the full list on every change, never a delta. */
   watchLinkState: 'watchLink:state',
   /** core → owner clients only: `(linkId, WatchChatMessage)`. */
