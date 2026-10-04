@@ -5,12 +5,12 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Current source checkpoint (2026-10-04, A100–A109).** The branch adds full retained
+**Current source checkpoint (2026-10-04, A100–A110).** The branch adds full retained
 terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
 offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
 questions. Source Control now works over direct SSH. A private typed file service lets a current
 Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
-an upstream contribution; no PR has been opened. The new release is being verified locally.
+an upstream contribution; no PR has been opened. Private beta 12/code 13 is prepared with passing release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
 ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
 Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
@@ -364,6 +364,26 @@ phone treats as "open the session" — never a guessed keystroke. The iOS app ca
 unchanged.
 
 ## What is verified, and how
+
+**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+`b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
+checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
+Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
+checking pass. The ten existing Windows/macOS runtime cases are explicitly skipped on this Linux
+host; no additional skip is accepted. The minified offline release build passes in
+**52.47 seconds**, with retained private signer, R8/runtime keeps and source/hash provenance.
+Independent SDK 36/37 signature, nondebuggable manifest, payload and 16-KB ZIP/native checks pass.
+The private support archive retains **236 isolated mutation variants** with passing controls and
+restored runs: 228 assertion cases, six named executable-contract failures and two bounded timeouts.
+Historical source hashes remain attached to their own receipts; this count does not claim that
+all earlier worktrees were identical to the final merged source. Full merged release gates pass.
+APK SHA-256: `d5a350a1f7c6f05f1ab476f25cbe58441eb666d61d1a4b62610a3faa2e058e1f`. Artifact:
+`.nodeterm/android-beta-12/nodeterm-android-0.1.0-beta.12.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-12/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone checks are paused, with **10 Pass / 22 Partial / 32 Pending**;
+live Claude rule/question application and the new physical feature matrix remain unverified.
+Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
+remains deferred until a PR is requested.
 
 **Current beta-10 delivery and paired update (2026-10-04):** `0.1.0-beta.10` / code `11`,
 clean snapshot `e3ce041c752bdef11b378cf301c719a6e62f70ab`, is installed on the intended Pixel with the

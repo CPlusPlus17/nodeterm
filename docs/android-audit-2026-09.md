@@ -129,6 +129,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A107](#a107) | medium | | medium | parity/gap | ✅ source fixed in `489c30a8` · Typed source control works on direct SSH; new physical checks pending |
 | [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
 | [A109](#a109) | low | | small | tests/bug | ✅ source fixed in `4e2f877d` · Three-digit findings retain device coverage; source regression verified |
+| [A110](#a110) | low | | small | tests/bug | ✅ test fixtures fixed in `8c57016c`, `b2e41255` · SSH profile isolation and actual unsafe-directory mode; merged gates verified |
 
 ## A01
 
@@ -3564,3 +3565,45 @@ Current Desktop/Server exposes bounded private typed request/response files unde
 Source change: `4e2f877d`.
 
 The documentation scanner recognized only two-digit finding IDs, silently ignoring continuation IDs from A100. Both heading and reference scanners now accept full IDs with at least two digits and reject malformed suffixes. The actual regression and restored control pass; reverting either production regex is caught by an assertion. Two mutants are killed.
+
+## A110
+
+**SSH integration fixtures retain their own profiles and actual permissions**
+
+Test changes: `8c57016c`, `b2e41255`.
+
+The first merged protocol run exposed shared-home pollution: the new file-service tests reused
+one class fixture and changed the workspace later transport tests expected. Each service method
+now owns and closes its own SSH server, private home/profile, tmux root and command observer.
+Existing browse, third-machine refusal and uncertainty assertions are preserved. A real MINA
+mutation restores the shared home: the first service succeeds, later producers fail with EEXIST,
+and the unchanged browse and NeedsRelay assertions catch the corrupted fixture. Control and
+restored runs pass all six real methods. Nine additional Inbox mutants verify host/event admission,
+busy state, cancellation and finally retirement; they extend the stale merged wiring assertion.
+
+The affected native suite also exposed a test-created mode narrowed by inherited umask `0077`.
+Explicit chmod makes the unsafe service directory actually `0755` before asserting Unsafe refusal.
+All 30 tests pass under `0077` and `0022` in both control and restored runs; removing chmod triggers
+the exact Vitest rejection assertion. The assertion still requires Unsafe refusal. Full merged gates pass
+815 protocol tests / 83 suites and 1,314 affected Vitest tests / 53 files, with zero failures and only
+the ten named existing Windows/macOS runtime skips on Linux; app and TypeScript checking pass.
+
+**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+`b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
+checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
+Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
+checking pass. The ten existing Windows/macOS runtime cases are explicitly skipped on this Linux
+host; no additional skip is accepted. The minified offline release build passes in
+**52.47 seconds**, with retained private signer, R8/runtime keeps and source/hash provenance.
+Independent SDK 36/37 signature, nondebuggable manifest, payload and 16-KB ZIP/native checks pass.
+The private support archive retains **236 isolated mutation variants** with passing controls and
+restored runs: 228 assertion cases, six named executable-contract failures and two bounded timeouts.
+Historical source hashes remain attached to their own receipts; this count does not claim that
+all earlier worktrees were identical to the final merged source. Full merged release gates pass.
+APK SHA-256: `d5a350a1f7c6f05f1ab476f25cbe58441eb666d61d1a4b62610a3faa2e058e1f`. Artifact:
+`.nodeterm/android-beta-12/nodeterm-android-0.1.0-beta.12.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-12/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone checks are paused, with **10 Pass / 22 Partial / 32 Pending**;
+live Claude rule/question application and the new physical feature matrix remain unverified.
+Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
+remains deferred until a PR is requested.

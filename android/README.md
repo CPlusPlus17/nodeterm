@@ -6,12 +6,12 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Current source checkpoint (2026-10-04, A100–A109).** The branch adds full retained
+**Current source checkpoint (2026-10-04, A100–A110).** The branch adds full retained
 terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
 offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
 questions. Source Control now works over direct SSH. A private typed file service lets a current
 Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
-an upstream contribution; no PR has been opened. The new release is being verified locally.
+an upstream contribution; no PR has been opened. Private beta 12/code 13 is prepared with passing release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
 ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
 Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
@@ -23,6 +23,26 @@ live refresh on All computers while visible; and captured-output Copy-sheet sear
 with highlighted matches and Previous/Next. The computer now discovers SSH host-key anchors through
 recursive configuration Includes. Beta 11/code 12 is prepared locally; the Pixel still runs
 beta 10/code 11. Phone checks remain paused, so none of these additions has a physical pass.
+
+**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+`b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
+checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
+Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
+checking pass. The ten existing Windows/macOS runtime cases are explicitly skipped on this Linux
+host; no additional skip is accepted. The minified offline release build passes in
+**52.47 seconds**, with retained private signer, R8/runtime keeps and source/hash provenance.
+Independent SDK 36/37 signature, nondebuggable manifest, payload and 16-KB ZIP/native checks pass.
+The private support archive retains **236 isolated mutation variants** with passing controls and
+restored runs: 228 assertion cases, six named executable-contract failures and two bounded timeouts.
+Historical source hashes remain attached to their own receipts; this count does not claim that
+all earlier worktrees were identical to the final merged source. Full merged release gates pass.
+APK SHA-256: `d5a350a1f7c6f05f1ab476f25cbe58441eb666d61d1a4b62610a3faa2e058e1f`. Artifact:
+`.nodeterm/android-beta-12/nodeterm-android-0.1.0-beta.12.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-12/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone checks are paused, with **10 Pass / 22 Partial / 32 Pending**;
+live Claude rule/question application and the new physical feature matrix remain unverified.
+Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
+remains deferred until a PR is requested.
 
 **Historical prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
 `314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
@@ -530,15 +550,15 @@ unsigned build inputs and checks.
    `android/`, select the beta versions, build with the pinned wrapper, and check the R8 keeps:
 
    ```sh
-   NODETERM_ANDROID_VERSION_CODE=3 \
-   NODETERM_ANDROID_VERSION_NAME=0.1.0-beta.2 \
+   NODETERM_ANDROID_VERSION_CODE=13 \
+   NODETERM_ANDROID_VERSION_NAME=0.1.0-beta.12 \
      ./gradlew :app:assembleRelease --stacktrace
    sh tools/check-r8-output.sh app/build/outputs/mapping/release
    ```
 
    After both commands succeed, record the actual APK/R8 hashes in `beta-build-inputs.json`. The
    packager requires these keys; `buildOrigin: "local"` distinguishes this from CI. From the same
-   `android/` directory, the following records version `3` / `0.1.0-beta.2`:
+   `android/` directory, the following records version `13` / `0.1.0-beta.12`:
 
    ```sh
    python3 - <<'PYTHON'
@@ -552,8 +572,8 @@ unsigned build inputs and checks.
        'schemaVersion': 1,
        'buildOrigin': 'local',
        'sourceRevision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-       'versionCode': 3,
-       'versionName': '0.1.0-beta.2',
+       'versionCode': 13,
+       'versionName': '0.1.0-beta.12',
        'unsignedApkSha256': sha(apk),
        'r8MappingSha256': sha(r8 / 'mapping.txt'),
        'r8SeedsSha256': sha(r8 / 'seeds.txt'),
@@ -601,7 +621,7 @@ unsigned build inputs and checks.
      --store-password-file /private/path/store-password \
      --key-password-file /private/path/key-password \
      --expected-signer-sha256 YOUR_CERTIFICATE_SHA256 \
-     --version-code 3 --version-name 0.1.0-beta.2 \
+     --version-code 13 --version-name 0.1.0-beta.12 \
      --source-revision FULL_COMMIT_SHA_FROM_BETA_BUILD_INPUTS \
      --build-tools-dir "$ANDROID_HOME/build-tools/36.0.0" \
      --output-dir /private/path/nodeterm-beta-1

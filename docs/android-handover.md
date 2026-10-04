@@ -3,17 +3,17 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A109`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A110`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-04, A100–A109).** The branch adds full retained
+**Current source checkpoint (2026-10-04, A100–A110).** The branch adds full retained
 terminal history search, trusted project env/shell on cold relay attach, per-agent approval policy,
 offscreen Sleeping wake, request-owned remembered permission rules and complete held Claude
 questions. Source Control now works over direct SSH. A private typed file service lets a current
 Desktop/Server own SSH Board writes; Desktop also accepts wake/refresh/rename nudges. This prepares
-an upstream contribution; no PR has been opened. The new release is being verified locally.
+an upstream contribution; no PR has been opened. Private beta 12/code 13 is prepared with passing release checks.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation and the device
 ledger remains **10 Pass / 22 Partial / 32 Pending**. No new physical or live-Claude pass is claimed.
 Hosted-backend fixes for immediate FCM and fresh-different-desktop relay recovery (A25/A93) need
@@ -26,6 +26,26 @@ needs a host-owned launch API. See the audit and Known gaps for the remaining li
   the Pixel still runs beta 10/code 11. Phone testing remains paused, including final rotation
   restoration/fixture Forget and background notification checks. The current device ledger stays
   10 Pass / 22 Partial / 32 Pending; new search/refresh/Include flows need physical verification.
+
+**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+`b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
+checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
+Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
+checking pass. The ten existing Windows/macOS runtime cases are explicitly skipped on this Linux
+host; no additional skip is accepted. The minified offline release build passes in
+**52.47 seconds**, with retained private signer, R8/runtime keeps and source/hash provenance.
+Independent SDK 36/37 signature, nondebuggable manifest, payload and 16-KB ZIP/native checks pass.
+The private support archive retains **236 isolated mutation variants** with passing controls and
+restored runs: 228 assertion cases, six named executable-contract failures and two bounded timeouts.
+Historical source hashes remain attached to their own receipts; this count does not claim that
+all earlier worktrees were identical to the final merged source. Full merged release gates pass.
+APK SHA-256: `d5a350a1f7c6f05f1ab476f25cbe58441eb666d61d1a4b62610a3faa2e058e1f`. Artifact:
+`.nodeterm/android-beta-12/nodeterm-android-0.1.0-beta.12.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-12/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone checks are paused, with **10 Pass / 22 Partial / 32 Pending**;
+live Claude rule/question application and the new physical feature matrix remain unverified.
+Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
+remains deferred until a PR is requested.
 
 **Historical prepared private beta 11 (2026-10-04).** `0.1.0-beta.11` / code `12`, clean built source
 `314105a435d18e719f53d49bb292d0f3e965ad4a`, includes all four additions (`A96`–`A99`) and the
@@ -229,6 +249,28 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Beta 12 prepared; merged release checks pass (2026-10-04)
+
+**Prepared private beta 12 (2026-10-04).** `0.1.0-beta.12` / code `13`, clean built source
+`b2e41255d8b2cf7bb342b78b7f686b8b0191879e`, includes A100–A110 and the earlier beta-11 additions. Full offline protocol
+checks pass **815 tests / 83 suites**, with zero failures, errors or skips.
+Offline app compilation, **1314 affected Vitest tests / 53 files** and full TypeScript
+checking pass. The ten existing Windows/macOS runtime cases are explicitly skipped on this Linux
+host; no additional skip is accepted. The minified offline release build passes in
+**52.47 seconds**, with retained private signer, R8/runtime keeps and source/hash provenance.
+Independent SDK 36/37 signature, nondebuggable manifest, payload and 16-KB ZIP/native checks pass.
+The private support archive retains **236 isolated mutation variants** with passing controls and
+restored runs: 228 assertion cases, six named executable-contract failures and two bounded timeouts.
+Historical source hashes remain attached to their own receipts; this count does not claim that
+all earlier worktrees were identical to the final merged source. Full merged release gates pass.
+APK SHA-256: `d5a350a1f7c6f05f1ab476f25cbe58441eb666d61d1a4b62610a3faa2e058e1f`. Artifact:
+`.nodeterm/android-beta-12/nodeterm-android-0.1.0-beta.12.apk`; build and mutation proof:
+`.nodeterm/android-beta-build-12/`. **Prepared, not installed:** beta 10/code 11 remains the last
+confirmed Pixel installation. Phone checks are paused, with **10 Pass / 22 Partial / 32 Pending**;
+live Claude rule/question application and the new physical feature matrix remain unverified.
+Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
+remains deferred until a PR is requested.
 
 ### Owned SSH actions and remaining source gaps (2026-10-04)
 
@@ -1131,6 +1173,12 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
+Before the new feature matrix, install the prepared beta 12/code 13 as a same-signer update
+and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
+the matching beta-12 source for host-dependent features, keeping the held older paired fixture
+and its original terminal intact. Test A100–A108 and earlier A96–A99 on the intended Pixel;
+source/build results do not promote physical checklist items.
+
 **Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
@@ -1551,7 +1599,7 @@ commits asked for. Its ledger is 10 Pass / 22 Partial / 32 Pending; new source f
 
 Continue Android work on `claude/android-ios-parity-75kfem` of CPlusPlus17/nodeterm.
 Read this handover, `docs/android.md`, the audit index and `android/README.md`; re-read current
-source before editing. A100–A109 close retained history, typed read recovery, project launch settings,
+source before editing. A100–A110 close retained history, typed read recovery, project launch settings,
 agent policy, offscreen wake, held rule/question replies, SSH Git and owned Board/node actions.
 The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
 paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
