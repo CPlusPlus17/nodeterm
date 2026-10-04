@@ -81,6 +81,7 @@ import type { TranscriptPresence } from '../shared/types'
 import { boardLogRemotePath } from '../core/board-log'
 import { PtyManager } from '../core/pty-manager'
 import { WorkspaceStore } from '../core/workspace-store'
+import { startSshActionsService, type SshActionsService } from '../core/ssh-actions'
 import type { CardLabelEdit } from '../core/project-kanban-write'
 import { WorkspaceWatcher } from '../core/workspace-watcher'
 import { SettingsStore } from '../core/settings-store'
@@ -651,6 +652,7 @@ let activeRemote: { cwd: string; ref: GitRemoteRef } | null = null
 // macOS close→dock-reopen cycle and silently swallows every send.
 // True from the first before-quit on: lets window close-events through (see hide-on-close).
 let quitting = false
+let sshActionsService: SshActionsService | undefined
 
 // Confirm-before-quit gate. Set once the user has answered "Quit" in the dialog below, or when
 // a quit is app-initiated rather than user-initiated (auto-update restart) and should not be
@@ -4101,6 +4103,10 @@ app.whenReady().then(async () => {
     if (typeof msg?.nodeId !== 'string' || !msg.nodeId) return
     setNodeHibernated(msg.nodeId, msg.on === true)
   })
+  // Files are reachable only to the same OS user authenticated by SSH; never through hook bearers.
+  // Seed persisted ownership before advertising even if the renderer has not loaded a canvas yet.
+  await workspaceStore.load({ sideline: false })
+  sshActionsService = await startSshActionsService(corePlatform.userDataDir, workspaceStore, hostBridge.nodeActions)
   initRemoteHost(win, ptyManager, listProjectsOutput, hostBridge)
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class
   // CorePlatform client of this desktop after mutual SAS approval. Runs BESIDE initRemoteHost (the
@@ -4447,6 +4453,7 @@ app.on('before-quit', (e) => {
     })
     return
   }
+  void sshActionsService?.stop() // retire queued file-service writes before teardown
   quitting = true // from here on, window close-events must NOT be turned into hide
   destroyNotchHud()
   // Electron releases power assertions at exit anyway; disposing keeps the hold/release log

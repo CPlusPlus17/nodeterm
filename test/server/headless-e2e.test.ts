@@ -43,6 +43,15 @@ describe('server headless mode: boots core services, binds no public listener', 
       })
       // Nothing bound: the sentinel port is 0.
       expect(srv.port).toBe(0)
+      // Actual boot advertises only the Server's served Board verbs; no renderer/master exists.
+      const advertisementFile = path.join(dataDir, 'ssh-actions/advertisement.json')
+      const advertisement = JSON.parse(fs.readFileSync(advertisementFile, 'utf8'))
+      expect(advertisement.version).toBe(1)
+      expect(advertisement.remoteProjects).toBe(false)
+      expect(advertisement.methods).toEqual([
+        'projects.ensureBoard', 'projects.setCardColumn', 'projects.editCardLabels'
+      ])
+      expect(fs.statSync(advertisementFile).mode & 0o777).toBe(0o600)
       // And the configured ephemeral port is NOT listening — a connect attempt is refused.
       const listening = await new Promise<boolean>((resolve) => {
         const sock = net
@@ -58,6 +67,7 @@ describe('server headless mode: boots core services, binds no public listener', 
       })
       expect(listening).toBe(false)
       await srv.close()
+      expect(fs.existsSync(advertisementFile)).toBe(false)
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true })
     }

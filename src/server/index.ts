@@ -16,6 +16,7 @@ import type { ServerConfig } from './config'
 import { initPlatform } from '../core/platform'
 import { SettingsStore } from '../core/settings-store'
 import { WorkspaceStore } from '../core/workspace-store'
+import { startSshActionsService } from '../core/ssh-actions'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
 import { PtyManager } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
@@ -808,6 +809,10 @@ export async function startServer(
     }
   })
 
+  // Server Edition has no standing desktop renderer nudge consumer or SSH ControlMaster.
+  // Serve local Board writes through the shared save chain; leave node and remote-project actions off.
+  const sshActionsService = await startSshActionsService(platform.userDataDir, workspaceStore, undefined, false)
+
   // Headless notification host: every core service above (incl. the loopback hook server, which
   // is its own listener and MUST run) is booted, but we bind NO public HTTP/WS listener — no
   // renderer serving, no auth surface, no open port. The granted push senders reach the phone over
@@ -817,6 +822,7 @@ export async function startServer(
     return {
       port: 0, // nothing bound
       async close() {
+        await sshActionsService?.stop()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
         projectSetupService.disposeAll()
@@ -866,7 +872,7 @@ export async function startServer(
       server.off('error', reject)
       resolve()
     })
-  })
+  }).catch(async (error) => { await sshActionsService?.stop(); throw error })
 
   const addr = server.address()
   const port = addr && typeof addr === 'object' ? addr.port : config.port
@@ -874,6 +880,7 @@ export async function startServer(
   return {
     port,
     async close() {
+      await sshActionsService?.stop()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.
       projectSetupService.disposeAll()

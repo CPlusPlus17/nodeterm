@@ -60,6 +60,7 @@ on:
       - 'src/main/remote-ssh/remote-status-push.ts'
       - 'src/main/remote-ssh/ssh-project.ts'
       - 'src/server/config.ts'
+      - 'src/server/index.ts'
   pull_request:
     paths:
       - 'android/**'
@@ -79,6 +80,7 @@ on:
       - 'src/main/remote-ssh/remote-status-push.ts'
       - 'src/main/remote-ssh/ssh-project.ts'
       - 'src/server/config.ts'
+      - 'src/server/index.ts'
   workflow_dispatch:
     inputs:
       prepare_beta:

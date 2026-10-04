@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'path'
-import { renameAtomic, writeFileAtomic } from './fs-atomic'
+import { renameAtomic, renameAtomicSync, writeFileAtomic } from './fs-atomic'
 import { IPC } from '../shared/ipc'
 import { platform } from './platform'
 import {
@@ -85,6 +85,26 @@ interface LoadedEntry {
   entry: IndexEntryV3
   project: Project
   file?: ProjectFileV1
+}
+
+/** A file-service request may wait behind desktop saves; it must still own its instance at commit. */
+export interface WorkspaceWriteFence { current(): boolean; nodeId?: string }
+const writableRequest = (raw: string, fence?: WorkspaceWriteFence): boolean => {
+  if (!fence) return true
+  if (!fence.current()) return false
+  if (!fence.nodeId) return true
+  try { return JSON.parse(raw).nodes?.filter((n: { id?: string; kind?: string }) => n.id === fence.nodeId && n.kind === 'terminal').length === 1 }
+  catch { return false }
+}
+async function writeFencedAtomic(file: string, raw: string, fence: WorkspaceWriteFence): Promise<void> {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    const mode = (await fs.stat(file)).mode & 0o777
+    await fs.writeFile(tmp, raw, { flag: 'wx', mode })
+    await fs.chmod(tmp, mode) // this shared project file keeps its original permission policy
+    if (!fence.current()) throw new Error('SSH actions instance changed')
+    renameAtomicSync(tmp, file)
+  } finally { await fs.unlink(tmp).catch(() => {}) }
 }
 
 export async function writeAtomic(filePath: string, content: string): Promise<void> {
@@ -1725,9 +1745,9 @@ export class WorkspaceStore {
    * IDEMPOTENT, and that is the safety property: an existing board is returned untouched and
    * nothing is written, so the phone may ask on every tap.
    */
-  ensureRemoteBoard(projectId: string, now = new Date()): Promise<KanbanColumn[] | null> {
+  ensureRemoteBoard(projectId: string, now = new Date(), fence?: WorkspaceWriteFence): Promise<KanbanColumn[] | null> {
     const run = this.saveChain.then(() =>
-      this.kanbanWriteNow(projectId, (raw) => ensureProjectBoard(raw, now))
+      this.kanbanWriteNow(projectId, (raw) => ensureProjectBoard(raw, now), fence)
     )
     this.saveChain = run.catch(() => {})
     // The board that is THERE NOW, whether this call seeded it or found it. `ensureProjectBoard`
@@ -1757,10 +1777,11 @@ export class WorkspaceStore {
     projectId: string,
     nodeId: string,
     columnId: string | null,
-    now = new Date()
+    now = new Date(),
+    fence?: WorkspaceWriteFence
   ): Promise<boolean> {
     const run = this.saveChain.then(() =>
-      this.kanbanWriteNow(projectId, (raw) => setProjectCardColumn(raw, nodeId, columnId, now))
+      this.kanbanWriteNow(projectId, (raw) => setProjectCardColumn(raw, nodeId, columnId, now), fence)
     )
     this.saveChain = run.catch(() => {})
     return run.then((res) => res?.written === true)
@@ -1785,10 +1806,11 @@ export class WorkspaceStore {
     projectId: string,
     nodeId: string,
     edit: CardLabelEdit,
-    now = new Date()
+    now = new Date(),
+    fence?: WorkspaceWriteFence
   ): Promise<{ edited: boolean; labels: KanbanLabel[]; cardLabelIds: string[] } | null> {
     const run = this.saveChain.then(() =>
-      this.kanbanWriteNow(projectId, (raw) => editProjectCardLabels(raw, nodeId, edit, now))
+      this.kanbanWriteNow(projectId, (raw) => editProjectCardLabels(raw, nodeId, edit, now), fence)
     )
     this.saveChain = run.catch(() => {})
     return run.then((res) => {
@@ -1835,13 +1857,16 @@ export class WorkspaceStore {
    */
   private async kanbanWriteNow(
     projectId: string,
-    transform: (raw: string) => string | null
+    transform: (raw: string) => string | null,
+    fence?: WorkspaceWriteFence
   ): Promise<{ file: ProjectFileV1; written: boolean } | null> {
     const e = this.index?.entries.find((x) => x.id === projectId)
     if (!e) return null
 
     if (e.ssh && e.cache) {
-      const updated = transform(serializeProjectFile(e.cache))
+      const cacheRaw = serializeProjectFile(e.cache)
+      if (!writableRequest(cacheRaw, fence)) return null
+      const updated = transform(cacheRaw)
       if (updated === null) return { file: e.cache, written: false }
       let parsed: ProjectFileV1
       try {
@@ -1879,10 +1904,12 @@ export class WorkspaceStore {
         return null // unparsable: there is no board to report and none was written
       }
     }
+    if (!writableRequest(raw, fence)) return null
     const updated = transform(raw)
     if (updated === null) return current()
     try {
-      await writeAtomic(file, updated)
+      if (fence) await writeFencedAtomic(file, updated, fence)
+      else await writeAtomic(file, updated)
     } catch {
       return current()
     }
