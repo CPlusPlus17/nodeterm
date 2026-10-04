@@ -1079,8 +1079,9 @@ describe('createWatchLinkService — creating a Control link', () => {
         throw new Error(`scrypt said no about ${pw}`)
       }
     })
-    const r = await t.s.create(ctlReq())
-    expect(r.ok).toBe(false)
+    // `unsupported`: the one kind whose desktop copy names no cause ("can't be created here right now");
+    // `network` would say nodeterm's service could not be reached, which is not what happened.
+    expect(await t.s.create(ctlReq())).toEqual({ ok: false, error: 'unsupported' })
     expect(t.calls).toEqual([])
     expect(t.hosts.made).toEqual([])
     expect(allLogged([warn])).not.toContain(PW)
@@ -1274,7 +1275,7 @@ describe('createWatchLinkService — the owner controls a Control link', () => {
     h.hooks.length = 0
     h.deps.onControlLocked() // its own write fails too: the lock holds
     expect(await t.s.allowControl(id)).toBe(false)
-    expect(h.hooks).toEqual(['allowControl', 'controlChanged'])
+    expect(h.hooks).toEqual([]) // a widening the write refused never reached the host
     expect(t.s.list()[0].control).toEqual({ enabled: true, locked: true })
     const c = h.record.control!
     expect(allLogged([warn])).not.toMatch(
@@ -1294,6 +1295,140 @@ describe('createWatchLinkService — the owner controls a Control link', () => {
     expect(await t.s.setControl(r.link.linkId, false)).toBe(false)
     expect(t.s.list()[0].control).toEqual({ enabled: true, locked: false })
     held.resolve('saved')
+  })
+})
+
+// A change that NARROWS access (typing off, a new password) reaches the host at once, before the write.
+// One that WIDENS it (typing on, allow again) reaches it only once the write landed: a viewer must never
+// unlock and type during a write the owner is then told failed.
+describe('createWatchLinkService — owner changes, by direction', () => {
+  async function heldWrites(o: { hashPassword?: Opts['hashPassword'] } = {}) {
+    let held: ReturnType<typeof deferred<SaveOutcome>> | null = null
+    // What each write carried, copied AT CALL TIME (the store snapshots then; the record objects in
+    // `f.saves` are the live ones and would show later changes).
+    const written: (WatchLinkRecord['control'] | undefined)[] = []
+    const f = fakeStore({
+      save: (recs) => {
+        written.push(recs[0]?.control ? { ...recs[0].control } : undefined)
+        return held ? held.promise : Promise.resolve('saved')
+      }
+    })
+    const t = service({ store: f.store, hashPassword: o.hashPassword ?? fastHash })
+    const r = await t.s.create(ctlReq())
+    if (!r.ok) throw new Error(r.error)
+    const h = t.hosts.made[0]
+    return {
+      t, f, h, written, id: r.link.linkId,
+      hold: () => (held = deferred<SaveOutcome>()),
+      release: (o: SaveOutcome) => {
+        const d = held!
+        held = null
+        d.resolve(o)
+      }
+    }
+  }
+
+  it('typing OFF reaches the host before the write lands', async () => {
+    const x = await heldWrites()
+    x.hold()
+    const off = x.t.s.setControl(x.id, false)
+    await flush()
+    expect(x.h.record.control?.enabled).toBe(false)
+    expect(x.h.hooks).toEqual(['controlChanged'])
+    x.release('saved')
+    expect(await off).toBe(true)
+  })
+
+  it('typing ON waits for the write: the record the host reads stays off throughout, and a failed write never turns it on', async () => {
+    const x = await heldWrites()
+    expect(await x.t.s.setControl(x.id, false)).toBe(true)
+    x.h.hooks.length = 0
+    x.hold()
+    const on = x.t.s.setControl(x.id, true)
+    await flush()
+    // What an unlock checks (the host reads the record live): still off while the write is in flight.
+    expect(x.h.record.control?.enabled).toBe(false)
+    expect(x.h.hooks).toEqual([])
+    expect(x.t.s.list()[0].control).toEqual({ enabled: false, locked: false })
+    // …and yet the write carries the change.
+    expect(x.written.at(-1)?.enabled).toBe(true)
+    x.release('failed')
+    expect(await on).toBe(false)
+    expect(x.h.record.control?.enabled).toBe(false)
+    expect(x.h.hooks).toEqual([])
+    expect(x.written.at(-1)?.enabled).toBe(false) // the list as it is, queued behind
+  })
+
+  it('typing ON that lands: applied, then the host is told', async () => {
+    const x = await heldWrites()
+    expect(await x.t.s.setControl(x.id, false)).toBe(true)
+    x.h.hooks.length = 0
+    x.hold()
+    const on = x.t.s.setControl(x.id, true)
+    await flush()
+    expect(x.h.hooks).toEqual([])
+    x.release('saved')
+    expect(await on).toBe(true)
+    expect(x.h.record.control?.enabled).toBe(true)
+    expect(x.h.hooks).toEqual(['controlChanged'])
+    expect(x.t.s.list()[0].control).toEqual({ enabled: true, locked: false })
+  })
+
+  it('allowControl waits for the write too: still locked throughout, and a failed write never unlocks it', async () => {
+    const x = await heldWrites()
+    x.h.deps.onControlLocked()
+    await flush()
+    x.hold()
+    const allow = x.t.s.allowControl(x.id)
+    await flush()
+    expect(x.h.record.control?.locked).toBe(true)
+    expect(x.h.hooks).toEqual([])
+    x.release('failed')
+    expect(await allow).toBe(false)
+    expect(x.h.record.control?.locked).toBe(true)
+    expect(x.h.hooks).toEqual([])
+    x.hold()
+    const again = x.t.s.allowControl(x.id)
+    await flush()
+    expect(x.h.record.control?.locked).toBe(true)
+    x.release('saved')
+    expect(await again).toBe(true)
+    expect(x.h.record.control?.locked).toBe(false)
+    expect(x.h.hooks).toEqual(['allowControl'])
+  })
+
+  it('typing ON then OFF while the ON is still being written: OFF wins, and the disk ends off', async () => {
+    const x = await heldWrites()
+    expect(await x.t.s.setControl(x.id, false)).toBe(true)
+    x.h.hooks.length = 0
+    x.hold()
+    const on = x.t.s.setControl(x.id, true)
+    await flush()
+    expect(await x.t.s.setControl(x.id, false)).toBe(true) // the later click
+    x.release('saved')
+    expect(await on).toBe(true) // written, then replaced by the later change
+    expect(x.h.record.control?.enabled).toBe(false)
+    expect(x.h.hooks).toEqual([])
+    await vi.waitFor(() => expect(x.written.at(-1)?.enabled).toBe(false))
+  })
+
+  it('a write issued while a widening is in flight cannot leave the disk behind memory', async () => {
+    const x = await heldWrites()
+    expect(await x.t.s.setControl(x.id, false)).toBe(true)
+    x.hold()
+    const on = x.t.s.setControl(x.id, true)
+    await flush()
+    const n = x.written.length
+    // A lock writes the LIVE record (still off) behind the write that carries ON — and touches
+    // another field, so the ON keeps its turn and is applied once its write lands.
+    x.h.deps.onControlLocked()
+    expect(x.written.length).toBe(n + 1)
+    expect(x.written.at(-1)).toMatchObject({ enabled: false, locked: true })
+    x.release('saved')
+    expect(await on).toBe(true)
+    expect(x.h.record.control).toMatchObject({ enabled: true, locked: true })
+    // The last write is the record as memory holds it, not the lock's older snapshot.
+    await vi.waitFor(() => expect(x.written.at(-1)).toEqual({ ...x.h.record.control }))
   })
 })
 
@@ -1364,6 +1499,46 @@ describe('createWatchLinkService — one bound on scrypt', () => {
     held.get('pc')!.resolve(true)
     expect(await Promise.all(results)).toEqual([true, false, true])
     expect(await changed).toBe(true)
+  })
+})
+
+describe('createWatchLinkService — a password check queued behind a new password', () => {
+  it('reads the NEW hash when it runs: the old password fails, the new one opens', async () => {
+    const holds = new Map<string, ReturnType<typeof deferred<boolean>>>()
+    const seen: { pw: string; hash: string }[] = []
+    const t = service({
+      verifyPassword: (pw, h) => {
+        seen.push({ pw, hash: h.hash })
+        if (pw.startsWith('hold-')) {
+          const d = deferred<boolean>()
+          holds.set(pw, d)
+          return d.promise
+        }
+        return verifyControlPassword(pw, h)
+      }
+    })
+    for (const nodeId of ['n1', 'n2', 'n1']) expect((await t.s.create(ctlReq({ nodeId }))).ok).toBe(true)
+    const [a, b, c] = t.hosts.made
+    const oldHash = a.record.control!.hash
+    // Both slots busy; then the new password's hash, then two checks on link A, queue in that order.
+    const busy = [b.deps.verifyPassword('hold-b'), c.deps.verifyPassword('hold-c')]
+    await flush()
+    const changed = t.s.setPassword(a.record.linkId, NEW_PW)
+    const oldTry = a.deps.verifyPassword(PW)
+    const newTry = a.deps.verifyPassword(NEW_PW)
+    await flush()
+    expect(seen.map((x) => x.pw)).toEqual(['hold-b', 'hold-c'])
+    // One slot frees: the hash runs in it while the other stays busy, so both checks are still queued
+    // when the new password lands; the first takes the hash's slot after it.
+    holds.get('hold-b')!.resolve(false)
+    expect(await changed).toBe(true)
+    expect(await oldTry).toBe(false)
+    holds.get('hold-c')!.resolve(false)
+    expect(await newTry).toBe(true)
+    const newHash = a.record.control!.hash
+    expect(newHash).not.toBe(oldHash)
+    expect(seen.filter((x) => x.pw === PW || x.pw === NEW_PW).map((x) => x.hash)).toEqual([newHash, newHash])
+    await Promise.all(busy)
   })
 })
 

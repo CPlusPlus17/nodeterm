@@ -48,7 +48,9 @@ export interface CreateWatchLinkRequest {
  *  - `unsupported` — this surface cannot create links: the Server Edition until it has a license
  *    layer ("Live links need a Pro license on this server — not available in the Server Edition
  *    yet", never an Upgrade button — R43), a relay tab ("Live links are created on the machine that
- *    runs this terminal"), a client that is not the machine's owner, or an app that is quitting.
+ *    runs this terminal"), a client that is not the machine's owner, or an app that is quitting. Also
+ *    a Control link whose password this machine could not hash (scrypt failed; nothing was created
+ *    anywhere): the desktop copy names no cause, and every other kind names one that is not it.
  *  - `ttl-unsupported` — the API refused an Unlimited link (an older server): pick an end time.
  *  - `control-unsupported` — a Control link on a terminal that cannot take typed input safely (a
  *    Zellij session, whose key bindings would reach every session).

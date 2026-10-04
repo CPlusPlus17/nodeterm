@@ -4989,23 +4989,24 @@ export class PtyManager {
    * inside each step (it can be gone by then → false), and the tmux name is resolved from it, never
    * from the caller. A false is never retried here (a timed-out delivery may well have run).
    *
-   * BOUNDED on every route (PANE_INPUT_DEADLINE_MS, the link host's own deadline). The tmux and SSH
-   * routes are bounded already (`runWithStdin`: PROC_TIMEOUT_MS), the session host's request by its
-   * own timeout once connected — but its reconnect can wait on a host that is still starting, and a
-   * step that never settled would hold every later chunk behind it, to land long after the link host
-   * told its controller it was dropped. So a step answers false at the deadline (a late delivery may
-   * still land, as with any timed-out one), and a chunk that could not even START by its deadline is
-   * dropped undelivered: whoever handed it over has given up on it.
+   * BOUNDED on every route, by a deadline PANE_INPUT_DEADLINE_MS after the chunk was HANDED OVER —
+   * the link host's own deadline, which runs from the same moment. The tmux and SSH routes are bounded
+   * already (`runWithStdin`: PROC_TIMEOUT_MS), the session host's request by its own timeout once
+   * connected — but its reconnect can wait on a host that is still starting, and a step that never
+   * settled would hold every later chunk behind it, to land long after the link host told its
+   * controller it was dropped. So a step gets only what is LEFT of its chunk's deadline (a chunk that
+   * waited 15 s behind a slow one has 5 s), answers false when it runs out (a late delivery may still
+   * land, as with any timed-out one), and a chunk with nothing left when its turn comes is dropped
+   * undelivered: whoever handed it over has given up on it.
    */
   controlInput(sessionId: string, chunk: ControlInputChunk): Promise<boolean> {
     const handedAt = Date.now()
     const prev = this.controlInputChains.get(sessionId) ?? Promise.resolve(true)
     const step = prev
-      .then(() =>
-        Date.now() - handedAt >= PANE_INPUT_DEADLINE_MS
-          ? false
-          : settleWithin(this.deliverControlInput(sessionId, chunk), PANE_INPUT_DEADLINE_MS)
-      )
+      .then(() => {
+        const left = PANE_INPUT_DEADLINE_MS - (Date.now() - handedAt)
+        return left <= 0 ? false : settleWithin(this.deliverControlInput(sessionId, chunk), left)
+      })
       .catch(() => false)
     this.controlInputChains.set(sessionId, step)
     void step.then(() => {

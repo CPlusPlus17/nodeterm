@@ -425,6 +425,30 @@ describe('controlInput — bounded on every route', () => {
     })
   }
 
+  // The deadline runs from the HAND-OVER: a chunk that waited 15 s behind a slow step has 5 s left,
+  // not a fresh 20 — its caller gives up 20 s after handing it over, whatever the chain did meanwhile.
+  it('a chunk queued behind a slow step for 15 s gets at most 5 s more', async () => {
+    let releaseFirst!: (v: boolean) => void
+    let n = 0
+    const sendText = vi.fn(
+      (): Promise<boolean> => (++n === 1 ? new Promise<boolean>((r) => (releaseFirst = r)) : new Promise<boolean>(() => {}))
+    )
+    const { mgr } = await manager({ nativeWindowsPane: { sendText }, tmuxBacked: false, persistKey: undefined })
+    vi.useFakeTimers()
+    const first = mgr.controlInput('sess-1', { kind: 'paste', text: 'a' })
+    let second: boolean | null = null
+    void mgr.controlInput('sess-1', { kind: 'paste', text: 'b' }).then((v) => (second = v))
+    await vi.advanceTimersByTimeAsync(15_000)
+    releaseFirst(true)
+    expect(await first).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sendText).toHaveBeenCalledTimes(2) // 'b' started, with 5 s left
+    await vi.advanceTimersByTimeAsync(PANE_INPUT_DEADLINE_MS - 15_000 - 1)
+    expect(second).toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(second).toBe(false)
+  })
+
   it('a chunk that could not START before the deadline is dropped undelivered: its caller gave up on it', async () => {
     const sendText = vi.fn((): Promise<boolean> => new Promise(() => {}))
     const { mgr } = await manager({ nativeWindowsPane: { sendText }, tmuxBacked: false, persistKey: undefined })

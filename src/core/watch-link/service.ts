@@ -40,11 +40,14 @@
 // through ONE FIFO gate of SCRYPT_SLOTS (each run is ~32 MiB and ~80 ms on libuv's 4-thread pool, and
 // unlock attempts arrive from strangers): a run waits for a slot, it is never refused. The lock the
 // link host asks for (`onControlLocked`) is set on the record synchronously — the host reads the record
-// live — and is never undone by a failed write. The owner's changes (typing on/off, a new password,
-// allow again) reach the host at once (turning typing off or replacing a leaked password must not wait
-// on the disk), are then written, and are undone in memory and at the host when the write fails or does
-// not answer within PERSIST_TIMEOUT_MS: the owner is answered false, never told a change was kept that
-// the next launch would not have.
+// live — and is never undone by a failed write. The owner's changes go by DIRECTION. One that NARROWS
+// access (typing off, a new password) reaches the record and the host at once — a leaked password or
+// an unwanted typist must not wait on the disk — and is undone when its write fails or does not answer
+// within PERSIST_TIMEOUT_MS. One that WIDENS it (typing on, allow again) is written first, from a copy
+// of the record, and reaches the record and the host only once that write landed: nobody can unlock
+// and type during a write the owner is then told failed. Either way a failed write answers false: the
+// owner is never told a change was kept that the next launch would not have. A later change to the
+// same field supersedes an earlier one still being written (its undo or its late apply is skipped).
 //
 // AN UNLIMITED LINK (`ttlSeconds` 0) has `expiresAt: null`: no expiry timer, no expiry check on a host
 // change, never pruned for time at launch. It ends like any link otherwise, and when its owner's Pro
@@ -426,10 +429,12 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   }
 
   /** Write the current records. Called, not awaited, wherever the owner must not wait on the disk;
-   *  the store snapshots at call time and serializes its writes, so disk order is call order. */
-  function persist(): Promise<boolean> {
+   *  the store snapshots at call time and serializes its writes, so disk order is call order.
+   *  `instead` is written in place of the record with its id (a change not yet applied in memory). */
+  function persist(instead?: WatchLinkRecord): Promise<boolean> {
     if (storeLatched) return Promise.resolve(true) // memory-only this run: nothing is written
-    const p = deps.store.save([...records.values(), ...writing.values()]).then(
+    const list = [...records.values(), ...writing.values()].map((x) => (instead && x.linkId === instead.linkId ? instead : x))
+    const p = deps.store.save(list).then(
       (outcome) => {
         sealRefused = outcome === 'memory-only'
         return outcome !== 'failed'
@@ -567,6 +572,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           // SYNCHRONOUSLY, before any I/O: the host's lock rests on this flag (it reads the record live
           // and never writes it). Never undone: a lock whose write fails still holds until quit.
           if (r.control) r.control.locked = true
+          takeTurn(r, 'locked') // an "allow again" still being written must not land over it
           if (records.get(r.linkId) === r) {
             void persist().then((saved) => {
               if (!saved) warn("a Control link's lock could not be saved; it holds until nodeterm quits")
@@ -695,28 +701,80 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     }
   }
 
+  /** Each owner change (and a lock) takes a TURN on the field it touches; an earlier change to the
+   *  same field still being written sees it lost its turn and neither undoes nor applies anything. */
+  type ControlField = 'enabled' | 'locked' | 'password'
+  const turns = new WeakMap<WatchLinkRecord, Record<ControlField, number>>()
+  function takeTurn(r: WatchLinkRecord, f: ControlField): number {
+    const t = turns.get(r) ?? { enabled: 0, locked: 0, password: 0 }
+    turns.set(r, t)
+    return ++t[f]
+  }
+  const hasTurn = (r: WatchLinkRecord, f: ControlField, n: number): boolean => turns.get(r)?.[f] === n
+
   /**
-   * An owner's change to a Control link. Applied in memory and told to the host AT ONCE (typing off or
-   * a replaced password must not wait on the disk), then written. A write that fails, or does not
-   * answer within PERSIST_TIMEOUT_MS, undoes the change (`undo` restores only what is still this
-   * change's own value), tells the host again, queues the corrected list behind the write, and answers
-   * false: the owner is never told a change was kept that the next launch would not have.
+   * An owner's change that NARROWS access (typing off, a new password): applied in memory and told to
+   * the host AT ONCE, then written. A write that fails, or does not answer within PERSIST_TIMEOUT_MS,
+   * undoes the change — only while it still holds the field's turn, and `undo` restores only what is
+   * still this change's own value — tells the host again, queues the corrected list behind the write,
+   * and answers false.
    */
-  async function changeControl(
+  async function narrowControl(
     r: ControlRecord,
+    field: ControlField,
     o: { apply(): void; undo(): void; host(h: LinkHost): void; undoHost(h: LinkHost): void }
   ): Promise<boolean> {
+    const turn = takeTurn(r, field)
     o.apply()
     tellHost(r.linkId, o.host)
     emitState()
     const written = await within(persist(), persistTimeoutMs)
     if (written === true) return true
-    o.undo()
-    tellHost(r.linkId, o.undoHost)
+    if (hasTurn(r, field, turn)) {
+      o.undo()
+      tellHost(r.linkId, o.undoHost)
+    }
     if (records.get(r.linkId) === r) void persist()
     emitState()
     warn("an owner's change to a Control link could not be saved; it was undone")
     return false
+  }
+
+  /**
+   * An owner's change that WIDENS access (typing on, allow again): written FIRST, from a copy of the
+   * record — the record the host reads is untouched, so nobody can unlock during the write — and
+   * applied to the record and told to the host only once that write landed. A write that fails or does
+   * not answer changes nothing in memory (the list as it is is queued behind it) and answers false. A
+   * later change to the same field wins: this one is then not applied, and the list as memory holds it
+   * is written again over this write's copy.
+   */
+  async function widenControl(
+    r: ControlRecord,
+    field: ControlField,
+    o: { change(c: WatchLinkControlRecord): void; host(h: LinkHost): void }
+  ): Promise<boolean> {
+    const turn = takeTurn(r, field)
+    const next = { ...r.control }
+    o.change(next)
+    const write = persist({ ...r, control: next })
+    const written = await within(write, persistTimeoutMs)
+    const live = liveControl(r.linkId) === r
+    if (written !== true) {
+      if (live) void persist()
+      warn("an owner's change to a Control link could not be saved; nothing changed")
+      return false
+    }
+    if (!live) return false
+    if (!hasTurn(r, field, turn)) {
+      void persist() // this write's copy is on disk; memory says what the later change made of it
+      return true
+    }
+    o.change(r.control)
+    // A write issued meanwhile snapshotted the record before this change, and lands after this one.
+    if (lastWrite !== write) void persist()
+    tellHost(r.linkId, o.host)
+    emitState()
+    return true
   }
 
   return {
@@ -751,8 +809,10 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           try {
             h = await scrypt(() => hashPassword(parsed.password as string))
           } catch (err) {
+            // `unsupported` ("can't be created here right now"): the one error that names no cause —
+            // `network` would say nodeterm's service could not be reached, which is not what happened.
             warn(`hashing a control password failed (${errorName(err)}); nothing was created`)
-            return fail('network')
+            return fail('unsupported')
           }
           parsed.password = null
           control = { enabled: true, locked: false, salt: h.salt, hash: h.hash }
@@ -903,14 +963,26 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       const r = liveControl(linkId)
       if (!r || typeof enabled !== 'boolean') return false
       const c = r.control
-      if (c.enabled === enabled) return true
-      const before = c.enabled
-      return changeControl(r, {
+      if (c.enabled === enabled) {
+        // Nothing to change here — but it is still the owner's latest word on this field: an earlier
+        // change still being written must not land over it.
+        takeTurn(r, 'enabled')
+        return true
+      }
+      if (enabled) {
+        return widenControl(r, 'enabled', {
+          change: (x) => {
+            x.enabled = true
+          },
+          host: (h) => h.controlChanged()
+        })
+      }
+      return narrowControl(r, 'enabled', {
         apply: () => {
-          c.enabled = enabled
+          c.enabled = false
         },
         undo: () => {
-          if (c.enabled === enabled) c.enabled = before
+          if (c.enabled === false) c.enabled = true
         },
         host: (h) => h.controlChanged(),
         undoHost: (h) => h.controlChanged()
@@ -931,7 +1003,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       if (!r) return false
       const c = r.control
       const before = { salt: c.salt, hash: c.hash }
-      return changeControl(r, {
+      return narrowControl(r, 'password', {
         apply: () => {
           c.salt = h.salt
           c.hash = h.hash
@@ -951,18 +1023,15 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     async allowControl(linkId) {
       const r = liveControl(linkId)
       if (!r) return false
-      const c = r.control
-      if (!c.locked) return true
-      return changeControl(r, {
-        apply: () => {
-          c.locked = false
+      if (!r.control.locked) {
+        takeTurn(r, 'locked')
+        return true
+      }
+      return widenControl(r, 'locked', {
+        change: (x) => {
+          x.locked = false
         },
-        // Locking again is always safe (and a lock that arrived meanwhile is the same state).
-        undo: () => {
-          c.locked = true
-        },
-        host: (h) => h.allowControl(),
-        undoHost: (h) => h.controlChanged()
+        host: (h) => h.allowControl()
       })
     },
 

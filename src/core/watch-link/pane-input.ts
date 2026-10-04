@@ -102,11 +102,12 @@ export type WatcherInputRoute = 'tmux' | 'ssh' | 'write' | 'none'
 export const WATCHER_INPUT_ROUTES = ['tmux', 'ssh', 'write', 'none'] as const satisfies readonly WatcherInputRoute[]
 
 /**
- * How long one chunk of a controller's input may take, from the moment it is handed over: the link
+ * How long one chunk of a controller's input may take, from the moment it is HANDED OVER: the link
  * host gives up on it then (INPUT_DELIVERY_TIMEOUT_MS is this value) and tells its controller it was
- * dropped, and `PtyManager.controlInput` answers false at the same deadline and moves the session's
- * chain on — so a delivery that never answers cannot hold every later chunk behind it, and a chunk
- * that could not even START by then is never delivered at all.
+ * dropped, and `PtyManager.controlInput` answers false at the same instant — a chunk that waited
+ * behind a slow one gets only what is left — and moves the session's chain on. So a delivery that
+ * never answers cannot hold every later chunk behind it, and a chunk with nothing left when its turn
+ * comes is never delivered at all.
  */
 export const PANE_INPUT_DEADLINE_MS = 20_000
 
