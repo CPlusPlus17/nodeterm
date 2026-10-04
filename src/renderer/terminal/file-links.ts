@@ -297,7 +297,7 @@ export function bufferView(term: Terminal): BufferView {
   }
 }
 
-/** Upper bound on rows joined in each direction — bounds hover work on pathological
+/** Upper bound on total rows joined — bounds hover work on pathological
  *  full-width walls of text; a wrapped OAuth URL is ~7 rows at 80 cols. */
 const MAX_JOIN_ROWS = 32
 
@@ -328,7 +328,8 @@ export function paragraphContaining(
 ): { text: string; startRow: number; rows: number } | null {
   if (!view.line(row)) return null
   let start = row
-  while (start > 0 && row - start < MAX_JOIN_ROWS && continuesOnNextRow(view, start - 1)) start--
+  // Reserve one row for the hovered row within the capped downward window.
+  while (start > 0 && row - start < MAX_JOIN_ROWS - 1 && continuesOnNextRow(view, start - 1)) start--
   let text = ''
   let r = start
   for (;;) {
