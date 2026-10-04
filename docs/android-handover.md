@@ -176,7 +176,8 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   capped paragraph now contains the hovered row after long hard/soft wrapped runs. Focused
   Vitest 24/24, affected link/dialect suites 54/54, full TypeScript check and three isolated
   mutants pass. All eight native Linux Desktop UI cases now pass at `01b4a2f5` with A121's
-  leave fix; Server/GPU/macOS remain unverified. This is Desktop/Server renderer
+  leave fix; separate eight-case Linux Server checks pass at `dcdf664a`. GPU/macOS remain
+  unverified. This is Desktop/Server renderer
   work only: Android already fixed `A32`, no host contract changes or iOS adoption are owed,
   and no APK rebuild or phone-check promotion follows from it.
 - **`A91`: empty-host stale rows are fixed in `4d33a5b5` and delivered in beta 9/code 10.** The last phone-shell
@@ -1350,7 +1351,8 @@ section before starting, since the verifier corrections take precedence):
 - **Desktop file-link follow-up (`A92`) is fixed in `127b6b28`.** `paragraphContaining` now reserves
   the hovered row within the 32-row window. Focused/affected Vitest suites, full TypeScript check
   and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5`
-  with A121's leave fix. Server/GPU/macOS remain unverified.
+  with A121's leave fix. Separate eight-case Linux Server checks pass at `dcdf664a`;
+  GPU/macOS remain unverified.
   Android already fixed this in `A32`; the held older paired fixture and shared `out/` remain
   unchanged. The four fresh `01b4a2f5` builds are separate disposable verification fixtures.
 - **A10/A50 trade-off.** The debug key is public by the user's decision. The private-beta packager
@@ -1462,8 +1464,9 @@ Verified:
   reconnect/history/End and relay phantom refusal are covered. Beta10/code11 is installed;
   its AGP/R8/signing/alignment/provenance and independent SDK 36/37 review pass. Focused real
   Pixel Home/project/custom creation/history/restart/update/reconnect and exact End promote
-  item 32 to Partial; item 1 paired update and later item 36 Board verification give the current 10 Pass / 22 Partial / 32 Pending. Relay/managed, cellular creation
-  remain pending; the A91 otherwise-empty-host variant passes on Oct4.
+  item 32 to Partial; item 1 paired update and later item 36 Board verification give the current 10 Pass / 22 Partial / 32 Pending.
+  Relay plain-shell creation/input/End pass; managed and cellular creation remain pending.
+  The A91 otherwise-empty-host variant passes on Oct4.
 - The protocol against the desktop's real code: the relay handshake, SAS, approval wait (and the
   host's decision hold), `projects.list` with its `lan` report, attach/snapshot/input/resize/exit,
   scroll, node actions (quick answers into SSH-project nodes through a fake remote writer), board
