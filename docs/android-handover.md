@@ -1211,7 +1211,7 @@ A108 adds owned SSH Board and Desktop node nudges. Device testing remains paused
 intends an upstream Android contribution but has not requested opening the PR. A25/A93 are
 maintainer backend dependencies with no source supplied; A68 stays deferred until PR preparation.
 A111 implements host-owned managed New over SSH on current enabled local Linux/macOS tmux hosts;
-Windows/non-tmux and third-machine creation remain unsupported. The A13 host follow-up also preserves direct-SSH viewers; native coattachment remains unverified.
+Windows/non-tmux and third-machine creation remain unsupported. The A13 host follow-up also preserves direct-SSH viewers; eight Linux native checks pass, while physical SSH/phone and other-platform runtime checks remain unverified.
 
 The user resumed broader Pixel release checks on 2026-10-04 after the hike. Beta 10 / code 11 is
 installed with A90/A91 and A94's authoritative-empty completion fix. Item 1 paired-update passes;
@@ -1293,7 +1293,7 @@ section before starting, since the verifier corrections take precedence):
 
 **Known gaps and caveats:**
 
-- **A13 coattachment is source-fixed in `ed2965be`.** Current hosts preserve external SSH/relay clients and selectively retire only verified same-profile app painters. Real tmux control-client checks pass; native/device checks remain pending. Android retains exit-zero reattach for older hosts.
+- **A13 coattachment is source-fixed in `ed2965be`.** Current hosts preserve external SSH/relay clients and selectively retire only verified same-profile app painters. Real tmux control-client checks and eight Linux native checks pass; physical SSH/phone and macOS/Windows runtime checks remain pending. Android retains exit-zero reattach for older hosts.
 - **A56/A57 are source-fixed through v2 request-owned hook replies (A105/A106).** Physical
   rule persistence and full-question CLI application remain unverified. Legacy unheld multi-select
   still opens the session. iOS adoption is owed to @eneskirca; see `hook-reply-approvals.md`.
@@ -1798,8 +1798,17 @@ isolated mutations fail assertions; three critical variants are additionally cau
 actual tmux server. Seven real private-socket tmux control-client methods pass without skips on
 tmux 3.7c: both phone/app attachment orders, unequal native pane grids, remounts, foreign/legacy
 clients and stale-client races. Control-client height formatting is empty on this host, so grid
-evidence reads the native pane and checks phone-only restoration. This is no native node-pty, SSH
-handshake, Pixel, macOS or Windows runtime pass.
+evidence reads the native pane and checks phone-only restoration.
+
+An additional Linux smoke at source `32d412b6` passes eight checks using cached Electron 42.11.3,
+Node 24.19.0, actual node-pty and tmux 3.7c. It exercises the production `PtyManager` and painter
+tracker in a private home/tmp/run/PID/network namespace: external/app attachment in both orders,
+same-manager joins, selective app remount takeover with exact shell output retained, and normal
+quit receipt cleanup while the external client and shell survive. Observed native pane grids
+return to 56×48 after the 100×40 app replacement leaves. The in-memory `CorePlatform` adapter is
+an explicit IPC boundary; no actual renderer, SSH handshake, relay, Pixel, macOS or Windows runtime
+pass is claimed. The cached native binding, Electron binary, all 96 bundled source inputs and
+external node-pty wrappers are hash-bound and unchanged across the final run.
 
 The private painter receipts are internal app state, outside the phone's named workspace/status/
 project files; no host-service verb, payload, mirror or client wire shape changes. Android keeps

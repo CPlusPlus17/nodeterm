@@ -2279,7 +2279,7 @@ the wider relay action matrix remain device checks.
   resolution remain outside the exposed contract; the phone still cannot edit or stage unmerged
   conflict resolutions through this screen.
 
-- **Direct-SSH coattachment is source-fixed (A13, `ed2965be`).** Updated hosts preserve external phone clients in either attachment order and remounts; only verified app-owned prior viewers are retired. Actual tmux control-client tests pass, while native/device grids and lifecycle remain pending. Android still reattaches when an older host detaches it.
+- **Direct-SSH coattachment is source-fixed (A13, `ed2965be`).** Updated hosts preserve external phone clients in either attachment order and remounts; only verified app-owned prior viewers are retired. Real tmux control-client checks and eight actual Linux native checks pass; physical SSH/phone and macOS/Windows runtime checks remain pending. Android still reattaches when an older host detaches it.
 - **Safe remembered rules and complete question answers replace the old fixed gaps (`A105`,
   `A106`; prior `A56`, `A57`).** Always allow confirms only exact eligible original addRules
   scopes; it cannot mean guessed option 2 or a permission-mode switch. Held questions expose every
@@ -2476,8 +2476,17 @@ isolated mutations fail assertions; three critical variants are additionally cau
 actual tmux server. Seven real private-socket tmux control-client methods pass without skips on
 tmux 3.7c: both phone/app attachment orders, unequal native pane grids, remounts, foreign/legacy
 clients and stale-client races. Control-client height formatting is empty on this host, so grid
-evidence reads the native pane and checks phone-only restoration. This is no native node-pty, SSH
-handshake, Pixel, macOS or Windows runtime pass.
+evidence reads the native pane and checks phone-only restoration.
+
+An additional Linux smoke at source `32d412b6` passes eight checks using cached Electron 42.11.3,
+Node 24.19.0, actual node-pty and tmux 3.7c. It exercises the production `PtyManager` and painter
+tracker in a private home/tmp/run/PID/network namespace: external/app attachment in both orders,
+same-manager joins, selective app remount takeover with exact shell output retained, and normal
+quit receipt cleanup while the external client and shell survive. Observed native pane grids
+return to 56×48 after the 100×40 app replacement leaves. The in-memory `CorePlatform` adapter is
+an explicit IPC boundary; no actual renderer, SSH handshake, relay, Pixel, macOS or Windows runtime
+pass is claimed. The cached native binding, Electron binary, all 96 bundled source inputs and
+external node-pty wrappers are hash-bound and unchanged across the final run.
 
 The private painter receipts are internal app state, outside the phone's named workspace/status/
 project files; no host-service verb, payload, mirror or client wire shape changes. Android keeps

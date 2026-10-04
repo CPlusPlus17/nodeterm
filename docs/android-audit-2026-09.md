@@ -32,7 +32,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A10](#a10) | medium | BLOCK | small | ci-docs/risk | ✅ fixed in `fcda932` · Debug APKs from CI change signature from run to run; README offers them as the install route, and updating means uninstalling, which wipes pairings |
 | [A11](#a11) | medium |  | small | build/bug | ✅ fixed in `de1eded` · Tapping an Inbox notification while the app is in the background does not open that computer |
 | [A12](#a12) | medium |  | medium | protocol/bug | ✅ fixed in `ab1335c`; follow-up `8430243` (SSH-project nodes typed over their ControlMaster) · Relay sendKeys (question answers, legacy approvals) writes into a pty that does not exist yet and then kills it immediately, so the keystroke can be lost while the UI reports success |
-| [A13](#a13) | medium |  | medium | protocol/bug | ✅ fixed in `68d0925` (phone), `b718a04` / `ed2965be` (desktop, both routes); seven real tmux methods and 24 distinct assertion mutants, physical pending · Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
+| [A13](#a13) | medium |  | medium | protocol/bug | ✅ fixed in `68d0925` (phone), `b718a04` / `ed2965be` (desktop, both routes); seven real tmux methods, eight Linux native checks and 24 distinct assertion mutants, physical pending · Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
 | [A14](#a14) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · New sessions in cwd-less (inline) projects are never registered: the desktop refuses them, the refusal is ignored, and the session is orphaned |
 | [A15](#a15) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · The cold-attach resume offer drops the node's managed Claude account (and on the relay, its cwd), so the resume fails with 'No conversation found' |
 | [A16](#a16) | medium |  | small | protocol/gap | ✅ fixed in `c58ad65` · The phone's launch ignores the project's own permission mode (and default account), so a project the user set to a stricter mode starts in the global mode |
@@ -591,8 +591,17 @@ isolated mutations fail assertions; three critical variants are additionally cau
 actual tmux server. Seven real private-socket tmux control-client methods pass without skips on
 tmux 3.7c: both phone/app attachment orders, unequal native pane grids, remounts, foreign/legacy
 clients and stale-client races. Control-client height formatting is empty on this host, so grid
-evidence reads the native pane and checks phone-only restoration. This is no native node-pty, SSH
-handshake, Pixel, macOS or Windows runtime pass.
+evidence reads the native pane and checks phone-only restoration.
+
+An additional Linux smoke at source `32d412b6` passes eight checks using cached Electron 42.11.3,
+Node 24.19.0, actual node-pty and tmux 3.7c. It exercises the production `PtyManager` and painter
+tracker in a private home/tmp/run/PID/network namespace: external/app attachment in both orders,
+same-manager joins, selective app remount takeover with exact shell output retained, and normal
+quit receipt cleanup while the external client and shell survive. Observed native pane grids
+return to 56×48 after the 100×40 app replacement leaves. The in-memory `CorePlatform` adapter is
+an explicit IPC boundary; no actual renderer, SSH handshake, relay, Pixel, macOS or Windows runtime
+pass is claimed. The cached native binding, Electron binary, all 96 bundled source inputs and
+external node-pty wrappers are hash-bound and unchanged across the final run.
 
 The private painter receipts are internal app state, outside the phone's named workspace/status/
 project files; no host-service verb, payload, mirror or client wire shape changes. Android keeps

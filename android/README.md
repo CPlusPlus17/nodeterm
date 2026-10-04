@@ -975,8 +975,17 @@ isolated mutations fail assertions; three critical variants are additionally cau
 actual tmux server. Seven real private-socket tmux control-client methods pass without skips on
 tmux 3.7c: both phone/app attachment orders, unequal native pane grids, remounts, foreign/legacy
 clients and stale-client races. Control-client height formatting is empty on this host, so grid
-evidence reads the native pane and checks phone-only restoration. This is no native node-pty, SSH
-handshake, Pixel, macOS or Windows runtime pass.
+evidence reads the native pane and checks phone-only restoration.
+
+An additional Linux smoke at source `32d412b6` passes eight checks using cached Electron 42.11.3,
+Node 24.19.0, actual node-pty and tmux 3.7c. It exercises the production `PtyManager` and painter
+tracker in a private home/tmp/run/PID/network namespace: external/app attachment in both orders,
+same-manager joins, selective app remount takeover with exact shell output retained, and normal
+quit receipt cleanup while the external client and shell survive. Observed native pane grids
+return to 56×48 after the 100×40 app replacement leaves. The in-memory `CorePlatform` adapter is
+an explicit IPC boundary; no actual renderer, SSH handshake, relay, Pixel, macOS or Windows runtime
+pass is claimed. The cached native binding, Electron binary, all 96 bundled source inputs and
+external node-pty wrappers are hash-bound and unchanged across the final run.
 
 The private painter receipts are internal app state, outside the phone's named workspace/status/
 project files; no host-service verb, payload, mirror or client wire shape changes. Android keeps
