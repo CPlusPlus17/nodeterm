@@ -8322,7 +8322,7 @@ unix-socket forward over it. POSIX keeps OpenSSH untouched.
   iOS app — which has never sent a name — is recognised by its fixed key comment `nodeterm-ios` and
   keeps `'iPhone'`. Store links go through `renderer/lib/links.ts` `mobileStoreLinks()`; the Play
   link is hidden by the single `ANDROID_APP_PUBLISHED` flag until the listing exists, and
-  `mobileStore.guard.test.ts` refuses a direct store URL anywhere else. `LicenseSource` includes
+  `mobileStore.guard.test.ts` refuses a direct store URL anywhere else in the renderer. `LicenseSource` includes
   `'google'` (a Play purchase bridged from the phone, `google:<orderId>`), with its own
   `licenseCopy` sentence. `settings.mobileLiveActivities` keeps its key; the UI says "Live updates
   on phone".

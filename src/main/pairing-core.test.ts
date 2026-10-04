@@ -327,6 +327,23 @@ describe('normalizeDeviceName', () => {
     expect(Array.from(out)).toHaveLength(64)
     expect(out).toBe('📱'.repeat(64))
   })
+
+  it('treats a name of only invisible / bidi characters as no name', () => {
+    expect(normalizeDeviceName('\u200B')).toBe('Phone')
+    // nodeterm-ios key
+    expect(normalizeDeviceName('\u202E\u200F', 'ssh-ed25519 AAAA nodeterm-ios')).toBe('iPhone')
+    expect(normalizeDeviceName('\u200D')).toBe('Phone')
+  })
+
+  it('strips zero-width and bidi characters from inside a name', () => {
+    expect(normalizeDeviceName('Pix\u200Bel\u202E 8')).toBe('Pixel 8')
+  })
+
+  it('caps by grapheme: a ZWJ emoji at the boundary is kept whole or cut whole, never dangling', () => {
+    const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'
+    expect(normalizeDeviceName('a'.repeat(63) + family + 'b')).toBe('a'.repeat(63) + family)
+    expect(normalizeDeviceName('a'.repeat(64) + '\u{1F468}\u200D\u{1F469}')).toBe('a'.repeat(64))
+  })
 })
 
 describe('device registry helpers', () => {

@@ -3,6 +3,8 @@
 // The QR payload + the authorized_keys line validation are the two bits of the pairing flow
 // with a fixed on-the-wire contract shared with the nodeterm iOS app — keep them here, pure.
 
+import { CONTROL_RE } from '../core/relay/team-admin'
+
 /**
  * The relay block optionally embedded in the QR payload (and the /pair HTTP response). Present
  * only when this host has phone-access (standing relay host) enabled + Pro, so the phone can
@@ -183,8 +185,13 @@ export type PublicDevice = Omit<DeviceEntry, 'token'>
 /** The comment the shipped iOS app puts on the key it generates (nodeterm-ios PairingService). */
 export const IOS_APP_KEY_COMMENT = 'nodeterm-ios'
 
-/** A phone-sent name is shown in Settings and sent as the relay label; keep it one short line. */
+/** A phone-sent name is shown in Settings and sent as the relay label; keep it one short line (graphemes). */
 export const DEVICE_NAME_MAX = 64
+
+const CONTROL_RE_GLOBAL = new RegExp(CONTROL_RE.source, 'gu')
+/** Zero-width characters with no visible glyph (NOT U+200D, which joins emoji). */
+const INVISIBLE_RE = /[\u200B\u200C\u2060\uFEFF]/g
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 /** The comment part of a public-key line (everything after type + blob), whitespace-collapsed. */
 export function keyCommentOf(publicKey: string): string {
@@ -195,7 +202,11 @@ export function keyCommentOf(publicKey: string): string {
  * The name a paired phone is listed (and relay-labelled) under.
  *
  * The name the phone sends wins — Android sends one. Control characters and newlines collapse to
- * single spaces and the result is capped at DEVICE_NAME_MAX code points (never splitting an emoji).
+ * single spaces; bidi / direction marks (the repo's Trojan-Source set, `CONTROL_RE`) become spaces
+ * too, and the zero-width characters U+200B, U+200C, U+2060 and U+FEFF are removed outright (U+200D
+ * is kept: it joins legitimate emoji). The result is capped at DEVICE_NAME_MAX GRAPHEMES, so a
+ * ZWJ emoji is kept whole or cut whole, never left with a dangling joiner. A name with no visible
+ * content after that (empty, or only U+200D) counts as no name.
  * With no usable name the fallback is the neutral 'Phone' — EXCEPT for the iOS app, which has
  * never sent a name: it is recognised by its fixed key comment and keeps the 'iPhone' every iPhone
  * paired so far was given. Without that branch every newly paired iPhone would silently become
@@ -203,8 +214,16 @@ export function keyCommentOf(publicKey: string): string {
  */
 export function normalizeDeviceName(name: unknown, publicKey = ''): string {
   if (typeof name === 'string') {
-    const flat = name.replace(/\p{Cc}/gu, ' ').replace(/\s+/g, ' ').trim()
-    if (flat) return Array.from(flat).slice(0, DEVICE_NAME_MAX).join('').trim()
+    const flat = name
+      .replace(CONTROL_RE_GLOBAL, ' ')
+      .replace(INVISIBLE_RE, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const capped = Array.from(GRAPHEME_SEGMENTER.segment(flat), (g) => g.segment)
+      .slice(0, DEVICE_NAME_MAX)
+      .join('')
+      .trim()
+    if (capped.replace(/\u200D/g, '').trim()) return capped
   }
   return keyCommentOf(publicKey) === IOS_APP_KEY_COMMENT ? 'iPhone' : 'Phone'
 }

@@ -497,7 +497,7 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
   existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
   `mobileStoreLinks()` in `src/renderer/lib/links.ts` — the Play link stays hidden behind
-  `ANDROID_APP_PUBLISHED` until the listing exists, and a guard test refuses direct store URLs.
+  `ANDROID_APP_PUBLISHED` until the listing exists, and a guard test refuses direct store URLs anywhere else in the renderer.
 
 - **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
   in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
