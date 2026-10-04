@@ -192,12 +192,14 @@ cannot reproduce) and never touches nodes of the desktop's
 SSH projects (they live on another host). Both surface as `NeedsRelayException`, and the app opens
 the session through a relay connection held next to the SSH one (`HostSession.viaRelay`).
 
-**The relay leg next to SSH (audit `A26`).** What needs nodeterm *the app* rather than the machine
-— a canvas-registered new session (`projects.registerNode`, and the attach that creates it), board writes
-(`projects.ensureBoard|setCardColumn|editCardLabels`), node actions (`node.wake|refresh|rename`) and
-`git.*` — is the relay's. `Auto` still keeps the SSH leg as the primary connection when it works;
-when one of those verbs is needed, `HostSession.connectionFor` opens the computer's relay leg next to
-it on that tap and keeps it until the connection is dropped. Which leg answers is ONE pure decision,
+**The relay leg next to SSH (audit `A26`).** `Auto` keeps SSH as the primary connection when it
+works. Direct Git runs on admitted folders without a relay (`A107`). A current selected-profile
+SSH service handles Board writes (`projects.ensureBoard|setCardColumn|editCardLabels`) on Desktop
+and Server, and delivery-only node nudges (`node.wake|refresh|rename`) on Desktop (`A108`).
+A canvas-registered new session (`projects.registerNode`, and the attach that creates it) still
+needs the relay. For a capability the primary connection does not serve,
+`HostSession.connectionFor` opens an allowed relay leg on that tap and keeps it until the
+connection is dropped. Which leg answers is ONE pure decision,
 `LegRouting.route` (`android/protocol`, `LegRoutingTest`): the primary connection when its
 capabilities include the verb, else the relay leg when the phone holds one (a relay block and a
 stored device token — often minted while on SSH by late adoption — and a route other than "Only on
@@ -250,17 +252,19 @@ its SSH projects, and reads what that desktop leaves on this computer, since the
   computer".
 
 These become projects marked `drivenRemotely` (`HostBrowse`, `android/protocol`), after the host's
-own. The host's own index wins: a project id or node it already lists is never listed twice, so a
-node of the paired desktop's OWN SSH projects stays relay-routed (`A09`), even when that desktop
-drives this very computer. What the machine does works on a driven project's sessions over SSH, on
+own. The host's own index wins: a project id or node it already lists is never listed twice.
+Terminal access to the paired desktop's OWN SSH projects stays relay-routed (`A09`), even when
+that desktop drives this very computer. What the machine does works on a driven project's sessions over SSH, on
 their own socket: attach (attach-only: a session the driving desktop creates there gets its remote
 tmux.conf and hook env, which the phone cannot give it), keys, the wake line, held approvals (a file
 on this computer, where that desktop's SSH answer path looks), read-acks (written where that
 desktop's ack sweep looks; on a computer that also runs its own nodeterm, see Known gaps), and ending
-the tmux session. What needs nodeterm *the app* (a canvas-registered new session, board writes, node actions, git)
-belongs to the desktop elsewhere, which neither leg of this computer reaches, so
-`LegRouting.forProject` makes it unavailable with that reason, and a driven session that is not
-running says it starts from that desktop instead of offering this computer's relay. The relay is
+the tmux session. Direct Git also works in a listed driven project's folder on this computer
+(`A107`). Its canvas registration, Board and node actions belong to the driving desktop, which
+neither leg of this computer reaches; `LegRouting.forProject` makes those unavailable with that
+reason. The selected-profile SSH service does not adopt another desktop's driven projects.
+A driven session that is not running says it starts from that desktop instead of offering this
+computer's relay. The relay is
 offered for a session that is not running only when it is a node of the computer's OWN index: the
 relay's `pty.attach` creates what it does not find, so for any other node (a driven one, or one no
 listing names, such as a driven project no longer listed or a deleted node) it would make a bare
@@ -300,11 +304,15 @@ list, its empty state and the Pair screen) adds one by host, port (22) and user;
 - **SSH only.** The record is the paired one's with `"manual": true` (`PairedHost.manual`): no relay
   block, no host box key, `sshAvailable` true, and a `fromJson` that drops a relay a record might
   carry. Its route is fixed to SSH (`HostStore.route`), Settings shows no choice for it, the late
-  relay adoption never runs for it, and `LegRouting.RelayLeg.ADDED_OVER_SSH` makes every relay verb
-  (a canvas-registered new session, board writes, node actions, git) unavailable with "remote access isn't set up for
-  this computer: it was added by its SSH address". A session that is not running, or a node of an SSH
-  project, is refused without the relay offer. Which refusal is said follows the relay leg the
-  phone has for the computer (`NeedsRelayException.refusal`): "remote access isn't set up" for one
+  relay adoption never runs for it. Direct Git works on admitted folders; a live selected-profile
+  Desktop/Server service can handle owned Board writes, and Desktop can deliver node nudges.
+  `LegRouting.RelayLeg.ADDED_OVER_SSH` makes a capability that still needs the relay unavailable
+  with "remote access isn't set up for this computer: it was added by its SSH address". This
+  includes canvas-registered New and Board/node actions without a supporting service. A missing
+  canvas session, or terminal access to a third-machine SSH project, is refused without the relay
+  offer. The separate phone-owned plain-terminal creation path remains available. Which refusal
+  is said follows the relay leg the phone has for the computer (`NeedsRelayException.refusal`):
+  "remote access isn't set up" for one
   added by address and for one the phone never got a relay leg for (paired with remote access off),
   and otherwise what is actually in the way, the way `LegRouting`'s reasons name it: remote access
   turned off since, a relay not picked up yet, or the route "Only on my network (SSH)". A changed
@@ -2128,8 +2136,12 @@ the wider relay action matrix remain device checks.
 - **A computer added by its SSH address is SSH only, and has no push** (audit `A27`, part b). "Add
   SSH server" reaches a headless Server Edition or a dev host the phone reaches only over SSH, but
   only where the phone can open an SSH connection to it (the same network, or a VPN): there is no
-  relay leg for it, ever, so nothing that goes through nodeterm the app (a canvas-registered new session, board writes,
-  node actions, git) and no "from anywhere". It gets no push either: the grant an iOS phone drops in
+  relay leg for it, ever, and no "from anywhere". Direct Git works on admitted local/driven folders
+  without an actions service. A current selected-profile service supplies owned Board writes on
+  Desktop/Server and delivery-only Wake/Refresh/Rename on Desktop; Server has no node nudges.
+  Missing service capabilities have no relay fallback on a manually added host, and
+  canvas-registered New still needs the relay. Phone-owned plain SSH New remains separate.
+  It gets no push either: the grant an iOS phone drops in
   such a host's `~/.nodeterm/push-grants` and the backend's `/v1/push` fan-out are APNs-only (see
   Push), and Android drops none, so the phone polls it like any other computer; docs/SERVER.md's
   "full push / Live-Activity coverage" is iOS's. Not built: a one-time password login to install the key (the user adds the

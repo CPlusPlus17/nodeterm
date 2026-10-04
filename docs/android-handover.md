@@ -1269,8 +1269,12 @@ section before starting, since the verifier corrections take precedence):
   unpin or cut on revoke and is not approved on a late adoption. Fixing it needs a SAS-approval pin
   to be linked to a device entry, which the approved-devices store does not record.
 - **Remaining parity.** Current typed SSH Git and the A108 selected-profile service support
-  Board writes and Desktop node nudges without relay; managed canvas New over bare SSH remains
-  unsupported. Phone-owned plain SSH New remains separate, with historical focused Pixel proof.
+  Board writes and Desktop delivery-only node nudges without relay. Git works on admitted
+  local/driven folders independently of the service; Server advertises Board only. A manual
+  SSH host has no relay fallback when a service capability is missing. The service admits only
+  selected-profile ownership, including Desktop's own SSH-project metadata, never another
+  desktop's driven projects. Managed canvas New over bare SSH remains unsupported.
+  Phone-owned plain SSH New remains separate, with historical focused Pixel proof.
   No immediate FCM or Live-Activity equivalent (A25); A93 needs the hosted relay maintainers.
   All-computers lifecycle/notifications and new source flows need physical verification. Dictation
   has no language picker (A59); SSH setup has no password bootstrap/install one-liner (A27).

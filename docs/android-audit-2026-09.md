@@ -45,7 +45,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A23](#a23) | medium |  | small | security/risk | ✅ fixed in `3d36d60` · Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
 | [A24](#a24) | medium |  | small | security/bug | ✅ fixed in `8e304db` · SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
 | [A25](#a25) | medium |  | medium | parity/gap | 🟡 in-app part fixed in `4ffb8b7`, `0d310cc` (notification actions, the tap opens the session); FCM push is still a backend gap · No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
-| [A26](#a26) | medium |  | medium | parity/gap | ✅ fixed in `9cdc4cf`, `1eeb5b8` · New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH. A90 adds a separate plain SSH-shell path; canvas registration remains relay-routed |
+| [A26](#a26) | medium |  | medium | parity/gap | ✅ fixed in `9cdc4cf`, `1eeb5b8` · New session and board edits were unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH. A108 now serves owned Board writes and Desktop delivery-only nudges over SSH; A90 adds separate plain SSH shells. Canvas registration remains relay-routed |
 | [A27](#a27) | medium |  | large | parity/gap | ✅ fixed in `8691e6d`, `9b5c342`, `1d8201f`, `c450e16` · Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup) |
 | [A28](#a28) | medium |  | small | parity/gap | ✅ fixed in `726271a,1cdd2f0` · SSH-project sessions over direct SSH are attached, approved and resumed on the wrong machine |
 | [A29](#a29) | medium |  | medium | parity/gap | ✅ fixed in `0c5a1e1`, `a5f38f5` · No source-control screen, although the protocol layer already implements the git verbs iOS uses |
@@ -949,7 +949,11 @@ Add an FCM leg to the backend's `/v1/push/notify` and `/v1/push/live-update`, sh
 
 ## A26
 
-**Current follow-up:** A108 now adds selected-profile SSH Board and Desktop node nudges without a relay; cold canvas New remains relay-only.
+**Current follow-up:** A107 serves direct Git on admitted local/driven folders independently of
+the actions service. A108 adds selected-profile SSH Board on Desktop/Server and delivery-only
+node nudges on Desktop. A manually added SSH host has no relay fallback for a missing service
+capability; cold canvas New remains relay-only. Another desktop's driven projects retain only
+machine-local operations, including direct Git, rather than this profile's Board/node actions.
 
 **New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH**
 
@@ -993,9 +997,11 @@ When connected over SSH, lazily open the relay leg (if the computer has one) for
 **Continuation scope (`A90`, 2026-10-03):** the original `A26` relay-routing fix remains.
 The user now needs an explicit plain shell on a manual SSH/WireGuard host with no local
 workspace/relay. `A90` adds a phone-owned `nodeterm-phone` session and independent listing,
-without registering on the desktop canvas or writing its shared project file. This exception
-does not restore cold managed-agent sessions or make board/node/git verbs available over SSH.
-Implementation/tests/build/device verification are pending.
+without registering on the desktop canvas or writing its shared project file. That A90 change
+alone did not restore cold managed-agent sessions or supply Board/node/Git verbs over SSH.
+At that checkpoint, implementation/tests/build/device verification were pending. The focused
+plain-shell flow later passed on the Pixel; A107/A108 now provide the separate typed Git and
+owned service paths described above. Their new physical matrices remain pending.
 
 ## A27
 
@@ -3548,7 +3554,7 @@ A57 display-only work is extended to all supported held questions. Parent PreToo
 
 Source change: `489c30a8`.
 
-The existing eight Git verbs now execute over POSIX SSH inside physically admitted local/driven roots and repository roots, with quoted argv/literal paths, NUL-delimited parsing, bounded output and confirmed status. Third-machine projects refuse. Unknown writes retire the connection with no replay. Upstream fallback requires the exact native exit-128 missing-upstream diagnostic for the pre-dispatch branch. Real SSH Git tests include hostile filenames, symlink jail escape, hooks/signatures, rejected pushes and transport uncertainty. Twenty-six pure and five real transport/routing mutants are caught; physical Source Control remains pending.
+The existing eight Git verbs now execute over POSIX SSH inside physically admitted local/driven roots and repository roots, with quoted argv/literal paths, NUL-delimited parsing, bounded output and confirmed status. Git capability does not depend on an actions-service advertisement or a relay leg. Third-machine projects refuse. Unknown writes retire the connection with no replay. Upstream fallback requires the exact native exit-128 missing-upstream diagnostic for the pre-dispatch branch. Real SSH Git tests include hostile filenames, symlink jail escape, hooks/signatures, rejected pushes and transport uncertainty. Twenty-six pure and five real transport/routing mutants are caught; physical Source Control remains pending.
 
 ## A108
 
