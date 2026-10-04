@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { NodeTerminalApi } from '@shared/types'
 import type { WatchLinkControlView, WatchLinkRole, WatchLinkView } from '@shared/watch-link-types'
@@ -98,6 +98,15 @@ function commentTarget(nodeId: string): { projectId: string; api: NodeTerminalAp
   return null
 }
 
+/**
+ * Something inside the popover the owner must still be shown — a new Control password whose save is
+ * in flight: once core takes it, its plaintext exists nowhere else, so a popover closed under it
+ * would lose a password that was changed. `hold()` keeps the popover from closing on an outside
+ * click, Escape or Open chat until the returned release runs. The link going away still closes it
+ * (nothing is owed for a link that no longer exists). Absent (the drawer): nothing to hold.
+ */
+const PopoverHold = createContext<(() => () => void) | null>(null)
+
 /** The roles whose viewers can chat: a Control link is a Commenter link plus typing (spec §2.1). */
 export function hasChat(role: WatchLinkRole): boolean {
   return role === 'commenter' || role === 'controller'
@@ -127,17 +136,35 @@ export function LiveLinkPopover({
   const now = useNow(30_000)
   // Below the chip; above it when there is no room below (the dropdown case of useMenuFlip).
   const flip = useMenuFlip(anchor.bottom + 6, anchor.left, anchor.top - 6)
+  // Holds (see `PopoverHold`): a counter, not state — nothing renders from it.
+  const holds = useRef(0)
+  const hold = useCallback((): (() => void) => {
+    holds.current++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      holds.current--
+    }
+  }, [])
+  /** Close unless something is held; says whether it closed. Every owner gesture comes here. */
+  const requestClose = useCallback((): boolean => {
+    if (holds.current > 0) return false
+    onClose()
+    return true
+  }, [onClose])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || !isTop()) return
+      // Swallowed even while held: the Escape was meant for the popover, not what is behind it.
       e.preventDefault()
       e.stopPropagation()
-      onClose()
+      requestClose()
     }
     // Capture phase: beat the canvas/global keydown listeners (and xterm) to the Escape.
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [isTop, onClose])
+  }, [isTop, requestClose])
   useEffect(() => {
     if (links.length === 0) onClose()
   }, [links.length, onClose])
@@ -158,12 +185,12 @@ export function LiveLinkPopover({
         className="live-pop__scrim"
         onClick={(e) => {
           e.stopPropagation()
-          onClose()
+          requestClose()
         }}
         onContextMenu={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          onClose()
+          requestClose()
         }}
       />
       <div
@@ -175,9 +202,11 @@ export function LiveLinkPopover({
         aria-label="Live links"
         tabIndex={-1}
       >
-        {links.map((l) => (
-          <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} onClose={onClose} />
-        ))}
+        <PopoverHold.Provider value={hold}>
+          {links.map((l) => (
+            <LinkBlock key={l.linkId} link={l} now={now} nodeId={nodeId} requestClose={requestClose} />
+          ))}
+        </PopoverHold.Provider>
       </div>
     </>,
     document.body
@@ -188,12 +217,13 @@ const LinkBlock = memo(function LinkBlock({
   link,
   now,
   nodeId,
-  onClose
+  requestClose
 }: {
   link: WatchLinkView
   now: number
   nodeId: string
-  onClose: () => void
+  /** Close the popover unless something in it is held; true when it closed. */
+  requestClose: () => boolean
 }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
   const [copied, setCopied] = useState(false)
@@ -238,9 +268,10 @@ const LinkBlock = memo(function LinkBlock({
             type="button"
             className="confirm__btn live-pop__btn"
             onClick={() => {
-              // The Live chat drawer (Task 8) listens; the popover gives way to it.
+              // The Live chat drawer (Task 8) listens; the popover gives way to it — unless a new
+              // password is still on its way to being shown here.
+              if (!requestClose()) return
               window.dispatchEvent(new CustomEvent('nodeterm:live-chat', { detail: { linkId: link.linkId } }))
-              onClose()
             }}
           >
             Open chat
@@ -318,7 +349,10 @@ const LinkBlock = memo(function LinkBlock({
  */
 export function ControlSection({ linkId, control }: { linkId: string; control: WatchLinkControlView }): React.JSX.Element {
   const api = window.nodeTerminal.watchLink
+  const hold = useContext(PopoverHold)
   const [busy, setBusy] = useState(false)
+  /** A password save is in flight: the popover holds open, Save reads "Saving…". */
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -329,7 +363,10 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
     const t = setTimeout(() => setCopied(false), 1500)
     return () => clearTimeout(t)
   }, [copied])
-  const run = (call: () => Promise<boolean>, failed: string, done?: () => void): void => {
+  // A hold this section took and has not released — released on unmount too (the link went away).
+  const releaseRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => releaseRef.current?.(), [])
+  const run = (call: () => Promise<boolean>, failed: string, done?: () => void, settled?: () => void): void => {
     setBusy(true)
     setError(null)
     void Promise.resolve()
@@ -338,7 +375,10 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
         (ok) => (ok ? done?.() : setError(failed)),
         () => setError(failed)
       )
-      .finally(() => setBusy(false))
+      .finally(() => {
+        setBusy(false)
+        settled?.()
+      })
   }
   const problem = passwordProblemText(draft)
   return (
@@ -424,6 +464,9 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
               disabled={busy || problem !== null}
               onClick={() => {
                 const next = draft
+                // Hold the popover open until the answer is in and, on success, shown.
+                releaseRef.current = hold?.() ?? null
+                setSaving(true)
                 run(
                   () => api.setPassword(linkId, next),
                   PASSWORD_CHANGE_FAILED_MESSAGE,
@@ -431,11 +474,16 @@ export function ControlSection({ linkId, control }: { linkId: string; control: W
                     setShown(next)
                     setDraft('')
                     setEditing(false)
+                  },
+                  () => {
+                    setSaving(false)
+                    releaseRef.current?.()
+                    releaseRef.current = null
                   }
                 )
               }}
             >
-              Save
+              {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </>

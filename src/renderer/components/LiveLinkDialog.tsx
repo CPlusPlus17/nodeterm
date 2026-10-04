@@ -16,10 +16,12 @@ import { useDialogStack } from './dialog-stack'
 import {
   capUnits,
   CONTROL_UNSUPPORTED_REASON,
-  CONTROL_WARNING,
+  controlWarning,
+  controlWarningMachine,
   createErrorMessage,
   DEFAULT_TTL,
   formatUntil,
+  LIVE_LINK_EXPOSURE,
   LIVE_LINK_WARNING,
   PASSWORD_SEPARATE_NOTE,
   PASSWORD_SHOWN_ONCE,
@@ -76,6 +78,18 @@ export function PasswordField(p: {
   )
 }
 
+/** Spec §2.7's typing warning, its "and" stressed. Text only: the machine is our own wording. */
+function ControlWarning({ machine }: { machine: string }): React.JSX.Element {
+  const [before, and, after] = controlWarning(machine)
+  return (
+    <p className="live-dialog__warning">
+      {before}
+      <strong>{and}</strong>
+      {after}
+    </p>
+  )
+}
+
 export type DialogState =
   | {
       phase: 'form'
@@ -120,6 +134,9 @@ export function LiveLinkDialogBody(p: {
   /** `watchLink.controlSupport` said this node's terminal cannot take typed input (a Zellij session):
    *  Control is shown disabled, with its reason. Absent / false: offered (unknown is offered too). */
   controlUnsupported?: boolean
+  /** Where a controller's commands would run, for the typing warning (`controlWarningMachine`).
+   *  Absent: this machine. */
+  controlMachine?: string
   /** R63: on a machine with no watcher client for this node, the link works only while the terminal
    *  is open in this app — said before the owner creates it. Absent: nothing to say (or not known). */
   whileOpenNote?: string | null
@@ -238,7 +255,10 @@ export function LiveLinkDialogBody(p: {
           onChange={(e) => p.onChange({ ...s, label: e.target.value })}
         />
       </label>
-      <p className="live-dialog__warning">{control ? CONTROL_WARNING : LIVE_LINK_WARNING}</p>
+      {/* Always what WATCHING exposes. A Control link is watched by anyone with the link alone, so
+          its warning keeps that (minus "They can't type", which it makes false) and adds typing. */}
+      <p className="live-dialog__warning">{control ? LIVE_LINK_EXPOSURE : LIVE_LINK_WARNING}</p>
+      {control && <ControlWarning machine={p.controlMachine ?? controlWarningMachine(null)} />}
       {p.whileOpenNote && <p className="live-dialog__note">{p.whileOpenNote}</p>}
       {s.error && (
         <p className="live-dialog__error" role="alert">
@@ -271,6 +291,7 @@ export function LiveLinkDialog({
   title,
   surface,
   remoteNode = false,
+  sshTarget,
   readPersistence,
   prepare,
   onUpgrade,
@@ -282,6 +303,9 @@ export function LiveLinkDialog({
   surface: LiveLinkSurface
   /** The node runs on an SSH project's host, whose own tmux gives a viewer a client of its own (R63). */
   remoteNode?: boolean
+  /** That SSH project's server, so the Control warning names the machine a controller's commands
+   *  run on (`user@host`). Absent: a local node — this machine. */
+  sshTarget?: { user: string; host: string } | null
   /** R63: the LOCAL core's session-protection status (`localSession.api.pty.tmuxStatus` — the core that
    *  creates the link, never a relay peer's). Absent, rejected or unreadable: no note (unknown claims
    *  nothing). */
@@ -460,6 +484,7 @@ export function LiveLinkDialog({
         onCopyPassword={copyPassword}
         onUpgrade={onUpgrade}
         controlUnsupported={controlUnsupported}
+        controlMachine={controlWarningMachine(sshTarget)}
       />
     </div>,
     document.body

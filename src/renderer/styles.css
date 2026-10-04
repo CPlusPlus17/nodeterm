@@ -11945,6 +11945,8 @@ button.pull-checks__name {
   color: var(--text);
   font-size: 12px;
   line-height: 1.45;
+  /* The Control warning can name a long user@host, which has no break points. */
+  overflow-wrap: anywhere;
 }
 .live-dialog__error {
   margin: 0 0 10px;

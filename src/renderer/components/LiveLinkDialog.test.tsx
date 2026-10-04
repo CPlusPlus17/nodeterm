@@ -7,8 +7,9 @@ import type { ControlSupport, CreateWatchLinkRequest, CreateWatchLinkResult } fr
 import { LiveLinkDialog, LiveLinkDialogBody } from './LiveLinkDialog'
 import {
   CONTROL_UNSUPPORTED_REASON,
-  CONTROL_WARNING,
+  controlWarningText,
   formatClock,
+  LIVE_LINK_EXPOSURE,
   LIVE_LINK_WARNING,
   PASSWORD_SEPARATE_NOTE,
   PASSWORD_SHOWN_ONCE,
@@ -17,8 +18,10 @@ import {
   UNLIMITED_NOTE
 } from '../lib/liveLink'
 import { resetDialogStack } from './dialog-stack'
+import { pinNeutralMachineNoun } from '../lib/testMachineNoun'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+pinNeutralMachineNoun()
 
 const noop = (): void => {}
 const body = (state: Parameters<typeof LiveLinkDialogBody>[0]['state'], extra: Partial<Parameters<typeof LiveLinkDialogBody>[0]> = {}) =>
@@ -38,7 +41,7 @@ describe('LiveLinkDialogBody', () => {
     for (const r of ['Viewer', 'Commenter', 'Control']) expect(html).toContain(r)
     // Neither Control's password field nor its warning until Control is picked.
     expect(html).not.toContain('live-dialog__password')
-    expect(html).not.toContain(CONTROL_WARNING)
+    expect(html).not.toContain('can type in this terminal as you')
     expect(html).toContain(LIVE_LINK_WARNING.replace(/'/g, '&#x27;'))
     expect(html).toContain('Create live link')
   })
@@ -59,6 +62,12 @@ describe('LiveLinkDialogBody', () => {
     const expiresAt = now + 24 * 3_600_000
     const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
     expect(html).toContain(`Anyone with this link can watch until tomorrow ${formatClock(expiresAt)}.`)
+  })
+
+  it('Control: the "and" of the typing warning is bold, and the machine is the one the caller names', () => {
+    const html = body({ ...FORM, role: 'controller' }, { controlMachine: 'ada@build.example' })
+    expect(html).toContain('<strong>and</strong>')
+    expect(html).toContain('running any command on ada@build.example;')
   })
 
   it('R63: the "only while open" note shows in the form when the caller has one', () => {
@@ -163,6 +172,7 @@ function mount(o: {
   onClose?: () => void
   surface?: 'desktop' | 'server' | 'relay'
   remoteNode?: boolean
+  sshTarget?: { user: string; host: string } | null
 } = {}): { onClose: ReturnType<typeof vi.fn> } {
   const onClose = vi.fn(o.onClose ?? (() => {}))
   act(() =>
@@ -172,6 +182,7 @@ function mount(o: {
         title="build"
         surface={o.surface ?? 'desktop'}
         remoteNode={o.remoteNode}
+        sshTarget={o.sshTarget}
         readPersistence={readPersistence}
         prepare={o.prepare ?? (async () => null)}
         onUpgrade={o.onUpgrade}
@@ -350,7 +361,8 @@ const typeInto = (input: HTMLInputElement, v: string): void =>
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
-const warning = (): string | null => document.querySelector('.live-dialog__warning')?.textContent ?? null
+const warnings = (): string[] => [...document.querySelectorAll('.live-dialog__warning')].map((e) => e.textContent ?? '')
+const warning = (): string | null => warnings()[0] ?? null
 const createWith = (over: Partial<CreateWatchLinkRequest> = {}): CreateWatchLinkResult => ({
   ok: true,
   link: {
@@ -362,23 +374,35 @@ const createWith = (over: Partial<CreateWatchLinkRequest> = {}): CreateWatchLink
 })
 
 describe('LiveLinkDialog — Control', () => {
-  it('Control shows the password field with Generate, and its own warning in place of the watch warning', async () => {
+  it('Control shows the password field with Generate, and BOTH warnings: what watching exposes, then typing', async () => {
     mount()
     await flush()
     expect(pwInput()).toBeNull()
-    expect(warning()).toBe(LIVE_LINK_WARNING)
+    expect(warnings()).toEqual([LIVE_LINK_WARNING])
     pick('Control')
     const input = pwInput()!
     expect(input.type).toBe('text')
     expect(input.getAttribute('autocomplete')).toBe('off')
     expect(input.getAttribute('spellcheck')).toBe('false')
     expect(input.maxLength).toBe(128)
-    expect(warning()).toBe(CONTROL_WARNING)
+    // Anyone with the link alone still WATCHES a Control link: that warning stays (minus the
+    // sentence a Control link makes false), and the typing warning comes under it.
+    expect(warnings()).toEqual([LIVE_LINK_EXPOSURE, controlWarningText('this computer')])
+    expect(document.querySelectorAll('.live-dialog__warning')[1].querySelector('strong')!.textContent).toBe('and')
     expect(btn('Generate')).toBeTruthy()
-    // Back to Viewer: the watch warning again, no password field.
+    // Back to Viewer: the watch warning alone again, no password field.
     pick('Viewer')
     expect(pwInput()).toBeNull()
-    expect(warning()).toBe(LIVE_LINK_WARNING)
+    expect(warnings()).toEqual([LIVE_LINK_WARNING])
+  })
+
+  it("an SSH project's node: the typing warning names the host its shell runs on", async () => {
+    mount({ remoteNode: true, sshTarget: { user: 'ada', host: 'build.example' } })
+    await flush()
+    pick('Control')
+    expect(warnings()[1]).toBe(controlWarningText('ada@build.example'))
+    expect(warnings()[1]).toContain('running any command on ada@build.example;')
+    expect(warnings()[1]).not.toContain('this computer')
   })
 
   it('Generate fills 16 symbols from crypto.getRandomValues', async () => {

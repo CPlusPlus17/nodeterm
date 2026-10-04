@@ -63,6 +63,8 @@ describe('Canvas live-link wiring', () => {
 
   it("R63: the dialog knows an SSH project's node from its project (the host's tmux serves its viewers)", () => {
     expect(src).toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
+    // …and names that host in the Control warning (a controller's commands run there, not here).
+    expect(src).toContain('sshTarget={useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh?.server ?? null}')
     // …and reads THIS machine's session protection from the local core, never a relay peer's.
     expect(src).toContain('readPersistence={readLocalPersistence}')
     expect(callback('readLocalPersistence')).toContain('localSession.api.pty.tmuxStatus()')

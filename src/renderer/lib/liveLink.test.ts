@@ -32,8 +32,11 @@ import {
   viewerName,
   CONTROL_LOCKED_TEXT,
   CONTROL_UNSUPPORTED_REASON,
-  CONTROL_WARNING,
+  controlWarning,
+  controlWarningMachine,
+  controlWarningText,
   controlTakenText,
+  LIVE_LINK_EXPOSURE,
   liveLinkNoticeEffect,
   PASSWORD_SEPARATE_NOTE,
   PASSWORD_SHOWN_ONCE,
@@ -381,10 +384,21 @@ describe('the create warning', () => {
 
 describe('Control and Unlimited copy', () => {
   it('is the exact ruled text', () => {
-    // Spec §2.7, verbatim.
-    expect(CONTROL_WARNING).toBe(
-      'Anyone with this link and the password can type in this terminal as you. In a shell that means running any command on this machine; in an agent session, giving the agent any instruction. Send the password separately from the link.'
+    // Spec §2.7, with the machine named truthfully (ruling 2): this machine's noun for a local node…
+    expect(controlWarningText(controlWarningMachine(null))).toBe(
+      'Anyone with this link and the password can type in this terminal as you. In a shell that means running any command on this computer; in an agent session, giving the agent any instruction. Send the password separately from the link.'
     )
+    // …and the host for an SSH project's node, whose shell runs there.
+    expect(controlWarningText(controlWarningMachine({ user: 'ada', host: 'build.example' }))).toBe(
+      'Anyone with this link and the password can type in this terminal as you. In a shell that means running any command on ada@build.example; in an agent session, giving the agent any instruction. Send the password separately from the link.'
+    )
+    // "and" is the emphasised word: the parts say where it is.
+    expect(controlWarning('x')[1]).toBe('and')
+    expect(controlWarning('x').join('')).toBe(controlWarningText('x'))
+    // A Control link still shows what WATCHING exposes — without the sentence a Control link makes false.
+    expect(LIVE_LINK_WARNING.startsWith(LIVE_LINK_EXPOSURE)).toBe(true)
+    expect(LIVE_LINK_WARNING).toBe(`${LIVE_LINK_EXPOSURE} They can't type or resize it.`)
+    expect(LIVE_LINK_EXPOSURE).not.toMatch(/type/)
     expect(PASSWORD_SEPARATE_NOTE).toBe('Send the password separately from the link.')
     expect(PASSWORD_SHOWN_ONCE).toBe(
       'This is the only time the password is shown. Change it later from the LIVE chip.'
@@ -401,6 +415,15 @@ describe('Control and Unlimited copy', () => {
     expect(passwordProblemText('longenough')).toBeNull()
     // Code points, as a person counts: eight emoji are eight characters.
     expect(passwordProblemText('\u{1F600}'.repeat(8))).toBeNull()
+  })
+})
+
+describe('controlWarningMachine', () => {
+  it("names the SSH host as user@host, bidi stripped; a host alone without a user; else this machine's noun", () => {
+    expect(controlWarningMachine(undefined)).toBe('this computer')
+    expect(controlWarningMachine({ user: 'ada', host: 'build.example' })).toBe('ada@build.example')
+    expect(controlWarningMachine({ user: '', host: 'build.example' })).toBe('build.example')
+    expect(controlWarningMachine({ user: 'a\u202eda', host: 'bu\u2066ild' })).toBe('ada@build')
   })
 })
 

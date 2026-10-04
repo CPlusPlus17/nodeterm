@@ -19324,6 +19324,8 @@ export function Canvas() {
           // R63: an SSH project's node runs in the HOST's tmux, which gives a viewer a client of its
           // own — the "only while open" note is about this machine's local terminals.
           remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}
+          // The Control warning names where a controller's commands run: the SSH host, else here.
+          sshTarget={useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh?.server ?? null}
           readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
           // No license layer in the Server Edition (R43): never an Upgrade button there.

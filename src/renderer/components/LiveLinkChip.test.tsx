@@ -679,6 +679,63 @@ describe('LiveLinkPopover — a Control link', () => {
     expect([...document.querySelectorAll('input')].map((i) => i.value)).not.toContain(generated)
   })
 
+  it('while a password save is in flight the popover stays: an outside click and Escape are ignored', async () => {
+    let answer!: (ok: boolean) => void
+    api.setPassword.mockImplementationOnce(() => new Promise<boolean>((r) => (answer = r)))
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    typeInto(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!, 'longenough1')
+    click(button('Save'))
+    await flush()
+    expect(button('Saving…')).toBeTruthy()
+    expect(button('Saving…').disabled).toBe(true)
+    click(document.querySelector('.live-pop__scrim')!)
+    expect(pop()).not.toBeNull()
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(pop()).not.toBeNull()
+    // Open chat would hand over to the drawer: not while the new password is still owed.
+    click(button('Open chat'))
+    expect(pop()).not.toBeNull()
+    await act(async () => answer(true))
+    expect(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!.value).toBe('longenough1')
+    expect(pop()!.textContent).toContain(PASSWORD_SHOWN_ONCE)
+    // Saved and shown: closing works again.
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(pop()).toBeNull()
+  })
+
+  it('a save that fails releases the popover too', async () => {
+    let answer!: (ok: boolean) => void
+    api.setPassword.mockImplementationOnce(() => new Promise<boolean>((r) => (answer = r)))
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    typeInto(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!, 'longenough1')
+    click(button('Save'))
+    await flush()
+    click(document.querySelector('.live-pop__scrim')!)
+    expect(pop()).not.toBeNull()
+    await act(async () => answer(false))
+    click(document.querySelector('.live-pop__scrim')!)
+    expect(pop()).toBeNull()
+  })
+
+  it('the link going away mid-save closes it: nothing is owed for a link that no longer exists', async () => {
+    api.setPassword.mockImplementationOnce(() => new Promise<boolean>(() => {}))
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([controller()])
+    click(chip()!)
+    click(button('Change password…'))
+    typeInto(pop()!.querySelector<HTMLInputElement>('.live-pop__password input')!, 'longenough1')
+    click(button('Save'))
+    await flush()
+    setLinks([])
+    expect(pop()).toBeNull()
+  })
+
   it('a password core refused is not shown as set', async () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([controller()])

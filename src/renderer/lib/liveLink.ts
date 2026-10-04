@@ -59,15 +59,39 @@ export const UNLIMITED_NOTE = 'This link works until you stop it.'
  *  stream is the terminal CLIENT's output, so tmux's session chooser (`C-b s` / `C-b w`, a live
  *  preview of every session — other projects' agents included) or a session switch inside it reaches
  *  viewers as well. */
-export const LIVE_LINK_WARNING =
-  "Anyone with the link sees everything this terminal shows: what's on screen now, anything printed later (tokens, env dumps), anything you scroll back to — and, if you open tmux's session chooser or switch sessions in it, those other sessions too. They can't type or resize it."
+export const LIVE_LINK_EXPOSURE =
+  "Anyone with the link sees everything this terminal shows: what's on screen now, anything printed later (tokens, env dumps), anything you scroll back to — and, if you open tmux's session chooser or switch sessions in it, those other sessions too."
+export const LIVE_LINK_WARNING = `${LIVE_LINK_EXPOSURE} They can't type or resize it.`
 export const KICK_NOTE =
   'Kick ends this connection; anyone with the link can rejoin. Stop sharing to end it for everyone.'
 
-/** The create dialog's warning while Control is picked, in place of `LIVE_LINK_WARNING` — spec §2.7,
- *  verbatim. "This machine" is the neutral noun: no brand is assumed (lib/machineName). */
-export const CONTROL_WARNING =
-  'Anyone with this link and the password can type in this terminal as you. In a shell that means running any command on this machine; in an agent session, giving the agent any instruction. Send the password separately from the link.'
+/**
+ * The create dialog's typing warning while Control is picked — spec §2.7, with the machine named
+ * truthfully. It is shown UNDER `LIVE_LINK_EXPOSURE`, never instead of it: a Control link is a
+ * Commenter link plus typing, so anyone with the link alone still watches. Three parts so the
+ * dialog can stress the middle one ("and"); `controlWarningText` is the same words as one string.
+ */
+export function controlWarning(machine: string): [string, string, string] {
+  return [
+    'Anyone with this link ',
+    'and',
+    ` the password can type in this terminal as you. In a shell that means running any command on ${machine}; in an agent session, giving the agent any instruction. Send the password separately from the link.`
+  ]
+}
+export function controlWarningText(machine: string): string {
+  return controlWarning(machine).join('')
+}
+/**
+ * Where a controller's commands run, for the typing warning: an SSH project's node runs its shell on
+ * the HOST (`user@host`, bidi-stripped — a project's SSH config is the user's own, but it is still
+ * shown as text); any other node on this machine, named through lib/machineName.
+ */
+export function controlWarningMachine(ssh: { user: string; host: string } | null | undefined): string {
+  if (!ssh) return thisMachine()
+  const host = stripBidiControls(ssh.host)
+  const user = stripBidiControls(ssh.user)
+  return user ? `${user}@${host}` : host
+}
 /** Beside a password shown once (the create dialog's done step, a changed password in the popover). */
 export const PASSWORD_SEPARATE_NOTE = 'Send the password separately from the link.'
 /** Core keeps only a hash (spec §2.2): there is no "show again". */
