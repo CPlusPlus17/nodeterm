@@ -41,6 +41,10 @@ import './index'
 const api = h.exposed.nodeTerminal as NodeTerminalApi
 
 describe('preload sshProject passphrase wiring', () => {
+  it('lists pairing adapters only through the local pairing channel', async () => {
+    await api.pairing.listNetworks()
+    expect(h.invoke).toHaveBeenCalledWith(IPC.pairingListNetworks)
+  })
   it('routes foreground process termination through request IPC', async () => {
     await api.pty.terminateForeground('node-1', 'claude')
     expect(h.invoke).toHaveBeenCalledWith(IPC.ptyTerminateForeground, 'node-1', 'claude')

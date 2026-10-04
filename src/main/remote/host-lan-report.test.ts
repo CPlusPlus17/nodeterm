@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { createHostLanReporter, HOST_KEYS_TTL_MS, type HostLanReport } from './host-lan-report'
-import { pickLanIPv4, type NetInterfaceAddr } from '../pairing-core'
+import { pairingNetworkIPv4, type PairingNetworkAddress } from '../../shared/pairing-network'
 import { createHostHandlers, type HostFsOps, type HostPtyManager, type HostRelaySocket } from './host-service'
 
 // GitHub's published host keys and the fingerprints OpenSSH prints for them (the same outside vector
@@ -27,7 +27,7 @@ afterEach(() => {
 })
 
 /** A laptop with loopback, a link-local leftover, Wi-Fi and a Docker bridge, in the order the OS lists them. */
-const LAPTOP: Record<string, NetInterfaceAddr[]> = {
+const LAPTOP: Record<string, PairingNetworkAddress[]> = {
   lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
   eth0: [{ address: '169.254.10.2', family: 'IPv4', internal: false }],
   wlan0: [
@@ -46,7 +46,7 @@ describe('createHostLanReporter', () => {
     writeFileSync(path.join(keys, 'ssh_host_ecdsa_key.pub'), `${GITHUB_ECDSA} root@box\n`)
     const report = await createHostLanReporter({ platform: 'linux', interfaces: () => LAPTOP, sshHostKeyDirs: [keys] })()
     // The same pick as the QR's `host` (pairing-service.ts), not a second opinion about it.
-    expect(report?.host).toBe(pickLanIPv4(LAPTOP))
+    expect(report?.host).toBe(pairingNetworkIPv4(LAPTOP))
     expect(report).toEqual({ host: '192.168.1.42', sshHostKeyFingerprints: [GITHUB_ECDSA_FP, GITHUB_ED25519_FP] })
   })
 
@@ -100,6 +100,32 @@ describe('createHostLanReporter', () => {
     // …and the keys are re-read once the minute is up.
     t += 1
     expect(await report()).toEqual({ host: '192.168.1.77', sshHostKeyFingerprints: [GITHUB_ECDSA_FP] })
+  })
+
+  it('prefers a LAN adapter ahead of an earlier container or tunnel address', async () => {
+    const report = createHostLanReporter({ platform: 'linux', interfaces: () => ({
+      docker0: LAPTOP.docker0, wg0: [{ address: '10.7.0.2', family: 4, internal: false }], wlan0: LAPTOP.wlan0
+    }), sshHostKeyDirs: noKeys() })
+    expect(await report()).toEqual({ host: '192.168.1.42' })
+  })
+
+  it('rereads the selected interface and DHCP address but never substitutes for an absent selection', async () => {
+    const keys = tempDir()
+    writeFileSync(path.join(keys, 'ssh_host_ed25519_key.pub'), `${GITHUB_ED25519}\n`)
+    let selected = 'wg0'
+    let tunnel = '10.7.0.2'
+    const report = createHostLanReporter({ platform: 'darwin', getPairingInterface: () => selected,
+      interfaces: () => ({ ...LAPTOP, ...(tunnel ? { wg0: [{ address: tunnel, family: 4, internal: false }] } : {}) }),
+      sshHostKeyDirs: [keys] })
+    expect(await report()).toEqual({ host: '10.7.0.2', sshHostKeyFingerprints: [GITHUB_ED25519_FP] })
+    tunnel = '10.7.0.9'
+    expect((await report())?.host).toBe('10.7.0.9')
+    tunnel = ''
+    expect(await report()).toEqual({ sshHostKeyFingerprints: [GITHUB_ED25519_FP] })
+    selected = 'wlan0'
+    expect((await report())?.host).toBe('192.168.1.42')
+    selected = ''
+    expect((await report())?.host).toBe('192.168.1.42')
   })
 })
 

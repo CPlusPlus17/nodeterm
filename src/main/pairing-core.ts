@@ -1,3 +1,5 @@
+import { pairingNetworkIPv4, type PairingNetworkAddress, type PairingInterfaces } from '../shared/pairing-network'
+
 // Pure helpers for the phone-pairing service (no I/O), so they can be unit-tested with fakes.
 //
 // The QR payload + the authorized_keys line validation are the two bits of the pairing flow
@@ -234,57 +236,18 @@ export function toPublicDevices(devices: DeviceEntry[]): PublicDevice[] {
   }))
 }
 
-/** Minimal shape of `os.networkInterfaces()` we need — kept structural so tests can fake it. */
-export interface NetInterfaceAddr {
-  address: string
-  family: string | number
-  internal: boolean
+/** Compatibility export for callers using the pairing core's structural OS address type. */
+export type NetInterfaceAddr = PairingNetworkAddress
+
+/** Automatic pairing uses the same current-adapter policy as QR and LAN refresh. */
+export function pickLanIPv4(interfaces: PairingInterfaces): string | null {
+  return pairingNetworkIPv4(interfaces)
 }
 
-/**
- * Pick a usable LAN IPv4 from `os.networkInterfaces()`, skipping internal (loopback) and
- * link-local (169.254.x.x) addresses. Returns null when none is present.
- */
-export function pickLanIPv4(
-  interfaces: Record<string, NetInterfaceAddr[] | undefined>
-): string | null {
-  for (const addrs of Object.values(interfaces)) {
-    if (!addrs) continue
-    for (const a of addrs) {
-      const isV4 = a.family === 'IPv4' || a.family === 4
-      if (!isV4 || a.internal) continue
-      if (a.address.startsWith('169.254.')) continue
-      return a.address
-    }
-  }
-  return null
-}
-
-/**
- * The pairing host address on Windows, where the first adapter `os.networkInterfaces()` lists is
- * routinely a virtual one the phone cannot reach (WSL / Hyper-V `vEthernet`, VirtualBox, VMware,
- * VPN clients). `routeAddress` is the source address the OS picked for a route to the internet —
- * i.e. the default-route adapter — and wins when it is a real non-internal IPv4 on this machine.
- * Otherwise the first address on an adapter whose name does not look virtual, then
- * `pickLanIPv4`'s old answer, so this never returns null where the old pick would not have.
- */
+/** Windows' current OS route hint has precedence within the shared automatic policy. */
 export function pickPairingIPv4(
-  interfaces: Record<string, NetInterfaceAddr[] | undefined>,
+  interfaces: PairingInterfaces,
   routeAddress: string | null
 ): string | null {
-  const usable = (a: NetInterfaceAddr): boolean =>
-    (a.family === 'IPv4' || a.family === 4) && !a.internal && !a.address.startsWith('169.254.')
-  if (routeAddress) {
-    for (const addrs of Object.values(interfaces)) {
-      if (addrs?.some((a) => usable(a) && a.address === routeAddress)) return routeAddress
-    }
-  }
-  for (const [name, addrs] of Object.entries(interfaces)) {
-    if (!addrs || VIRTUAL_ADAPTER.test(name)) continue
-    const hit = addrs.find(usable)
-    if (hit) return hit.address
-  }
-  return pickLanIPv4(interfaces)
+  return pairingNetworkIPv4(interfaces, '', routeAddress)
 }
-
-const VIRTUAL_ADAPTER = /vEthernet|WSL|Hyper-V|VirtualBox|VMware|Loopback|Tailscale|ZeroTier|Npcap|TAP-|Docker/i

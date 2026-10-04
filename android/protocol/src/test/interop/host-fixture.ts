@@ -24,6 +24,8 @@
 //   mode "ack-sweep": the real shared-file consumers (also bundled independently by
 //                 ack-fixture-runner.ts), receiving ownership and a scratch home from the caller.
 //   mode "launch-parity": real mirror host facts and shared desktop approval command assembly.
+//   mode "pairing-network": real QR builder, adapter policy and LAN reporter over an explicit
+//                 fake OS-interface boundary. No HTTP pairing/authentication or socket is simulated.
 //   mode "never-ready": prints nothing and stays alive, so InteropHarnessTest can check that a
 //                 harness whose ready wait fails still kills the process.
 //
@@ -76,6 +78,8 @@ import { assembleLaunchCommand, assembleResumeCommand } from '../../../../../src
 import { AGENT_CONFIG, ALL_PERMISSION_MODES, gatePermissionMode } from '../../../../../src/shared/agents/config'
 import { normalizeFor } from '../../../../../src/shared/agents/normalize'
 import { createPairingService } from '../../../../../src/main/pairing-service'
+import { buildPairingPayload } from '../../../../../src/main/pairing-core'
+import { pairingNetworkChoices, pairingNetworkIPv4, type PairingInterfaces } from '../../../../../src/shared/pairing-network'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
 import { DEFAULT_SETTINGS, type ClaudeAccount, type Workspace } from '../../../../../src/shared/types'
 
@@ -352,7 +356,7 @@ async function runRelay(): Promise<void> {
     listProjects: () =>
       buildProjectsListBlob({ workspace: store, userDataDir: platform().userDataDir, listSessions: async () => ['nt-term-abc-1'] }),
     // A74-refresh: the `lan` field beside the blob, from the desktop's own reporter (the QR's
-    // `pickLanIPv4` over the interfaces, and the sealed answer's host-key reader). The interfaces are
+    // `pairingNetworkIPv4` over the interfaces, and the sealed answer's host-key reader). The interfaces are
     // the test's (FIXTURE_LAN_ADDRESS, as a Wi-Fi adapter beside loopback), never this machine's, and
     // the host keys/config Include root come from FIXTURE_SSH_HOST_KEY_DIR or a dir that does not
     // exist, never /etc. PairingInteropTest also lays out recursive external Includes under scratch.
@@ -554,11 +558,76 @@ async function runLaunchParity(): Promise<void> {
   emit({ ready: true, blob, commands })
 }
 
+/** No sockets: these are production wire producers; only the kernel's interface table is fake. */
+async function runPairingNetwork(): Promise<void> {
+  const userData = process.env.FIXTURE_USERDATA
+  if (!userData) throw new Error('pairing-network needs FIXTURE_USERDATA (a scratch dir)')
+  const ipv4 = (address: string): { address: string; family: string; internal: boolean } =>
+    ({ address, family: 'IPv4', internal: false })
+  // Docker and VPN deliberately precede the physical adapter in the kernel's enumeration.
+  const base: PairingInterfaces = {
+    docker0: [ipv4('172.17.0.1')], wg0: [ipv4('10.7.0.2')],
+    lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+    wlan0: [ipv4('192.168.1.42')]
+  }
+  let interfaces = base
+  let selected = 'wlan0'
+  // The real desktop injects the same fresh settings getter into pairing and this reporter.
+  // Reuse ONE reporter while the table and selection change, so a captured initial value fails.
+  const report = createHostLanReporter({
+    platform: 'linux', interfaces: () => interfaces, getPairingInterface: () => selected,
+    sshHostKeyDirs: [process.env.FIXTURE_SSH_HOST_KEY_DIR || path.join(userData, 'no-ssh-host-keys')]
+  })
+  const keys = genKeyPair()
+  const hostKey = publicKeyToB64(keys.publicKey)
+  const cases: { name: string; payload: string | null; lan: Awaited<ReturnType<typeof report>>; choices: ReturnType<typeof pairingNetworkChoices> }[] = []
+  const capture = async (name: string): Promise<void> => {
+    const host = pairingNetworkIPv4(interfaces, selected)
+    cases.push({
+      name,
+      payload: host ? buildPairingPayload({ host, user: 'fixture', token: 'fixture-pair-token',
+        pairPort: 23456, name: 'Adapter fixture', hostKey,
+        relay: { hostId: 'fixture-relay-host', hostPublicKeyB64: hostKey, relayEndpoint: 'wss://relay.example.test' }
+      }) : null,
+      lan: await report(), choices: pairingNetworkChoices(interfaces)
+    })
+  }
+  await capture('selected')
+  interfaces = { ...base, wlan0: [ipv4('192.168.1.77')] }
+  await capture('dhcp-moved')
+  interfaces = { docker0: base.docker0, wg0: base.wg0, lo: base.lo }
+  await capture('selected-missing')
+  selected = 'wg0'
+  await capture('selection-changed')
+  interfaces = base
+  selected = ''
+  await capture('automatic-physical')
+  interfaces = { wg0: base.wg0 }
+  await capture('automatic-virtual-only')
+  // Windows has a relay-only pairing payload. Its OS default-route hint is accepted only when it
+  // is a current eligible address; an explicit adapter still takes precedence over that hint.
+  const multiple = { ...base, wlan0: [ipv4('192.168.1.42'), ipv4('192.168.1.99')] }
+  const windowsPayload = (selection: string, route: string): string => {
+    const host = pairingNetworkIPv4(multiple, selection, route)
+    if (!host) throw new Error('fixture has no eligible route')
+    return buildPairingPayload({ host, user: 'fixture', token: 'fixture-pair-token', pairPort: 23456,
+      name: 'Windows adapter fixture', hostKey, ssh: false,
+      relay: { hostId: 'fixture-relay-host', hostPublicKeyB64: hostKey, relayEndpoint: 'wss://relay.example.test' }
+    })
+  }
+  emit({ ready: true, cases,
+    windows: { currentRoute: windowsPayload('', '192.168.1.99'), staleRoute: windowsPayload('', '203.0.113.8'),
+      explicitAdapter: windowsPayload('wg0', '192.168.1.99'),
+      lan: await createHostLanReporter({ platform: 'win32', interfaces: () => multiple, getPairingInterface: () => 'wg0',
+        sshHostKeyDirs: [process.env.FIXTURE_SSH_HOST_KEY_DIR || path.join(userData, 'no-ssh-host-keys')] })() }
+  })
+}
+
 const mode = process.argv[2]
 if (mode === 'never-ready') {
   setInterval(() => {}, 60_000)
 } else if (mode !== 'project-launch') {
-  ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : mode === 'launch-parity' ? runLaunchParity() : runRelay()).catch((err) => {
+  ;(mode === 'pair' ? runPair() : mode === 'ack-sweep' ? runAckSweep() : mode === 'launch-parity' ? runLaunchParity() : mode === 'pairing-network' ? runPairingNetwork() : runRelay()).catch((err) => {
     emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
     process.exit(1)
   })

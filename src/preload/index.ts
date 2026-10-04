@@ -664,6 +664,7 @@ const api: NodeTerminalApi = {
       ipcRenderer.invoke(IPC.handoffBuild, sessionId, agentId, sourceNodeId, cwd, accountId)
   },
   pairing: {
+    listNetworks: () => ipcRenderer.invoke(IPC.pairingListNetworks),
     start: () => ipcRenderer.invoke(IPC.pairingStart),
     stop: () => ipcRenderer.invoke(IPC.pairingStop),
     onDone: (cb) => {

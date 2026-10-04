@@ -1669,7 +1669,7 @@ app.whenReady().then(async () => {
     // the standing host on the phone's first relay handshake, asked inside the pin store's queue so
     // a racing revoke cannot be undone (see pinApprovedDeviceIf).
     pinRelayKeyIfPaired: (pub, stillPaired) => pinApprovedDeviceIf(pub, stillPaired)
-  })
+  }, { getPairingInterface: () => settingsStore.get().phonePairingInterface })
   ipcMain.handle(IPC.pairingStart, () =>
     pairingService.start((result) => {
       const w = getMainWindow()
@@ -1689,6 +1689,7 @@ app.whenReady().then(async () => {
     if (url) void shell.openExternal(url)
   })
   ipcMain.handle(IPC.pairingListDevices, () => pairingService.listDevices())
+  ipcMain.handle(IPC.pairingListNetworks, () => pairingService.listNetworks())
   ipcMain.handle(IPC.pairingRevokeDevice, (_e, id: string) => pairingService.revokeDevice(id))
 
   // Host-security control plane, so it stays on raw ipcMain: a remote peer must never be able to
@@ -4096,7 +4097,7 @@ app.whenReady().then(async () => {
     // This computer's current LAN address and SSH host keys, beside every projects.list answer, so
     // a phone that reached it through the relay can update the LAN leg it dials (audit A74-refresh:
     // the pairing QR's address is a DHCP lease, and a reinstall regenerates sshd's keys).
-    lanReport: createHostLanReporter()
+    lanReport: createHostLanReporter({ getPairingInterface: () => settingsStore.get().phonePairingInterface })
   }
   // The renderer owns the Eco hibernation flag (persisted in ITS localStorage) and main only
   // mirrors it — same direction as `terminalFocused`. Feeds the agent-status mirror so the phone

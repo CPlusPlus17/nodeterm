@@ -25,6 +25,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import os from 'os'
 import path from 'path'
+import { pairingNetworkChoices, pairingNetworkIPv4, type PairingInterfaces, type PairingNetworkChoice } from '../shared/pairing-network'
 import {
   buildPairingPayload,
   filterAuthorizedKeys,
@@ -33,8 +34,6 @@ import {
   isValidEd25519PublicKey,
   normalizeAuthorizedKeysLine,
   normalizeDeviceName,
-  pickLanIPv4,
-  pickPairingIPv4,
   readDevices,
   removeDevice,
   rewriteKeyComment,
@@ -268,6 +267,8 @@ export type PairingDone = {
 }
 
 export interface PairingService {
+  /** Read this computer's current IPv4 adapters, without guessing phone reachability. */
+  listNetworks(): PairingNetworkChoice[]
   /** Begin pairing; resolves once the listener is up. `onDone` fires exactly once later. */
   start(onDone: (result: PairingDone) => void): Promise<PairingStartResult>
   /** Cancel an in-flight pairing (idempotent). Does NOT fire onDone. */
@@ -468,6 +469,10 @@ function readBody(req: IncomingMessage): Promise<string> {
 export interface PairingServiceOptions {
   /** Defaults to `process.platform`. */
   platform?: NodeJS.Platform
+  /** Defaults to the OS interface list, re-read for every start/list. */
+  interfaces?: () => PairingInterfaces
+  /** The saved adapter NAME, read at use. Empty or absent means automatic. */
+  getPairingInterface?: () => string
   /** Windows key-file detection (explanation only). Defaults to the real probe. */
   detectKeyFile?: () => Promise<WindowsKeyFile>
   /** Windows' machine-wide administrators key file, swept on revoke. */
@@ -486,6 +491,7 @@ export function createPairingService(
   options: PairingServiceOptions = {}
 ): PairingService {
   const platform = options.platform ?? process.platform
+  const interfaces = options.interfaces ?? os.networkInterfaces
   // Windows: no SSH key, relay only. Everything the phone sends over SSH is POSIX sh + tmux
   // (nodeterm-ios HostCommands / TmuxBinary / TerminalTransport), Windows OpenSSH hands out
   // cmd.exe, and sessions live in the session host — so a key sshd accepts only pins the phone to
@@ -637,15 +643,18 @@ export function createPairingService(
     cleanup()
     onDoneCb = onDone
 
-    const host = directSsh
-      ? pickLanIPv4(os.networkInterfaces())
-      : pickPairingIPv4(
-          os.networkInterfaces(),
-          await (options.defaultRouteAddress ?? defaultRouteIPv4)().catch(() => null)
-        )
+    // Only Windows uses its existing OS route hint. An explicit adapter always wins, and is
+    // re-read after the asynchronous hint so a settings/DHCP change is not cached into the QR.
+    const routeAddress = !directSsh && !options.getPairingInterface?.()
+      ? await (options.defaultRouteAddress ?? defaultRouteIPv4)().catch(() => null)
+      : null
+    const preferred = options.getPairingInterface?.() ?? ''
+    const host = pairingNetworkIPv4(interfaces(), preferred, routeAddress)
     if (!host) {
       onDoneCb = null
-      throw new Error("Couldn't detect a LAN IP address — connect to Wi-Fi and try again.")
+      throw new Error(preferred
+        ? `The selected pairing network “${preferred}” has no usable IPv4 address. Reconnect it or choose another network in Settings → Phone.`
+        : "Couldn't detect a LAN IPv4 address — connect to a network and try again.")
     }
     const token = randomBytes(24).toString('base64url')
     const user = os.userInfo().username
@@ -1109,5 +1118,5 @@ export function createPairingService(
     }
   }
 
-  return { start, stop, listDevices, revokeDevice, probeSsh, approvePairedRelayKey }
+  return { start, stop, listNetworks: () => pairingNetworkChoices(interfaces()), listDevices, revokeDevice, probeSsh, approvePairedRelayKey }
 }

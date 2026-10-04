@@ -46,6 +46,7 @@ function stubBridge(result: DeviceRevokeResult | Error): void {
   })
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = {
     pairing: {
+      listNetworks: vi.fn(async () => []),
       start: vi.fn(),
       stop: vi.fn(async () => undefined),
       onDone: vi.fn(() => () => undefined),

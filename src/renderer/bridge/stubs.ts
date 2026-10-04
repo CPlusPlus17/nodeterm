@@ -450,6 +450,7 @@ export function buildStubApi(): Omit<
       build: U('handoff.build')
     },
     pairing: {
+      listNetworks: U('pairing.listNetworks'),
       start: U('pairing.start'),
       stop: U('pairing.stop'),
       onDone: noopUnsub,

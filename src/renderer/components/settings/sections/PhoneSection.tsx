@@ -16,6 +16,7 @@ import {
   relayOnlyExplanation
 } from '@shared/pairing-gate'
 import { thisMachine } from '../../../lib/machineName'
+import { PairingNetworkRow } from './PairingNetworkRow'
 
 const ROWS = {
   remote: {
@@ -24,7 +25,7 @@ const ROWS = {
   },
   pair: {
     title: 'Pair phone',
-    keywords: ['phone', 'pair', 'qr', 'ios', 'mobile', 'ssh', 'scan', 'nodeterm']
+    keywords: ['phone', 'pair', 'qr', 'ios', 'mobile', 'ssh', 'scan', 'nodeterm', 'network', 'adapter', 'vpn', 'lan', 'wireguard']
   },
   devices: {
     title: 'Paired devices',
@@ -249,6 +250,10 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
               {ANDROID_APP_LABEL}
             </button>
           </p>
+
+          {/* This row mounts only while Pair phone is visible, including global-search results. */}
+          <PairingNetworkRow isActive pairingBusy={busy} waiting={phase === 'waiting'}
+            stopPairing={stop} restartPairing={start} />
 
           {phase === 'idle' || phase === 'timeout' ? (
             <div className="space-y-3">

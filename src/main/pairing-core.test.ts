@@ -385,6 +385,19 @@ describe('pickLanIPv4', () => {
     expect(picked).toBe('192.168.1.42')
   })
 
+  it('shares automatic physical-adapter preference and strict address rejection with QR/LAN refresh', () => {
+    expect(pickLanIPv4({
+      docker0: [{ address: '172.17.0.1', family: 4, internal: false }],
+      wg0: [{ address: '10.7.0.2', family: 4, internal: false }],
+      wlan0: [{ address: '192.168.1.42', family: 4, internal: false }],
+    })).toBe('192.168.1.42')
+    expect(pickLanIPv4({ en0: [
+      { address: '999.1.2.3', family: 4, internal: false },
+      { address: '127.0.0.2', family: 4, internal: false },
+      { address: '224.1.2.3', family: 4, internal: false },
+    ] })).toBeNull()
+  })
+
   it('accepts the numeric family form (family: 4)', () => {
     expect(
       pickLanIPv4({ en0: [{ address: '10.0.0.2', family: 4, internal: false }] })
@@ -458,7 +471,13 @@ describe('pickPairingIPv4', () => {
     expect(pickPairingIPv4(ifaces, '10.9.9.9')).toBe('192.168.1.42')
     expect(pickPairingIPv4(ifaces, null)).toBe('192.168.1.42')
   })
-  it('falls back to the old pick when only virtual adapters exist', () => {
+  it('accepts a current secondary adapter address as a hint, but rejects malformed/non-unicast hints', () => {
+    const current = { docker0: [nic('172.17.0.1'), nic('172.17.0.2')], wlan0: [nic('192.168.1.42')] }
+    expect(pickPairingIPv4(current, '172.17.0.2')).toBe('172.17.0.2')
+    expect(pickPairingIPv4({ bad: [nic('999.1.2.3')], wlan0: [nic('192.168.1.42')] }, '999.1.2.3')).toBe('192.168.1.42')
+  })
+
+  it('keeps a valid fallback when only virtual adapters exist', () => {
     expect(pickPairingIPv4({ 'vEthernet (WSL)': [nic('172.20.48.1')] }, null)).toBe('172.20.48.1')
   })
 })

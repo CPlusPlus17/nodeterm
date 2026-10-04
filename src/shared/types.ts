@@ -17,6 +17,7 @@ import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
+import type { PairingNetworkChoice } from './pairing-network'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
 import type { CanvasLayout, LayoutViewports } from './canvas-layout'
 import type {
@@ -1766,6 +1767,9 @@ export interface Settings {
    *  (end-to-end encrypted). Default on — the host only admits SAS-approved, pinned devices, so
    *  an un-paired install just keeps an idle listener. Toggle in Settings → Phone. */
   phoneAccessEnabled: boolean
+  /** Adapter name for pairing and authenticated LAN reports. Empty = automatic; an unavailable
+   *  explicit adapter advertises no address. The current OS address follows DHCP changes. */
+  phonePairingInterface: string
   /** Send APNs push notifications to relay-paired phones when an agent needs approval, asks a
    *  question, or finishes a turn (spec: apns-push). Default on — it only fires for users who
    *  have paired a phone. Toggle in Settings → Notifications. */
@@ -1978,6 +1982,7 @@ export const DEFAULT_SETTINGS: Settings = {
   telemetryEnabled: true,
   debugLogPanel: false,
   phoneAccessEnabled: true,
+  phonePairingInterface: '',
   mobilePushEnabled: true,
   mobilePushNeedsYou: true,
   mobilePushDone: true,
@@ -3454,6 +3459,8 @@ export interface DeviceRevokeResult {
 
 /** Phone-pairing (nodeterm iOS "scan a QR" flow) bridge. */
 export interface PairingApi {
+  /** Current usable IPv4 adapters on this computer, not a phone reachability test. Desktop only. */
+  listNetworks(): Promise<PairingNetworkChoice[]>
   /** Start the one-shot LAN listener; resolves with the QR payload + an SSH-reachable hint. */
   start(): Promise<{
     payload: string

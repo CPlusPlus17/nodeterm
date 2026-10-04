@@ -1,7 +1,7 @@
 // What this computer tells a paired phone about its own direct-SSH leg, next to every relay
 // `projects.list` answer (audit A74-refresh).
 //
-// The phone's LAN leg dials the address the pairing QR carried (`pickLanIPv4`, pairing-service.ts) and
+// The phone's LAN leg dials the address the pairing QR carried (`pairingNetworkIPv4`, pairing-service.ts) and
 // checks the SSH host key against what the sealed `/pair` answer named (`sshHostKeyFingerprints`,
 // audit A49-anchor). Both are facts about the moment of pairing: a DHCP lease moves, and a reinstall
 // regenerates sshd's keys. The relay leg authenticates this computer on its own (the phone pinned this
@@ -13,7 +13,7 @@
 // read `lan` (the iOS app today, an older Android build) sees the reply it always saw.
 
 import os from 'os'
-import { pickLanIPv4, type NetInterfaceAddr } from '../pairing-core'
+import { pairingNetworkIPv4, type PairingInterfaces } from '../../shared/pairing-network'
 import { readSshHostKeyFingerprints, SSH_HOST_KEY_DIRS } from '../ssh-host-keys'
 
 /** The `lan` field of a `projects.list` answer. Each part is left out when it is unknown. */
@@ -28,7 +28,9 @@ export interface HostLanReporterOptions {
   /** Defaults to `process.platform`. */
   platform?: NodeJS.Platform
   /** Defaults to `os.networkInterfaces`. */
-  interfaces?: () => Record<string, NetInterfaceAddr[] | undefined>
+  interfaces?: () => PairingInterfaces
+  /** Same saved adapter NAME used by pairing; read on each report. Empty means automatic. */
+  getPairingInterface?: () => string
   /** Where sshd's host keys and config are read from. Defaults to `SSH_HOST_KEY_DIRS`. */
   sshHostKeyDirs?: readonly string[]
   /** How long one read of the host keys is reused. Defaults to `HOST_KEYS_TTL_MS`. */
@@ -69,7 +71,7 @@ export function createHostLanReporter(options: HostLanReporterOptions = {}): () 
   return async () => {
     let host: string | null = null
     try {
-      host = pickLanIPv4(interfaces())
+      host = pairingNetworkIPv4(interfaces(), options.getPairingInterface?.() ?? '')
     } catch {
       host = null
     }
