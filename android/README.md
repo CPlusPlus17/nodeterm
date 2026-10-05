@@ -1363,9 +1363,10 @@ admission performs no authentication; the installed-PAM result above supplies th
 Private environment proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/environment-admission/`.
 
 **Ordinary Linux Desktop Quit remains unresolved.** Two full-product attempts finish the eight
-DOM link/leave cases, then observe trusted, unprevented Ctrl+Q with an enabled native Quit menu,
-but reach no before-quit event or confirmation dialog. A separate early attempt reproduces that
-observation before any link test or external URL open (zero cases/opens). Three minimal cached-Electron
+DOM link/leave cases and dispatch native Ctrl+Q, but reach no before-quit event or confirmation
+dialog. The instrumented V5 attempt additionally records trusted, unprevented key delivery and
+an enabled native Quit menu. A separate early attempt reproduces that observation before any
+link test or external URL open (zero cases/opens). Three minimal cached-Electron
 controls quit naturally, including debugger attachment and two post-window menu rebuilds. Those
 controls verify the test environment, not product Quit. The full-product attempts need cleanup
 signals and cannot pass the ordinary-Quit gate; no product cause or fix is established. Diagnostic
