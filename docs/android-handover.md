@@ -3,19 +3,32 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A123`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A124`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-05, A100–A123).** The branch adds retained terminal history search,
+**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a now has a fresh,
+hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
+Vanadium WebView `145.0.7632.120.0`). Manual high-port SSH with an explicit profile passes
+authentication refusal, fingerprint/pin handling and idempotent public-key installation on an
+owned disposable Desktop host. Existing-terminal input, cwd, retained Unicode history,
+continuous held dragging, post-lift momentum and an early new-touch stop also pass.
+Managed **New session → Terminal → Start** failed against host `15dd1341` with
+“The configured shell is unavailable.” A124 (`651f46da`) fixes absolute executable resolution; 38 affected
+Vitest tests, full TypeScript checking and three isolated guard mutations pass. **Physical repair
+retest is pending; the new phone is disconnected.** The original Pixel 10 Pro beta-10 ledger stays
+paused at **10 Pass / 22 Partial / 32 Pending**; this fresh installation does not verify its
+same-signer update or promote its checklist. Dated receipts below remain historical.
+
+**Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
-has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the local release checks. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
+has been opened. Beta 16/code 17 was prepared from `2723845e`, passed the local release checks and is now installed on the separate Pixel 7a. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
 A120 also passes controlled native OpenSSH enrollment, cancellation/deadline and synthetic installed-Fedora-PAM checks; see the later verification receipts.
 Current Desktop source also fixes focused-terminal native Quit interception (A122, `9613cec5`); all four Linux native focused-terminal cases pass.
 Later checks verify eight shipped-tmux and eight actual SSH-project cases. Separate GPU recovery
@@ -25,8 +38,9 @@ use the existing `db83fb7d` captures. A single Desktop Canvas SSH reconnect pilo
 at `fa259f6e`; see the final follow-up for their limits.
 A92/A121 also pass separate eight-case native Linux Desktop and genuine Server UI checks;
 the later receipts preserve both assertion mutants and their source bindings.
-Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
-**10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
+The original Pixel 10 Pro remains paused on beta 10/code 11 with
+**10 Pass / 22 Partial / 32 Pending**. Fresh Pixel 7a results and the A124 failure are recorded
+separately above; repaired managed creation and live-provider checks remain unverified. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. The push adapter points to a separate `nodeterm-server` spec; it was not found in 39 nearby checkouts or the owner’s 22 public GitHub repositories. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
@@ -1220,6 +1234,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+A124 is source-fixed, but the separate Pixel 7a managed-shell creation must be retested against a
+fresh Desktop/Server build containing the repair. The phone is currently disconnected. Its
+beta-16 manual explicit-profile SSH, existing-terminal input/history and bounded gesture checks
+pass; the original Pixel 10 Pro beta-10 checklist remains paused and unchanged.
+
 A92/A121 now pass eight native Linux Desktop UI cases at `01b4a2f5` and eight genuine Linux
 Server UI cases at `dcdf664a`, with both native mutants caught on each shell. This local
 follow-up is finished. Later historical `972f7994` / built `01b4a2f5` runs also pass the
@@ -1237,7 +1256,7 @@ installed-Fedora-PAM checks; real-user policy and Android setup/lifecycle remain
 
 Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps,
 and adds explicit SSH profile selection and confirmed one-time password enrollment (A119/A120);
-A108 adds owned SSH Board and Desktop node nudges. Device testing remains paused. The branch prepares the upstream Android contribution;
+A108 adds owned SSH Board and Desktop node nudges. The original phone checklist remains paused; the separate Pixel 7a results above cover only the named checks. The branch prepares the upstream Android contribution;
 no PR has been opened. A25/A93 are maintainer backend dependencies with no source supplied.
 A68 is source-fixed for readiness: main-only push, retained PR checks, no merge-group trigger,
 and all-five-job opt-in manual beta preparation.
@@ -1255,14 +1274,15 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-When phone testing resumes, install prepared beta 16/code 17 as a same-signer update
-and verify saved pairing/key/pin survival. Use a fresh isolated Desktop/Server built from
-the current branch checkpoint for host-dependent features, including the later A13 fix. The
+When the Pixel 7a reconnects, use a fresh isolated Desktop/Server built with A124 and retest
+managed plain-shell creation, canvas registration and input before the remaining feature matrix.
+A same-signer beta-16 update and saved pairing/key/pin survival still need the original Pixel 10 Pro;
+the fresh Pixel 7a installation supplies no update/migration proof. The
 prepared APK includes A118–A120's Android changes. Keep the held older paired
 fixture and its original terminal intact. Test A100–A120 and earlier A96–A99 on the intended Pixel;
 source/build results do not promote physical checklist items.
 
-**Next work when phone testing resumes, in order** (item lists were written for this session's workflows; re-read each audit
+**Next work when phone testing resumes:** first retest A124 managed creation on the Pixel 7a, then continue the remaining checks below. **Original checklist work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
 1. **Finish the remaining relay/session, notification and inset checks.**
@@ -2366,3 +2386,24 @@ After push, exact-head CI is required through `workflow_dispatch` with `prepare_
 the verified run and exact head are recorded with the source exports. This closes the source
 finding; no PR is opened by this checkpoint. APK/client bytes, private signing, phone pause
 and **10 Pass / 22 Partial / 32 Pending** are unchanged.
+
+## Pixel 7a beta-16 check and A124 host repair (2026-10-05)
+
+A fresh beta 16/code 17 installation on the separate Pixel 7a passes installed APK hash,
+signature and non-debuggable checks. Normal manual explicit-profile, high-port SSH passes
+authentication refusal, host fingerprint/pin handling and public-key idempotence. Existing owned
+Desktop-terminal input/cwd/Unicode history and bounded held-drag/coast/new-touch-stop checks pass.
+Managed New on `15dd1341` failed with “The configured shell is unavailable”; A124 source-fixes
+absolute executable lookup and passes 38 affected tests, full TypeScript and three isolated
+assertion-caught guard mutants. **Repaired physical creation is pending; the phone is disconnected.**
+The old disposable host was gracefully stopped, generated authentication removed and listeners
+closed; the strict source-binding receipt records the later A124 working-tree edits.
+See [the verification notes](android.md#what-is-verified-and-how) and [audit A124](android-audit-2026-09.md#a124) for precise evidence/limits.
+Private device proof: `.nodeterm/android-pixel7a-device-y0ia4hm_/`. This fresh installation does not
+verify the original Pixel 10 Pro update, QR/relay/cellular routes, FPS or the full checklist.
+The original beta-10 ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
+No wire/file contract changes; @eneskirca can note the shared host benefit for iOS.
+
+Next: reconnect the Pixel 7a, rebuild an isolated Desktop/Server with A124, then retest managed
+plain-shell creation/registration/input before the remaining device/provider checks. Original
+Pixel update/migration, A25/A93 backend dependencies and other-platform checks remain separate.

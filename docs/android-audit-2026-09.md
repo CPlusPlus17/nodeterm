@@ -16,6 +16,19 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a now has a fresh,
+hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
+Vanadium WebView `145.0.7632.120.0`). Manual high-port SSH with an explicit profile passes
+authentication refusal, fingerprint/pin handling and idempotent public-key installation on an
+owned disposable Desktop host. Existing-terminal input, cwd, retained Unicode history,
+continuous held dragging, post-lift momentum and an early new-touch stop also pass.
+Managed **New session → Terminal → Start** failed against host `15dd1341` with
+“The configured shell is unavailable.” A124 (`651f46da`) fixes absolute executable resolution; 38 affected
+Vitest tests, full TypeScript checking and three isolated guard mutations pass. **Physical repair
+retest is pending; the new phone is disconnected.** The original Pixel 10 Pro beta-10 ledger stays
+paused at **10 Pass / 22 Partial / 32 Pending**; this fresh installation does not verify its
+same-signer update or promote its checklist. Dated receipts below remain historical.
+
 ## Index
 
 | ID | Sev | Block | Effort | Area | Title |
@@ -143,6 +156,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; tmux8/SSH8 and separate GPU recovery pilots verified; wider GPU pressure/macOS pending |
 | [A122](#a122) | medium | | small | desktop/bug | ✅ source-fixed in `9613cec5`; 133 focused / 218 affected tests and six assertion-caught mutants; four Linux native cases pass · Focused Canvas/Modal xterm consumes the advertised native Quit chord |
 | [A123](#a123) | low | | small | desktop/bug | ✅ fixed in `db83fb7d`; 44 budget / 301 affected tests, two helper assertion mutants and Desktop native control/sole-call-removal/restored proof pass; later genuine Server 0/3/0 and derived Desktop compositor cell evidence verified · Restored addon context remains live after disposal and budget retirement |
+| [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; physical repair retest pending · Managed SSH New rejects an available absolute default shell as unavailable |
 
 ## A01
 
@@ -4206,6 +4220,43 @@ correlation uses three existing `db83fb7d` captures; it adds no Server runtime o
 full-frame compositor proof. Android, external SSH/relay contracts and iOS fields are unchanged;
 no APK or phone ledger change follows. Other platforms, synchronized/full-frame compositing,
 physical-display output, shared glyph eviction and repeated/page-wide pressure remain unverified.
+
+## A124
+
+**Managed SSH New rejects an available absolute shell as unavailable (2026-10-05).**
+
+- Severity: **medium**; effort: small; area: shared Desktop/Server executable resolution; kind: bug.
+- Status: **fixed in `651f46da239cb0877c3bfccc6a478e1b555a63cc`; physical repair retest pending**.
+- Locations: `src/core/exec-path.ts` (`findInPathString`), `src/core/managed-terminal-plan.ts`
+  (`createManagedTerminalPlanner`), `src/core/pty-manager.ts` (`resolveLocalSessionShell`).
+
+Fresh beta 16/code 17 on the separate Pixel 7a reaches a genuine owned Desktop host at
+`15dd1341c55302f9936b83a19d82c165733320c9` through manual explicit-profile SSH. Existing-terminal
+input/cwd/history pass, but **New session → Terminal → Start** reports “The configured shell is
+unavailable.” The host has blank `defaultShell`, inherited `SHELL=/bin/bash` and an available
+executable `/bin/bash`; the planner calls the real login-PATH resolver. That resolver joins the
+absolute program beneath each PATH entry, checking unrelated paths such as `/usr/bin/bin/bash`.
+The observed workspace retains only its original Desktop terminal.
+
+The repair validates the exact absolute path with the platform's executable-access check and a
+regular-file check, returning null on failure without PATH fallback. Bare-name/PATHEXT behavior
+is unchanged. Real-filesystem regressions cover an absolute executable outside PATH, absent and
+non-executable files, directories and a joined PATH shadow. Planner integration uses the actual
+shell and login-PATH resolvers with a disposable inherited absolute shell and blank defaultShell.
+All **38 affected Vitest tests in two files** pass; five platform cases skip on Linux. Full
+TypeScript checking passes. Network/PID-isolated control and restored runs pass; removing the
+absolute branch fails three regressions, removing the regular-file check fails directory rejection,
+and removing executable access fails non-executable rejection. Three earlier fixture setup
+failures stopped before Vitest and earn no mutation credit.
+
+Physical proof is `.nodeterm/android-pixel7a-device-y0ia4hm_/`; source/regression proof is
+`~/.cache/nodeterm-android-work/a124-executable-mutation-lhf2f_p6/proof/`. The phone is disconnected;
+**no repaired physical managed-creation pass is claimed**. The old host was gracefully stopped,
+its generated authentication removed and listeners closed; its strict source-binding result
+records the A124 working-tree edits rather than a clean immutable source pass. The original Pixel
+10 Pro beta-10 ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
+No phone payload, host verb or SSH-visible file contract changes. The shared host repair also
+benefits iOS managed creation; @eneskirca should note the host update, with no new client field.
 
 ## Native Desktop wrapped-link and leave verification (A92/A121, 2026-10-05)
 

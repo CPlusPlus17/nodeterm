@@ -5,14 +5,27 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Current source checkpoint (2026-10-05, A100–A123).** The branch adds retained terminal history search,
+**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a now has a fresh,
+hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
+Vanadium WebView `145.0.7632.120.0`). Manual high-port SSH with an explicit profile passes
+authentication refusal, fingerprint/pin handling and idempotent public-key installation on an
+owned disposable Desktop host. Existing-terminal input, cwd, retained Unicode history,
+continuous held dragging, post-lift momentum and an early new-touch stop also pass.
+Managed **New session → Terminal → Start** failed against host `15dd1341` with
+“The configured shell is unavailable.” A124 (`651f46da`) fixes absolute executable resolution; 38 affected
+Vitest tests, full TypeScript checking and three isolated guard mutations pass. **Physical repair
+retest is pending; the new phone is disconnected.** The original Pixel 10 Pro beta-10 ledger stays
+paused at **10 Pass / 22 Partial / 32 Pending**; this fresh installation does not verify its
+same-signer update or promote its checklist. Dated receipts below remain historical.
+
+**Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
 with an enabled Linux/macOS tmux backend to create and register a managed shell or agent in an
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
-has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the local release checks. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
+has been opened. Beta 16/code 17 was prepared from `2723845e`, passed the local release checks and is now installed on the separate Pixel 7a. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
 A120 also passes controlled native OpenSSH enrollment, cancellation/deadline and synthetic installed-Fedora-PAM checks; see the later verification receipts.
 Current Desktop source also fixes focused-terminal native Quit interception (A122, `9613cec5`); all four Linux native focused-terminal cases pass.
 Later checks verify eight shipped-tmux and eight actual SSH-project cases. Separate GPU recovery
@@ -20,8 +33,9 @@ pilots exposed and verified A123 restored-context cleanup (`db83fb7d`). A later 
 pilot verifies the same retirement path at `fa259f6e`; separate derived Desktop cell comparisons
 use the existing `db83fb7d` captures. A single Desktop Canvas SSH reconnect pilot also passes
 at `fa259f6e`; see the final follow-up for their limits.
-Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
-**10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
+The original Pixel 10 Pro remains paused on beta 10/code 11 with
+**10 Pass / 22 Partial / 32 Pending**. Fresh Pixel 7a results and the A124 failure are recorded
+separately above; repaired managed creation and live-provider checks remain unverified. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
@@ -410,6 +424,35 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
+**Fresh Pixel 7a verification and A124 (2026-10-05).** This separate phone runs Android 16 /
+API 36 and Vanadium WebView `145.0.7632.120.0`. Fresh installation of private beta 16/code 17
+matches APK SHA-256 `9c5309c8cfb225daf59f7fac70be1760fb0abdaac36cb55005b958f2186c8ce3`;
+signature verification and the non-debuggable/run-as refusal check pass. This is fresh-install
+proof, not the original Pixel 10 Pro's update/migration result.
+
+Normal manual SSH uses an explicit profile on a disposable shared Desktop/sshd host. The
+app displays the actual host fingerprint, refuses authentication before the public key is
+installed, and adds/pins the host only after authentication. Reapplying the displayed public-key
+installer preserves one phone key and the selfcheck key with private file modes. An existing
+owned Desktop terminal receives phone input exactly once in the expected project cwd; retained
+Unicode history is visible. A continuous held drag advances copy history from 10 to 135 lines;
+after a flick returns, momentum advances 295 to 490. An early new touch stops at 510 while the
+grid stays `50x43`; the later long-touch IME resize is recorded separately. The first wrong-direction
+scroll attempt was inconclusive and receives no pass. These are bounded gesture checks, not FPS
+or a complete 64-item device run. Manual high-port SSH supplies no QR, port-22, relay or cellular proof.
+
+Managed New failed on host `15dd1341` before a new node was registered, exposing A124's absolute
+shell lookup bug. The source repair passes 38 affected tests, full TypeScript checking and three
+actual isolated guard mutations with passing controls/restored runs. **The phone is now disconnected;
+physical repair retest is pending.** The old disposable host was gracefully stopped, generated
+authentication removed and listeners closed; its source-binding failure explicitly records the
+A124 edits. Evidence: `.nodeterm/android-pixel7a-device-y0ia4hm_/` (`install-baseline.json`,
+`manual-ssh-setup-result.json`, `public-key-idempotency.json`, `phone-input-result.json`,
+`scroll-check-result.json`, `phone-managed-workspace.json`, `old-host-stop-result.json`). Source
+proof: `~/.cache/nodeterm-android-work/a124-executable-mutation-lhf2f_p6/proof/`.
+The original Pixel 10 Pro beta-10 ledger stays paused at **10 Pass / 22 Partial / 32 Pending**.
+No wire/file contract changes; the shared host repair benefits iOS too (@eneskirca).
+
 **Latest native follow-up (2026-10-05).** A120 passes four cancellation/deadline cases
 (76 case-scoped assertions) and a separate 17-check synthetic installed-Fedora-PAM control.
 See [the receipt and its limits](#native-setup-timing-installed-pam-and-remaining-desktop-checks-2026-10-05).
@@ -489,7 +532,7 @@ live Claude rule/question application and the new physical feature matrix remain
 Each requested push still needs its own exact-head green Android workflow. No PR opened; A68
 remains deferred until a PR is requested.
 
-**Current beta-10 delivery and paired update (2026-10-04):** `0.1.0-beta.10` / code `11`,
+**Historical beta-10 delivery and paired update (2026-10-04):** `0.1.0-beta.10` / code `11`,
 clean snapshot `e3ce041c752bdef11b378cf301c719a6e62f70ab`, is installed on the intended Pixel with the
 unchanged private signer. The actual release build passes in 52.4 seconds with all R8 keeps;
 independent SDK 36/37 signature, 16-KB alignment, payload and provenance review passes.
