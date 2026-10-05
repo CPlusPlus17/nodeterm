@@ -111,7 +111,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
 | [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect/exact End pass; beta 10 relay plain-shell creation/input/exact End also pass; item 32 Partial for managed/cellular variants; beta-9 Oct4 A91 empty-host flow passes · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
 | [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; beta-9 Oct4 physical empty-host first Home/exact last-End/row-group removal/connected SSH/second Home flow pass; A94 delivered full installed End/recreate/open/End flow passes · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
-| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5` with A121's leave fix; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; GPU context recovery/macOS pending |
+| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5` with A121's leave fix; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; tmux8/SSH8 and separate GPU recovery pilots verified; wider GPU pressure/macOS pending |
 | [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; original same-desktop recovery succeeds; fresh-different-desktop failure remains open |
 | [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants and full689/67 pass, beta 10 delivered; full physical completed-empty End/recreate/open/End flow passes · Authoritative empty SSH listing remains labelled Loading sessions |
 | [A95](#a95) | medium | | small | desktop/interop | ✅ fixed in `ec12ea9a`; actual beta 10 phone move/remove/re-add/create-label updates reach rebuilt production desktop Board with unchanged page time origin and matching persisted state; item 36 Pass; nine suites/133 tests, full TypeScript and four mutants pass · Held desktop Board remained stale after phone moves/labels |
@@ -140,8 +140,9 @@ the audit's proposal, the handover's progress log says how and why.
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 | [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
 | [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods / seven assertion mutants, 28 native OpenSSH checks, four timing cases / 76 assertions and 17 synthetic installed-PAM checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
-| [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; GPU context recovery/macOS pending |
+| [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; tmux8/SSH8 and separate GPU recovery pilots verified; wider GPU pressure/macOS pending |
 | [A122](#a122) | medium | | small | desktop/bug | ✅ source-fixed in `9613cec5`; 133 focused / 218 affected tests and six assertion-caught mutants; four Linux native cases pass · Focused Canvas/Modal xterm consumes the advertised native Quit chord |
+| [A123](#a123) | low | | small | desktop/bug | ✅ fixed in `db83fb7d`; 44 budget / 301 affected tests, two helper assertion mutants and native control/sole-call-removal/restored proof pass · Restored addon context remains live after disposal and budget retirement |
 
 ## A01
 
@@ -3173,7 +3174,8 @@ survival is not proved. Receipts: `.nodeterm/android-beta-build-9/artifact-revie
 - Severity: **low**; effort: small; area: desktop renderer; kind: bug
 - Status: **fixed in `127b6b28`; native Linux Desktop UI verified at `01b4a2f5` with A121's leave
 fix**. Separate Linux Server checks pass at `dcdf664a`. The later GPU-enabled eight-case matrix
-passes (Canvas4 hardware / Modal4 DOM); GPU context recovery and macOS remain unverified.
+passes (Canvas4 hardware / Modal4 DOM); Those earlier runs did not verify GPU recovery; later individual pilots are recorded in the final
+follow-up. macOS remains unverified.
 - Locations: `src/renderer/terminal/file-links.ts` (`paragraphContaining`) and `file-links.test.ts`
 
 This was the desktop follow-up recorded while fixing Android `A32`. The exported helper walks up
@@ -4116,7 +4118,8 @@ deferred until a requested PR. No PR opened.
 - Severity: **low**; effort: small; area: desktop renderer; kind: bug
 - Status: **fixed in `01b4a2f5`; native Linux Desktop UI verified**. Separate Linux Server checks
 pass at `dcdf664a`. The later GPU-enabled eight-case matrix passes (Canvas4 hardware / Modal4 DOM);
-GPU context recovery and macOS remain unverified.
+Those earlier runs did not verify GPU recovery; later individual pilots are recorded in the final
+follow-up. macOS remains unverified.
 
 **Observed:** the isolated full Linux Electron Desktop UI at `c0accdfcb0642dc2d643e1794640065f61906f34` rendered a wrapped URL through the real plain NodePTY and bundled xterm DOM renderer. Tail hover, complete URL activation by Ctrl-click, and native non-drag movement outside the terminal were delivered. In the SGR mouse case, moving to the canvas left xterm's active link and pointer state set (`A92_HOVER_CLEAR_FAILED`). No pointer capture was active. The normal mouse case completed the same leave successfully.
 
@@ -4161,6 +4164,44 @@ File-menu Quit with own PTY/hook retirement are verified. See the final checkpoi
 The fix changes only Desktop renderer shortcut handling, not Android, SSH/relay contracts or iOS
 fields. macOS/Windows native delivery remains unverified. No APK, installed-phone or physical
 ledger change follows from this source repair.
+
+## A123
+
+**A restored addon context stays live after disposal and budget retirement (2026-10-05).**
+
+- Severity: **low**; effort: small; area: Desktop Canvas GPU lifecycle; kind: bug.
+- Status: **fixed in `db83fb7dfc59c336083769edf0943bf82b367c58`; Linux native control/mutant/restored verified**.
+- Locations: `src/renderer/nodes/TerminalNode.tsx`, `src/renderer/terminal/webgl-budget.ts`.
+
+At source `6bfa5412`, a genuine quick original `webglcontextrestored` event restores the context.
+The owning Canvas listener disposes the addon and removes its budget grant, but addon-webgl 0.18
+only detaches its canvas/deletes resources. The native observer sees the original context healthy
+at readable DOM fallback, fresh hardware regrant and final observation. The restore hook clears
+its local `webgl`, but `webglAddonRef.current` still references the disposed addon until replacement;
+the passive fixture also retains the captured context for observation. This establishes missing explicit retirement, not a reproduced Chromium cap-pressure
+failure or a permanent leak. Page-wide and repeated pressure consequences remain an inference.
+
+The repair explicitly calls `loseWebglContexts` on the captured original addon canvas after
+disposal and before notifying the coordinator. It preserves stale-addon ownership, already-lost
+cleanup and the delayed budget-gated regrant policy. Two new tests cover detached captured
+canvases and continuation after an earlier canvas throws. All 44 budget tests, 301 affected tests
+in seven files and full TypeScript checking pass. Full helper control/restored runs catch two
+exact assertion mutants; these helper checks do not prove TerminalNode wiring.
+
+Three fresh full builds at the signed repair source supply separate actual native wiring proof.
+Both fixed controls observe a trusted original restore before production's handler, production's
+second native loss, readable stock DOM and distinct fresh NVIDIA WebGL2. The sole-call-removal
+compiled mutant fails exactly `GPU_RETIRED_CONTEXT_NOT_LOST` after three trusted native input
+acknowledgements and two complete URL controls pass; old context remains live. Startup/focus/
+fixture failures supply no mutation credit. Every run preserves the same terminal, buffer, grid
+and real PTY birth, with no fixture second loss, GC or forced redraw. Explicit fixture app exit
+supplies no ordinary-Quit proof. See the final follow-up and its private source-bound archive.
+
+The shared Desktop/Server Canvas hook receives this repair when using the per-terminal WebGL
+addon; native retirement proof covers Linux Desktop only. Browser GPU restoration is unverified.
+Android, external SSH/relay contracts and iOS fields are unchanged; no APK or phone ledger change
+follows. Other platforms, compositor pixels, shared glyph eviction and repeated/page-wide
+pressure remain unverified.
 
 ## Native Desktop wrapped-link and leave verification (A92/A121, 2026-10-05)
 
@@ -4286,7 +4327,50 @@ Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/d
 
 The A122 source repair changes Desktop shortcuts only; Android and external contracts are unchanged.
 Beta 16/code 17 remains prepared from `2723845e`, uninstalled; beta 10/code 11 is last installed.
-Phone testing stays paused at **10 Pass / 22 Partial / 32 Pending**. Wider tmux/SSH and other-platform
-runtime checks remain pending. A105/A106 live checks need a usable provider after HTTP 401;
+Phone testing stays paused at **10 Pass / 22 Partial / 32 Pending**. The later tmux/SSH and
+GPU follow-up below keeps its own source bindings; other-platform runtime remains unverified.
+A105/A106 live checks need a usable provider after HTTP 401;
 A25/A93 need hosted-backend maintainers. Resume Pixel checks when authorized. No PR is opened,
 and A68 remains deferred until requested PR preparation.
+
+## Tmux, SSH and GPU recovery follow-up (2026-10-05)
+
+The fresh full Linux Desktop build at `6bfa5412` passes two separate eight-case matrices:
+Canvas/Board modal × soft/hard wrap × inner mouse reporting off/SGR. Each matrix delivers
+52 native mouse actions and eight complete URL opens through shipped xterm handlers. The local
+matrix uses real shipped tmux; the remote matrix uses an actual SSH project, production
+SshProjectManager/OpenSSH ControlMaster and remote `nodeterm-rmt` tmux. Exact pane, server and
+client births survive every case. SSH retains its connection notice in history and calibrates the
+actual viewport offset; the fixture does not erase it. Own session and SSH service cleanup pass.
+These fixtures end with explicit app exit and supply no ordinary-Quit or SSH-reconnect proof.
+Private proof: `desktop-tmux-matrix-20261005/` and `desktop-ssh-matrix-20261005/` below
+`.nodeterm/android-beta-build-16/operation-verification-receipt/`.
+
+Two separate one-terminal GPU pilots at that same source pass delayed loss → readable stock DOM
+→ fresh NVIDIA WebGL2 and quick original restoration → DOM → fresh WebGL2. Both retain the same
+49×48 buffer/PTY and three trusted native input acknowledgements, with complete URL interaction
+and glyph checks before/after. Quick restoration also exposes A123: the detached original
+context remains live after the new renderer is granted. Chromium cap-pressure consequences are
+an inference; no page-wide pressure failure was reproduced.
+
+A123 is source-fixed in `db83fb7d`: retire the captured original context after addon disposal and
+before reporting context loss to the budget coordinator. Two new behavioral tests cover detached
+canvases and retirement continuing after a throw; all 44 budget tests and 301 affected tests in
+seven files pass with full TypeScript checking. Full 44-test control/restored helper runs catch
+two exact assertion mutants. Three separate fresh full Desktop builds at `db83fb7d` verify the
+actual restore hook: both fixed controls release the original context before fresh regrant, while
+the compiled sole-call-removal mutant fails only `GPU_RETIRED_CONTEXT_NOT_LOST` after all three
+native input acknowledgements and both complete URL controls pass. A capture-phase native event
+witnesses the genuine restoration before production retires it; a passive second-loss event and
+DOM/fresh/final checks verify retirement. Fixture probes retain the original context for observation;
+no forced GC or second fixture loss supplies a pass. These are one-terminal Linux Canvas pilots,
+with explicit fixture app exit rather than ordinary Quit. Private proof: `gpu-context-recovery-20261005/`
+for historical recovery and `a123-context-retirement-20261005/` for the new source/compiled mutants.
+The older 6bfa and A122 source/build bindings remain separate.
+
+Android and external contracts are unchanged. Beta 16/code 17 remains prepared from `2723845e`,
+uninstalled; beta 10/code 11 is last installed. Phone testing remains paused at **10 Pass /
+22 Partial / 32 Pending**. Repeated/page-wide GPU pressure, shared glyph eviction, compositor
+pixels, SSH reconnect, macOS/Windows and the remaining Pixel checklist are unverified. Live
+A105/A106 needs usable provider authentication; A25/A93 belong to the hosted-backend maintainers.
+No PR is opened; A68 waits until PR preparation is requested.

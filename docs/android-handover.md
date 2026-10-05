@@ -3,12 +3,12 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A122`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A123`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Current source checkpoint (2026-10-05, A100–A122).** The branch adds retained terminal history search,
+**Current source checkpoint (2026-10-05, A100–A123).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
 Board writes and Desktop wake/refresh/rename. New session can now ask a current Desktop/Server
@@ -18,6 +18,8 @@ Older hosts retain the relay New flow. The actual producer fixture also exposed 
 has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the local release checks. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
 A120 also passes controlled native OpenSSH enrollment, cancellation/deadline and synthetic installed-Fedora-PAM checks; see the later verification receipts.
 Current Desktop source also fixes focused-terminal native Quit interception (A122, `9613cec5`); all four Linux native focused-terminal cases pass.
+Later checks verify eight shipped-tmux and eight actual SSH-project cases. Separate GPU recovery
+pilots exposed and verified A123 restored-context cleanup (`db83fb7d`); see the final follow-up.
 A92/A121 also pass separate eight-case native Linux Desktop and genuine Server UI checks;
 the later receipts preserve both assertion mutants and their source bindings.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
@@ -178,8 +180,9 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   Vitest 24/24, affected link/dialect suites 54/54, full TypeScript check and three isolated
   mutants pass. All eight native Linux Desktop UI cases now pass at `01b4a2f5` with A121's
   leave fix; separate eight-case Linux Server checks pass at `dcdf664a`. The later GPU-enabled
-  eight-case matrix passes (Canvas4 hardware / Modal4 DOM); GPU context recovery and macOS remain
-  unverified. This is Desktop/Server renderer
+  eight-case matrix passes (Canvas4 hardware / Modal4 DOM). Those earlier runs did not verify GPU
+  recovery; later individual pilots are recorded in the final follow-up. macOS remains unverified.
+  This is Desktop/Server renderer
   work only: Android already fixed `A32`, no host contract changes or iOS adoption are owed,
   and no APK rebuild or phone-check promotion follows from it.
 - **`A91`: empty-host stale rows are fixed in `4d33a5b5` and delivered in beta 9/code 10.** The last phone-shell
@@ -1219,8 +1222,11 @@ Server UI cases at `dcdf664a`, with both native mutants caught on each shell. Th
 follow-up is finished. Later historical `972f7994` / built `01b4a2f5` runs also pass the
 GPU-enabled eight-case matrix (four hardware Canvas WebGL2, four intentional DOM Modal), native
 File-menu Quit, outside-terminal Ctrl+Q and one real tmux Canvas pilot. A122 fixes focused-terminal
-native Quit in `9613cec5`; all four Linux native focused cases pass. GPU context recovery, wider
-tmux/SSH and macOS/Windows checks remain open. A120 also passes native timing and synthetic
+native Quit in `9613cec5`; all four Linux native focused cases pass.
+Later checks pass all eight tmux and eight actual SSH-project cases, plus separate single-context
+GPU loss/restore controls and A123 retirement verification. Repeated/page-wide GPU pressure,
+compositor, SSH reconnect and macOS/Windows remain unverified. A120 also passes native timing
+and synthetic
 installed-Fedora-PAM checks; real-user policy and Android setup/lifecycle remain pending.
 
 Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps,
@@ -2249,7 +2255,50 @@ Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/d
 
 The A122 source repair changes Desktop shortcuts only; Android and external contracts are unchanged.
 Beta 16/code 17 remains prepared from `2723845e`, uninstalled; beta 10/code 11 is last installed.
-Phone testing stays paused at **10 Pass / 22 Partial / 32 Pending**. Wider tmux/SSH and other-platform
-runtime checks remain pending. A105/A106 live checks need a usable provider after HTTP 401;
+Phone testing stays paused at **10 Pass / 22 Partial / 32 Pending**. The later tmux/SSH and
+GPU follow-up below keeps its own source bindings; other-platform runtime remains unverified.
+A105/A106 live checks need a usable provider after HTTP 401;
 A25/A93 need hosted-backend maintainers. Resume Pixel checks when authorized. No PR is opened,
 and A68 remains deferred until requested PR preparation.
+
+## Tmux, SSH and GPU recovery follow-up (2026-10-05)
+
+The fresh full Linux Desktop build at `6bfa5412` passes two separate eight-case matrices:
+Canvas/Board modal × soft/hard wrap × inner mouse reporting off/SGR. Each matrix delivers
+52 native mouse actions and eight complete URL opens through shipped xterm handlers. The local
+matrix uses real shipped tmux; the remote matrix uses an actual SSH project, production
+SshProjectManager/OpenSSH ControlMaster and remote `nodeterm-rmt` tmux. Exact pane, server and
+client births survive every case. SSH retains its connection notice in history and calibrates the
+actual viewport offset; the fixture does not erase it. Own session and SSH service cleanup pass.
+These fixtures end with explicit app exit and supply no ordinary-Quit or SSH-reconnect proof.
+Private proof: `desktop-tmux-matrix-20261005/` and `desktop-ssh-matrix-20261005/` below
+`.nodeterm/android-beta-build-16/operation-verification-receipt/`.
+
+Two separate one-terminal GPU pilots at that same source pass delayed loss → readable stock DOM
+→ fresh NVIDIA WebGL2 and quick original restoration → DOM → fresh WebGL2. Both retain the same
+49×48 buffer/PTY and three trusted native input acknowledgements, with complete URL interaction
+and glyph checks before/after. Quick restoration also exposes A123: the detached original
+context remains live after the new renderer is granted. Chromium cap-pressure consequences are
+an inference; no page-wide pressure failure was reproduced.
+
+A123 is source-fixed in `db83fb7d`: retire the captured original context after addon disposal and
+before reporting context loss to the budget coordinator. Two new behavioral tests cover detached
+canvases and retirement continuing after a throw; all 44 budget tests and 301 affected tests in
+seven files pass with full TypeScript checking. Full 44-test control/restored helper runs catch
+two exact assertion mutants. Three separate fresh full Desktop builds at `db83fb7d` verify the
+actual restore hook: both fixed controls release the original context before fresh regrant, while
+the compiled sole-call-removal mutant fails only `GPU_RETIRED_CONTEXT_NOT_LOST` after all three
+native input acknowledgements and both complete URL controls pass. A capture-phase native event
+witnesses the genuine restoration before production retires it; a passive second-loss event and
+DOM/fresh/final checks verify retirement. Fixture probes retain the original context for observation;
+no forced GC or second fixture loss supplies a pass. These are one-terminal Linux Canvas pilots,
+with explicit fixture app exit rather than ordinary Quit. Private proof: `gpu-context-recovery-20261005/`
+for historical recovery and `a123-context-retirement-20261005/` for the new source/compiled mutants.
+The older 6bfa and A122 source/build bindings remain separate.
+
+Android and external contracts are unchanged. Beta 16/code 17 remains prepared from `2723845e`,
+uninstalled; beta 10/code 11 is last installed. Phone testing remains paused at **10 Pass /
+22 Partial / 32 Pending**. Repeated/page-wide GPU pressure, shared glyph eviction, compositor
+pixels, SSH reconnect, macOS/Windows and the remaining Pixel checklist are unverified. Live
+A105/A106 needs usable provider authentication; A25/A93 belong to the hosted-backend maintainers.
+No PR is opened; A68 waits until PR preparation is requested.
