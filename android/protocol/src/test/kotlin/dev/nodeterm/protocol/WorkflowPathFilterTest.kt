@@ -263,6 +263,52 @@ class WorkflowPathFilterTest {
         assertFailsWith<AssertionError> { pathFilter(ignoring, "push") }
     }
 
+    @Test
+    fun `Android workflow pushes only main and retains PR and manual entry points`() {
+        androidTriggerPolicy(workflow)
+    }
+
+    @Test
+    fun `the trigger policy reads ref filters as data and rejects widened entry points`() {
+        val yaml = """
+            name: x
+            on:
+              # merge_group and branches: [feature] in comments are not triggers or filters.
+              push:
+                branches: ["main"]
+                paths:
+                  - 'android/**'
+              pull_request:
+                paths:
+                  - 'android/**'
+              workflow_dispatch:
+                inputs:
+                  merge_group:
+                    description: A nested input name is not a workflow trigger.
+            jobs:
+              nested:
+                on:
+                  push:
+                    branches: [feature]
+        """.trimIndent()
+        androidTriggerPolicy(yaml)
+        androidTriggerPolicy(yaml.replace("branches: [\"main\"]", "branches:\n      - 'main'"))
+        val mutations = mapOf(
+            "unrestricted pushes" to yaml.replace("    branches: [\"main\"]\n", ""),
+            "additional branch" to yaml.replace("[\"main\"]", "[main, feature]"),
+            "branch wildcard" to yaml.replace("[\"main\"]", "['main*']"),
+            "other branch" to yaml.replace("[\"main\"]", "[feature]"),
+            "tag pushes" to yaml.replace("    branches: [\"main\"]", "    branches: [main]\n    tags: ['v*']"),
+            "missing PR" to yaml.replace("  pull_request:", "  pull_request_target:"),
+            "merge queue" to yaml.replace("  workflow_dispatch:", "  merge_group:\n  workflow_dispatch:"),
+            "missing manual entry" to yaml.replace("  workflow_dispatch:", "  schedule:"),
+        )
+        for ((name, changed) in mutations) {
+            assertFalse(changed == yaml, "$name must change the actual configuration data")
+            assertFailsWith<AssertionError>(name) { androidTriggerPolicy(changed) }
+        }
+    }
+
     private fun assertCovered(required: Set<String>, what: String) {
         for (trigger in triggers) {
             val patterns = pathFilter(workflow, trigger) ?: continue // no filter: every change runs it
@@ -344,6 +390,77 @@ class WorkflowPathFilterTest {
                 }
             }
             return paths
+        }
+
+        /** A68: inspect trigger data, separately from A63's path coverage. */
+        internal fun androidTriggerPolicy(yaml: String) {
+            fun indent(line: String) = line.length - line.trimStart().length
+            fun skip(line: String) = line.isBlank() || line.trimStart().startsWith("#")
+            val lines = yaml.lines()
+            val on = lines.indices.filter { lines[it].trimEnd() == "on:" }
+            assertEquals(1, on.size, "expected one top-level block-style on declaration")
+            val events = linkedMapOf<String, MutableList<String>>()
+            var current: MutableList<String>? = null
+            for (line in lines.drop(on.single() + 1)) {
+                if (skip(line)) continue
+                val depth = indent(line)
+                if (depth == 0) break
+                if (depth == 2) {
+                    val event = Regex("([a-z_]+):").matchEntire(line.trim())?.groupValues?.get(1)
+                        ?: fail("unsupported workflow trigger declaration: $line")
+                    assertFalse(event in events, "duplicate trigger $event")
+                    current = mutableListOf<String>().also { events[event] = it }
+                } else {
+                    assertTrue(depth > 2 && current != null, "invalid trigger indentation: $line")
+                    current!!.add(line)
+                }
+            }
+            assertEquals(setOf("push", "pull_request", "workflow_dispatch"), events.keys,
+                "retain PR and manual dispatch, and do not add merge_group or another event")
+
+            fun fields(event: String): Map<String, String> {
+                val result = linkedMapOf<String, String>()
+                for (line in events.getValue(event).filter { indent(it) == 4 }) {
+                    val field = Regex("([a-z_][a-z_-]*):\\s*(.*)").matchEntire(line.trim())
+                        ?: fail("unsupported $event field: $line")
+                    val key = field.groupValues[1]
+                    assertFalse(key in result, "duplicate $event field $key")
+                    result[key] = field.groupValues[2]
+                }
+                return result
+            }
+            val push = fields("push")
+            assertEquals(setOf("branches", "paths"), push.keys,
+                "push must select branches and paths, with no tag or ignore filters")
+            assertEquals(setOf("paths"), fields("pull_request").keys,
+                "retain the PR path filter without introducing a target-branch restriction")
+
+            fun literal(raw: String): String {
+                val trimmed = raw.trim()
+                val value = if (trimmed.length >= 2 && trimmed.first() in listOf('\'', '"') &&
+                    trimmed.last() == trimmed.first()) trimmed.substring(1, trimmed.length - 1) else trimmed
+                assertTrue(Regex("[A-Za-z0-9_./*?!+-]+").matches(value), "unsupported branch pattern $raw")
+                return value
+            }
+            val rawBranches = push.getValue("branches")
+            val branches = if (rawBranches.startsWith("[") && rawBranches.endsWith("]")) {
+                val contents = rawBranches.substring(1, rawBranches.length - 1)
+                if (contents.isBlank()) emptyList() else contents.split(',').map(::literal)
+            } else {
+                assertTrue(rawBranches.isEmpty(), "branches must be a literal inline or block list")
+                val block = events.getValue("push")
+                val at = block.indexOfFirst { indent(it) == 4 && it.trim() == "branches:" }
+                assertTrue(at >= 0, "no branches list")
+                block.drop(at + 1).takeWhile { indent(it) > 4 }.map { line ->
+                    assertTrue(indent(line) == 6 && line.trimStart().startsWith("- "),
+                        "unsupported branch list entry: $line")
+                    literal(line.trim().removePrefix("- "))
+                }
+            }
+            assertEquals(listOf("main"), branches, "push must admit only main, not feature branches or tags")
+            val paths = pathFilter(yaml, "push") ?: fail("push must retain its path filter")
+            assertTrue(paths.isNotEmpty(), "push path filter must not disable all changed-file runs")
+            assertEquals(paths, pathFilter(yaml, "pull_request"), "push and PR must retain the same input coverage")
         }
 
         /** A GitHub Actions path pattern as a regex over a repo-relative, `/`-separated path. */

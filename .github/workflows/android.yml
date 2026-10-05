@@ -43,6 +43,7 @@ name: Android
 # filters miss, and on a read by a computed path it has not been told about.
 on:
   push:
+    branches: [main]
     paths:
       - 'android/**'
       - 'src/core/**'
@@ -114,9 +115,10 @@ concurrency:
 permissions:
   contents: read
 
-# This feature branch has no workflow on cached main yet, so workflow_dispatch alone cannot prepare
-# its first beta. Keep a versioned unsigned beta path on this exact branch's pushes until A68/PR
-# readiness; all other refs retain the ordinary app versions. No private key enters Actions.
+# Use workflow_dispatch with prepare_beta=true to run all five checks on a feature branch.
+# Main pushes and pull requests retain ordinary app versions. The older feature-push beta
+# defaults remain below, but main-only push admission prevents that historical route.
+# No private key enters Actions.
 env:
   NODETERM_BETA_VERSION_CODE: '2'
   NODETERM_BETA_VERSION_NAME: '0.1.0-beta.1'
