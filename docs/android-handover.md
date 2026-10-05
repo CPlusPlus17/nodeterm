@@ -8,18 +8,29 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a now has a fresh,
+**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a has a fresh,
 hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
-Vanadium WebView `145.0.7632.120.0`). Manual high-port SSH with an explicit profile passes
-authentication refusal, fingerprint/pin handling and idempotent public-key installation on an
-owned disposable Desktop host. Existing-terminal input, cwd, retained Unicode history,
-continuous held dragging, post-lift momentum and an early new-touch stop also pass.
-Managed **New session → Terminal → Start** failed against host `15dd1341` with
-“The configured shell is unavailable.” A124 (`651f46da`) fixes absolute executable resolution; 38 affected
-Vitest tests, full TypeScript checking and three isolated guard mutations pass. **Physical repair
-retest is pending; the new phone is disconnected.** The original Pixel 10 Pro beta-10 ledger stays
-paused at **10 Pass / 22 Partial / 32 Pending**; this fresh installation does not verify its
-same-signer update or promote its checklist. Dated receipts below remain historical.
+Vanadium WebView `145.0.7632.120.0`). Manual explicit-profile, high-port SSH and the existing
+terminal's input/cwd/Unicode history and bounded held-drag/coast/new-touch-stop checks pass.
+The original **New session → Start** attempt kept default Claude selected and failed shared
+shell validation on host `15dd1341`. A124 (`651f46da`) fixes absolute executable resolution.
+**The repaired single managed-shell case passes physically on Desktop `40731381`:** actual shell
+radio selection, canvas registration, input exactly once, viewer reopen and saved SSH reconnect
+after an Android process restart all preserve the same pane and the other original terminal.
+Offscreen retained-history Find, selected-line clipboard paste and Copy-sheet URL clipboard
+roundtrip also pass. Both disposable QA host profiles were removed through the app; beta 16 and
+the phone identity remain. The repaired host stopped cleanly with generated authentication removed
+and listeners closed. The original Pixel 10 Pro beta-10 checklist stays paused at
+**10 Pass / 22 Partial / 32 Pending**. Fresh-install/single-case results do not verify its update,
+live agents, managed End, power loss, QR/relay/cellular routes or the full device matrix.
+Dated receipts below remain historical.
+
+At checkpoint `40731381`, offline protocol tests pass **949 methods / 98 suites**, with zero
+failures, errors or skips; **38 affected Vitest tests** pass with five platform skips, full
+TypeScript passes, and all three isolated guard mutants fail their expected assertions.
+The frozen full Desktop build passes in **29.3 seconds**. The first push has all five Android jobs
+green in [run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878),
+verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pushes need their own gates and CI.
 
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
@@ -40,7 +51,7 @@ A92/A121 also pass separate eight-case native Linux Desktop and genuine Server U
 the later receipts preserve both assertion mutants and their source bindings.
 The original Pixel 10 Pro remains paused on beta 10/code 11 with
 **10 Pass / 22 Partial / 32 Pending**. Fresh Pixel 7a results and the A124 failure are recorded
-separately above; repaired managed creation and live-provider checks remain unverified. Immediate FCM
+separately above; the repaired single managed-shell case passes, while live-provider and broader lifecycle/outage checks remain unverified. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
 source; the user has no backend checkout. The push adapter points to a separate `nodeterm-server` spec; it was not found in 39 nearby checkouts or the owner’s 22 public GitHub repositories. Existing missing canvas sessions remain attach-only
 over SSH. See the audit and Known gaps for unsupported backends and remaining verification.
@@ -1234,10 +1245,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-A124 is source-fixed, but the separate Pixel 7a managed-shell creation must be retested against a
-fresh Desktop/Server build containing the repair. The phone is currently disconnected. Its
-beta-16 manual explicit-profile SSH, existing-terminal input/history and bounded gesture checks
-pass; the original Pixel 10 Pro beta-10 checklist remains paused and unchanged.
+A124 now passes a physical managed plain-shell creation/registration/input/reopen/app-restart
+case on the separate Pixel 7a and frozen Desktop `40731381`. Retained-history Find and clipboard
+checks pass too, and both owned QA profiles/hosts are cleaned up. Remaining background/lifecycle,
+outage, answer/notification/permission and live-provider checks still need their own device
+matrix. The original Pixel 10 Pro beta-10 checklist remains paused and unchanged.
 
 A92/A121 now pass eight native Linux Desktop UI cases at `01b4a2f5` and eight genuine Linux
 Server UI cases at `dcdf664a`, with both native mutants caught on each shell. This local
@@ -1274,15 +1286,16 @@ empty-screen flow passes, preserving the connected SSH route and error.
 Focused A90 proof keeps item 32 Partial, giving 10 Pass / 22 Partial / 32 Pending. The otherwise-empty SSH host's last-shell End/empty-list/New-terminal
 variant passes on beta 9 Oct4; relay plain-shell creation/input passes, while managed and cellular creation remain pending. Phone checks are paused; the ledger stays unchanged.
 
-When the Pixel 7a reconnects, use a fresh isolated Desktop/Server built with A124 and retest
-managed plain-shell creation, canvas registration and input before the remaining feature matrix.
+Continue the remaining Pixel 7a device matrix in fresh isolated Desktop/Server fixtures with
+A124: background/lifecycle and outage recovery, held answers and notification/permission paths,
+then provider-authenticated agent creation. The single managed plain-shell case is verified.
 A same-signer beta-16 update and saved pairing/key/pin survival still need the original Pixel 10 Pro;
 the fresh Pixel 7a installation supplies no update/migration proof. The
 prepared APK includes A118–A120's Android changes. Keep the held older paired
 fixture and its original terminal intact. Test A100–A120 and earlier A96–A99 on the intended Pixel;
 source/build results do not promote physical checklist items.
 
-**Next work when phone testing resumes:** first retest A124 managed creation on the Pixel 7a, then continue the remaining checks below. **Original checklist work, in order** (item lists were written for this session's workflows; re-read each audit
+**Next work when phone testing resumes:** continue the remaining lifecycle/outage, answer/notification/permission and live-provider matrix; the A124 single plain-shell case passes. **Original checklist work, in order** (item lists were written for this session's workflows; re-read each audit
 section before starting, since the verifier corrections take precedence):
 
 1. **Finish the remaining relay/session, notification and inset checks.**
@@ -2390,20 +2403,35 @@ and **10 Pass / 22 Partial / 32 Pending** are unchanged.
 ## Pixel 7a beta-16 check and A124 host repair (2026-10-05)
 
 A fresh beta 16/code 17 installation on the separate Pixel 7a passes installed APK hash,
-signature and non-debuggable checks. Normal manual explicit-profile, high-port SSH passes
-authentication refusal, host fingerprint/pin handling and public-key idempotence. Existing owned
-Desktop-terminal input/cwd/Unicode history and bounded held-drag/coast/new-touch-stop checks pass.
-Managed New on `15dd1341` failed with “The configured shell is unavailable”; A124 source-fixes
-absolute executable lookup and passes 38 affected tests, full TypeScript and three isolated
-assertion-caught guard mutants. **Repaired physical creation is pending; the phone is disconnected.**
-The old disposable host was gracefully stopped, generated authentication removed and listeners
-closed; the strict source-binding receipt records the later A124 working-tree edits.
-See [the verification notes](android.md#what-is-verified-and-how) and [audit A124](android-audit-2026-09.md#a124) for precise evidence/limits.
-Private device proof: `.nodeterm/android-pixel7a-device-y0ia4hm_/`. This fresh installation does not
-verify the original Pixel 10 Pro update, QR/relay/cellular routes, FPS or the full checklist.
-The original beta-10 ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
+signature and non-debuggable checks. Normal manual explicit-profile, high-port SSH and bounded
+existing-terminal input/cwd/Unicode history/held-drag/coast/new-touch-stop checks pass.
+The original `15dd1341` **New session → Start** attempt retained default Claude because its
+nonclickable label did not select the shell; shared shell validation exposed A124 before CLI lookup.
+The repaired wrong-label attempt's unavailable-Claude-CLI refusal is expected, not a new finding.
+Actual shell-radio selection on frozen Desktop `40731381` creates and registers `/bin/bash`.
+Phone input executes once in the expected cwd; viewer reopen and an Android-process restart with
+saved SSH reconnect retain the same pane/marker and leave the other original terminal untouched.
+
+Host-retained Find locates two offscreen matching lines in 155 retained lines after 150 additional
+output lines; native visible-screen capture independently excludes the old marker. History-line
+clipboard paste matches. Local Copy-sheet search correctly has no offscreen-marker match; its
+public URL offer and URL clipboard roundtrip pass. External browser opening is unverified.
+Both QA profiles are removed through the app, which returns to the initial Computers/Add screen;
+beta 16 and global identity remain. The repaired V5 host stops cleanly: app/sshd exit, closed
+listeners and generated private-auth cleanup pass. The earlier host's source-binding failure stays
+historical and separate.
+
+At `40731381`, offline protocol passes **949 methods / 98 suites** with zero failures/errors/skips;
+38 affected Vitest tests, full TypeScript and three assertion-caught isolated guard mutants pass
+(five platform Vitest cases skip on Linux). The frozen full Desktop build passes in 29.3 seconds.
+First-push [Android run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878)
+passes all five jobs against exact head `40731381c646ccd3425af597b116b5371daf0a63`.
+See [the verification notes](android.md#what-is-verified-and-how) and [audit A124](android-audit-2026-09.md#a124) for precise evidence and scope. Private physical proof:
+`.nodeterm/android-pixel7a-device-y0ia4hm_/physical-repair-result.json`.
+The original Pixel 10 Pro beta-10 ledger stays paused at **10 Pass / 22 Partial / 32 Pending**.
 No wire/file contract changes; @eneskirca can note the shared host benefit for iOS.
 
-Next: reconnect the Pixel 7a, rebuild an isolated Desktop/Server with A124, then retest managed
-plain-shell creation/registration/input before the remaining device/provider checks. Original
-Pixel update/migration, A25/A93 backend dependencies and other-platform checks remain separate.
+Next: continue the remaining background/lifecycle/outage, notification/answer/permission and
+live-provider device matrix using fresh owned fixtures. Single-case success does not verify
+managed End, power loss, original Pixel update/migration, QR/relay/cellular routes, FPS or all
+64 checklist items. A25/A93 backend dependencies and other-platform checks remain separate.

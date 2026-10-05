@@ -16,18 +16,29 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a now has a fresh,
+**Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a has a fresh,
 hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
-Vanadium WebView `145.0.7632.120.0`). Manual high-port SSH with an explicit profile passes
-authentication refusal, fingerprint/pin handling and idempotent public-key installation on an
-owned disposable Desktop host. Existing-terminal input, cwd, retained Unicode history,
-continuous held dragging, post-lift momentum and an early new-touch stop also pass.
-Managed **New session → Terminal → Start** failed against host `15dd1341` with
-“The configured shell is unavailable.” A124 (`651f46da`) fixes absolute executable resolution; 38 affected
-Vitest tests, full TypeScript checking and three isolated guard mutations pass. **Physical repair
-retest is pending; the new phone is disconnected.** The original Pixel 10 Pro beta-10 ledger stays
-paused at **10 Pass / 22 Partial / 32 Pending**; this fresh installation does not verify its
-same-signer update or promote its checklist. Dated receipts below remain historical.
+Vanadium WebView `145.0.7632.120.0`). Manual explicit-profile, high-port SSH and the existing
+terminal's input/cwd/Unicode history and bounded held-drag/coast/new-touch-stop checks pass.
+The original **New session → Start** attempt kept default Claude selected and failed shared
+shell validation on host `15dd1341`. A124 (`651f46da`) fixes absolute executable resolution.
+**The repaired single managed-shell case passes physically on Desktop `40731381`:** actual shell
+radio selection, canvas registration, input exactly once, viewer reopen and saved SSH reconnect
+after an Android process restart all preserve the same pane and the other original terminal.
+Offscreen retained-history Find, selected-line clipboard paste and Copy-sheet URL clipboard
+roundtrip also pass. Both disposable QA host profiles were removed through the app; beta 16 and
+the phone identity remain. The repaired host stopped cleanly with generated authentication removed
+and listeners closed. The original Pixel 10 Pro beta-10 checklist stays paused at
+**10 Pass / 22 Partial / 32 Pending**. Fresh-install/single-case results do not verify its update,
+live agents, managed End, power loss, QR/relay/cellular routes or the full device matrix.
+Dated receipts below remain historical.
+
+At checkpoint `40731381`, offline protocol tests pass **949 methods / 98 suites**, with zero
+failures, errors or skips; **38 affected Vitest tests** pass with five platform skips, full
+TypeScript passes, and all three isolated guard mutants fail their expected assertions.
+The frozen full Desktop build passes in **29.3 seconds**. The first push has all five Android jobs
+green in [run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878),
+verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pushes need their own gates and CI.
 
 ## Index
 
@@ -132,7 +143,7 @@ same-signer update or promote its checklist. Dated receipts below remain histori
 | [A97](#a97) | low | | small | parity/gap | ✅ fixed in `8443e71e`; isolated control/restored 25-method runs / 31 mutants and protocol730/70/app checks pass; beta 11 prepared, physical follow-up pending · All computers does not refresh live while visible (A55 residual) |
 | [A98](#a98) | low | | small | terminal/UX | ✅ fixed in `1b1872f1`; 9 bounded JVM checks / 13 isolated mutants, protocol730/70 and app checks pass; beta 11 prepared, physical follow-up pending · Captured terminal output cannot be searched |
 | [A99](#a99) | low | | small | security/risk | ✅ fixed in `e07071e9`; actual Linux control/restored 19 tests / 16 isolated mutants and protocol730/70/app/desktop checks pass; physical included-key pairing pending · SSH host-key discovery ignores recursive external Includes (A49 residual) |
-| [A100](#a100) | medium | | medium | terminal/gap | ✅ source fixed in `2f693d83, 97b8a9a4, 4f1985f5` · Retained host history search; new physical checks pending |
+| [A100](#a100) | medium | | medium | terminal/gap | ✅ source fixed in `2f693d83, 97b8a9a4, 4f1985f5`; Pixel 7a retained-history Find and selected-line clipboard paste verified on `40731381`, wider device matrix pending · Retained host history search |
 | [A101](#a101) | medium | | small | runtime/bug | ✅ source fixed in `fbaa535d` · Interrupted typed session-host reads reconnect; source regression verified |
 | [A102](#a102) | medium | | medium | protocol/gap | ✅ source fixed in `e584586f` · Cold relay attach retains trusted project launch settings; new physical checks pending |
 | [A103](#a103) | medium | | medium | protocol/gap | ✅ source fixed in `91e6a3f5` · Agent approval policy survives launch, resume and wake; new physical checks pending |
@@ -143,7 +154,7 @@ same-signer update or promote its checklist. Dated receipts below remain histori
 | [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
 | [A109](#a109) | low | | small | tests/bug | ✅ source fixed in `4e2f877d` · Three-digit findings retain device coverage; source regression verified |
 | [A110](#a110) | low | | small | tests/bug | ✅ test fixtures fixed in `8c57016c`, `b2e41255` · SSH profile isolation and actual unsafe-directory mode; merged gates verified |
-| [A111](#a111) | medium | | medium | parity/gap | ✅ fixed in `d652b96c`–`ba64f628`; beta-13 local checks pass, physical/live CLI pending · New session needs genuine host-owned create/launch/register over direct SSH |
+| [A111](#a111) | medium | | medium | parity/gap | ✅ fixed in `d652b96c`–`ba64f628`; beta-13 local checks pass; one Pixel 7a manual-SSH plain-shell create/register/input/reopen case verified on `40731381`, live agent CLI and wider device matrix pending · New session needs genuine host-owned create/launch/register over direct SSH |
 | [A112](#a112) | low | | small | tests/bug | ✅ fixed in `9675c4d1`; producer/input regressions and mutations pass · Managed producer imports session-host files missing from CI and incremental test inputs |
 | [A113](#a113) | medium | | small | desktop/bug | ✅ fixed in `349b791a`; 111 affected tests / 11 assertion mutants · Legacy relay revoke lacks a confirmed remote-access receipt |
 | [A114](#a114) | low | | small | phone/UX | ✅ fixed in `6b989e59`; 39 focused methods / 18 assertion mutants; physical pending · Dictation has no language picker |
@@ -151,12 +162,12 @@ same-signer update or promote its checklist. Dated receipts below remain histori
 | [A116](#a116) | medium | | medium | pairing/UX | ✅ fixed in `a6b3e88b`; six real HTTP / five interop methods, 56 assertion mutants; physical pending · Multiadapter pairing/refresh has no network choice |
 | [A117](#a117) | medium | | small | pairing/bug | ✅ fixed in `227a7262`; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
-| [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
+| [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; Pixel 7a manual explicit-profile Desktop SSH verified, remaining physical profile matrix pending · Explicit saved SSH profile folder for custom Server data directories |
 | [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods / seven assertion mutants, 28 native OpenSSH checks, four timing cases / 76 assertions and 17 synthetic installed-PAM checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
 | [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; tmux8/SSH8 and separate GPU recovery pilots verified; wider GPU pressure/macOS pending |
 | [A122](#a122) | medium | | small | desktop/bug | ✅ source-fixed in `9613cec5`; 133 focused / 218 affected tests and six assertion-caught mutants; four Linux native cases pass · Focused Canvas/Modal xterm consumes the advertised native Quit chord |
 | [A123](#a123) | low | | small | desktop/bug | ✅ fixed in `db83fb7d`; 44 budget / 301 affected tests, two helper assertion mutants and Desktop native control/sole-call-removal/restored proof pass; later genuine Server 0/3/0 and derived Desktop compositor cell evidence verified · Restored addon context remains live after disposal and budget retirement |
-| [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; physical repair retest pending · Managed SSH New rejects an available absolute default shell as unavailable |
+| [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; one Pixel 7a manual-SSH shell creation/input/reopen/app-restart case passes on `40731381` · Managed SSH New rejects an available absolute default shell as unavailable |
 
 ## A01
 
@@ -4226,14 +4237,17 @@ physical-display output, shared glyph eviction and repeated/page-wide pressure r
 **Managed SSH New rejects an available absolute shell as unavailable (2026-10-05).**
 
 - Severity: **medium**; effort: small; area: shared Desktop/Server executable resolution; kind: bug.
-- Status: **fixed in `651f46da239cb0877c3bfccc6a478e1b555a63cc`; physical repair retest pending**.
+- Status: **fixed in `651f46da239cb0877c3bfccc6a478e1b555a63cc`; one physical Pixel 7a managed-shell case verified on `40731381`**.
 - Locations: `src/core/exec-path.ts` (`findInPathString`), `src/core/managed-terminal-plan.ts`
   (`createManagedTerminalPlanner`), `src/core/pty-manager.ts` (`resolveLocalSessionShell`).
 
 Fresh beta 16/code 17 on the separate Pixel 7a reaches a genuine owned Desktop host at
 `15dd1341c55302f9936b83a19d82c165733320c9` through manual explicit-profile SSH. Existing-terminal
-input/cwd/history pass, but **New session → Terminal → Start** reports “The configured shell is
-unavailable.” The host has blank `defaultShell`, inherited `SHELL=/bin/bash` and an available
+input/cwd/history pass, but **New session → Start with default Claude selected** reports “The
+configured shell is unavailable.” The original XML shows that tapping a nonclickable option label
+did not select Terminal. This is still shared shell validation before any agent CLI resolution;
+the repaired wrong-label retest correctly refuses the missing Claude CLI and is not a new finding.
+The host has blank `defaultShell`, inherited `SHELL=/bin/bash` and an available
 executable `/bin/bash`; the planner calls the real login-PATH resolver. That resolver joins the
 absolute program beneath each PATH entry, checking unrelated paths such as `/usr/bin/bin/bash`.
 The observed workspace retains only its original Desktop terminal.
@@ -4249,12 +4263,31 @@ absolute branch fails three regressions, removing the regular-file check fails d
 and removing executable access fails non-executable rejection. Three earlier fixture setup
 failures stopped before Vitest and earn no mutation credit.
 
-Physical proof is `.nodeterm/android-pixel7a-device-y0ia4hm_/`; source/regression proof is
-`~/.cache/nodeterm-android-work/a124-executable-mutation-lhf2f_p6/proof/`. The phone is disconnected;
-**no repaired physical managed-creation pass is claimed**. The old host was gracefully stopped,
-its generated authentication removed and listeners closed; its strict source-binding result
-records the A124 working-tree edits rather than a clean immutable source pass. The original Pixel
-10 Pro beta-10 ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
+The actual shell radio is independently selected in `repaired-shell-selected.xml`. On frozen
+Desktop `40731381`, the phone creates/registers `/bin/bash` node `term-muvrrd9n-623cda88cddd8ded`,
+pane PID 1101, and input executes exactly once in the project cwd. The original terminal/PID 368
+remains unchanged. Viewer close/reopen and Android process restart (9258 → 14735) with saved SSH
+reconnect return to the same managed pane and visible old marker, without resetting app identity.
+After 150 further output lines, Find reports two matches in 155 retained lines; native tmux `-S 0`
+excludes the old marker from the visible screen. History selected-line clipboard paste matches.
+Local Copy-sheet search correctly has no offscreen-marker match; URL offer and URL clipboard paste
+pass. No external browser-open result is claimed.
+
+Both owned host profiles are removed through the app and the phone returns to Computers/Add;
+beta 16 and global identity remain. V5 then stops at clean `40731381` with runner success/exit zero,
+graceful requested stop, app/server exit, closed listeners and generated private-auth cleanup.
+The old host's negative source-binding receipt explicitly preserves the earlier working-tree edits.
+The exact `40731381` offline protocol gate passes 949 methods / 98 suites with zero failures,
+errors or skips; the full frozen Desktop build passes in 29.3 seconds. First-push
+[Android run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878)
+passes all five jobs against `40731381c646ccd3425af597b116b5371daf0a63`.
+
+Physical proof is `.nodeterm/android-pixel7a-device-y0ia4hm_/physical-repair-result.json` and its
+named evidence; source/regression proof is
+`~/.cache/nodeterm-android-work/a124-executable-mutation-lhf2f_p6/proof/`. This single manual high-port
+SSH shell case does not verify live agents/provider answers, managed End, power loss, QR/relay/
+cellular routes or the full background/outage/permission/64-item matrix. The original Pixel 10 Pro
+beta-10 ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
 No phone payload, host verb or SSH-visible file contract changes. The shared host repair also
 benefits iOS managed creation; @eneskirca should note the host update, with no new client field.
 
