@@ -139,7 +139,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A117](#a117) | medium | | small | pairing/bug | ✅ fixed in `227a7262`; 22 reader methods, seven reader mutants and actual pairing/Android regression · Relative private HostKey names can enter Include reads |
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 | [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
-| [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods, seven assertion mutants and 28 native OpenSSH checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
+| [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods / seven assertion mutants, 28 native OpenSSH checks, four timing cases / 76 assertions and 17 synthetic installed-PAM checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
 | [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU/macOS pending |
 
 ## A01
@@ -4180,3 +4180,58 @@ paused at **10 Pass / 22 Partial / 32 Pending**. Next: resume the Pixel update/c
 authorized; live A105/A106 needs a usable provider account after HTTP 401; A25/A93 need hosted
 backend maintainers. The Android contribution is in this repository. No PR is opened; A68 waits
 for requested PR preparation.
+
+## Native setup timing, installed PAM and remaining desktop checks (2026-10-05)
+
+A120 now passes four native OpenSSH cancellation/deadline cases at clean source
+`7cf2bb339d73c98e7876a7ce1edec5f6f3585141`, with **76 case-scoped assertions**.
+All 76 protocol source files were compiled privately with Kotlin 2.2/JDK 21 and SSHJ 0.39.
+The pre-install gate admits real password authentication and the exact production exec request,
+then holds it without running the installer; cancellation/deadline leaves authorized_keys unchanged.
+The post-install gate retains the actual installed key, accepts a third connection and reads a
+real upstream SSH banner before withholding it. That case does not complete a third key exchange
+or key authentication. External cancellation remains CancellationException; the operation's own
+12-second post-dispatch deadline reports HostUnansweredException. Neither returns a PairedHost.
+Owned client sockets, gates and daemon descendants close; caller password buffers clear, consumed
+confirmations cannot replay, unrelated key bytes/modes survive, and generated secrets are removed.
+This is protocol/native proof, not physical HostStore, Keystore or Android background/setup UX proof.
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/openssh-timing/`.
+The earlier 28 distinct native assertions / 40 events and 17 JVM methods / seven product mutants
+retain their separate inventories; these new fixture checks are not new JUnit methods or mutants.
+
+A separate **17-check native installed-PAM control** passes against OpenSSH 10.2p1 and this host's
+unchanged Fedora PAM stack. It uses a namespace-only synthetic NSS/shadow account and a UID/GID
+1000 client with every process capability cleared. Actual logs record one accepted password,
+two accepted key authentications, three successful PAM account checks, and three matched session
+opens/closes, with no PAM session/credential errors. Public fingerprint confirmation, independent
+retained-key exec, wrong-password/pin refusals, key-file preservation, no replay and socket cleanup
+pass. All 31 public installed-stack bindings remain unchanged, SELinux remains enforcing, and
+generated credentials plus owned daemon descendants are removed. This reuses 513 class files from
+the earlier timing compilation after verifying all 76 protocol source bytes; only the 11 standalone
+driver class files are freshly compiled. It does not verify real-user policy, MFA, ordinary systemd
+user-session registration, macOS, or Android UI/storage. Earlier setpriv and private-log traversal
+failures are retained as failed fixture attempts, without product fixes or mutation credit.
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/runtime-checkpoint-supplement/`.
+
+A private hardware probe also passes first and retained WebGL2 contexts on the RTX 4090 through
+NVIDIA Vulkan, including exact RGBA readback and no context loss. It loads no product main process
+or terminal, so **the terminal GPU matrix remains pending**. The separate successful PAM namespace
+admission performs no authentication; the installed-PAM result above supplies that later evidence.
+Private environment proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/environment-admission/`.
+
+**Ordinary Linux Desktop Quit remains unresolved.** Two full-product attempts finish the eight
+DOM link/leave cases, then observe trusted, unprevented Ctrl+Q with an enabled native Quit menu,
+but reach no before-quit event or confirmation dialog. A separate early attempt reproduces that
+observation before any link test or external URL open (zero cases/opens). Three minimal cached-Electron
+controls quit naturally, including debugger attachment and two post-window menu rebuilds. Those
+controls verify the test environment, not product Quit. The full-product attempts need cleanup
+signals and cannot pass the ordinary-Quit gate; no product cause or fix is established. Diagnostic
+archives preserve the negatives separately from the positive DOM and minimal-menu controls.
+
+No runtime, external contract, APK or phone state changes follow from this verification.
+Beta 16/code 17 remains prepared from `2723845e`; beta 10/code 11 remains last installed.
+Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**. Next: investigate product Quit,
+run the terminal GPU and real tmux/SSH/macOS matrices, and resume the Pixel update/checklist when
+authorized. Live A105/A106 requires a usable provider account after HTTP 401; A25/A93 require
+maintainer backend work. The Android contribution stays in this repository; no PR is opened and
+A68 remains deferred until requested PR preparation.

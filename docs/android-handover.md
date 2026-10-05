@@ -16,7 +16,7 @@ with an enabled Linux/macOS tmux backend to create and register a managed shell 
 open local folder project (A111); the host resolves its command, account, environment and hooks.
 Older hosts retain the relay New flow. The actual producer fixture also exposed and fixed Android CI/local incremental coverage for `src/session-host/**` (A112). Current source also adds truthful legacy revoke outcomes (A113), a dictation language picker (A114), exact connection/record retirement (A115) and a saved LAN/VPN adapter choice (A116). This prepares the upstream Android contribution; no PR
 has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the local release checks. It includes A118's eligible legacy relay identity proof, an explicit SSH profile folder (A119) and one-time password enrollment with fingerprint confirmation and retained-key verification (A120). Current host source also fixes direct-SSH coattachment (A13) and protects relative private HostKey Include reads (A117).
-A120 also passes a controlled native OpenSSH enrollment/key-login run; see the later verification receipt.
+A120 also passes controlled native OpenSSH enrollment, cancellation/deadline and synthetic installed-Fedora-PAM checks; see the later verification receipts.
 A92/A121 also pass separate eight-case native Linux Desktop and genuine Server UI checks;
 the later receipts preserve both assertion mutants and their source bindings.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
@@ -1214,7 +1214,10 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 A92/A121 now pass eight native Linux Desktop UI cases at `01b4a2f5` and eight genuine Linux
 Server UI cases at `dcdf664a`, with both native mutants caught on each shell. This local
-follow-up is finished. GPU/macOS and ordinary app quit have no new execution proof.
+follow-up is finished. Hardware WebGL2 is now admitted, but the product terminal GPU matrix
+and macOS remain unverified. Ordinary app Quit was attempted and remains unresolved. A120
+also passes native timing and synthetic installed-Fedora-PAM checks; real-user policy and
+Android setup/lifecycle remain pending (see the final verification section).
 
 Current source closes the launch/policy/offscreen-wake/history/held-answer/SSH-Git gaps,
 and adds explicit SSH profile selection and confirmed one-time password enrollment (A119/A120);
@@ -2169,3 +2172,58 @@ paused at **10 Pass / 22 Partial / 32 Pending**. Next: resume the Pixel update/c
 authorized; live A105/A106 needs a usable provider account after HTTP 401; A25/A93 need hosted
 backend maintainers. The Android contribution is in this repository. No PR is opened; A68 waits
 for requested PR preparation.
+
+## Native setup timing, installed PAM and remaining desktop checks (2026-10-05)
+
+A120 now passes four native OpenSSH cancellation/deadline cases at clean source
+`7cf2bb339d73c98e7876a7ce1edec5f6f3585141`, with **76 case-scoped assertions**.
+All 76 protocol source files were compiled privately with Kotlin 2.2/JDK 21 and SSHJ 0.39.
+The pre-install gate admits real password authentication and the exact production exec request,
+then holds it without running the installer; cancellation/deadline leaves authorized_keys unchanged.
+The post-install gate retains the actual installed key, accepts a third connection and reads a
+real upstream SSH banner before withholding it. That case does not complete a third key exchange
+or key authentication. External cancellation remains CancellationException; the operation's own
+12-second post-dispatch deadline reports HostUnansweredException. Neither returns a PairedHost.
+Owned client sockets, gates and daemon descendants close; caller password buffers clear, consumed
+confirmations cannot replay, unrelated key bytes/modes survive, and generated secrets are removed.
+This is protocol/native proof, not physical HostStore, Keystore or Android background/setup UX proof.
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/openssh-timing/`.
+The earlier 28 distinct native assertions / 40 events and 17 JVM methods / seven product mutants
+retain their separate inventories; these new fixture checks are not new JUnit methods or mutants.
+
+A separate **17-check native installed-PAM control** passes against OpenSSH 10.2p1 and this host's
+unchanged Fedora PAM stack. It uses a namespace-only synthetic NSS/shadow account and a UID/GID
+1000 client with every process capability cleared. Actual logs record one accepted password,
+two accepted key authentications, three successful PAM account checks, and three matched session
+opens/closes, with no PAM session/credential errors. Public fingerprint confirmation, independent
+retained-key exec, wrong-password/pin refusals, key-file preservation, no replay and socket cleanup
+pass. All 31 public installed-stack bindings remain unchanged, SELinux remains enforcing, and
+generated credentials plus owned daemon descendants are removed. This reuses 513 class files from
+the earlier timing compilation after verifying all 76 protocol source bytes; only the 11 standalone
+driver class files are freshly compiled. It does not verify real-user policy, MFA, ordinary systemd
+user-session registration, macOS, or Android UI/storage. Earlier setpriv and private-log traversal
+failures are retained as failed fixture attempts, without product fixes or mutation credit.
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/runtime-checkpoint-supplement/`.
+
+A private hardware probe also passes first and retained WebGL2 contexts on the RTX 4090 through
+NVIDIA Vulkan, including exact RGBA readback and no context loss. It loads no product main process
+or terminal, so **the terminal GPU matrix remains pending**. The separate successful PAM namespace
+admission performs no authentication; the installed-PAM result above supplies that later evidence.
+Private environment proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/environment-admission/`.
+
+**Ordinary Linux Desktop Quit remains unresolved.** Two full-product attempts finish the eight
+DOM link/leave cases, then observe trusted, unprevented Ctrl+Q with an enabled native Quit menu,
+but reach no before-quit event or confirmation dialog. A separate early attempt reproduces that
+observation before any link test or external URL open (zero cases/opens). Three minimal cached-Electron
+controls quit naturally, including debugger attachment and two post-window menu rebuilds. Those
+controls verify the test environment, not product Quit. The full-product attempts need cleanup
+signals and cannot pass the ordinary-Quit gate; no product cause or fix is established. Diagnostic
+archives preserve the negatives separately from the positive DOM and minimal-menu controls.
+
+No runtime, external contract, APK or phone state changes follow from this verification.
+Beta 16/code 17 remains prepared from `2723845e`; beta 10/code 11 remains last installed.
+Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**. Next: investigate product Quit,
+run the terminal GPU and real tmux/SSH/macOS matrices, and resume the Pixel update/checklist when
+authorized. Live A105/A106 requires a usable provider account after HTTP 401; A25/A93 require
+maintainer backend work. The Android contribution stays in this repository; no PR is opened and
+A68 remains deferred until requested PR preparation.
