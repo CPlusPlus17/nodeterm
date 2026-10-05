@@ -48,6 +48,7 @@ import {
 } from '../shared/settings-verb'
 import { CONTROL_REQUEST_TIMEOUT_MS, decideControlConfirm, isWaivableVerb } from '../shared/control-confirm'
 import { DEFAULT_SETTINGS } from '../shared/types'
+import { PROJECT_NAME_MAX } from '../shared/project-name'
 import { serverSettingsControl } from '../server/settings-control'
 import {
   REPORT_CAP_PER_DAY,
@@ -1267,7 +1268,7 @@ describe('the --project clause tells the truth about travel (review #363 I-1 + M
       }
       // Every refused verb is named AND carries its own reason — a bare list would tell an agent
       // that `branch` and `arrange` fail for the same cause, and they do not.
-      for (const v of ['group', 'ungroup', 'move', 'arrange', 'align', 'verify', 'spawn-team', 'branch', 'open-worktree', 'close-worktree', 'browser']) {
+      for (const v of ['verify', 'spawn-team', 'branch', 'open-worktree', 'close-worktree', 'browser']) {
         const d = offScreenDisposition(v)
         expect(d.kind, v).toBe('refuse')
         if (d.kind !== 'refuse') continue
@@ -1484,6 +1485,7 @@ describe('--after-pr: open a node that waits on a pull request', () => {
     expect(flat).toContain('default 24h, at most 14d')
     expect(flat).toContain('`list` marks it EXPIRED')
     expect(flat).toContain('`list` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED')
+    expect(flat).toContain('Every other agent row names its state: WORKING, IDLE (its turn ended; it waits for input) or NEEDS YOU')
     expect(flat).toContain('you start it with the `run` verb')
     // What is refused.
     expect(flat).toContain('the pull request must exist in the repository this project\'s kanban board syncs with')
@@ -1654,5 +1656,21 @@ describe('the read-only GitHub lane verbs (issues, prs) in both agent-facing bod
     expect(VERBS_FOR_TEST).toContain('prs')
     expect(PROJECT_TARGETABLE_VERBS.has('issues')).toBe(true)
     expect(PROJECT_TARGETABLE_VERBS.has('prs')).toBe(true)
+  })
+})
+
+describe('open-project --name limit in the agent-facing text (issue #940)', () => {
+  it('both bodies name the limit, rendered from PROJECT_NAME_MAX', () => {
+    const sentence = `\`--name\` over ${PROJECT_NAME_MAX} characters`
+    const squash = (s: string): string => s.replace(/\s+/g, ' ')
+    expect(squash(buildCanvasSkillBody('/tmp/nodeterm.sh'))).toContain(sentence)
+    expect(squash(buildCanvasControlInstructions('/tmp/nodeterm.sh'))).toContain(sentence)
+  })
+})
+
+describe('one-way context links (issue #852) — agent-facing docs', () => {
+  it('both canvas-control surfaces document link --one-way', () => {
+    expect(buildCanvasControlInstructions('/x/nodeterm.sh')).toContain('--one-way')
+    expect(buildCanvasSkillBody('/x/nodeterm.sh')).toContain('--one-way')
   })
 })

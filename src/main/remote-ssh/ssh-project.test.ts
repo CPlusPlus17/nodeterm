@@ -8,6 +8,7 @@ import { AskpassServer } from './ssh-askpass'
 import { AppSshAgent } from './ssh-agent'
 import { RemoteHooks } from './remote-hooks'
 import { controlPathFor } from '../../core/remote-ssh/control-master'
+import { SHARE_TIMEOUTS } from './share-team'
 import { remoteCodexSocket } from '../../core/codex-accounts-core'
 import type { SshConnection } from '@shared/ssh'
 
@@ -88,6 +89,14 @@ describe('SshProjectManager', () => {
     const args = ((spawnMaster.mock.calls[0] as unknown[])[0] as string[]).join(' ')
     expect(args).not.toContain('IdentityAgent=')
     expect(mgr.refForProject('p1')?.conn.identityAgentSock).toBeUndefined()
+  })
+
+  it('sshRun hands its timeout to the runner (Share with team: bootstrap needs 60 s, not the 15 s default)', async () => {
+    const { mgr, run } = makeMgr()
+    await mgr.sshRun(['-S', '/cp', 'h', 'true'], 'stdin', { timeoutMs: SHARE_TIMEOUTS.bootstrap })
+    expect(run).toHaveBeenLastCalledWith(['-S', '/cp', 'h', 'true'], 'stdin', 60_000)
+    await mgr.sshRun(['h', 'true'])
+    expect(run).toHaveBeenLastCalledWith(['h', 'true'], undefined, undefined) // the runner's own default
   })
 
   it('listDir parses remote dir entries', async () => {

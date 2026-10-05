@@ -547,3 +547,56 @@ describe('applyCanvasMutation — parent-first order (the downgrade contract)', 
     expect(ids(applyCanvasMutation([n('b'), n('a')], { op: 'upsert', node: n('c') }))).toEqual(['b', 'a', 'c'])
   })
 })
+
+// Issue #852: a context link's one-way `reader` is part of the edge on the wire. Every hop of team
+// sync (diff → shape gate → reflector sanitize → peer apply) used to carry only the three ids, so a
+// direction flip was never cast, and a freshly cast one-way link landed on the peer as both-read —
+// which the peer then saved and published back, widening who may read on every canvas.
+describe('one-way context links (#852) through team sync', () => {
+  const oneWay = (reader: string): BridgeLink => ({ id: 'x', source: 'a', target: 'b', reader })
+  const scene = (bridges: BridgeLink[]) => ({ nodes: [], bridges, ropes: [] })
+
+  it('a direction flip diffs to an edge-upsert carrying the reader', () => {
+    expect(diffToMutations(scene([e('x')]), scene([oneWay('a')]))).toEqual([
+      { op: 'edge-upsert', kind: 'bridge', edge: oneWay('a') }
+    ])
+    expect(diffToMutations(scene([oneWay('a')]), scene([e('x')]))).toEqual([
+      { op: 'edge-upsert', kind: 'bridge', edge: e('x') }
+    ])
+    expect(diffToMutations(scene([oneWay('a')]), scene([oneWay('a')]))).toEqual([])
+  })
+
+  it('flip → cast → reflect → peer apply leaves the peer one-way, not both-read', () => {
+    const peer = [e('x')]
+    const [cast] = diffToMutations(scene([e('x')]), scene([oneWay('b')]))
+    expect(isCanvasMutation(cast)).toBe(true)
+    const clean = sanitizeCanvasMutation(cast as CanvasMutation)!
+    const out = applyEdgeMutation(peer, 'bridge', clean)
+    expect(out).not.toBe(peer)
+    expect(out).toEqual([oneWay('b')])
+    // …and back to both-read clears it on the peer.
+    const back = sanitizeCanvasMutation({ op: 'edge-upsert', kind: 'bridge', edge: e('x') })!
+    expect(applyEdgeMutation(out, 'bridge', back)).toEqual([e('x')])
+  })
+
+  it('a held one-way bridge re-cast unchanged keeps identity', () => {
+    const list = [oneWay('a')]
+    expect(applyEdgeMutation(list, 'bridge', { op: 'edge-upsert', kind: 'bridge', edge: oneWay('a') })).toBe(list)
+  })
+
+  it('refuses a malformed reader rather than dropping it (dropping would widen the link)', () => {
+    const bad = (reader: unknown) =>
+      isCanvasMutation({ op: 'edge-upsert', kind: 'bridge', edge: { ...e('x'), reader } })
+    expect(bad('a')).toBe(true)
+    expect(bad(7)).toBe(false)
+    expect(bad('')).toBe(false)
+    expect(bad('r'.repeat(129))).toBe(false)
+    // A rope has no direction.
+    expect(isCanvasMutation({ op: 'edge-upsert', kind: 'rope', edge: oneWay('a') })).toBe(false)
+  })
+
+  it('never lets a reader onto a rope, even past the gate', () => {
+    const [out] = applyEdgeMutation([], 'rope', { op: 'edge-upsert', kind: 'rope', edge: oneWay('a') })
+    expect(out).toEqual(e('x'))
+  })
+})

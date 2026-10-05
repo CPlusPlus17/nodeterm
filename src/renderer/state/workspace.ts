@@ -36,6 +36,7 @@ import { normalizeNodeIcon } from '@shared/node-icon'
 import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
 import { isSafeNodeId } from '@shared/safe-id'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
+import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -87,6 +88,8 @@ export interface NodeData {
   collapsed?: boolean
   /** Agent nodes only: when true, this node's subagent/loop fan-out cards are hidden. */
   hideFanout?: boolean
+  /** Terminal nodes: own font size (issue #915) — see CanvasNodeState.terminalFontSize. */
+  terminalFontSize?: number
   /** Expanded height to restore when un-collapsing (kept out of the persisted size). */
   expandedHeight?: number
   /**
@@ -992,10 +995,31 @@ export function isMediaFile(path: string): boolean {
   return isVideoFile(path) || isAudioFile(path)
 }
 
+const HTML_EXTS = ['html', 'htm']
+
+/** True when a local file can be rendered as a page inside a WebNode. */
+export function isHtmlFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  return HTML_EXTS.includes(ext)
+}
+
 /** True when a path looks like a playable video file (by extension). */
 export function isVideoFile(path: string): boolean {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   return VIDEO_EXTS.includes(ext)
+}
+
+/** Pick the canvas surface for a file. HTML renders as a page only when the caller asked to VIEW
+ *  it (`renderHtml` — a terminal link, not Explorer/⌘K, where .html means "edit the source"), and
+ *  only locally: a WebNode serves a file off THIS machine's disk, so an SSH project's page stays in
+ *  the editor. Every other preview works through EditorNode's routed fs. */
+export function fileViewerKind(
+  path: string,
+  opts: { sshFs?: boolean; renderHtml?: boolean } = {}
+): 'editor' | 'video' | 'web' {
+  if (opts.renderHtml && !opts.sshFs && isHtmlFile(path)) return 'web'
+  if (isMediaFile(path)) return 'video'
+  return 'editor'
 }
 
 /** Creates a video player node for a video file (streamed via nt-media://). When `sshFs` is true,
@@ -2238,6 +2262,9 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         tags: n.tags,
         collapsed,
         hideFanout: n.hideFanout,
+        // Validated at the same seam as the icon below: project.json is hand-editable and shared,
+        // and xterm must never be handed a font size outside the Settings range (issue #915).
+        terminalFontSize: normalizeTerminalFontSize(n.terminalFontSize),
         // Validated HERE, at the seam where a git-shared, hand-editable project file becomes live
         // node data — so every surface that renders an icon gets a value this module vouched for
         // rather than each one re-deciding. An unrecognized icon becomes no icon.
@@ -2325,6 +2352,8 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         tags: n.data.tags,
         collapsed: n.data.collapsed,
         hideFanout: n.data.hideFanout,
+        // Re-validated on the way OUT, same reasoning as the icon below (issue #915).
+        terminalFontSize: normalizeTerminalFontSize(n.data.terminalFontSize),
         // React Flow's node `data` is `Record<string, unknown>`, so the icon comes back out
         // untyped. Re-validating on the way OUT (not just on the way in) also means a value a
         // peer canvas mutation or a future caller put on live node data cannot be written to the

@@ -107,11 +107,17 @@ function checkMutation(value: unknown, sized: boolean): value is CanvasMutation 
   if (m.op === 'edge-remove') return isEdgeKind(m.kind) && isRefId(m.id) && fits(value)
   if (m.op === 'edge-upsert') {
     if (!isEdgeKind(m.kind)) return false
-    const edge = m.edge as { id?: unknown; source?: unknown; target?: unknown } | undefined
+    const edge = m.edge as { id?: unknown; source?: unknown; target?: unknown; reader?: unknown } | undefined
     if (!edge || typeof edge !== 'object') return false
     // All three ids are ADDRESSES — an edge with a truncated endpoint would attach to the wrong
     // node on every peer — so they are rejected rather than capped, exactly like a node id.
     if (!isRefId(edge.id) || !isRefId(edge.source) || !isRefId(edge.target)) return false
+    // A one-way context link's reader (issue #852) is an address too. A malformed one REFUSES the
+    // op rather than being dropped: dropping it would turn a one-way link into a both-read one on
+    // every peer — widening who may read, the unsafe direction. Ropes never carry one.
+    if ('reader' in edge && edge.reader !== undefined) {
+      if (m.kind !== 'bridge' || !isRefId(edge.reader)) return false
+    }
     return fits(m)
   }
   if (m.op !== 'upsert') return false
@@ -149,8 +155,7 @@ export function sanitizeCanvasMutation(m: CanvasMutation, keepLaunch = false): C
   if (m.op === 'remove') return withStamp({ op: 'remove', id: m.id }, m)
   if (m.op === 'edge-remove') return withStamp({ op: 'edge-remove', kind: m.kind, id: m.id }, m)
   if (m.op === 'edge-upsert') {
-    const { id, source, target } = m.edge
-    return withStamp({ op: 'edge-upsert', kind: m.kind, edge: { id, source, target } }, m)
+    return withStamp({ op: 'edge-upsert', kind: m.kind, edge: edgeFields(m.kind, m.edge) }, m)
   }
   return sanitizeInboundMutation(m, keepLaunch)
 }
@@ -316,6 +321,19 @@ export function applyOwnCanvasMutation(
   return next
 }
 
+/** The fields an edge op defines: its three ids, plus — for a context link (`bridge`) only — the
+ *  one-way `reader` (issue #852). Anything else a cast carries is dropped. The reader MUST travel:
+ *  a peer that received only three ids would hold the link as both-read and publish that back. */
+function edgeFields(kind: CanvasEdgeKind, e: BridgeLink): BridgeLink {
+  const out: BridgeLink = { id: e.id, source: e.source, target: e.target }
+  return kind === 'bridge' && typeof e.reader === 'string' ? { ...out, reader: e.reader } : out
+}
+
+/** Same edge for sync purposes: endpoints AND one-way reader — a direction flip is a change. */
+function sameEdge(a: BridgeLink, b: BridgeLink): boolean {
+  return a.source === b.source && a.target === b.target && a.reader === b.reader
+}
+
 /**
  * Apply one EDGE mutation to one of a project's edge lists, returning a NEW array when it changes
  * anything (the input is never mutated). A mutation for the other kind — or for a node — and one
@@ -340,13 +358,13 @@ export function applyEdgeMutation(
     const next = edges.filter((e) => e.id !== m.id)
     return next.length === edges.length ? edges : next
   }
-  const edge: BridgeLink = { id: m.edge.id, source: m.edge.source, target: m.edge.target }
+  const edge = edgeFields(kind, m.edge)
   const idx = edges.findIndex((e) => e.id === edge.id)
   if (idx === -1) return [...edges, edge]
   // The edge we already hold, unchanged: same reference, so a duplicate cast (every Server Edition
   // tab re-casts a server-written edge) costs a receiver no setState, no markDirty, no save.
   const held = edges[idx]
-  if (held.source === edge.source && held.target === edge.target) return edges
+  if (sameEdge(held, edge)) return edges
   const next = edges.slice()
   next[idx] = edge
   return next
@@ -407,7 +425,7 @@ function diffEdges(
   const prevById = new Map(prev.map((e) => [e.id, e]))
   for (const edge of next) {
     const before = prevById.get(edge.id)
-    if (!before || before.source !== edge.source || before.target !== edge.target) {
+    if (!before || !sameEdge(before, edge)) {
       upserts.push({ op: 'edge-upsert', kind, edge })
     }
   }

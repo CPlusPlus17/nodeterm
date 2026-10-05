@@ -1,6 +1,7 @@
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { IPC } from '../../shared/ipc'
+import { E_UNSUPPORTED } from '../../shared/rpc'
 import type { NodeTerminalApi } from '../../shared/types'
 import type { FrameTransport } from './frame-transport'
 import { buildRelayApi } from './relay-api'
@@ -152,6 +153,39 @@ describe('buildRelayApi', () => {
     expect((local.relayClient.disconnect as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('conn-7')
   })
 
+  it('live links: a relay tab takes the inert stub, never the LOCAL preload member, and sends nothing', async () => {
+    const { local } = fakeLocalApi()
+    const localWatchLink = { NAME: 'local-watch-link', create: vi.fn(), list: vi.fn() }
+    ;(local as unknown as { watchLink: unknown }).watchLink = localWatchLink
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t)
+    expect(api.watchLink).not.toBe(localWatchLink)
+    await expect(
+      api.watchLink.create({ nodeId: 'n1', role: 'viewer', ttlSeconds: 3600, label: 'Ada', title: 'build' })
+    ).resolves.toEqual({ ok: false, error: 'unsupported' })
+    await expect(api.watchLink.list()).resolves.toEqual([])
+    await expect(api.watchLink.kick('l', 'v')).resolves.toBe(false)
+    await expect(api.watchLink.sendChat('l', 'x')).resolves.toBeNull()
+    await expect(api.watchLink.chatHistory('l')).resolves.toEqual([])
+    expect(typeof api.watchLink.onState(() => {})).toBe('function')
+    expect(localWatchLink.create).not.toHaveBeenCalled()
+    expect(t.sent).toEqual([]) // nothing crossed the relay
+  })
+
+  it('share with team: a relay tab takes the E_UNSUPPORTED stub, never the LOCAL preload member', async () => {
+    const { local } = fakeLocalApi()
+    const localShareTeam = { probe: vi.fn() }
+    ;(local as unknown as { shareTeam: unknown }).shareTeam = localShareTeam
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t)
+    expect(api.shareTeam).not.toBe(localShareTeam)
+    await expect(api.shareTeam.probe('p', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(localShareTeam.probe).not.toHaveBeenCalled()
+    expect(t.sent).toEqual([])
+  })
+
   it('produces a value that satisfies NodeTerminalApi', () => {
     const { local } = fakeLocalApi()
     ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
@@ -217,6 +251,17 @@ describe('buildRelayApi — hosted team tabs', () => {
     api.hosted!.onPendingClosed((p) => seen.push(p))
     t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedPendingClosed, args: [{ pendingId: 'x', reason: 'denied' }] }))
     expect(seen).toEqual([pending, { pendingId: 'x', reason: 'denied' }])
+  })
+
+  it('a shared-set change reaches the onSharedChanged subscribers', () => {
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t, { hosted: true })
+    const seen: unknown[] = []
+    const off = api.hosted!.onSharedChanged((p) => seen.push(p))
+    t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedSharedChanged, args: [{ projectIds: ['p1', 'p2'] }] }))
+    off()
+    t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedSharedChanged, args: [{ projectIds: [] }] }))
+    expect(seen).toEqual([{ projectIds: ['p1', 'p2'] }])
   })
 
   it('before the role is known, a hosted tab sends only what a viewer may (fail closed)', async () => {

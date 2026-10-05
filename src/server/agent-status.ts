@@ -31,6 +31,7 @@ import { linkedClaudeConfigDirs } from '../core/claude-config-dir'
 import { isAsyncSubagentLaunch, grokRawFields, type NormalizedAgentEvent } from '../shared/agents/normalize'
 import { applyGrokHookSession } from '../core/grok-hook-session'
 import { IPC } from '../shared/ipc'
+import { subagentReplay } from '../core/subagent-replay'
 import type { ServerPlatform } from './platform-server'
 
 /** The narrow surface of the hook server this module needs — injectable for tests. */
@@ -81,6 +82,7 @@ export function wireAgentStatus(
   const subagentTail =
     opts.subagentTail ??
     createSubagentTail(({ toolUseId, chunk }) => {
+      subagentReplay.touch(toolUseId) // a streaming subagent is alive: keep it in the reload replay
       platform.broadcast(IPC.agentSubagentActivity, { toolUseId, chunk })
     })
   // Claude's two subagent signal paths merged into one card per child (native SubagentStart/Stop

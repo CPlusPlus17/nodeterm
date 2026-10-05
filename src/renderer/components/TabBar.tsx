@@ -22,6 +22,7 @@ import {
 } from '@shared/agents/config'
 import { bypassSandboxCaveat, permissionModeAgentsLabel } from '@shared/agents/approval-mode'
 import { codexApprovalCaps } from '@renderer/state/codexCli'
+import { PROJECT_NAME_MAX, clampProjectName } from '@shared/project-name'
 
 interface TabBarProps {
   onSwitch: (id: string) => void
@@ -46,6 +47,11 @@ interface TabBarProps {
   /** Deep-link to this project's own pane in Settings — everything this menu can change plus the
    *  shared/machine-local settings families, which have no other entry point. */
   onOpenProjectSettings: (id: string) => void
+  /** Open "Share with team" for an SSH project. Absent = the row is not offered. */
+  onShareWithTeam?: (projectId: string) => void
+  /** Why the share cannot start for this project right now (the row is then disabled with it as
+   *  its tooltip), or null when it can. */
+  shareBlockedReason?: (projectId: string) => string | null
 }
 
 /**
@@ -81,7 +87,9 @@ export function TabBar({
   onRemoteAccess,
   onSetDefaultAccount,
   onSetDefaultPermissionMode,
-  onOpenProjectSettings
+  onOpenProjectSettings,
+  onShareWithTeam,
+  shareBlockedReason
 }: TabBarProps) {
   // Select the raw array and filter in a memo, a `.filter()` inside the selector returns a
   // fresh array every store snapshot, which re-rendered the TabBar on EVERY projects change.
@@ -111,6 +119,9 @@ export function TabBar({
   )
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // The stored name the editor opened on. Committing the cut draft of an over-long one
+  // (issue #940) stores that cut: the user asked to rename and sees what will be stored.
+  const [draftStart, setDraftStart] = useState('')
   // Tab drag-reorder: the project id being dragged + the current drop target ('' = end zone).
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropId, setDropId] = useState<string | null>(null)
@@ -181,14 +192,16 @@ export function TabBar({
 
   const startRename = (id: string, current: string) => {
     setEditingId(id)
-    setDraft(current)
+    // Start from what a rename would store, so an over-long name (issue #940) is shown cut.
+    setDraft(clampProjectName(current))
+    setDraftStart(current)
     closeMenu()
   }
 
   const commitRename = () => {
     if (editingId) {
       const name = draft.trim()
-      if (name) onRename(editingId, name)
+      if (name && name !== draftStart) onRename(editingId, name)
     }
     setEditingId(null)
   }
@@ -402,6 +415,7 @@ export function TabBar({
                   <input
                     className="tab__edit"
                     value={draft}
+                    maxLength={PROJECT_NAME_MAX}
                     autoFocus
                     spellCheck={false}
                     onChange={(e) => setDraft(e.target.value)}
@@ -514,6 +528,24 @@ export function TabBar({
             >
               Remote access…
             </button>
+            {menuProject.ssh &&
+              !menuProject.remote &&
+              onShareWithTeam &&
+              (() => {
+                const blocked = shareBlockedReason?.(menuProject.id) ?? null
+                return (
+                  <button
+                    disabled={!!blocked}
+                    title={blocked ?? undefined}
+                    onClick={() => {
+                      onShareWithTeam(menuProject.id)
+                      closeMenu()
+                    }}
+                  >
+                    Share with team…
+                  </button>
+                )
+              })()}
             {menuAccounts.length > 0 && (
               <>
                 <button

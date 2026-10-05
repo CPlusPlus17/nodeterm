@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { RelayClosedReason } from '@shared/types'
-import { createHostedAttempts, type HostedAttemptDeps, type HostedAttemptRequest } from './hostedAttempts'
+import { createHostedAttempts, type HostedAttemptDeps, type HostedAttemptRequest, type HostedMountResult } from './hostedAttempts'
 import type { JoinFailure } from './hostedTeam'
 
 const wrap = (m: string) => new Error(`Error invoking remote method 'relay:client:connect': Error: ${m}`)
@@ -9,7 +9,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 /** Deps whose every answer the test controls, with a manual clock. */
 function harness() {
   const connects: Array<{ code: string; resolve: (id: string) => void; reject: (e: Error) => void }> = []
-  const mounts: Array<{ id: string; req: HostedAttemptRequest; resolve: (r: { projectId: string } | { retry: boolean }) => void }> = []
+  const mounts: Array<{ id: string; req: HostedAttemptRequest; resolve: (r: HostedMountResult) => void }> = []
   const closeCbs = new Map<string, (reason?: RelayClosedReason) => void>()
   const unsubs: string[] = []
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
@@ -563,5 +563,61 @@ describe('hosted attempts: one attempt and one live connection per team (R38/R39
     expect(a.run(boot({ manual: true, reconnectProjectId: 'proj-1' }))).toBe('started')
     expect(h.connects).toHaveLength(1)
     expect(h.armed()).toEqual([])
+  })
+
+  // ── One connection, several tabs ────────────────────────────────────────────────────────────────
+  it('retarget moves a live team onto another of its tabs: a drop then reconnects into that tab', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    h.connects[0].resolve('c1')
+    await flush()
+    h.mounts[0].resolve({ projectId: 'A', projectIds: ['A', 'B'] })
+    await flush()
+    expect(a.phase('H1')).toBe('live')
+    a.retarget('A', 'B')
+    h.closeCbs.get('c1')!(undefined)
+    expect(h.ended).toHaveLength(1)
+    expect(h.ended[0].projectId).toBe('B')
+  })
+
+  it('cancelProject on a retargeted tab no longer touches the team', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    h.connects[0].resolve('c1')
+    await flush()
+    h.mounts[0].resolve({ projectId: 'A', projectIds: ['A', 'B'] })
+    await flush()
+    a.retarget('A', 'B')
+    a.cancelProject('A')
+    expect(a.phase('H1')).toBe('live')
+    a.cancelProject('B')
+    expect(a.phase('H1')).toBeNull()
+  })
+
+  it('retarget also moves a reconnect still waiting for its tab: it comes back into the new one', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'A' }))
+    h.connects[0].reject(wrap('[E_JOIN_NETWORK] x'))
+    await flush()
+    a.retarget('A', 'B')
+    a.cancelProject('A') // the old tab is no longer this attempt's
+    expect(a.phase('H1')).toBe('waiting')
+    h.fire()
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts[0].req.reconnectProjectId).toBe('B')
+  })
+
+  it('retarget leaves other teams and other tabs alone', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ hostId: 'H2', reconnectProjectId: 'C' }))
+    a.retarget('A', 'B')
+    h.connects[0].resolve('c1')
+    await flush()
+    expect(h.mounts[0].req.reconnectProjectId).toBe('C')
   })
 })

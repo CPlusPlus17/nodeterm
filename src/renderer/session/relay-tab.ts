@@ -31,6 +31,7 @@ import {
   disposeSession,
   getSessionStores,
   takeSessionOffline,
+  projectIdsBoundToSession,
   type SessionSource,
 } from './session'
 
@@ -61,11 +62,21 @@ export interface RelayTabDeps {
   /** Switch to the tab once it is live (default true). A reconnect nobody clicked (boot, a dropped
    *  tab coming back) binds its tab without taking the screen from whatever the user is on. */
   activate?: boolean
+  /** HOSTED only: place the host's shared projects as tabs (one per project, reusing a reconnecting
+   *  team's greyed tabs) and return their ids in host order — never empty (a team with nothing
+   *  shared gets one placeholder). Absent = a Team Access tab: `projects[0]` exactly as before. */
+  placeProjects?: (projects: Project[]) => string[]
+  /** Activate this tab when it is among the placed ones (the one the user just shared). */
+  focusProjectId?: string
 }
 
 export interface RelayTab {
   sessionId: string
+  /** The tab activated on open: the focused one, else the first placed. */
   projectId: string
+  /** Every tab this connection serves (one for a Team Access tab, one per shared project for a
+   *  hosted team), in the host's order. */
+  projectIds: string[]
   /** A hosted team's tab: this device's role there and the team's name. Absent otherwise. */
   hosted?: HostedTeamInfo
   /** Tear the tab's session down (runs the held presence teardown + relay socket close, once). */
@@ -130,18 +141,30 @@ export async function openRelayTab(
   // transport to the relay api; Stage-3 sync then keeps it live. If the host shared nothing (or the
   // project was deleted), OR we're reconnecting (no `adoptProject` dep — the existing tab is reused),
   // fall back to the labelled tab so it still opens rather than throwing.
+  // A hosted team shares several projects through one connection: `placeProjects` turns each into
+  // its own tab (id = the host's project id, since the relay api translates no ids), and every one
+  // of them is bound to this session.
   // The load runs AFTER createSession + the held teardowns, so a host that vanishes between approval
   // and load would leave the SESSIONS entry, its presence subscription (the peer lingers in host
   // facepiles) and the relay socket all leaking. Dispose the just-created session before rethrowing
   // — `disposeSession` runs the held teardowns exactly once (idempotent).
   try {
     const ws = await handle.api.workspace.load()
-    const hostProject = ws.projects[0]
+    let projectIds: string[]
+    if (deps.placeProjects) {
+      projectIds = deps.placeProjects(ws.projects.map(sanitizeRelayProject))
+    } else {
+      const hostProject = ws.projects[0]
+      projectIds = [
+        hostProject && deps.adoptProject
+          ? deps.adoptProject(sanitizeRelayProject(hostProject)).id
+          : deps.addProject(label).id
+      ]
+    }
+    if (projectIds.length === 0) projectIds = [deps.addProject(label).id]
+    for (const id of projectIds) bindProjectToSession(id, session.id)
     const projectId =
-      hostProject && deps.adoptProject
-        ? deps.adoptProject(sanitizeRelayProject(hostProject)).id
-        : deps.addProject(label).id
-    bindProjectToSession(projectId, session.id)
+      deps.focusProjectId && projectIds.includes(deps.focusProjectId) ? deps.focusProjectId : projectIds[0]
     if (deps.activate !== false) {
       setActiveSession(session.id)
       deps.setActiveProject(projectId)
@@ -158,6 +181,7 @@ export async function openRelayTab(
     return {
       sessionId: session.id,
       projectId,
+      projectIds,
       ...(hostedInfo ? { hosted: hostedInfo } : {}),
       dispose: () => disposeSession(session.id),
     }
@@ -187,7 +211,10 @@ export interface RelayDropDeps {
  *  reconnect in place. NEVER removes the project (that is only a user close). Idempotent. */
 export function handleRelayDrop(tab: RelayTab, deps: RelayDropDeps): void {
   takeSessionOffline(tab.sessionId)
-  deps.setProjectUnavailable(tab.projectId, true)
+  // Every tab the connection served greys, so each one can reconnect in place: the ones placed at
+  // mount and any a share event bound to the session since (bindings survive going offline).
+  const ids = new Set([...tab.projectIds, ...projectIdsBoundToSession(tab.sessionId)])
+  for (const id of ids) deps.setProjectUnavailable(id, true)
 }
 
 export interface RelayReconnectDeps {

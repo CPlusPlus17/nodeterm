@@ -76,8 +76,10 @@ describe('arrange inside a group (source pins)', () => {
     // No second packing or fitting implementation in the branch.
     expect(groupBranch).not.toMatch(/\barrangeNodes\(|fitGroupToChildren\(|fitAncestorChain\(/)
     const write = groupBranch.slice(groupBranch.indexOf('if (next !== live)'))
-    expect(write.indexOf('setNodes(next)')).toBeGreaterThan(-1)
-    expect(write.indexOf('markDirty()')).toBeGreaterThan(write.indexOf('setNodes(next)'))
+    // `commitCtlNodes` is the one write for on- and off-screen projects (it marks dirty itself).
+    expect(write).toMatch(/^if \(next !== live\) commitCtlNodes\(next\)/)
+    // Off screen the lineage ropes are the owning project's, never the live canvas's.
+    expect(groupBranch).toContain('offCanvas ? offCanvas.project.ropes')
     // A refusal names the verb and never reports ok.
     expect(groupBranch).toContain('reply({ ok: false, error: `arrange: ${refusal}` })')
   })

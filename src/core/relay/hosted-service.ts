@@ -24,7 +24,8 @@
 //    the pin is written (a racing `team add-owner`) keeps it: the approval writes nothing.
 //  - A relay peer never saves the host's workspace (`workspace:save` is refused for every role): the
 //    host's canvas authority writes shared projects' content from canvas ops alone, and the share
-//    set it governs is read through `sharedProjectIds()` and announced by `onSharedChange`.
+//    set it governs is read through `sharedProjectIds()` and announced by `onSharedChange`. Every
+//    connected MEMBER (viewers too) is told the whole new set on `relay:hosted:shared-changed`.
 //  - The scheduler hears about EVERY session end. The core fires `onClose` only for ends the shell
 //    did not ask for; every end this service causes (deny, expiry, removal, a listener the
 //    scheduler closes) runs the same `ended` bookkeeping, at most once per session.
@@ -78,6 +79,12 @@ export type PendingClosedReason = HostedPendingClosedReason
 export type HostedStartResult = 'started' | 'no-team' | 'host-key-unreadable' | 'stopped'
 /** `not-running`: the key was rotated on a service that was not hosting, and hosting stays off. */
 export type HostedRotateResult = HostedStartResult | 'not-running'
+/** Hosting's first verdict: a listener is open (`up`), the backend refused to mint (`refused`, with
+ *  the scheduler's reason), or neither within the wait (`starting`). */
+export type HostingWait = 'up' | 'starting' | { refused: string }
+
+/** How often `waitForHosting` re-reads the scheduler's status. */
+const HOSTING_WAIT_POLL_MS = 250
 
 export interface HostedServiceDeps {
   dataDir: string
@@ -139,6 +146,12 @@ export interface HostedService {
   /** Replace the host key. Every teammate needs a new join code. A hosting service restarts on the
    *  new key and answers the start result; one that was not hosting stays off ('not-running'). */
   rotateKey(): Promise<HostedRotateResult>
+  /** Wait (bounded) for hosting's first verdict: an idle listener registered ('up'), the backend
+   *  refused to mint ({ refused: why }), or neither yet ('starting'). `start()` answers 'started'
+   *  before any mint, so this is the only way to learn a refusal synchronously. */
+  waitForHosting(timeoutMs: number): Promise<HostingWait>
+  /** This key's role in the team, or null for a non-member. Read from the team store on every call. */
+  roleOf(pubkeyB64: string): TeamRole | null
 }
 
 /** One relay listener and, once a peer bridges, its session. */
@@ -267,6 +280,13 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
   /** Connected owners ONLY, judged per send. Never a broadcast. */
   const tellOwners = (channel: string, payload: unknown): void => {
     for (const c of conns) if (c.open && memberRole(keyOf(c)) === 'owner') send(c, channel, payload)
+  }
+  /** Every connected session that is served at all, judged per send by `standing` (a removed member
+   *  gets nothing). Unlike `tellOwners` this reaches viewers, the viewer fallback of a session whose
+   *  pin write failed included: its tabs follow share changes too, and the payload is only what its
+   *  narrowed workspace already shows. */
+  const tellMembers = (channel: string, payload: unknown): void => {
+    for (const c of conns) if (c.open && c.session && standing(c, c.session) !== null) send(c, channel, payload)
   }
   const pendingList = (): HostedPending[] => [...pending.values()].map((p) => ({ ...p.info }))
 
@@ -614,6 +634,7 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
     },
     async share(projectId, on) {
       await team.update((d) => setShared(d, projectId, on))
+      tellMembers(IPC.relayHostedSharedChanged, { projectIds: [...team.current().sharedProjects] })
       // The share landed; a failing listener must not report it as failed to the admin.
       try {
         deps.onSharedChange?.()
@@ -656,6 +677,31 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
         if (!wasHosting) return 'not-running'
         return startNow(my)
       })
+    },
+    waitForHosting(timeoutMs) {
+      const verdict = (): HostingWait | null => {
+        if (!scheduler) return { refused: 'Hosting is not running on this server.' }
+        const s = scheduler.status()
+        if (s.state === 'backend-refused') {
+          return { refused: s.lastError ?? 'The nodeterm API refused to issue relay tokens.' }
+        }
+        if (s.idle > 0 || s.bridged > 0) return 'up'
+        return null
+      }
+      // Polled on the deps-injected timers, so a test's fake timers drive it like every other wait here.
+      return new Promise<HostingWait>((resolve) => {
+        const deadline = monoNow() + timeoutMs
+        const tick = (): void => {
+          const v = verdict()
+          if (v !== null) return resolve(v)
+          if (monoNow() >= deadline) return resolve('starting')
+          setT(tick, Math.min(HOSTING_WAIT_POLL_MS, Math.max(0, deadline - monoNow())))
+        }
+        tick()
+      })
+    },
+    roleOf(pubkeyB64) {
+      return memberRole(pubkeyB64) ?? null
     }
   }
   return api

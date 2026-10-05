@@ -714,7 +714,12 @@ function executeWindowsPlan(
   return JSON.parse(result.stdout) as string[];
 }
 
-describe.runIf(WINDOWS)("real Windows shell argv behavior", () => {
+// Each case spawns a real shell (and Git Bash a node child) once per prompt; on a loaded
+// windows-latest runner that sat right at the 5 s default and timed out at random. Same
+// Windows-sized budget as remote-atomic-write's real-shell cases.
+const REAL_SHELL_TIMEOUT_MS = 30_000
+
+describe.runIf(WINDOWS)("real Windows shell argv behavior", { timeout: REAL_SHELL_TIMEOUT_MS }, () => {
   const windowsCases: Array<[AgentLaunchDialect, string | null]> = [
     ["pwsh", PWSH],
     ["windows-powershell", WINDOWS_POWERSHELL],
@@ -821,6 +826,7 @@ describe.runIf(WINDOWS)("real Windows shell argv behavior", () => {
 
 describe.runIf(WINDOWS && WSL_DISTROS.length > 0)(
   "real WSL POSIX argv behavior",
+  { timeout: REAL_SHELL_TIMEOUT_MS },
   () => {
     it.each(WSL_DISTROS)(
       "%s delivers the metacharacter and Unicode matrix exactly",

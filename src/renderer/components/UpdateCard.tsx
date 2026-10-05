@@ -26,6 +26,21 @@ export function UpdateCard(): JSX.Element | null {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [minimized, setMinimized] = useState(false)
   const upToDateTimer = useRef<number | null>(null)
+  // Windows session host (issue #829): the installer refuses to run while the host is up, so the
+  // card offers the in-app "Prepare for update" flow. Main answers `unsupported` everywhere else.
+  const [canPrepare, setCanPrepare] = useState(false)
+  useEffect(() => {
+    let live = true
+    void window.nodeTerminal.updates
+      .prepareInspect()
+      .then((r) => {
+        if (live) setCanPrepare(r.kind !== 'unsupported')
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
 
   useEffect(() => {
     const offAvailable = window.nodeTerminal.updates.onAvailable((info) => {
@@ -128,6 +143,14 @@ export function UpdateCard(): JSX.Element | null {
   if (status.kind === 'idle') return null
 
   const openReleases = () => window.open(RELEASES_URL, '_blank', 'noopener')
+  const prepareButton = canPrepare ? (
+    <button
+      className="update-card__link"
+      onClick={() => window.dispatchEvent(new Event('nodeterm:prepare-update'))}
+    >
+      Prepare for update…
+    </button>
+  ) : null
   const dismiss = () => setStatus({ kind: 'idle' })
 
   if (minimized) {
@@ -217,6 +240,7 @@ export function UpdateCard(): JSX.Element | null {
           <button className="update-card__btn" onClick={openReleases}>
             {noSelfInstallCopy('manual-install', status.version).action}
           </button>
+          {prepareButton}
         </>
       )}
 
@@ -226,6 +250,7 @@ export function UpdateCard(): JSX.Element | null {
           <button className="update-card__btn" onClick={openReleases}>
             {noSelfInstallCopy('no-channel').action}
           </button>
+          {prepareButton}
         </>
       )}
 
@@ -267,6 +292,7 @@ export function UpdateCard(): JSX.Element | null {
           <button className="update-card__link" onClick={openReleases}>
             Download manually
           </button>
+          {prepareButton}
         </>
       )}
     </div>

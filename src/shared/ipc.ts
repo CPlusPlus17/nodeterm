@@ -28,6 +28,7 @@ export const IPC = {
   ptySessionAge: 'pty:session-age',
   ptyReadScrollback: 'pty:read-scrollback',
   ptySendText: 'pty:send-text',
+  ptySendChatPrompt: 'pty:send-chat-prompt',
   ptyTmuxStatus: 'pty:tmux-status',
   /** The foreground command of a node's tmux pane (`#{pane_current_command}`) — how the in-place
    *  agent restart sees that the CLI has exited and a shell owns the pane again. */
@@ -261,6 +262,38 @@ export const IPC = {
   stationHandoverList: 'station-handover:list',
   /** core → every renderer: the FULL current list on each change, never a delta. */
   stationHandoverChanged: 'station-handover:changed',
+  /** Live links (docs/live-links.md, src/core/watch-link/service.ts). OWNER-ONLY: every `watchLink:`
+   *  channel is host-only (host-control.ts), so no relay peer — hosted owners and editors included —
+   *  can create a link, which would publish a host terminal with the host's Pro. The viewer's own
+   *  tunnel protocol is `watch:*` (src/shared/watch-link/protocol.ts), deliberately NOT this
+   *  namespace. invoke: `create(CreateWatchLinkRequest)` → CreateWatchLinkResult. */
+  watchLinkCreate: 'watchLink:create',
+  /** invoke: the current links (WatchLinkView[]), for a renderer that booted after a push. */
+  watchLinkList: 'watchLink:list',
+  /** invoke: `(linkId)` — stop one link now (local first, then a best-effort server revoke). */
+  watchLinkRevoke: 'watchLink:revoke',
+  /** invoke: stop every link on this machine, then one server revoke-all. */
+  watchLinkRevokeAll: 'watchLink:revoke-all',
+  /** invoke: `(linkId, viewerId)` → boolean — end ONE viewer's connection (the link stays). */
+  watchLinkKick: 'watchLink:kick',
+  /** invoke: `(linkId, text)` → WatchChatMessage | null — the owner's reply on a Commenter link. */
+  watchLinkChatSend: 'watchLink:chat-send',
+  /** invoke: `(linkId)` → WatchChatMessage[] — this run's last messages (memory only). */
+  watchLinkChatHistory: 'watchLink:chat-history',
+  /** invoke: `(linkId, enabled)` → boolean — a Control link: turn typing on or off. */
+  watchLinkSetControl: 'watchLink:set-control',
+  /** invoke: `(linkId, password)` → boolean — a Control link: replace its password. */
+  watchLinkSetPassword: 'watchLink:set-password',
+  /** invoke: `(linkId)` → boolean — a Control link locked by wrong passwords: allow unlocking again. */
+  watchLinkAllowControl: 'watchLink:allow-control',
+  /** invoke: `(nodeId)` → ControlSupport — whether the node's terminal can take a Control link's input. */
+  watchLinkControlSupport: 'watchLink:control-support',
+  /** core → owner clients only: the full list on every change, never a delta. */
+  watchLinkState: 'watchLink:state',
+  /** core → owner clients only: `(linkId, WatchChatMessage)`. */
+  watchLinkChat: 'watchLink:chat',
+  /** core → owner clients only: a `WatchLinkNotice`. */
+  watchLinkNotice: 'watchLink:notice',
   /** Canvas sync: a client casts its local node mutations here; the core reflector
    *  (src/core/canvas-sync.ts) stamps each with the total order (`seq`) and sends it back out on the
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see
@@ -305,6 +338,10 @@ export const IPC = {
   appGetVersion: 'app:get-version',
   appUserDataDir: 'app:user-data-dir',
   appUpdatePolicy: 'app:update-policy',
+  // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
+  appUpdatePrepInspect: 'app:update-prep-inspect',
+  appUpdatePrepShutdown: 'app:update-prep-shutdown',
+  appUpdatePrepQuit: 'app:update-prep-quit',
   licenseActivate: 'license:activate',
   licenseDeactivate: 'license:deactivate',
   licenseStatus: 'license:status',
@@ -490,6 +527,10 @@ export const IPC = {
   filesSaveUpload: 'files:save-upload',
   /** Write a canvas image into the project's own `.nodeterm/images/` (see core/canvas-images.ts). */
   filesSaveCanvasImage: 'files:save-canvas-image',
+  /** Custom agent-alert sounds (issue #289) — stored under the core's data dir, addressed by kind. */
+  filesSaveAlertSound: 'files:save-alert-sound',
+  filesReadAlertSound: 'files:read-alert-sound',
+  filesClearAlertSound: 'files:clear-alert-sound',
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',
   sshList: 'ssh:list',
@@ -666,12 +707,29 @@ export const IPC = {
   relayHostedDeny: 'relay:hosted:deny',
   relayHostedInviteCode: 'relay:hosted:invite-code',
   relayHostedSelf: 'relay:hosted:self',
+  // Sent to EVERY connected member (viewers too) after `team share`/`unshare` lands: the team's
+  // whole shared set, so a joiner opens a tab for a newly shared project and closes the tab of one
+  // that stopped being shared — with no new code and no new approval.
+  relayHostedSharedChanged: 'relay:hosted:shared-changed',
   // The hosted teams THIS desktop has joined (src/main/remote/relay-bookmarks.ts). Unlike the
   // hosted verbs above, these two never ride the relay: they are raw `ipcMain` handlers in the
   // desktop main process, invisible to any relay peer. `relayHostedBookmarks` () lists them without
   // their device tokens; `relayHostedBookmarkRemove` (hostId) forgets one.
   relayHostedBookmarks: 'relay:hosted:bookmarks',
   relayHostedBookmarkRemove: 'relay:hosted:bookmark-remove',
+  // "Share with team" for an SSH project (src/main/remote-ssh/share-team.ts): each verb runs one
+  // generated command over the project's ControlMaster. These are raw `ipcMain` handlers, never on
+  // the platform, so a relay peer can never reach them. `shareTeamInstallOutput` is main → renderer,
+  // payload `{ projectId, text }`.
+  shareTeamProbe: 'share-team:probe',
+  shareTeamInstall: 'share-team:install',
+  shareTeamCancelInstall: 'share-team:cancel-install',
+  shareTeamInstallOutput: 'share-team:install-output',
+  shareTeamFlushMirror: 'share-team:flush-mirror',
+  shareTeamBootstrap: 'share-team:bootstrap',
+  shareTeamKillSessions: 'share-team:kill-sessions',
+  shareTeamResume: 'share-team:resume',
+  shareTeamSeedBookmark: 'share-team:seed-bookmark',
   handoffBuild: 'handoff:build',
   // Phone pairing (nodeterm iOS "scan a QR" flow): renderer starts/stops the one-shot LAN
   // listener; main pushes the completion result back over `pairing:done`. The per-device

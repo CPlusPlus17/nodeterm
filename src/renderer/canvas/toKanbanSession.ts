@@ -59,7 +59,9 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
       agentId: n.data.agentId as string | undefined,
       accountId: n.data.accountId as string | undefined,
       ssh: n.data.ssh as SshConnection | undefined,
-      sshRemoteTmux: !!n.data.sshRemoteTmux
+      sshRemoteTmux: !!n.data.sshRemoteTmux,
+      terminalFontSize: n.data.terminalFontSize as number | undefined,
+      agentSessionId: n.data.agentSessionId as string | undefined
     }
   }
 }

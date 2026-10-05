@@ -101,6 +101,12 @@ import {
   type SessionLife
 } from '../terminal/terminal-config'
 import { useXtermVisualSettings } from '../terminal/useXtermVisualSettings'
+import {
+  FONT_ZOOM_NODE_ATTR,
+  leavesSharedGlyphAtlas,
+  requestTerminalFontZoom,
+  terminalFontZoomAction
+} from '../terminal/terminal-font-zoom'
 import { ensureProjectLaunchInfo } from '../state/projectLaunchInfo'
 import { loseWebglContexts, registerWebglClient, type WebglClientHandle } from '../terminal/webgl-budget'
 import { quantizeCharSize } from '../terminal/char-size-quantize'
@@ -184,6 +190,7 @@ import {
   queryPaneWithin,
   registerAgentHibernate,
   registerAgentPause,
+  registerAgentUpdateExit,
   registerAgentRestart,
   clearEnvEligibility,
   restartEligibility,
@@ -205,6 +212,7 @@ import {
   LIVENESS_QUERY_MS
 } from '../terminal/agent-liveness'
 import { shouldAutoWake, shouldColdResume } from '../terminal/hibernation-policy'
+import { skipsColdResume, takeColdResumeSkip } from '../terminal/handed-off-resume'
 import { coldSelfHealVerdict } from '../terminal/cold-self-heal'
 import { WakeInputBuffer } from '../terminal/wake-input-buffer'
 import { FindBar } from '../components/FindBar'
@@ -216,10 +224,11 @@ import {
   useMdModeFocus
 } from '../terminal/useMdModeFocus'
 import { canvasOwnsMarkdownChord } from '../lib/markdownChord'
-import { IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEyeOff, IconGrid, IconMic, IconMoveTo, IconPlay, IconReload, IconSearch, IconSparkle } from '../components/icons'
+import { IconBroadcast, IconChat, IconChevronDown, IconChevronRight, IconClose, IconEye, IconEyeOff, IconGrid, IconMic, IconMoveTo, IconPlay, IconReload, IconSearch, IconSparkle } from '../components/icons'
 import { NodeLabels } from '../components/kanban/NodeLabels'
 import { MdViewHintButton } from '../components/MdViewHintButton'
 import { mdViewHint } from '../lib/mdViewHint'
+import { transcriptSessionFor } from '../lib/transcriptSession'
 import { Tooltip } from '../components/Tooltip'
 import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
@@ -241,6 +250,7 @@ import { isLiquidGlass } from '../lib/appTheme'
 import { readsClaudeTranscript } from '../lib/transcriptGates'
 import { liveProjectJumpTarget } from '../lib/projectJump'
 import { pushSessionRename } from '../lib/sessionRename'
+import { announceUserClosedSession } from '../lib/lastSessionClose'
 import { useSettings } from '../state/settings'
 import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../state/codexIdentity'
 import { ensureCodexLaunchCaps } from '../state/codexCli'
@@ -255,6 +265,7 @@ import { pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import type { AgentState } from '@shared/agents/normalize'
 import type { ClientId } from '@shared/presence'
 import { PresenceChips } from '../components/PresenceChips'
+import { LiveLinkChip } from '../components/LiveLinkChip'
 import { useAgentNodes } from '../state/agentNodes'
 import { useTerminalFocus } from '../state/terminalFocus'
 import { useProjects } from '../state/projects'
@@ -266,6 +277,8 @@ import { isRemoteSessionNode } from '@shared/worktree'
 import { useSession, useActiveSessionPresence } from '../session/session'
 import { isHostedReadOnly, useHostedReadOnly } from '../state/hostedTeams'
 import { isBrowserRuntime } from '../bridge/runtime'
+import { liveLinkUnavailable } from '../lib/liveLinkEntry'
+import { useWatchLinks } from '../state/watchLinks'
 import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
@@ -1010,6 +1023,13 @@ interface CoState {
    * nothing is typed or relaunched — it names the cause and offers an Antigravity node instead.
    */
   geminiRetired: boolean
+  /**
+   * This node's cold-restore relaunch was skipped once because its project was just taken back from
+   * a hosted team ("Open here anyway", `terminal/handed-off-resume.ts`): the team's server may be
+   * running the same conversation, and resuming it here too would put two processes on one
+   * transcript. A slim banner, like `lostSession`: the shell is alive and nothing was typed.
+   */
+  resumeSkipped: boolean
 }
 const NO_CO: CoState = {
   letterbox: false,
@@ -1020,7 +1040,8 @@ const NO_CO: CoState = {
   staleCwd: false,
   lostSession: false,
   launchTooLongBytes: null,
-  geminiRetired: false
+  geminiRetired: false,
+  resumeSkipped: false
 }
 const coStates = new Map<string, CoState>()
 const coSubs = new Map<string, (s: CoState) => void>()
@@ -1235,7 +1256,8 @@ function setCo(key: string, patch: Partial<CoState>): void {
     next.staleCwd === prev.staleCwd &&
     next.lostSession === prev.lostSession &&
     next.launchTooLongBytes === prev.launchTooLongBytes &&
-    next.geminiRetired === prev.geminiRetired
+    next.geminiRetired === prev.geminiRetired &&
+    next.resumeSkipped === prev.resumeSkipped
   )
     return
   coStates.set(key, next)
@@ -1355,7 +1377,17 @@ export function TerminalNode({
   // One shallow-compared subscription for the whole appearance slice — see useXtermVisualSettings.
   // Scoped to the OWNING project so its `terminal.theme` / `terminal.fontFamily` layer over the
   // global settings for this node, and for no other project's nodes.
-  const visual = useXtermVisualSettings(owningProjectId())
+  // `data.terminalFontSize` is this node's own ⌘+ / ⌘− size (issue #915), layered last by the hook
+  // so the card modal (which passes the same value) re-options through the identical path.
+  const visual = useXtermVisualSettings(owningProjectId(), data.terminalFontSize)
+  // Mirrored for the lifecycle effect, which builds a NEW xterm on a refresh (`respawnNonce`) or an
+  // offscreen revive without remounting — the [visual, glass] live-options effect does not re-run
+  // then, so the instance must be born with the effective appearance (the node's font override, the
+  // project's theme/font), not the bare global settings (review round 2 of #915).
+  const visualRef = useRef(visual)
+  visualRef.current = visual
+  // The GLOBAL size the shared glyph atlas is rasterized for (see `fontLeavesAtlas`).
+  const globalFontSize = useSettings((s) => s.settings.fontSize)
   // Glass terminals (Settings → Appearance): xterm paints no background and the node supplies a
   // translucent tint of THIS node's effective theme (lib/useTerminalGlass.ts).
   const { glass, tint, vars: glassVars } = useTerminalGlass(visual.terminalTheme)
@@ -1373,6 +1405,15 @@ export function TerminalNode({
   // mounted node right away instead of waiting for a remount. Search, Close and the worktree-move
   // button are absent from `isHidden`'s inventory and stay put whatever the list says.
   const hiddenHeaderButtons = useSettings((s) => s.settings.hiddenHeaderButtons)
+  // The header's "Share live link" button: the same availability rule every opener checks before the
+  // Pro gate (lib/liveLinkEntry). A primitive selector — the header must not re-render on every
+  // watch-link state push.
+  const activeLiveLinks = useWatchLinks((s) => s.links.length)
+  const shareLinkWhy = liveLinkUnavailable({
+    serverEdition: isBrowserRuntime(),
+    source: session.source,
+    activeLinks: activeLiveLinks
+  })
   const bodyRef = useRef<HTMLDivElement>(null)
   const middleClickPaste = useSettings((st) => st.settings.terminalMiddleClickPaste)
   // Chromium pastes the X PRIMARY selection into xterm's hidden textarea on middle click — a path
@@ -1463,7 +1504,9 @@ export function TerminalNode({
               send(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: id } })),
         copy: (text) => window.nodeTerminal.clipboard.writeText(text),
         openFile: (abs) =>
-          send(new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: activeIsSsh } })),
+          send(
+            new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: activeIsSsh, view: true } })
+          ),
         revealInExplorer: (abs) =>
           send(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } })),
         revealInOs: (abs) => window.nodeTerminal.shell.reveal(abs),
@@ -1704,7 +1747,13 @@ export function TerminalNode({
   // React Flow viewport, so the shared layer's glyphs — positioned from on-canvas geometry —
   // would paint somewhere the node no longer is. Routes through the same setup/teardown the
   // collapse/⌘M/stacking/drag reasons always used; v1 deliberately forces the DOM/WebGL path.
-  const glyphOff = collapsed || mdMode || glyphOpaque || dragging || focused
+  // `fontLeavesAtlas` is a MUST-BE-OPAQUE reason too (issue #915 review): the shared atlas is
+  // rasterized for the GLOBAL font with a cell fixed at `register`, so a node rendering at its own
+  // ⌘+/⌘− size would keep painting old-size glyphs over a pty that was resized to the new cell.
+  // Holding it off the shared canvas makes it paint its own pixels; clearing the override rejoins.
+  // `visual` is declared above, so this reads the same effective size xterm is re-optioned with.
+  const fontLeavesAtlas = leavesSharedGlyphAtlas(visual.fontSize, globalFontSize)
+  const glyphOff = collapsed || mdMode || glyphOpaque || dragging || focused || fontLeavesAtlas
   const glyphOffRef = useRef(glyphOff)
   glyphOffRef.current = glyphOff
   // The NOT-ON-SCREEN half on its own. `setupGlyph`'s gate needs to tell the two reasons apart:
@@ -2182,13 +2231,21 @@ export function TerminalNode({
         .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
         .join(', ')
     : ''
+  // Which session this node's transcript READERS look at: the hook-confirmed id, else the id the
+  // node was launched with (`data.agentSessionId`) — ONE rule shared with the kanban card modal
+  // (lib/transcriptSession.ts). A fallback reads strictly by id and says so in the chat panel.
+  const transcript = transcriptSessionFor({
+    live: status?.sessionId,
+    persisted: data.agentSessionId,
+    cwd: (data.cwd as string) || undefined
+  })
   // Use the chat panel only for a chat-capable agent with a known session; otherwise the
   // markdown-of-output view (computed in the capture effect below) is shown as a fallback.
   // `chatAvailable` is split out because the label-row ⌘M hint names the face BEFORE it is open:
   // one value feeds both, so the hint cannot say "Chat view" while the chord opens markdown.
-  const chatAvailable = showChat && !!status?.sessionId
+  const chatAvailable = showChat && !!transcript.sessionId
   const useChat = mdMode && chatAvailable
-  useContextEnsure(session.api.context, id, agentId, status?.sessionId, (data.cwd as string) || undefined, accountForReads)
+  useContextEnsure(session.api.context, id, agentId, transcript.sessionId, transcript.cwd, accountForReads)
   const updateNodeInternals = useUpdateNodeInternals()
 
   const [searchOpen, setSearchOpen] = useState(false)
@@ -2263,6 +2320,7 @@ export function TerminalNode({
   }
   const dismissStaleCwd = (): void => setCo(termKey, { staleCwd: false })
   const dismissLostSession = (): void => setCo(termKey, { lostSession: false })
+  const dismissResumeSkipped = (): void => setCo(termKey, { resumeSkipped: false })
   const dismissGeminiRetired = (): void => setCo(termKey, { geminiRetired: false })
   // Canvas owns node creation; a terminal node has no direct line to it (same pattern as the
   // file-manager's `nodeterm:open-terminal`). The new node lands beside this one, in its frame.
@@ -2401,7 +2459,8 @@ export function TerminalNode({
     const s = useSettings.getState().settings
     // Appearance comes from ONE place, shared with the kanban card modal's viewer of this same
     // session (`ModalTerminal`) — see `xtermOptionsFromSettings`.
-    const term = parked?.term ?? new Terminal(xtermOptionsFromSettings(s, isLiquidGlass(s.appTheme)))
+    const term =
+      parked?.term ?? new Terminal(xtermOptionsFromSettings(visualRef.current, isLiquidGlass(s.appTheme)))
     // A hosted team's Viewer/Commenter watches and never types: keystrokes and pastes are not taken
     // at all (the host refuses pty:write for them anyway). Set only for such a tab — every other
     // session never touches the option. The role is known before the session exists (relay-tab).
@@ -3273,7 +3332,10 @@ export function TerminalNode({
         if (isDir) window.dispatchEvent(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } }))
         else
           window.dispatchEvent(
-            new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: projectFs().ssh } })
+            // `view`: a link asks to SEE the file, so a local .html renders as a page (Canvas.openFile).
+            new CustomEvent('nodeterm:open-file', {
+              detail: { path: abs, ssh: projectFs().ssh, view: true }
+            })
           )
       }
       // Shift+Cmd/Ctrl+click → the OS default app (a directory → the OS file manager). The same
@@ -3351,6 +3413,22 @@ export function TerminalNode({
     // dispatcher that honors the policy for every other chord, so it owes the check itself.
     // `liveProjectJumpTarget` is the same decision Canvas's handler makes.
     term.attachCustomKeyEventHandler((e) => {
+      // ⌘+ / ⌘− / ⌘0 → THIS terminal's font size (issue #915), only when the user opted in
+      // (`terminalFontZoomKeys`). First, and swallowed: off-mac xterm would otherwise write ^_ for
+      // Ctrl+− to the pty, and a prevented event keeps the window dispatcher's canvas ⌘0 out of it.
+      // Canvas applies the step (the one writer — see terminal-font-zoom.ts); the live re-option
+      // effect below then re-fits and reports the new grid like any font change. The desktop ⌘0
+      // never arrives here (main's before-input-event claims it); Canvas resolves that one from
+      // focus via FONT_ZOOM_NODE_ATTR on the xterm host.
+      const fontZoom = terminalFontZoomAction(e, {
+        enabled: useSettings.getState().settings.terminalFontZoomKeys,
+        isMac
+      })
+      if (fontZoom) {
+        e.preventDefault()
+        requestTerminalFontZoom(id, fontZoom)
+        return false
+      }
       const ownsProjectJump =
         terminalShortcutPolicy() !== 'terminal-first' && liveProjectJumpTarget(e) !== null
       const registryOwns = terminalChordBubbles(
@@ -3590,7 +3668,8 @@ export function TerminalNode({
               lostSession: false,
               launchTooLongBytes: null,
               letterbox: false,
-              geminiRetired: false
+              geminiRetired: false,
+              resumeSkipped: false
             })
             if (!disposed) term.write(`\r\n\x1b[90m[${refusal.message}]\x1b[0m\r\n`)
             return
@@ -3643,6 +3722,8 @@ export function TerminalNode({
         // cold-restore branch below can raise it) so a respawn that resumes cleanly — or any
         // warm reattach, which never reaches that branch at all — takes the old banner down.
         setCo(termKey, { lostSession: false })
+        // …and the skipped-resume notice, for the same reason.
+        setCo(termKey, { resumeSkipped: false })
         // Catch up a size change that landed while the spawn was in flight (applyFit skips the
         // IPC until sessionId is set, and the observer won't re-fire without another change).
         applyFit()
@@ -4026,6 +4107,15 @@ export function TerminalNode({
         if (data.clearEnv) {
           updateNodeData(id, { clearEnv: undefined })
         }
+        // A project just taken back from a hosted team ("Open here anyway") skips this relaunch
+        // ONCE (see terminal/handed-off-resume.ts). The mark is taken here, warm or cold, so it
+        // never outlives this mount; never by a relay tab's node, which shares the node id and is
+        // the team's own view of the same session.
+        const skipResume = skipsColdResume({
+          coldStart,
+          canColdRestore,
+          marked: session.source !== 'relay' && takeColdResumeSkip(id)
+        })
         // Run a one-shot command on first open (e.g. "gh auth login" or the agent CLI), then
         // forget it.
         if (data.initialCommand) {
@@ -4049,6 +4139,10 @@ export function TerminalNode({
               if (outcome === 'line-too-long') setCo(termKey, { launchTooLongBytes: lineBytes(command) })
             }
           })
+        } else if (skipResume) {
+          // Say so rather than leaving a bare shell under an agent badge in silence. Resuming stays
+          // the user's explicit choice.
+          if (!life.dead) setCo(termKey, { resumeSkipped: true })
         } else if (coldStart && canColdRestore) {
           // Cold restart of an agent node: the live agent is gone, so re-launch it. Resume the
           // prior conversation by its session id when we have one; otherwise start the agent
@@ -4755,6 +4849,35 @@ export function TerminalNode({
         return 'paused'
       })
     })
+    // Prepare-for-update (Windows session host, issue #829): ask an idle agent to quit cleanly so
+    // its conversation is saved before the host ends every session. The same exit half as Pause,
+    // with the same refusals (busy, not resumable, no session id, CLI not in this pane), but it
+    // records the node as SLEEPING rather than PAUSED: the update ends the session anyway, and on
+    // the next launch the cold restore (`fresh` clears `hibernated`) resumes it with `--resume`.
+    const unregisterUpdateExit = registerAgentUpdateExit(
+      id,
+      guardConcurrentRestart(id, async (): Promise<ExitPhaseOutcome> => {
+        const st = useAgentStatus.getState().byId[id]
+        const agentSessionId = st?.sessionId
+        const gate = restartEligibility(agentId, st?.state, agentSessionId)
+        if (!gate.ok || !agentId || !agentSessionId || !restartTarget()) return 'not-eligible'
+        if (!agentProcessInPane(agentId, st)) return 'exited'
+        if (decideHibernateExit(await readPaneOwner(), agentId, paneBinaries()) !== 'agent-owns-pane')
+          return 'not-eligible'
+        const outcome = await performExitPhase({
+          agentId,
+          sessionId: agentSessionId,
+          io: restartIo,
+          paneCommand: () => api.pty.paneCommand(id),
+          isLive: restartTarget
+        })
+        if (outcome === 'exited') {
+          useAgentStatus.getState().setHibernatedContext(id, captureWakeContext(await readPaneOwner()))
+          useAgentStatus.getState().setHibernated(id, true)
+        }
+        return outcome
+      })
+    )
 
     // Coalesce observer bursts: dragging the NodeResizer fires per animation frame, and every
     // call is a full cell-geometry measure + a resize IPC → node-pty → tmux (which redraws the
@@ -4938,6 +5061,7 @@ export function TerminalNode({
       // node as unwired (`planHibernation` refuses it) and the wake finds nothing to resume into.
       unregisterHibernate()
       unregisterPause()
+      unregisterUpdateExit()
       observer.disconnect()
       rootObserver.disconnect()
       // The visibility observer is NOT disconnected here — it is mount-stable and must outlive an
@@ -6074,9 +6198,12 @@ export function TerminalNode({
             SSH {(data.ssh as SshConnection).user}@{(data.ssh as SshConnection).host}
           </span>
         ) : null}
-        {showUsage && <ContextMeter sessionId={status?.sessionId ?? null} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
+        {showUsage && <ContextMeter sessionId={transcript.sessionId ?? null} fromLaunchId={transcript.fallback} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
         {/* Who else is in this node. Subscribes to presence itself — see PresenceChips. */}
         <PresenceChips nodeId={id} />
+        {/* This terminal is broadcast by a live link — never hideable (live-link.guard.test.ts).
+            Only through the LOCAL session: a relay tab's node with the same id is not ours (R57). */}
+        <LiveLinkChip nodeId={id} source={session.source} />
         {status?.state === 'working' && (
           <span className="term-node__status term-node__status--busy" title={`${agentLabel} is working`}>
             <AgentMascot agentId={agentId} />
@@ -6365,6 +6492,28 @@ export function TerminalNode({
             </button>
           </Tooltip>
         )}
+        {!isHidden('share-link', hiddenHeaderButtons) && (
+          <Tooltip label={shareLinkWhy ?? 'Share live link'}>
+            {/* The node menu's "Share live link…" row as a header button. Canvas opens the dialog
+                (`nodeterm:live-link`) after re-checking availability and the Pro gate; a node only
+                ever lives in the active project's canvas, so that is the project it names. */}
+            <button
+              className="term-node__share nodrag"
+              aria-label="Share live link"
+              disabled={!!shareLinkWhy}
+              onClick={(e) => {
+                e.stopPropagation()
+                window.dispatchEvent(
+                  new CustomEvent('nodeterm:live-link', {
+                    detail: { nodeId: id, title: data.title, projectId: owningProjectId() }
+                  })
+                )
+              }}
+            >
+              <IconBroadcast />
+            </button>
+          </Tooltip>
+        )}
         {!isHidden('hide-fanout', hiddenHeaderButtons) && (
           <Tooltip label={hideFanout ? 'Show cards & connections' : 'Hide cards & connections'}>
             <button
@@ -6406,6 +6555,10 @@ export function TerminalNode({
             aria-label="Close"
             onClick={() => {
               transport.destroy(id)
+              // Issue #848: THIS click — and no other teardown — may offer to close the project
+              // when it removes the last session node. Announced before `deleteElements`, so
+              // Canvas still sees the node it is deciding about (lib/lastSessionClose).
+              announceUserClosedSession(id)
               deleteElements({ nodes: [{ id }] })
             }}
           >
@@ -6456,6 +6609,7 @@ export function TerminalNode({
         <div
           className={`term-node__xterm nodrag nowheel${co.letterbox ? ' letterboxed' : ''}`}
           ref={bodyRef}
+          {...{ [FONT_ZOOM_NODE_ATTR]: id }}
         />
         {uploadNote && (
           <div className={`term-node__upload${uploadNote.failed ? ' failed' : ''}`}>
@@ -6620,6 +6774,30 @@ export function TerminalNode({
               </button>
             </div>
           )}
+        {/* Resume skipped once after "Open here anyway" on a project handed to a hosted team: the
+            same slim banner as lostSession, and it yields to the same bigger problems. */}
+        {!co.closed &&
+          !co.ended &&
+          !co.spawnError &&
+          !co.offline &&
+          !co.staleCwd &&
+          co.resumeSkipped &&
+          !offscreenDown && (
+            <div className="term-node__stalecwd nodrag">
+              <span className="term-node__stalecwd-text">
+                Not resumed: this project was shared with a team, and its server may be running this
+                conversation. Resume it here only once it has stopped there.
+              </span>
+              <button
+                className="term-node__stalecwd-dismiss"
+                onClick={dismissResumeSkipped}
+                title="Dismiss"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
         {/* Gemini CLI retired for personal accounts: the same slim banner as lostSession, and
             yields to the same bigger problems. Two actions — an Antigravity node (Google's
             replacement) beside this one, and Google's migration guide — plus dismiss. */}
@@ -6667,7 +6845,8 @@ export function TerminalNode({
             <Suspense fallback={<ChatPanelFallback />}>
               <ChatPanel
                 nodeId={id}
-                sessionId={status?.sessionId}
+                sessionId={transcript.sessionId}
+                sessionFallback={transcript.fallback}
                 cwd={data.cwd as string | undefined}
                 // A READER (the ⌘M transcript view) takes the account the session actually RUNS
                 // as, never the creation-time one, so a plain terminal launched under

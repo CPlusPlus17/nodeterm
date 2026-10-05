@@ -1156,7 +1156,7 @@ export class HeadlessNodeFactory {
     verified: boolean
   ): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
-      const flagError = unsupportedFlags(args, new Set(['from', 'to']))
+      const flagError = unsupportedFlags(args, new Set(['from', 'to', 'one-way']))
       if (flagError) return { ok: false, error: `link: ${flagError}` }
       if (!verified) {
         return {
@@ -1203,7 +1203,9 @@ export class HeadlessNodeFactory {
           const node = byId.get(id)
           return node ? headlessLinkEndpoint(node, this.deps.agentIdOf) : null
         },
-        existing
+        existing,
+        // Valueless flag: the shim sends `arg.one-way=` (present, empty).
+        { oneWay: 'one-way' in args }
       )
       if (!plan.edges.length) {
         return {
@@ -1222,7 +1224,9 @@ export class HeadlessNodeFactory {
         : ''
       return {
         ok: true,
-        message: `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
+        message: 'one-way' in args
+          ? `linked one-way: ${from} reads ${plan.linked.join(', ')}${note}`
+          : `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
         result: { from, linked: plan.linked, skipped: plan.skipped }
       }
     })

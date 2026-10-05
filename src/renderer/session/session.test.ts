@@ -17,6 +17,8 @@ import {
   activeSessionPresence,
   presenceForProject,
   projectIdsBoundToApi,
+  unbindProject,
+  projectIdsBoundToSession,
 } from './session'
 import { defaultPresence } from '../state/presence'
 import type { NodeTerminalApi } from '@shared/types'
@@ -343,5 +345,26 @@ describe('projectIdsBoundToApi (a relay connection -> the tabs it serves)', () =
     expect(projectIdsBoundToApi(fakeApi)).toEqual([])
     disposeSession(a.id)
     expect(projectIdsBoundToApi(apiA)).toEqual([])
+  })
+})
+
+describe('unbindProject / projectIdsBoundToSession (one session serving several tabs)', () => {
+  it('unbinds ONE project and leaves the session serving its other tabs', () => {
+    const local = createSession('local', fakeApi, 'This Mac')
+    setActiveSession(local.id)
+    const relay = createSession('relay', { marker: 'relay' } as unknown as NodeTerminalApi, 'Team')
+    bindProjectToSession('pa', relay.id)
+    bindProjectToSession('pb', relay.id)
+    expect(projectIdsBoundToSession(relay.id)).toEqual(['pa', 'pb'])
+
+    unbindProject('pa')
+    expect(projectIdsBoundToSession(relay.id)).toEqual(['pb'])
+    expect(sessionForProject('pa')).toBe(local) // unbound → falls back to local
+    expect(sessionForProject('pb')).toBe(relay)
+    expect(sessionCount()).toBe(2) // the session itself lives on
+
+    unbindProject('never-bound') // no-op
+    expect(projectIdsBoundToSession(relay.id)).toEqual(['pb'])
+    expect(projectIdsBoundToSession('relay-999')).toEqual([])
   })
 })

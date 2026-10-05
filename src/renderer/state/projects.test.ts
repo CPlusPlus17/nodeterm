@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useProjects } from './projects'
+import { sameSshEndpoint, useProjects } from './projects'
+import { PROJECT_NAME_MAX } from '@shared/project-name'
 
 beforeEach(() => {
   useProjects.getState().hydrate({ version: 2, activeProjectId: '', projects: [] })
@@ -221,6 +222,26 @@ describe('openSshProject', () => {
   })
 })
 
+// The one "same server folder" rule: openSshProject's dedupe and Canvas's handed-off check before
+// it must agree, or the check would look at one project and the store would reopen another.
+describe('sameSshEndpoint', () => {
+  const at = (server: object, remoteCwd = '~/app') => ({ server, remoteCwd }) as never
+  const base = { id: 's1', label: 'niova', host: 'h', user: 'root' }
+
+  it('ignores the server entry id and label', () => {
+    expect(sameSshEndpoint(at(base), at({ ...base, id: 's2', label: 'renamed' }))).toBe(true)
+  })
+  it('an unset port is port 22', () => {
+    expect(sameSshEndpoint(at(base), at({ ...base, port: 22 }))).toBe(true)
+    expect(sameSshEndpoint(at(base), at({ ...base, port: 2222 }))).toBe(false)
+  })
+  it('host, user and remoteCwd must all match', () => {
+    expect(sameSshEndpoint(at(base), at({ ...base, host: 'other' }))).toBe(false)
+    expect(sameSshEndpoint(at(base), at({ ...base, user: 'alice' }))).toBe(false)
+    expect(sameSshEndpoint(at(base), at(base, '~/web'))).toBe(false)
+  })
+})
+
 describe('setProjectColor', () => {
   it('updates the project color', () => {
     const p = useProjects.getState().addProject('demo', '/tmp/demo')
@@ -328,5 +349,77 @@ describe('rebindNode', () => {
     seed()
     useProjects.getState().rebindNode('p1', 'n1', { agentId: 'claude' })
     expect(stored('p1', 'n1')?.accountId).toBe('a')
+  })
+})
+
+describe('renameProject', () => {
+  it('cuts a pasted wall of text to PROJECT_NAME_MAX (issue #940)', () => {
+    const p = useProjects.getState().addProject('my-app', '/Users/me/dev/my-app')
+    const pasted = 'Please refactor the session sidebar so that '.repeat(64)
+    useProjects.getState().renameProject(p.id, pasted)
+    const name = useProjects.getState().projects.find((q) => q.id === p.id)!.name
+    expect(name.length).toBeLessThanOrEqual(PROJECT_NAME_MAX)
+    expect(pasted.startsWith(name)).toBe(true)
+  })
+
+  it('trims the name, and leaves the project alone for a blank one', () => {
+    const p = useProjects.getState().addProject('my-app', '/Users/me/dev/my-app')
+    useProjects.getState().renameProject(p.id, '  renamed  ')
+    expect(useProjects.getState().projects.find((q) => q.id === p.id)!.name).toBe('renamed')
+    useProjects.getState().renameProject(p.id, '   ')
+    expect(useProjects.getState().projects.find((q) => q.id === p.id)!.name).toBe('renamed')
+  })
+})
+
+describe('addProject — the name a new project gets (issue #940)', () => {
+  it('cuts an over-long name, as a rename does', () => {
+    const p = useProjects.getState().addProject('y'.repeat(PROJECT_NAME_MAX * 3), '/Users/me/dev/x')
+    expect(p.name).toBe('y'.repeat(PROJECT_NAME_MAX))
+  })
+
+  it('keeps the default name when none, or a blank one, is given', () => {
+    expect(useProjects.getState().addProject().name).toMatch(/^Project \d+$/)
+    expect(useProjects.getState().addProject('   ').name).toMatch(/^Project \d+$/)
+  })
+})
+
+describe('closeProject on a background project (issue #848: the offer outlives a tab switch)', () => {
+  it('closes only the named project and leaves the active one and its nodes alone', () => {
+    const a = useProjects.getState().addProject('a')
+    const b = useProjects.getState().addProject('b')
+    useProjects.getState().setActive(b.id)
+    const activeBefore = useProjects.getState().getProject(b.id)
+    useProjects.getState().closeProject(a.id)
+    const s = useProjects.getState()
+    expect(s.activeProjectId).toBe(b.id)
+    expect(s.getProject(a.id)?.closed).toBe(true)
+    expect(s.getProject(b.id)).toBe(activeBefore)
+  })
+})
+
+describe('setHandedOffTo', () => {
+  it('sets and clears the handover mark, and toWorkspace carries it to the save', () => {
+    const p = useProjects.getState().addProject('box', undefined, {
+      server: { host: 'box', user: 'alice' },
+      remoteCwd: '~/proj'
+    })
+    useProjects.getState().setHandedOffTo(p.id, { at: 5 })
+    expect(useProjects.getState().getProject(p.id)?.handedOffTo).toEqual({ at: 5 })
+    useProjects.getState().setHandedOffTo(p.id, { hostId: 'H', projectId: 'project-9', at: 6 })
+    const saved = useProjects.getState().toWorkspace().projects.find((x) => x.id === p.id)
+    expect(saved?.handedOffTo).toEqual({ hostId: 'H', projectId: 'project-9', at: 6 })
+    useProjects.getState().setHandedOffTo(p.id, undefined)
+    const cleared = useProjects.getState().getProject(p.id)!
+    // Cleared means absent, not `undefined`: the index entry must lose the field.
+    expect('handedOffTo' in cleared).toBe(false)
+  })
+
+  it('leaves other projects alone and ignores an unknown id', () => {
+    const a = useProjects.getState().addProject('a', '/a')
+    const b = useProjects.getState().addProject('b', '/b')
+    useProjects.getState().setHandedOffTo(a.id, { at: 1 })
+    useProjects.getState().setHandedOffTo('nope', { at: 2 })
+    expect(useProjects.getState().getProject(b.id)?.handedOffTo).toBeUndefined()
+    expect(useProjects.getState().projects).toHaveLength(2)
   })
 })

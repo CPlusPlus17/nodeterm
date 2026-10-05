@@ -2447,6 +2447,7 @@ body,
 .term-node__close,
 .term-node__move-worktree,
 .term-node__hide-fanout,
+.term-node__share,
 .term-node__tidy-fanout {
   display: inline-flex;
   align-items: center;
@@ -2476,6 +2477,7 @@ body,
 .term-node__maximize:hover,
 .term-node__move-worktree:hover,
 .term-node__hide-fanout:hover,
+.term-node__share:hover:not(:disabled),
 .term-node__tidy-fanout:hover {
   background: rgba(var(--tint-rgb), 0.1);
   color: var(--text);
@@ -2487,7 +2489,8 @@ body,
   color: var(--danger);
 }
 
-.term-node__ai:disabled {
+.term-node__ai:disabled,
+.term-node__share:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -3248,6 +3251,16 @@ body,
 .term-chat__hint {
   opacity: 0.6;
 }
+/* The view is reading the node's persisted launch id, not a hook-confirmed one (ChatPanel
+   `sessionFallback`): one quiet line, never an alarm — it is usually the right conversation. */
+.term-chat__fallback-note {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
+}
 .term-chat__msgs {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -3325,6 +3338,18 @@ body,
   border-radius: 14px;
   background: rgba(var(--tint-rgb), 0.09);
   color: var(--text-strong);
+}
+/* Sent while the agent was working: it sits in the CLI's own queue until the transcript shows it
+   (ChatPanel's queuedRef). A dashed outline on the same bubble, dimmed, with a "Queued" caption. */
+.term-chat__msg--queued {
+  background: none;
+  border: 1px dashed rgba(var(--tint-rgb), 0.35);
+  color: var(--muted);
+}
+.term-chat__queued-label {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
 }
 .term-chat__msg--assistant {
   align-self: stretch;
@@ -3407,6 +3432,14 @@ body,
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* Same treatment as the markdown view's quotes (.term-md__content blockquote); without it a quote
+   in the thread was only the browser's default indent. */
+.term-chat__text blockquote {
+  margin: 6px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
 /* A tool call in the unbubbled assistant flow: a quiet chip on the panel itself (a light tint and a
    hairline), not a dark box nested in a bubble that is no longer there. */
 .term-chat__tool {
@@ -3451,6 +3484,30 @@ body,
   font-family: ui-monospace, monospace;
   font-size: 11px;
   opacity: 0.85;
+}
+/* The agent's OWN dialog is on the pane's screen (ChatPanel's `screenBlock`): the sentence saying
+   where to answer it, then the dialog's lines as the terminal shows them. Shaped like a tool card
+   so it reads as part of the thread; monospace because the options are laid out in columns. */
+.term-chat__screen-block {
+  margin: 6px 0;
+  padding: 10px 12px;
+  background: rgba(var(--tint-rgb), 0.04);
+  border: 1px solid rgba(var(--tint-rgb), 0.08);
+  border-left: 2px solid var(--warn);
+  border-radius: 8px;
+  min-width: 0;
+}
+.term-chat__screen-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.term-chat__screen-block-text {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
 }
 /* An expanded tool card: a tool part with a readable `body` (an ExitPlanMode plan, an
    AskUserQuestion question). Same tint as the chip so it still reads as "the agent's tool call",
@@ -4065,14 +4122,22 @@ body,
 
 /* ---- Welcome / empty state ---- */
 .welcome {
+  /* The card row's width — four 150px cards and three 14px gaps. The lists below take exactly
+     this width so their outer edges line up with the first and last card. */
+  --welcome-row: calc(4 * 150px + 3 * 14px);
   position: absolute;
   inset: 0;
   z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* `safe`: when the content is taller than the window (stacked lists on a phone), start at the
+     top and scroll instead of centering the overflow off both edges where nothing can reach it. */
+  justify-content: safe center;
   gap: 6px;
+  padding: 24px 16px;
+  box-sizing: border-box;
+  overflow-y: auto;
   background: var(--canvas-bg);
 }
 
@@ -4139,11 +4204,56 @@ body,
   color: var(--accent);
 }
 
-/* ---- "Recently closed" projects list on the start screen ---- */
-.welcome__recent {
-  margin-top: 28px;
+/* ---- The lists under the cards: Recent conversations | Recently closed ----
+   ONE container as wide as the card row, centered with it (the page's flex column centers it).
+   Each section used to be its own centered max-width box, so the two lists had different widths
+   and neither lined up with the cards. Two equal columns; a lone section spans both. */
+.welcome__lists {
   width: 100%;
-  max-width: 480px;
+  max-width: var(--welcome-row);
+  margin-top: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 28px;
+  align-items: start;
+}
+
+.welcome__lists:empty {
+  display: none;
+}
+
+.welcome__lists > :only-child {
+  grid-column: 1 / -1;
+}
+
+/* Below the card row's own width (642px + the 16px page gutters) the four cards no longer fit
+   on one line: they become a 2×2 grid as wide as the lists, and the lists stack in reading order
+   — Recent conversations, then Recently closed. Above it two ~314px columns always fit, because
+   the container IS the card row. */
+@media (max-width: 700px) {
+  .welcome__cards {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    width: 100%;
+    max-width: var(--welcome-row);
+  }
+
+  .welcome__card {
+    width: auto;
+    min-width: 0;
+  }
+
+  .welcome__lists {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- "Recently closed" projects list on the start screen ----
+   Every line in a section — title, folder headers, rows, "Show all" — puts its text 10px in from
+   the column edge, and trailing bits (age, action, ×) sit 10px in from the right edge. */
+.welcome__recent {
+  min-width: 0;
 }
 
 .welcome__recent-title {
@@ -4153,7 +4263,7 @@ body,
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 8px;
-  padding-left: 2px;
+  padding: 0 10px;
 }
 
 /* Issue #506: shown only past RECENT_FILTER_THRESHOLD rows, where the list is already
@@ -4164,7 +4274,8 @@ body,
   box-sizing: border-box;
   margin-bottom: 6px;
   font-size: 12px;
-  padding: 5px 8px;
+  /* 9px + the 1px border = the shared 10px text inset. */
+  padding: 5px 9px;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -4189,7 +4300,8 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  /* 9px + the 1px (hover) border = the shared 10px text inset. */
+  padding: 8px 9px;
   border-radius: 8px;
   border: 1px solid transparent;
   color: var(--text);
@@ -4294,13 +4406,24 @@ body,
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
   padding: 2px 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--muted);
 }
 
+.welcome__convs-folder-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .welcome__convs-folder .welcome__recent-path {
+  flex: 1 1 0;
+  min-width: 0;
   font-weight: 400;
 }
 
@@ -4313,23 +4436,32 @@ body,
   white-space: nowrap;
 }
 
+/* Age and action share ONE slot at the row's right edge: the age at rest, the action on hover /
+   focus. An invisible-but-present action used to reserve its width after the age, so every
+   timestamp stopped short of the edge by a different amount ("Resume" vs "Go to node"). */
 .welcome__conv-age {
   flex: none;
+  margin-left: auto;
   font-size: 11px;
   color: var(--muted);
 }
 
 .welcome__conv-action {
+  display: none;
   flex: none;
+  margin-left: auto;
   font-size: 11px;
   color: var(--accent);
-  opacity: 0;
-  transition: opacity 0.12s;
+}
+
+.welcome__conv:hover .welcome__conv-age,
+.welcome__conv:focus-visible .welcome__conv-age {
+  display: none;
 }
 
 .welcome__conv:hover .welcome__conv-action,
 .welcome__conv:focus-visible .welcome__conv-action {
-  opacity: 1;
+  display: inline;
 }
 
 .welcome__conv--disabled {
@@ -4342,8 +4474,10 @@ body,
 }
 
 .welcome__convs-more {
-  margin-top: 4px;
+  display: block;
+  margin: 4px 0 0;
   padding: 2px 10px;
+  text-align: left;
   font-size: 11px;
   color: var(--muted);
   background: transparent;
@@ -6457,6 +6591,32 @@ body,
 
 .consent-btn.primary:hover {
   background: var(--accent-hover);
+}
+
+.update-prep__title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Prepare-for-update (issue #829): the busy-session list and the stop summary. No fill of its own:
+   it sits inside `.confirm`, which owns the surface in every appearance. */
+.update-prep__list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.update-prep__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .confirm__msg {
@@ -9348,7 +9508,10 @@ button.group-node__setup:disabled {
 /* Content-sized (not flex:1): the row click navigates to the group on the canvas, so the
    rename target must be only as wide as the name itself. */
 .ss-subgroup__name { flex: 0 1 auto; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ss-subgroup__head .ss-group__count { margin-left: auto; }
+/* Signal badges + count ride together at the right edge of a frame row. The count alone used to
+   carry `margin-left: auto`; with badges beside it that would strand them against the (truncating)
+   name, so the whole tail is one shrink-to-fit block instead. */
+.ss-subgroup__tail { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 .ss-subgroup__ai { opacity: 0; border: none; background: transparent; color: var(--text); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px; flex: 0 0 auto; }
 .ss-subgroup__head:hover .ss-subgroup__ai { opacity: 0.6; }
 .ss-subgroup__ai:hover { opacity: 1 !important; color: var(--accent); }
@@ -11487,6 +11650,635 @@ button.pull-checks__name {
   background: var(--state-warning);
   border-color: transparent;
 }
+/* Live link chip — "this terminal is being broadcast" (components/LiveLinkChip.tsx), one component on
+   the node header, the kanban card, the card modal and the sessions sidebar row. The dot reads the
+   ERROR role on purpose (task-14-17 H28): the spec asks for a red broadcast dot, and a role of its own
+   would have to pass styles.palette.test's one-colour-per-meaning pins. The label stays ink (muted
+   when refused, as the spec asks). Never animated: a chip that pulsed for as long as a link lives
+   would hold the compositor's frame loop open (CLAUDE.md, Idle energy). */
+.live-chip {
+  --live-tone: var(--state-error);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--live-tone) 45%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--live-tone) 12%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.live-chip:hover {
+  background: color-mix(in srgb, var(--live-tone) 20%, transparent);
+}
+.live-chip__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live-tone);
+}
+/* Reconnecting: the relay leg is down; it comes back on its own. */
+.live-chip--offline {
+  --live-tone: var(--state-warning);
+}
+/* Viewers are waiting for a session they may join (R63): the owner has to open the terminal. */
+.live-chip--waiting {
+  --live-tone: var(--state-warning);
+}
+/* Refused: nodeterm's service will not host the link — muted, the owner opens it to see why. */
+.live-chip--refused {
+  --live-tone: var(--muted);
+  color: var(--muted);
+}
+/* Unread chat: a COUNT (summed over the node's links), ink on an unread wash — the status-chip
+   recipe, so it reads on the default look and under Liquid Glass alike. Fits the 16px sidebar chip. */
+.live-chip__unread {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--state-unread) 70%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--state-unread) 28%, transparent);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 11px;
+  text-align: center;
+}
+.kanban-card__live,
+.kanban-modal__live {
+  margin-left: 0;
+}
+.ss-live {
+  flex: 0 0 auto;
+  height: 16px;
+  margin-left: 0;
+  padding: 0 5px;
+  font-size: 10px;
+}
+/* Its popover: a body portal above the card modal's scrim (55) and the dictation overlay (60). A
+   solid --panel: under Liquid Glass it is not in either glass list, so it stays opaque. */
+.live-pop__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+}
+.live-pop {
+  position: fixed;
+  z-index: 62;
+  box-sizing: border-box;
+  width: 340px;
+  max-width: calc(100vw - 12px);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: default;
+}
+.live-pop:focus {
+  outline: none;
+}
+:is(.live-pop, .live-chat__body) p {
+  margin: 0;
+}
+.live-pop__link + .live-pop__link {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.live-pop__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.live-pop__role,
+.live-pop__who {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.live-pop__time,
+.live-pop__muted {
+  color: var(--muted);
+}
+.live-pop p.live-pop__label {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+:is(.live-pop, .live-chat__body) p.live-pop__status {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+}
+:is(.live-pop, .live-chat__body) p.live-pop__status--refused {
+  background: rgba(var(--tint-rgb), 0.06);
+}
+.live-pop__actions {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+:is(.live-pop, .live-chat__body) .confirm__btn.live-pop__btn {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+:is(.live-pop, .live-chat__body) p.live-pop__error {
+  margin: 4px 0;
+  color: var(--danger);
+}
+.live-pop__viewers ul,
+.live-pop__thread {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+.live-pop__viewers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+:is(.live-pop, .live-chat__body) .live-pop__kick {
+  margin-left: auto;
+}
+:is(.live-pop, .live-chat__body) p.live-pop__note {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.live-pop__chat {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.live-pop__thread {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.live-pop__msg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  margin: 4px 0;
+}
+.live-pop__text {
+  flex-basis: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.live-pop__copy {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.live-pop__copy:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.live-pop__reply {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.live-pop .confirm__input.live-pop__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+/* A Control link's owner controls in the popover (ControlSection): the Typing switch row, the
+   locked line with Allow control again, and the Change password field (a new one shown once). */
+.live-pop__control {
+  margin: 8px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.live-pop__locked {
+  margin-bottom: 8px;
+}
+.live-pop__locked .live-pop__btn {
+  margin-top: 6px;
+}
+.live-pop__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-pop__password {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.live-pop__password .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+/* A Control link's password, wherever it is typed or shown (create dialog, popover, drawer):
+   monospace, so a 0 and an o, or a 1 and an l, never read alike. One rule for every field. */
+.live-dialog__password .confirm__input,
+.live-pop__password .confirm__input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+:is(.live-pop, .live-chat__body) p.live-pop__invalid {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+}
+/* A viewer typing right now (a Control link): the working role, never animated (Idle energy). */
+.live-pop__typing {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-working);
+}
+/* The Live chat drawer (LiveChatDrawer): the Explorer drawer's shell and pin, with the popover's
+   owner controls inside it (the `:is(.live-pop, .live-chat__body)` rules above are shared). Raised
+   over the kanban card modal (scrim 55) while one is open — the card's LIVE chip opens it — whatever
+   the pin; pinned beside a pinned Explorer, docked one Explorer width (320px) and a gap to its left.
+   The `.drawer` shell is already a Liquid Glass text surface with its blur, and nothing inside paints
+   a surface token. Tokens only: the viewer-name hues come from the web page's table
+   (lib/liveChatLook) as `--live-name`, darkened toward the ink on the light theme, where the
+   page's near-black-tuned yellows and cyans would not read. */
+.drawer-overlay.drawer-overlay--raised {
+  z-index: 57;
+}
+.drawer-overlay--beside .drawer--pinned {
+  right: calc(var(--float-gap) + 320px + 8px);
+}
+.live-chat:focus {
+  outline: none;
+}
+.live-chat__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 14px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.live-chat__link {
+  flex: none;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.live-chat__body .confirm__input.live-chat__select {
+  margin: 0 0 8px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+.live-chat__linkhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-chat__goto {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.live-chat__goto:hover {
+  text-decoration: underline;
+}
+.live-chat__people {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+/* A Viewer link has no chat: People takes the drawer. */
+.live-chat__people.live-chat__people--only {
+  flex: 1 1 auto;
+  max-height: none;
+  border-bottom: 0;
+}
+.live-chat__heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.live-chat__viewers {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+.live-chat__viewers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.live-chat__chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+/* The list scrolls; the "N new messages" pill floats over its foot. */
+.live-chat__listwrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.live-chat__body p.live-chat__empty {
+  margin: 0 0 6px;
+}
+.live-chat__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+/* One dense line per message, like the viewer page: time, badge, name, text. */
+.live-chat__msg {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.live-chat__time {
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* The owner's own line, marked by the HOST's word: ink on a success wash, the status-chip recipe. */
+.live-chat__badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--state-success) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--state-success) 16%, transparent);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+.live-chat__name {
+  color: var(--live-name, var(--text));
+  font-weight: 700;
+}
+.live-chat__msg--sharer .live-chat__name {
+  --live-name: var(--success);
+}
+:root[data-theme='light'] .live-chat__name {
+  color: color-mix(in srgb, var(--live-name, var(--text)) 55%, var(--text-strong));
+}
+.live-chat__colon {
+  color: var(--muted);
+}
+.live-chat__text {
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.live-chat__body .confirm__btn.live-chat__more {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.live-chat__reply {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.live-chat__body .confirm__input.live-chat__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+/* The create dialog (LiveLinkDialog): the `.confirm` shell, a little wider for the URL. */
+.confirm.live-dialog {
+  width: 460px;
+}
+.live-dialog .live-dialog__title {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.live-dialog__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+}
+.live-dialog__group legend {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.live-dialog__label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__label .confirm__input {
+  margin: 4px 0 10px;
+}
+/* The exposure warning: always visible, never a checkbox. A hue wash with ink text (the status-chip
+   recipe), so it reads the same on the default look and under Liquid Glass. */
+.live-dialog__warning {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  /* The Control warning can name a long user@host, which has no break points. */
+  overflow-wrap: anywhere;
+}
+.live-dialog__error {
+  margin: 0 0 10px;
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.live-dialog__url {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.live-dialog__url .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+.live-dialog__note {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* A note that belongs to the control just above it (Unlimited's, a password shown once). */
+.live-dialog__note.live-dialog__note--tight {
+  margin: -4px 0 10px;
+}
+/* The role choice: "Viewer · Can watch". */
+.live-dialog__hint {
+  color: var(--muted);
+}
+/* Control on a terminal that cannot take typed input (a Zellij session): shown, disabled, with why. */
+.live-dialog__group label.live-dialog__off {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.live-dialog__reason {
+  width: 100%;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+/* A Control link's password: the form's field with Generate, and the done step's copy of it. */
+.live-dialog__pw {
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__url.live-dialog__password {
+  margin: 4px 0 10px;
+}
+.live-dialog__invalid {
+  margin: -6px 0 10px;
+  color: var(--danger);
+  font-size: 11px;
+}
+/* "Share with team" (ShareTeamDialog): the `.confirm` shell, wider for the lists, with the body as
+   the scrolling region so Share / Close stay on screen however long the lists are. */
+.confirm.share-team {
+  width: 480px;
+}
+.share-team__title {
+  flex: 0 0 auto;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.share-team__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.share-team__body p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.share-team__heading {
+  color: var(--muted);
+}
+.share-team__list {
+  margin: -4px 0 10px;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+/* The security sentence: always visible, the status-chip recipe like the live link warning. */
+.share-team__warning {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+}
+.share-team__error {
+  color: var(--danger);
+}
+.share-team__code {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.share-team__code .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+/* The installer's output: a sunken well, the tail only (the component keeps the last 4000 chars). */
+.share-team__log {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */
 .kanban-modal__session {
   flex: 0 1 auto;
@@ -11958,12 +12750,49 @@ button.pull-checks__name {
 .kanban-modal__header {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
   border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
 }
+.kanban-modal__identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 280px;
+  min-width: min(280px, 100%);
+  overflow: hidden;
+}
+.kanban-modal__project {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 72px;
+  max-width: 220px;
+  box-sizing: border-box;
+  border: 1px solid rgba(var(--tint-rgb), 0.18);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: rgba(var(--tint-rgb), 0.8);
+  font-size: 11px;
+}
+.kanban-modal__project-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+}
+.kanban-modal__project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .kanban-modal__title {
+  min-width: 0;
+  flex: 0 1 auto;
   font-size: 14px;
   font-weight: 700;
   color: rgba(var(--tint-rgb), 0.92);
@@ -11984,6 +12813,11 @@ button.pull-checks__name {
   outline: none;
 }
 .kanban-modal__column {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -11994,6 +12828,7 @@ button.pull-checks__name {
   margin-right: auto;
 }
 .kanban-modal__action {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -12298,6 +13133,118 @@ button.pull-checks__name {
 .kanban-modal__action[aria-pressed='true'] {
   background: var(--accent);
   color: #fff;
+}
+
+/* Read-only document preview stacked over a Kanban card. The card and board remain mounted below,
+   so closing this layer returns the user to exactly the terminal and scroll position they left. */
+.local-file-preview-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 62; /* above card modal (55), below confirmation/palette dialogs (70+) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.68);
+  animation: kanban-fade 0.14s ease-out;
+}
+.local-file-preview {
+  width: min(1180px, calc(100vw - 24px));
+  height: min(820px, calc(100vh - 24px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border: 1px solid rgba(var(--tint-rgb), 0.15);
+  border-radius: 12px;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, calc(0.72 * var(--shadow-k)));
+  animation: kanban-pop 0.16s ease-out;
+}
+.local-file-preview__header {
+  flex: 0 0 auto;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.09);
+}
+.local-file-preview__title {
+  min-width: 0;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--tint-rgb), 0.92);
+  font-size: 14px;
+  font-weight: 700;
+}
+.local-file-preview__path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--tint-rgb), 0.4);
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+}
+.local-file-preview__body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+  background: var(--term-bg, var(--surface-sunken));
+}
+.local-file-preview__body webview,
+.local-file-preview__body iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: flex;
+}
+.local-file-preview__body--image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.local-file-preview__body--image img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.local-file-preview__body--markdown .term-md__content {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 28px 34px 50px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.local-file-preview__body--text pre {
+  box-sizing: border-box;
+  min-height: 100%;
+  margin: 0;
+  padding: 22px 26px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgba(var(--tint-rgb), 0.88);
+  font: 12px/1.55 ui-monospace, monospace;
+}
+.local-file-preview__message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(var(--tint-rgb), 0.45);
+  font-size: 12px;
+}
+.local-file-preview__message--error {
+  color: var(--danger);
 }
 
 /* ---- Node comments flyout: the header 💬 expands the board-log feed to the node's right ---- */
@@ -15515,8 +16462,10 @@ body.focus-mode .dock:hover {
    (#323232 with no shadow, #242424, #1e1e1e, #1a1a1a, a near-black 0.98 slab) beside the glass
    menus. Under glass each is the menu surface's own colour made solid (`--panel`, the colour the
    glass fill is `--panel` at an alpha of), with the glass hairline and one shadow. Every modal
-   dialog is glass (the text list above); these four are the only opaque floating surfaces. */
-:root[data-nt-glass='on'] :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker) {
+   dialog is glass (the text list above); these five are the only opaque floating surfaces — the
+   fifth, the live-link popover (LiveLinkPopover), opens over the card modal as well as a glass node
+   header, and stays solid for the same reason. */
+:root[data-nt-glass='on'] :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker, .live-pop) {
   background: var(--panel);
   border: 1px solid var(--glass-edge);
   box-shadow: 0 12px 36px rgba(0, 0, 0, calc(0.45 * var(--shadow-k)));
@@ -15812,7 +16761,7 @@ body.focus-mode .dock:hover {
    floating surfaces (the popovers inside glass nodes, below): the glass placeholder is sized for the
    translucent fill, and on a solid popover it read brighter than the popover's own body text, as if
    the field were already filled (visual QA round 4, N4-M2). */
-:root[data-nt-glass='on'] :not(.sticky-node__body, :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker) *)::placeholder {
+:root[data-nt-glass='on'] :not(.sticky-node__body, :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker, .live-pop) *)::placeholder {
   color: var(--glass-placeholder);
 }
 /* An empty field must look empty (visual QA round 3, NM1): the placeholder's 4.5:1 floor sits at

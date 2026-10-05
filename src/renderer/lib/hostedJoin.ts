@@ -6,8 +6,12 @@
 //    credential) — unless the team was forgotten since, and then it asks for a code;
 //  - a pasted join code: joins now, into the team's own tab when it has one, and is told why if it
 //    cannot;
+//  - the share flow (`joinApproved`): a team this desktop just set up itself joins now, retrying
+//    while its relay comes up, with no SAS (its bookmark is pre-approved);
 //  - forgetting a team: stops its loop and removes its bookmark (the host is not touched);
-//  - closing or deleting a tab: its team's attempt stops, in any phase (R40).
+//  - closing or deleting a tab: its team's attempt stops, in any phase (R40) — unless the team has
+//    other tabs open (one connection serves one tab per shared project): then the attempt moves to
+//    one of those (`tabRemoved`), and tabs a share event opens later join the team (`tabsAdded`).
 // And what the user is told for each: one sentence per stop, nothing for a retry in progress, one
 // notice when the quick retries of a drop run out, a "remove and rejoin" offer after a revocation,
 // and "waiting for an owner" whenever a mount is still unapproved after a moment. Pure over
@@ -35,9 +39,10 @@ export const WAITING_NOTICE_DELAY_MS = 2500
 export const HOSTED_CODE_IN_TEAM_ACCESS_TAB =
   'That is a hosted team invite code — paste it with New Remote Connection to open the team in its own tab.'
 
-/** How a mount ended, as the canvas reports it: a live tab, or the error it failed with. `declined`
- *  = this user declined the SAS themselves (nothing to tell them). */
-export type HostedMountOutcome = { projectId: string } | { error: unknown; declined: boolean }
+/** How a mount ended, as the canvas reports it: live tabs, or the error it failed with. `declined`
+ *  = this user declined the SAS themselves (nothing to tell them). `projectIds` = every tab the one
+ *  connection serves (one per project the team shares); `projectId` is the one it activated. */
+export type HostedMountOutcome = { projectId: string; projectIds?: string[] } | { error: unknown; declined: boolean }
 
 export interface HostedNotice {
   kind: 'info' | 'error'
@@ -84,6 +89,18 @@ export interface HostedJoiner {
   isHostedTab(projectId: string): boolean
   /** The user closed or deleted this tab: its team's attempt stops now, in any phase (R40). */
   tabClosed(projectId: string): void
+  /** One of a team's tabs went away while `successorId`, another of its tabs, stays open (the user
+   *  closed it, or the host stopped sharing it): the team's attempt follows the successor, so the
+   *  connection lives on and a drop reconnects into a tab that is still there. */
+  tabRemoved(projectId: string, successorId: string): void
+  /** A share event opened `projectIds` as more tabs of `hostId`'s live connection: they reconnect
+   *  like the team's other tabs. A no-op for a team this joiner holds no tab for. */
+  tabsAdded(hostId: string, projectIds: string[]): void
+  /** Join a team this desktop just set up itself (its bookmark is already approved): retries a
+   *  network failure like an unattended reconnect, confirms on its own (no SAS prompt), and
+   *  activates `focusProjectId` when the mount places it. `busy` = that team already has an
+   *  attempt or a live connection, and the user was told. */
+  joinApproved(code: string, opts?: { focusProjectId?: string }): 'started' | 'busy'
   /** Reconnect every approved bookmark (once, at boot). */
   bootReconnect(): Promise<void>
   /** Forget a team: its loop stops and its bookmark goes. Refused while it is connecting. */
@@ -197,8 +214,11 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
         disarm()
       }
       if ('projectId' in outcome) {
-        tabs.set(outcome.projectId, { hostId: req.hostId, code: req.code, label: req.label })
-        return { projectId: outcome.projectId }
+        // One connection serves every tab the team shares: each one reconnects from this team.
+        for (const id of outcome.projectIds ?? [outcome.projectId]) {
+          tabs.set(id, { hostId: req.hostId, code: req.code, label: req.label })
+        }
+        return { projectId: outcome.projectId, projectIds: outcome.projectIds }
       }
       // Declined by this user, or its tab was closed meanwhile (closed for it): nothing to say.
       if (outcome.declined || !tabWanted(req)) return { retry: false }
@@ -320,6 +340,38 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     tabClosed(projectId) {
       tabs.delete(projectId)
       attempts.cancelProject(projectId)
+    },
+    tabRemoved(projectId, successorId) {
+      const t = tabs.get(projectId)
+      tabs.delete(projectId)
+      if (t && !tabs.has(successorId)) tabs.set(successorId, t)
+      attempts.retarget(projectId, successorId)
+    },
+    tabsAdded(hostId, projectIds) {
+      const t = [...tabs.values()].find((x) => x.hostId === hostId)
+      if (t) for (const id of projectIds) tabs.set(id, t)
+    },
+    joinApproved(raw, opts) {
+      const code = raw.trim()
+      const peek = peekJoinCode(code)
+      const hostId = peek?.hostId ?? `unreadable:${code}`
+      const label = peek?.label ?? ''
+      const target = tabFor(hostId)
+      // A team this desktop just set up itself over ssh (its bookmark is pre-approved): retry a
+      // relay that is still coming up, and confirm on our side with no SAS (main confirms a join
+      // whose bookmark is approved for the same host key).
+      const result = run({
+        hostId,
+        code,
+        label,
+        manual: true,
+        retry: true,
+        autoConfirm: true,
+        ...(target ? { reconnectProjectId: target } : {}),
+        ...(opts?.focusProjectId ? { focusProjectId: opts.focusProjectId } : {})
+      })
+      if (result === 'busy') deps.notify({ kind: 'info', text: busyText(hostId, label) })
+      return result
     },
     async bootReconnect() {
       const list = await deps.bookmarks().catch(() => [])

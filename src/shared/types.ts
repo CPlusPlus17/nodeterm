@@ -1,4 +1,4 @@
-import type { TextDeliveryResult } from './text-delivery'
+import type { ChatPromptResult, TextDeliveryResult } from './text-delivery'
 import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
@@ -28,7 +28,9 @@ import type { BoardDispatch } from './board-dispatch'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
+import type { AlertSoundKind, AlertSoundSaveResult, CustomAlertSounds } from './alert-sound'
 import type { CanvasLayout, LayoutViewports } from './canvas-layout'
+import type { ShareTeamApi } from './share-team'
 import type {
   ModelDiscoveryResult,
   ModelGatewayCredentialStatus,
@@ -499,6 +501,10 @@ export interface CanvasNodeState {
   /** Parent group node id, if this node belongs to a group frame. */
   parentId?: string
   // terminal-only
+  /** This terminal's own font size (issue #915), set with ⌘+ / ⌘− when
+   *  `settings.terminalFontZoomKeys` is on; absent = follow the global `fontSize`. Hand-editable,
+   *  so every reader goes through `normalizeTerminalFontSize` (renderer/terminal/terminal-font-zoom). */
+  terminalFontSize?: number
   shell?: string
   cwd?: string
   /** Which agent runs in this terminal node (claude/codex/gemini/custom). */
@@ -771,6 +777,12 @@ export interface BridgeLink {
   id: string
   source: string
   target: string
+  /**
+   * Context links only (issue #852): the ONE endpoint allowed to read the other. Absent = both
+   * read each other, which is every link persisted before the field existed. A value naming
+   * neither endpoint authorizes nobody (fail closed) — see `linkReadPairs` in canvas-link.ts.
+   */
+  reader?: string
 }
 
 /** Where a column sits in a card's lifecycle (see @shared/kanban-category). A closed set; an
@@ -1025,6 +1037,12 @@ export interface NavStop {
   note: string
 }
 
+/** MACHINE-LOCAL: this SSH project was handed over to a hosted team on its host ("Share with
+ *  team"). From that moment the server core is the only writer of its project.json, so this
+ *  desktop never mirrors, reconciles or polls it again. `hostId` absent = the handover started
+ *  and did not finish (the same guard applies until the user reopens it). */
+export interface HandedOffTo { hostId?: string; projectId?: string; at: number }
+
 /** A project is one canvas/page: its own nodes, viewport, and default working dir. */
 export interface Project {
   id: string
@@ -1112,6 +1130,8 @@ export interface Project {
    *  shared project file, same rule as `closed` itself. Absent on a project closed before this
    *  field existed; such entries sort last. */
   closedAt?: number
+  /** See `HandedOffTo`. Index-only; never written to the shared project.json. */
+  handedOffTo?: HandedOffTo
   /**
    * Sessions (terminal/agent/sticky/…) deleted from this project, most-recent-first, capped at
    * 20. MACHINE-LOCAL, same rule as `closedAt`/`breadcrumbs` — see `IndexEntryV3.closedSessions`,
@@ -1290,6 +1310,10 @@ export interface PtyApi {
    *  false if unavailable; `pasted-not-submitted` means input was accepted but Enter was not
    *  confirmed written. Surface it without automatically resending. True is not an app receipt. */
   sendText(persistKey: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult>
+  /** Submit a prompt from the ⌘M chat view. For an agent whose screen can be read
+   *  (`readsScreenDialogs`), refused BEFORE anything is written when the agent's own dialog owns the
+   *  keyboard (`ChatPromptBlocked`) — such dialogs fire no hook. Otherwise the `sendText` contract. */
+  sendChatPrompt(persistKey: string, text: string, agentId: string): Promise<ChatPromptResult>
   /** Is tmux available on this host (else the silent plain-shell fallback), plus a suggested
    *  install command for the "tmux not found" banner. */
   tmuxStatus(): Promise<TmuxStatus>
@@ -1543,6 +1567,17 @@ export interface FilesApi {
    * Resolves null when it could not be written; callers drop that file like a failed drop.
    */
   saveCanvasImage(projectId: string, name: string, dataBase64: string): Promise<string | null>
+  /**
+   * Store a custom sound for an agent alert (issue #289). The core validates kind, extension,
+   * size and magic bytes, then writes a FIXED per-kind file under its own data dir — the picked
+   * file's path is never sent, only its bytes and base name. Resolves `{ ok: false, error }` for a
+   * refusal; never rejects on a bad file.
+   */
+  saveAlertSound(kind: AlertSoundKind, name: string, dataBase64: string): Promise<AlertSoundSaveResult>
+  /** The stored custom sound for `kind` as base64, or null when there is none (or it is unreadable). */
+  readAlertSound(kind: AlertSoundKind): Promise<string | null>
+  /** Delete the custom sound for `kind` (Reset to default). */
+  clearAlertSound(kind: AlertSoundKind): Promise<boolean>
 }
 
 export interface MediaApi {
@@ -1699,6 +1734,14 @@ export interface SpeechSettings {
 export type TerminalCursorStyle = 'block' | 'bar' | 'underline'
 export type TerminalCursorInactiveStyle = TerminalCursorStyle | 'outline' | 'none'
 
+/** The primary modifiers of a forwarded desktop ⌘/Ctrl+0 (issue #915): the renderer applies the
+ *  per-platform terminal-font-reset predicate to them. Optional on the listener because the Server
+ *  Edition stub never fires and an absent value must read as "not a font reset". */
+export interface ZoomActualSizeModifiers {
+  meta: boolean
+  control: boolean
+}
+
 /** User-configurable application settings (settings.json). */
 export interface Settings {
   fontSize: number
@@ -1829,6 +1872,12 @@ export interface Settings {
    *  costs them the sense of where they were. Either way the node is centred and kept clear of the
    *  floating chrome (renderer/lib/nodeFocus). */
   focusZoomToNode: boolean
+  /** Closing the LAST session (terminal/agent) node of a project with its × offers to close the
+   *  project too (issue #848). Opt-in — default OFF, because not everyone closes their last
+   *  session when they are done with a project. Only the user's × click asks; a restart, an exit,
+   *  a hibernated agent (still a node) or a bulk/programmatic close never does
+   *  (renderer/lib/lastSessionClose). Declining keeps the project open. */
+  offerCloseProjectOnLastSession: boolean
   /** Whether the bottom-left canvas lock survives a restart. OFF by default, and deliberately so:
    *  the lock was transient by design, because a canvas that will not pan on the next launch reads
    *  as "the app is frozen" to whoever opens it, and the lit button is a small thing to spot. Users
@@ -1881,6 +1930,13 @@ export interface Settings {
    * terminal. Logic: `renderer/terminal/copy-on-select.ts`.
    */
   copyOnSelect: boolean
+  /** ⌘+ / ⌘− / ⌘0 (Ctrl off-mac) change the FOCUSED terminal's own font size instead of doing
+   *  nothing / zooming the canvas (issue #915). The size is stored per node
+   *  (`CanvasNodeState.terminalFontSize`); ⌘0 clears it back to `fontSize`. OFF by default: off-mac
+   *  the chord is Ctrl+−, which a focused terminal passes to the shell today (readline undo). With
+   *  it off, and whenever no terminal has focus, the keys behave exactly as before. See
+   *  renderer/terminal/terminal-font-zoom.ts. */
+  terminalFontZoomKeys: boolean
   /**
    * Windows SSH projects: after a key is unlocked with its passphrase, also load it into the
    * Windows OpenSSH agent service, so later connections (and the user's own `ssh`) do not prompt
@@ -2003,6 +2059,11 @@ export interface Settings {
   soundEffects: boolean
   /** Sound-effect volume, 0..1. */
   soundVolume: number
+  /** User-picked replacements for the built-in chimes, per alert kind (issue #289). Holds only a
+   *  display name + a stamp — the FILE lives in the core's data dir (`<userData>/sounds/`), never
+   *  at the user's original path. Read through `customAlertSoundFor` (hand-editable JSON); an
+   *  absent/malformed entry, or a file that is gone or will not decode, plays the built-in chime. */
+  customAlertSounds: CustomAlertSounds
   /** User-defined agents (BYO CLI) appended to the Add menus. */
   customAgents: CustomAgent[]
   /** One gateway root + non-secret credential reference used by model-switch-capable harnesses. */
@@ -2123,9 +2184,12 @@ export interface Settings {
   /** Push when an agent finishes a turn (the `done` kind). Default on. Sub-gate under
    *  `mobilePushEnabled` (the master switch). Toggle in Settings → Notifications. */
   mobilePushDone: boolean
-  /** Stream Live Activity updates (Lock Screen / Dynamic Island) to paired phones as a session's
-   *  state + activity + context% change (spec: interactive-push-live-activities). Default on.
-   *  Sub-gate under `mobilePushEnabled` (the master switch). Toggle in Settings → Notifications. */
+  /** Stream live status updates to paired phones as a session's state + activity + context%
+   *  change — an iOS Live Activity (Lock Screen / Dynamic Island) or an Android ongoing
+   *  notification (spec: interactive-push-live-activities). Default on. The KEY keeps its
+   *  iOS-era name because it is persisted in settings.json; the UI calls it "Live updates on
+   *  phone". Sub-gate under `mobilePushEnabled` (the master switch). Toggle in Settings →
+   *  Notifications. */
   mobileLiveActivities: boolean
   /** Hold phone ALERTS while you're actively at this computer, releasing them when you go idle or
    *  lock the screen (spec: presence-aware-push). Default on. Desktop-only (the Server Edition is
@@ -2259,11 +2323,13 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalFocusFollowsPointer: true,
   doubleClickFocus: true,
   focusZoomToNode: true,
+  offerCloseProjectOnLastSession: false,
   rememberCanvasLock: false,
   openMarkdownPreview: true,
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
   copyOnSelect: false,
+  terminalFontZoomKeys: false,
   windowsSshAgentAddKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
@@ -2293,6 +2359,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyConsentAsked: false,
   soundEffects: true,
   soundVolume: 0.5,
+  customAlertSounds: {},
   customAgents: [],
   modelGateway: { baseUrl: '', apiKey: '' },
   // No default gateway model until the user picks one in Settings → Model gateway. Absent ⇒
@@ -2738,6 +2805,13 @@ export interface UpdateApi {
   getPolicy(): Promise<UpdatePolicy>
   /** Quit and install the staged update. */
   restart(): void
+  /** Prepare-for-update (Windows session host, issue #829): what the running host holds. Never
+   *  launches a host. Answers `unsupported` off Windows and in the Server Edition. */
+  prepareInspect(): Promise<import('./update-prep').UpdatePrepInspection>
+  /** Prepare-for-update: ask the host to end every session and exit, and confirm it did. */
+  prepareShutdownHost(): Promise<import('./update-prep').UpdatePrepShutdown>
+  /** Prepare-for-update: quit the app (no quit confirmation) once the host is gone. */
+  prepareQuit(): void
 }
 
 /** A single news/announcement item, fetched from the remote announcements feed. */
@@ -3704,12 +3778,13 @@ export interface LicenseStatus {
 
 /**
  * Where the entitlement behind this install came from. A verified entitlement's licenseId is NOT
- * always a keygen license id: an App Store purchase on a paired phone bridges Pro to the desktop
- * and mints `apple:<txn>`, and `free:` exists too. For those the server makes zero keygen calls
- * and answers `key: null, used: 0, seats: 0` — genuinely "device counting does not apply here",
- * which is a different fact from a failed read and from a keygen license with no devices yet.
+ * always a keygen license id: a store purchase on a paired phone bridges Pro to the desktop and
+ * mints `apple:<txn>` (App Store) or `google:<orderId>` (Google Play), and `free:` exists too. For
+ * those the server makes zero keygen calls and answers `key: null, used: 0, seats: 0` — genuinely
+ * "device counting does not apply here", which is a different fact from a failed read and from a
+ * keygen license with no devices yet.
  */
-export type LicenseSource = 'keygen' | 'apple' | 'free'
+export type LicenseSource = 'keygen' | 'apple' | 'google' | 'free'
 
 /** What Settings → License shows: the key to copy and how much of the device cap is in use.
  *  A failed read is an ERROR, never "0 devices" — the two are different facts. */
@@ -3952,6 +4027,8 @@ export interface HostedSessionApi {
   deny(pendingId: string): Promise<boolean>
   onPeerPending(listener: (p: HostedPending) => void): () => void
   onPendingClosed(listener: (p: { pendingId: string; reason: HostedPendingClosedReason }) => void): () => void
+  /** The team's shared projects changed (share or unshare on the host): their whole set. */
+  onSharedChanged(listener: (p: { projectIds: string[] }) => void): () => void
 }
 
 /** A paired device as exposed to the renderer — the bearer token is never included. */
@@ -4165,6 +4242,9 @@ export interface NodeTerminalApi {
   relayHost: RelayHostApi
   relayClient: RelayClientApi
   relayHosted: RelayHostedApi
+  /** "Share with team" for an SSH project. Desktop only (the Server Edition and relay tabs answer
+   *  `E_UNSUPPORTED`). */
+  shareTeam: ShareTeamApi
   /** The hosted team verbs of THIS session's host — present only on a relay tab joined by a hosted
    *  team's join code; absent everywhere else (local, Server Edition, Team Access relay tabs). */
   hosted?: HostedSessionApi
@@ -4179,7 +4259,7 @@ export interface NodeTerminalApi {
   /** Fires when the user presses Cmd/Ctrl+0 (zoom the canvas back to 100%). Desktop only: the
    *  key is intercepted in main because Electron's default View menu owns the accelerator. In the
    *  Server Edition the renderer's own keydown handler sees the key and this is a no-op stub. */
-  onZoomActualSize(listener: () => void): () => void
+  onZoomActualSize(listener: (mods?: ZoomActualSizeModifiers) => void): () => void
   /** Native View menu → Snap to Grid toggle. Returns unsubscribe. */
   onToggleAutoAlign(listener: () => void): () => void
   /** Native View menu → Fit View. Returns unsubscribe. */
@@ -4383,4 +4463,9 @@ export interface NodeTerminalApi {
     list(): Promise<import('./station-handover').StationHandoverRecord[]>
     onChanged(cb: (records: import('./station-handover').StationHandoverRecord[]) => void): () => void
   }
+  /** Live links (src/core/watch-link/service.ts): a read-only, expiring browser link to one terminal,
+   *  hosted by THIS machine. Owner-only (`watchLink:*` is host-only). Desktop: real. Server Edition:
+   *  the real bridge, whose create answers `unsupported` until that edition has a license layer.
+   *  Relay tab: an inert stub (a peer's terminals are not this machine's to publish). */
+  watchLink: import('./watch-link-types').WatchLinkApi
 }
