@@ -366,17 +366,17 @@ jobs:
   # left as it was): security.yml runs only on pull requests into main, pushes to main, the merge queue
   # and a weekly schedule, with no workflow_dispatch, so a job there cannot run from a feature branch and
   # its first run ever would be on somebody's pull request, where a broken job shows red on every PR into
-  # main. Here it runs on this workflow's triggers: a push to any branch or a pull request that changes a
+  # main. Here it runs on this workflow's triggers: a push to main or a pull request that changes a
   # file the path filter above lists, and workflow_dispatch.
   # The trade-off: it follows that path filter. The Kotlin (all of it under android/) is analysed when
-  # Android-relevant files change: on the branch that changes them, on a pull request that touches them,
-  # and on main when such a pull request lands. Code scanning compares a pull request with the latest
+  # Android-relevant files change: on a pull request that touches them and on main when such a pull
+  # request lands. Code scanning compares a pull request with the latest
   # analysis on main of the same category, so a pull request that touches no Android file needs none of
   # its own; its Kotlin is main's. Lost against security.yml's triggers: the weekly re-scan (a new CodeQL
   # query reaches unchanged Kotlin only with the next Android change on main) and a merge-queue run. It
   # is not a required check and must not become one: a pull request this workflow skips reports nothing
-  # for it, so a required one would wait forever. On a pull request from a branch of this repo it runs
-  # twice, like every job here (push and pull_request); each run uploads for its own ref. Not verified:
+  # for it, so a required one would wait forever. Feature-branch pushes do not duplicate PR runs;
+  # each admitted run uploads for its own ref. Not verified:
   # whether GitHub's code-scanning check on a pull request that skips it reports main's java-kotlin
   # configuration as not found (that is a warning on that check, not a failure).
   # build-mode none would analyse nothing: for java-kotlin it reads Java sources only, and android/ is all
