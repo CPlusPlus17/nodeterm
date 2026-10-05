@@ -111,7 +111,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
 | [A90](#a90) | medium | | medium | parity/gap | ✅ implemented in `bcc92367`, `b88d1415`; protocol 684/66 and 32 mutants pass; beta 8/9 focused Pixel Home/project/custom cwd/input/history/restart/update/reconnect/exact End pass; beta 10 relay plain-shell creation/input/exact End also pass; item 32 Partial for managed/cellular variants; beta-9 Oct4 A91 empty-host flow passes · Manual SSH/WireGuard host has no way to create a new plain terminal without a local desktop/relay |
 | [A91](#a91) | medium | | small | runtime/bug | ✅ fixed in `4d33a5b5`; protocol 688/67, offline app compile and six mutants pass; beta 9/code 10 installed with verified hash; beta-9 Oct4 physical empty-host first Home/exact last-End/row-group removal/connected SSH/second Home flow pass; A94 delivered full installed End/recreate/open/End flow passes · Ending the last phone shell on an otherwise empty SSH host leaves its cached row visible |
-| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5` with A121's leave fix; eight Linux Server cases also pass at `dcdf664a`; GPU/macOS pending |
+| [A92](#a92) | low | | small | desktop/bug | ✅ fixed in `127b6b28` · Desktop/Server terminal link lookup can exclude the hovered row after 32 continuing rows; 24 focused Vitest tests, full TypeScript check and three isolated mutants pass; eight native Linux Desktop cases now pass at `01b4a2f5` with A121's leave fix; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; GPU context recovery/macOS pending |
 | [A93](#a93) | medium | | medium | interop/backend | OPEN · Fresh-desktop remote-on pairing succeeds without relay credentials; bounded retry using the exact production mint request body returns HTTP 403 reauth_required; original same-desktop recovery succeeds; fresh-different-desktop failure remains open |
 | [A94](#a94) | medium | | small | runtime/bug | ✅ fixed in `3c217cba`; five Kotlin methods/eight mutants and full689/67 pass, beta 10 delivered; full physical completed-empty End/recreate/open/End flow passes · Authoritative empty SSH listing remains labelled Loading sessions |
 | [A95](#a95) | medium | | small | desktop/interop | ✅ fixed in `ec12ea9a`; actual beta 10 phone move/remove/re-add/create-label updates reach rebuilt production desktop Board with unchanged page time origin and matching persisted state; item 36 Pass; nine suites/133 tests, full TypeScript and four mutants pass · Held desktop Board remained stale after phone moves/labels |
@@ -140,7 +140,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A118](#a118) | medium | | medium | pairing/gap | ✅ eligible legacy association fixed in `aa902d0a`; actual host/Android proof and mutation checks pass; physical pending · Legacy entries cannot revoke their unassociated relay key |
 | [A119](#a119) | medium | | small | SSH/setup | ✅ source-fixed in `3a68e42b`; actual Server/SSH and mutation checks pass; physical pending · Explicit saved SSH profile folder for custom Server data directories |
 | [A120](#a120) | medium | | medium | SSH/setup | ✅ source-fixed in `2723845e`; 17 JVM methods / seven assertion mutants, 28 native OpenSSH checks, four timing cases / 76 assertions and 17 synthetic installed-PAM checks; physical pending · One-time password setup with human fingerprint confirmation and retained-key verification |
-| [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU/macOS pending |
+| [A121](#a121) | low | | small | desktop/bug | ✅ fixed in `01b4a2f5`; eight native Linux Desktop cases and the synchronous-blur mutant verified · next-task Canvas blur preserves mouseleave; eight Linux Server cases also pass at `dcdf664a`; GPU-enabled matrix Canvas4 hardware / Modal4 DOM verified; GPU context recovery/macOS pending |
+| [A122](#a122) | medium | | small | desktop/bug | ✅ source-fixed in `9613cec5`; 133 focused / 218 affected tests and six assertion-caught mutants; four Linux native cases pass · Focused Canvas/Modal xterm consumes the advertised native Quit chord |
 
 ## A01
 
@@ -3170,7 +3171,9 @@ survival is not proved. Receipts: `.nodeterm/android-beta-build-9/artifact-revie
 **Desktop/Server link lookup can exclude the hovered row after a long wrapped run (2026-10-04).**
 
 - Severity: **low**; effort: small; area: desktop renderer; kind: bug
-- Status: **fixed in `127b6b28`; native Linux Desktop UI verified at `01b4a2f5` with A121's leave fix**. Separate Linux Server checks pass at `dcdf664a`; GPU/macOS remain unverified.
+- Status: **fixed in `127b6b28`; native Linux Desktop UI verified at `01b4a2f5` with A121's leave
+fix**. Separate Linux Server checks pass at `dcdf664a`. The later GPU-enabled eight-case matrix
+passes (Canvas4 hardware / Modal4 DOM); GPU context recovery and macOS remain unverified.
 - Locations: `src/renderer/terminal/file-links.ts` (`paragraphContaining`) and `file-links.test.ts`
 
 This was the desktop follow-up recorded while fixing Android `A32`. The exported helper walks up
@@ -4111,7 +4114,9 @@ deferred until a requested PR. No PR opened.
 **Canvas terminal blur can leave a stale link pointer (2026-10-05).**
 
 - Severity: **low**; effort: small; area: desktop renderer; kind: bug
-- Status: **fixed in `01b4a2f5`; native Linux Desktop UI verified**. Separate Linux Server checks pass at `dcdf664a`; GPU/macOS remain unverified.
+- Status: **fixed in `01b4a2f5`; native Linux Desktop UI verified**. Separate Linux Server checks
+pass at `dcdf664a`. The later GPU-enabled eight-case matrix passes (Canvas4 hardware / Modal4 DOM);
+GPU context recovery and macOS remain unverified.
 
 **Observed:** the isolated full Linux Electron Desktop UI at `c0accdfcb0642dc2d643e1794640065f61906f34` rendered a wrapped URL through the real plain NodePTY and bundled xterm DOM renderer. Tail hover, complete URL activation by Ctrl-click, and native non-drag movement outside the terminal were delivered. In the SGR mouse case, moving to the canvas left xterm's active link and pointer state set (`A92_HOVER_CLEAR_FAILED`). No pointer capture was active. The normal mouse case completed the same leave successfully.
 
@@ -4126,6 +4131,36 @@ deferred until a requested PR. No PR opened.
 Private evidence:
 - Current failed control: `/tmp/nodeterm-a92-current-ys5prgif/runtime/control-7yoizvhv/proof/{receipt.json,runtime-result.json,canvas-soft-sgr-hover-clear-failed.png}`.
 - A92 old-bound mutant: `/tmp/nodeterm-a92-mutant-7dyrrp0u/runtime/old-upward-bound-mgnkw593/proof/{receipt.json,runtime-result.json}`.
+
+## A122
+
+**Focused Desktop xterm consumes the advertised native Quit chord (2026-10-05).**
+
+- Severity: **medium**; effort: small; area: Desktop terminal keyboard; kind: bug.
+- Status: **source-fixed in `9613cec519c1469aff10371bf0acf97adb90ed1a`; four Linux native cases pass**.
+- Locations: `src/renderer/terminal/terminal-config.ts`, `src/renderer/nodes/TerminalNode.tsx`
+  and `src/renderer/components/kanban/ModalTerminal.tsx`.
+
+Earlier full-product Linux Desktop attempts delivered native Ctrl+Q while the terminal was
+focused but reached no native confirmation. The actual File-menu and outside-terminal Ctrl+Q
+controls later confirm natural Quit on the historical `972f7994` / built `01b4a2f5` checkpoint.
+The original V5 key observation is document-capture/main before-input evidence, not the final
+renderer default-prevented state. Current source identifies the ordinary xterm Ctrl+Q/XON path
+as the missing native-role exception; `terminalKeyAction` now returns `native` for only the exact
+printed platform Quit chord on Desktop keydown/keyup before policy or registry handling.
+Canvas and Modal pass their actual Desktop/browser identity. Neither handler prevents default
+for this branch. Server and other terminal chords keep their existing bytes/behavior.
+
+133 focused policy tests and all 218 tests in three affected files pass with full TypeScript
+checking. Six isolated compiled mutations are assertion-caught with passing control/restored
+runs. A fresh full Desktop build is source-bound to `9613cec5`; all four native Linux
+Canvas/Modal × app-first/terminal-first cases pass. Actual owned textarea/main focus at dispatch,
+parented native Quit confirmation, Escape Cancel retaining the exact PTY, and later natural
+File-menu Quit with own PTY/hook retirement are verified. See the final checkpoint section.
+
+The fix changes only Desktop renderer shortcut handling, not Android, SSH/relay contracts or iOS
+fields. macOS/Windows native delivery remains unverified. No APK, installed-phone or physical
+ledger change follows from this source repair.
 
 ## Native Desktop wrapped-link and leave verification (A92/A121, 2026-10-05)
 
@@ -4213,26 +4248,45 @@ user-session registration, macOS, or Android UI/storage. Earlier setpriv and pri
 failures are retained as failed fixture attempts, without product fixes or mutation credit.
 Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/runtime-checkpoint-supplement/`.
 
-A private hardware probe also passes first and retained WebGL2 contexts on the RTX 4090 through
-NVIDIA Vulkan, including exact RGBA readback and no context loss. It loads no product main process
-or terminal, so **the terminal GPU matrix remains pending**. The separate successful PAM namespace
-admission performs no authentication; the installed-PAM result above supplies that later evidence.
-Private environment proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/environment-admission/`.
+The earlier RTX 4090 WebGL2 probe verified the environment only; the successful PAM namespace
+admission performed no authentication. Their historical scope is unchanged. Later product GPU
+and installed-PAM results supply the separate evidence recorded here.
 
-**Ordinary Linux Desktop Quit remains unresolved.** Two full-product attempts finish the eight
-DOM link/leave cases and dispatch native Ctrl+Q, but reach no before-quit event or confirmation
-dialog. The instrumented V5 attempt additionally records trusted, unprevented key delivery and
-an enabled native Quit menu. A separate early attempt reproduces that observation before any
-link test or external URL open (zero cases/opens). Three minimal cached-Electron
-controls quit naturally, including debugger attachment and two post-window menu rebuilds. Those
-controls verify the test environment, not product Quit. The full-product attempts need cleanup
-signals and cannot pass the ordinary-Quit gate; no product cause or fix is established. Diagnostic
-archives preserve the negatives separately from the positive DOM and minimal-menu controls.
+Earlier focused-terminal Ctrl+Q attempts remain nonpositive. V5's trusted renderer capture and
+main before-input observations do not establish `defaultPrevented` after xterm's target handler.
+Minimal Electron Quit controls verified the environment, not product Quit; failed fixture and
+classifier attempts remain separate from the successful runs below.
 
-No runtime, external contract, APK or phone state changes follow from this verification.
-Beta 16/code 17 remains prepared from `2723845e`; beta 10/code 11 remains last installed.
-Phone checks stay paused at **10 Pass / 22 Partial / 32 Pending**. Next: investigate product Quit,
-run the terminal GPU and real tmux/SSH/macOS matrices, and resume the Pixel update/checklist when
-authorized. Live A105/A106 requires a usable provider account after HTTP 401; A25/A93 require
-maintainer backend work. The Android contribution stays in this repository; no PR is opened and
-A68 remains deferred until requested PR preparation.
+**Historical Linux Desktop runtime checkpoint:** current source `972f7994` differs from built
+Desktop `01b4a2f5` only in six documents. Native File-menu Quit/Cancel and a separate outside-terminal
+Ctrl+Q/Cancel both pass, followed by native File-menu confirmation and natural zero exit. Cancel
+preserves the exact own PTY/workspace/window; Quit retires the own PTY/hook and saves state.
+The GPU-enabled eight-case link matrix passes with eight complete URL opens: four Canvas cases
+use the actual NVIDIA RTX 4090 xterm WebGL2 context, real glyph pixels and production 2D link
+underline before/hover/leave; four Modal cases intentionally use DOM. The single GPU pilot stays
+separate. A real shipped-tmux Canvas soft-wrap/inner-no-reporting pilot also passes one native
+hover/plain-click/Ctrl-click/leave case while preserving the exact pane/client and shipped mouse-on
+options. GPU and tmux fixtures use explicit `app.exit(0)`, supplying no ordinary-Quit proof.
+These do not verify GPU context recovery/compositor pixels or full tmux/SSH matrices.
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/desktop-checkpoint-20261005/`.
+
+**A122 is fixed in `9613cec519c1469aff10371bf0acf97adb90ed1a`.** Desktop Canvas/Modal now keeps the
+exact native Quit chord ahead of xterm on keydown/keyup under either shortcut policy, without
+preventing the native menu. Server retains Ctrl+Q/XON. 133 focused policy tests, 218 affected tests
+in three files, full TypeScript and six assertion-caught isolated mutations pass. The fresh full
+Desktop build is bound to that exact source (snapshot `57e09375369a1a68f0c28b7975616561aad6715a4dc05a6fc5eeb00d0dc0706c`;
+build receipt `86eb82912ab7aa8a853a7236bacebc40ffbd9eff6845f3b79caaac83a029f5ff`).
+All four native Linux cases pass: Canvas/Modal × app-first/terminal-first. At dispatch the actual
+owned xterm textarea and main focus IPC are true; Ctrl+Q opens the real parented Quit dialog.
+Native Escape Cancel retains the exact PTY and saved state; native File → Quit / Tab / Enter then
+exits naturally with code zero, retires every admitted PTY birth and removes the own hook endpoint.
+No signal, `app.exit`, renderer-dispatched key or API Quit supplies a pass. These are four separate private
+home/network/PID/Xvfb cases, with zero link cases/URL opens; native macOS/Windows remains unverified.
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/desktop-native-quit-20261005/`.
+
+The A122 source repair changes Desktop shortcuts only; Android and external contracts are unchanged.
+Beta 16/code 17 remains prepared from `2723845e`, uninstalled; beta 10/code 11 is last installed.
+Phone testing stays paused at **10 Pass / 22 Partial / 32 Pending**. Wider tmux/SSH and other-platform
+runtime checks remain pending. A105/A106 live checks need a usable provider after HTTP 401;
+A25/A93 need hosted-backend maintainers. Resume Pixel checks when authorized. No PR is opened,
+and A68 remains deferred until requested PR preparation.
