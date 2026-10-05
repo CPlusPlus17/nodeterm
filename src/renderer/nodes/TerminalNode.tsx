@@ -2984,15 +2984,23 @@ export function TerminalNode({
         e,
         isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId ?? '')
       )
-      const action = terminalKeyAction(e, term.hasSelection(), ownsProjectJump, registryOwns)
+      const action = terminalKeyAction(
+        e,
+        term.hasSelection(),
+        ownsProjectJump,
+        registryOwns,
+        undefined,
+        { isDesktop: !isBrowserRuntime(), isMac }
+      )
       if (action === 'pass') return true
       // 'bubble': the window dispatcher owns this chord (an allowInTerminal registry command).
       // Return false so xterm skips its own keymap — which would consume e.g. Ctrl+Shift+Arrow
       // into a CSI write and cancel the event — and DO NOT preventDefault: the dispatcher bails
       // on defaultPrevented events, so a prevented bubble would kill the very dispatch this
       // exists to reach.
-      // 'native': same mechanics, different owner — the PLATFORM's paste (Windows Ctrl+V, issue
-      // #562). xterm would map it to \x16 and cancel the keydown, which suppresses both
+      // 'native': same mechanics, different owner — the Desktop Quit role or PLATFORM paste.
+      // Quit stays live under either policy; Ctrl+Q otherwise becomes XON and is cancelled.
+      // Windows Ctrl+V (issue #562) maps to \x16 and cancels the keydown, which suppresses both
       // Chromium's paste command and the Edit menu's Ctrl+V accelerator; leaving the event
       // untouched lets the ordinary `paste` event reach xterm's textarea, exactly as ⌘V does on
       // macOS (bracketed-paste framing included).

@@ -13,6 +13,8 @@ import type { AgentId } from '@shared/agents/config'
 import { effectiveAccountId } from '../../lib/accountChip'
 import { readsClaudeTranscript } from '../../lib/transcriptGates'
 import { liveProjectJumpTarget } from '../../lib/projectJump'
+import { isBrowserRuntime } from '../../bridge/runtime'
+import { isMacPlatform } from '@shared/platform-utils'
 import { terminalChordBubbles, terminalShortcutPolicy } from '../../lib/keybindingOverrides'
 import { FindBar } from '../FindBar'
 import { useAgentStatus } from '../../state/agentStatus'
@@ -263,11 +265,18 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch }: Moda
       // focus etc. mean nothing here), so those chords keep reaching the pty; app-scope
       // allowInTerminal commands still bubble, matching what the dispatcher would claim.
       const registryOwns = terminalChordBubbles(e, true)
-      const action = terminalKeyAction(e, term.hasSelection(), ownsProjectJump, registryOwns)
+      const action = terminalKeyAction(
+        e,
+        term.hasSelection(),
+        ownsProjectJump,
+        registryOwns,
+        undefined,
+        { isDesktop: !isBrowserRuntime(), isMac: isMacPlatform() }
+      )
       if (action === 'pass') return true
       // 'bubble': hand the chord to the window dispatcher — no preventDefault (it bails on
       // defaultPrevented), no xterm processing. 'native' leaves the event uncancelled for the
-      // PLATFORM's own paste (Windows Ctrl+V). See TerminalNode's twin comment.
+      // Desktop Quit role or PLATFORM paste (Windows Ctrl+V). See TerminalNode's twin comment.
       if (action === 'bubble' || action === 'native') return false
       e.preventDefault()
       if (action === 'copy') window.nodeTerminal.clipboard.writeText(term.getSelection())
