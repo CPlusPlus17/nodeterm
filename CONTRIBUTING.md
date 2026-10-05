@@ -1018,6 +1018,18 @@ a transmitted text request is uncertain delivery, never a pre-paste refusal; sho
 warning. SessionStart idle rescue is scoped to that same nonempty session and agent identity,
 and a foreign idle must not broadcast fresh state proof to the renderer.
 
+## Retired WebGL contexts
+
+A restored xterm WebGL context is live again. When its owning Canvas listener replaces the addon,
+explicitly lose the captured original addon canvas after disposal and before notifying the budget
+coordinator. Querying the screen after disposal misses the detached canvas; disposing addon-webgl
+0.18 alone does not retire its context. Keep the already-lost `onContextLoss` path and delayed,
+budget-gated regrant policy unchanged. Behavioral helper tests cover retained detached canvases and
+fail-open retirement. Native restored-hook verification must separately observe the trusted restored
+event, old-context retirement, readable DOM fallback and a distinct fresh renderer; visible recovery
+alone does not prove that budget slots were released. Preserve stale-addon ownership guards and do
+not infer repeated/page-wide pressure coverage from a one-terminal pilot.
+
 ## Canvas terminal mouse-leave ordering
 
 Canvas mouse leave defers only xterm blur to the next task (`terminal/deferred-blur.ts`).

@@ -2334,6 +2334,9 @@ export function TerminalNode({
             // what actually guarantees the terminal is back on a renderer that paints.
           }
           webgl = null
+          // Restore made the original context live again. Dispose only detaches its canvas;
+          // explicitly retire that captured context before the coordinator grants another.
+          loseWebglContexts(addonCanvas ? [addonCanvas] : null)
           verifyCleanDomState('context-restored')
           fullRepaint()
           webglHandle?.contextLost()

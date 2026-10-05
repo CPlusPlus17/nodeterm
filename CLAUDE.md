@@ -672,7 +672,12 @@ Lifecycle, by intent:
   DOM renderer until panned out and back). The NODE still never re-acquires itself (that loop is
   the eviction fight the design fears): the retry goes through `tryGrant` — never exceeds the
   budget, never reclaims a visible holder — and stops after `WEBGL_LOSS_STREAK_MAX` consecutive
-  losses (visibility transition resets). The node registers via `registerWebglClient` on mount
+  losses (visibility transition resets). A `webglcontextrestored` event makes the original context
+  live again: capture its addon canvas, dispose the addon, then explicitly retire that original
+  context via `loseWebglContexts` BEFORE reporting `handle.contextLost()` and allowing a fresh
+  grant. Addon disposal detaches the canvas and deletes resources but does not release the context's
+  Chromium cap slot. Keep the already-lost `onContextLoss` path separate; nodes never re-grant
+  themselves. The node registers via `registerWebglClient` on mount
   and `handle.dispose()`s on unmount (which releases + cancels timers). A parked terminal is
   off-screen so it holds no context. Permanent-delete paths call `disposeTerminalOnUnmount(id)` so a
   deleted node disposes instead of parking.
