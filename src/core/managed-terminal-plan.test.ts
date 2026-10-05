@@ -6,8 +6,13 @@ import { DEFAULT_SETTINGS, UNKNOWN_CLAUDE_CLI_CAPS, UNKNOWN_CODEX_CLI_CAPS, UNKN
   type Project, type Settings, type Workspace } from '../shared/types'
 import type { ManagedTerminalRequest } from './managed-terminals'
 import { createManagedTerminalPlanner, type ManagedTerminalPlannerDeps } from './managed-terminal-plan'
+import { findInLoginPath } from './exec-path'
 
-vi.mock('./codex-accounts-core', () => ({ codexAccountHome: (root: string, id: string) => path.join(root, 'codex-test', id) }))
+vi.mock('./codex-accounts-core', async (original) => ({
+  ...(await original<typeof import('./codex-accounts-core')>()),
+  codexAccountHome: (root: string, id: string) => path.join(root, 'codex-test', id)
+}))
+vi.mock('node-pty', () => ({ spawn: vi.fn(() => { throw new Error('planner must not spawn a PTY') }) }))
 
 describe('host-owned managed terminal planner', () => {
   let root: string
@@ -44,7 +49,7 @@ describe('host-owned managed terminal planner', () => {
     request = { creationId: '11111111-1111-4111-8111-111111111111', projectId: project.id,
       kind: 'shell', cols: 80, rows: 24 }
   })
-  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
+  afterEach(async () => { vi.unstubAllEnvs(); await fs.rm(root, { recursive: true, force: true }) })
   const planner = () => createManagedTerminalPlanner(deps)
   const agent = (agentId: 'claude' | 'codex' | 'grok' | 'gemini' | 'opencode' | 'copilot' = 'claude') =>
     ({ ...request, kind: 'agent' as const, agentId })
@@ -60,6 +65,27 @@ describe('host-owned managed terminal planner', () => {
     const largest = await planner().plan({ ...request, cols: 500, rows: 500, title: 'a'.repeat(120) }, nodeId)
     expect(largest.options).toMatchObject({ cols: 500, rows: 500 })
     expect(largest.node.title).toHaveLength(120)
+  })
+
+  it.skipIf(process.platform === 'win32')('plans the inherited absolute POSIX shell using the real executable resolver', async () => {
+    // The physical Android New Terminal path uses these same production dependencies. With a
+    // blank defaultShell, the inherited absolute SHELL used to be looked up beneath each PATH dir.
+    const { resolveLocalSessionShell } = await import('./pty-manager')
+    const shell = path.join(root, 'qa-shell')
+    await fs.writeFile(shell, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    vi.stubEnv('SHELL', shell)
+    vi.stubEnv('PATH', path.join(root, 'unrelated-path'))
+    settings.defaultShell = ''
+    deps.executable = findInLoginPath
+    deps.sessionShell = resolveLocalSessionShell
+    const plan = await planner().plan(request, nodeId)
+    expect(plan.node.shell).toBe(shell)
+    expect(plan.options.shell).toBe(shell)
+    expect(plan.command).toBeUndefined()
+    expect(await planner().revalidate(request, plan)).toBe(true)
+    await fs.unlink(shell)
+    expect(await planner().revalidate(request, plan)).toBe(false)
+    await expect(planner().plan(request, nodeId)).rejects.toThrow('The configured shell is unavailable.')
   })
 
   it('rejects extra executable hints, unsupported custom agents, account-on-shell and invalid sizes before resolution', async () => {

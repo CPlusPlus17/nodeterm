@@ -208,6 +208,39 @@ describe('findInPathString (real filesystem)', () => {
     expect(findInPathString('nt-absent', dir)).toBeNull()
   })
 
+  it('resolves an absolute executable without requiring its directory on PATH', () => {
+    const bin = writeBin(process.platform === 'win32' ? 'nt-absolute.exe' : 'nt-absolute')
+    expectPath(findInPathString(bin, ''), bin)
+    expectPath(findInPathString(bin, path.join(dir, 'unrelated')), bin)
+  })
+
+  it('rejects an absent absolute executable', () => {
+    const bin = path.join(dir, 'absent', process.platform === 'win32' ? 'nt-absent.exe' : 'nt-absent')
+    expect(findInPathString(bin, dir)).toBeNull()
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects an absent absolute executable even if PATH contains a joined shadow', () => {
+    // Windows cannot represent the old joined result with a second drive letter in the middle.
+    const bin = path.join(dir, 'absent', process.platform === 'win32' ? 'nt-shadow.exe' : 'nt-shadow')
+    const pathEntry = path.join(dir, 'path-entry')
+    // The old lookup joined even absolute programs to PATH, admitting this unrelated file.
+    const shadow = path.join(pathEntry, bin)
+    fs.mkdirSync(path.dirname(shadow), { recursive: true })
+    fs.writeFileSync(shadow, '', { mode: 0o755 })
+    expect(findInPathString(bin, pathEntry)).toBeNull()
+  })
+
+  it('rejects a directory supplied as an absolute executable', () => {
+    expect(findInPathString(dir, '')).toBeNull()
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a non-executable absolute file', () => {
+    // Windows checks existence instead of POSIX executable permissions.
+    const bin = path.join(dir, 'nt-no-exec')
+    fs.writeFileSync(bin, '', { mode: 0o644 })
+    expect(findInPathString(bin, '')).toBeNull()
+  })
+
   it('skips empty entries and searches later ones', () => {
     const bin = process.platform === 'win32' ? 'nt-probe.exe' : 'nt-probe'
     writeBin(bin)

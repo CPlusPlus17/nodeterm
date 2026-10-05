@@ -169,9 +169,18 @@ export function unquotePathEntry(entry: string): string {
  *  harmless but says something untrue about the check; F_OK says what we actually test. */
 const ACCESS_MODE = os.platform() === 'win32' ? fs.constants.F_OK : fs.constants.X_OK
 
-/** Walk a PATH string for an executable — sync but SUBPROCESS-FREE (one accessSync per candidate),
- *  so it is safe on the main thread. Returns the first accessible match, or null. */
+/** Resolve an absolute executable directly, or walk PATH for a bare name — sync but
+ *  SUBPROCESS-FREE, so it is safe on the main thread. An unavailable absolute path never falls
+ *  through to PATH: joining it to a PATH entry would check an unrelated executable. */
 export function findInPathString(bin: string, pathStr: string | null | undefined): string | null {
+  if (path.isAbsolute(bin)) {
+    try {
+      fs.accessSync(bin, ACCESS_MODE)
+      return fs.statSync(bin).isFile() ? bin : null
+    } catch {
+      return null
+    }
+  }
   const names = executableCandidates(bin, os.platform(), process.env.PATHEXT)
   for (const raw of (pathStr ?? '').split(path.delimiter)) {
     const dir = unquotePathEntry(raw)
