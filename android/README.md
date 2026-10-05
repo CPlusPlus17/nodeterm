@@ -18,7 +18,10 @@ has been opened. Beta 16/code 17 is prepared from `2723845e` and has passed the 
 A120 also passes controlled native OpenSSH enrollment, cancellation/deadline and synthetic installed-Fedora-PAM checks; see the later verification receipts.
 Current Desktop source also fixes focused-terminal native Quit interception (A122, `9613cec5`); all four Linux native focused-terminal cases pass.
 Later checks verify eight shipped-tmux and eight actual SSH-project cases. Separate GPU recovery
-pilots exposed and verified A123 restored-context cleanup (`db83fb7d`); see the final follow-up.
+pilots exposed and verified A123 restored-context cleanup (`db83fb7d`). A later genuine Server
+pilot verifies the same retirement path at `fa259f6e`; separate derived Desktop cell comparisons
+use the existing `db83fb7d` captures. A single Desktop Canvas SSH reconnect pilot also passes
+at `fa259f6e`; see the final follow-up for their limits.
 Phone testing remains paused: beta 10/code 11 is the last confirmed installation, with
 **10 Pass / 22 Partial / 32 Pending**. No new physical or live-CLI pass is claimed. Immediate FCM
 and fresh-different-desktop relay recovery (A25/A93) still need the maintainers' hosted backend
@@ -1443,9 +1446,47 @@ with explicit fixture app exit rather than ordinary Quit. Private proof: `gpu-co
 for historical recovery and `a123-context-retirement-20261005/` for the new source/compiled mutants.
 The older 6bfa and A122 source/build bindings remain separate.
 
+**Additional Server verification (`fa259f6e`).** Three fresh genuine Linux Node Server/browser
+Canvas soft/none runs pass fixed control / sole-call-removal mutant / restored confirmation
+with natural fixture exits 0 / 3 / 0. Each authenticates through the shipped HTTP login and WS
+bridge, without Desktop preload, and retains the same plain NodePTY, producer, 49×48
+buffer and geometry. Three trusted native input ACKs and two complete URL/glyph controls complete before
+the retirement assertion. Fixed runs witness genuine original restoration, production loss of that retired
+context, stock DOM fallback and fresh NVIDIA rendering; the calibrated mutant fails only
+`GPU_RETIRED_CONTEXT_NOT_LOST`. Owned Server SIGTERM closes it gracefully with zero and removes
+its PTY/producer; fixture app exit supplies no ordinary-Quit proof. This is one visible Server
+Canvas pilot, not a Server GPU matrix or pressure test.
+
+**Additional SSH reconnect verification (`fa259f6e`).** One Linux Desktop Canvas soft/none
+pilot passes after a single controlled SIGKILL of the exact product ControlMaster. Actual SSH
+exit 255 triggers shipped automatic recovery; a separate strictly pinned read-only observer
+verifies the same remote tmux pane and server, session-created identity, full history and producer across
+the gap and recovery. A new master, local PTY and remote attachment are required. Two trusted
+native `g` ACKs and complete URL hover/plain-click/Ctrl-click/leave checks pass with one producer
+paint. Exact owned session, observer, master and daemon cleanup passes; explicit fixture app exit
+provides no ordinary-Quit proof. Observer reads may affect timing, so this proves no performance
+or backoff guarantee. Broader SSH reconnect matrices remain pending; this pilot supplies no
+Modal, Server, Android or PAM enrollment proof.
+Earlier V2 nonce admission and V3 service-process failures remain fixture negatives; V3's outage
+state was not established. Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/desktop-ssh-reconnect-20261005/`.
+
+**Derived Desktop compositor evidence (`db83fb7d`).** A separate hash/CRC-checked analysis of
+three existing positive-run `capturePage` PNGs compares an uncovered repeated `A` cell and a blank
+cell with the actual framebuffer RGB references. All three match 152/152 pixels in each cell;
+42 glyph pixels differ from the blank background. The Sessions-covered top-left cell is excluded,
+not a product failure. Recorded geometry establishes 1:1 capture/CSS/GL scales at zoom 1;
+a direct device-pixel-ratio query was not recorded. This adds a single-run compositor cell
+correlation without rerunning the product or relabelling its old receipts. It does not establish
+synchronized frames, whole-frame or physical-display output, or link-underline compositing.
+
+Private proof: `.nodeterm/android-beta-build-16/operation-verification-receipt/a123-server-context-retirement-20261005/`
+contains **80 evidence/recipe files plus its manifest**. Server runtime and historical Desktop
+cell derivation remain separate; the original Desktop receipts are unchanged.
+
 Android and external contracts are unchanged. Beta 16/code 17 remains prepared from `2723845e`,
 uninstalled; beta 10/code 11 is last installed. Phone testing remains paused at **10 Pass /
-22 Partial / 32 Pending**. Repeated/page-wide GPU pressure, shared glyph eviction, compositor
-pixels, SSH reconnect, macOS/Windows and the remaining Pixel checklist are unverified. Live
+22 Partial / 32 Pending**. Repeated/page-wide GPU pressure, shared glyph eviction, synchronized/
+full-frame compositor or physical-display output, broader SSH reconnect, macOS/Windows and the remaining
+Pixel checklist are unverified. Live
 A105/A106 needs usable provider authentication; A25/A93 belong to the hosted-backend maintainers.
 No PR is opened; A68 waits until PR preparation is requested.
