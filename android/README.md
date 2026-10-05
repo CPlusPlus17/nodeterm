@@ -648,12 +648,13 @@ unsigned build inputs and checks.
    their results. AGP 8.10.1 supports this build's Kotlin 2.2 metadata (`A83`); do not use the earlier
    warning-producing APK as the final beta.
 
-   **CI alternative:** after the required checks, push `claude/android-ios-parity-75kfem`. Pushes
-   to this exact branch prepare version `2` / `0.1.0-beta.1`; increase the workflow's
-   `NODETERM_BETA_VERSION_CODE/NAME` for later betas. Optional manual **prepare_beta** inputs work
-   once the workflow exists on the default branch, as
-   [GitHub requires](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-   Wait for **Protocol**, **App release (R8, unsigned)** and **Private beta checks** to succeed.
+   **CI alternative:** dispatch registered workflow `366764274` through the GitHub API or CLI
+   on the intended branch ref with **prepare_beta=true** and explicit beta version code/name.
+   Verify the resulting run's exact `head_sha` matches the source commit. Registered workflows
+   can use API/CLI dispatch on other refs; the UI Run button has a separate default-branch rule
+   ([GitHub workflow_dispatch documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)).
+   Feature-branch pushes do not prepare beta inputs. Wait for all five jobs: **Protocol**, **App**,
+   **App release (R8, unsigned)**, **Private beta checks** and **CodeQL (Kotlin)**.
 2. For CI, download `nodeterm-android-release-unsigned`, `r8-release-outputs`, and
    `nodeterm-android-beta-build-inputs` from that same run and extract them into separate directories.
    For either path, use the exact `sourceRevision` and version fields in `beta-build-inputs.json`.
@@ -712,8 +713,8 @@ weekly Gradle update PRs for `android/`, the protocol build and the wrapper incl
 (okhttp, sshj, eddsa, BouncyCastle) come in a PR of their own, so an androidx bump the app cannot take
 yet (one that demands a higher `compileSdk`, say) does not hold them back. CodeQL analyses the app's
 and the protocol module's Kotlin (`.github/workflows/android.yml`, job `CodeQL (Kotlin)`) whenever
-that workflow runs: on a branch push or a pull request that changes an Android-relevant file, on
-`main` when such a change lands, and by hand (workflow_dispatch). A pull request that changes none is
+that workflow runs: on a `main` push or a pull request that changes an Android-relevant file,
+and by hand (`workflow_dispatch`). There is no `merge_group` trigger. A pull request that changes none is
 compared with `main`'s analysis. There is no weekly re-scan of unchanged Kotlin, and the job is not a
 required check. `GradleCiCoverageTest` pins all of this. The wrapper properties carry no
 `distributionSha256Sum` yet, so the Gradle distribution itself is not pinned.
@@ -1489,4 +1490,21 @@ uninstalled; beta 10/code 11 is last installed. Phone testing remains paused at 
 full-frame compositor or physical-display output, broader SSH reconnect, macOS/Windows and the remaining
 Pixel checklist are unverified. Live
 A105/A106 needs usable provider authentication; A25/A93 belong to the hosted-backend maintainers.
-No PR is opened; A68 waits until PR preparation is requested.
+A68 is source-fixed for branch readiness; no PR has been opened.
+
+**A68 workflow readiness (2026-10-05).** Source fix `7e91785c` limits Android
+push runs to `main` and retains pull-request path filters, without `merge_group`. Feature-branch
+pushes no longer duplicate PR checks or automatically prepare beta inputs. Manual
+`workflow_dispatch` with `prepare_beta=true` runs all five Android jobs; beta version overrides
+and **Private beta checks** are confined to that opt-in. The registered workflow `366764274`
+accepts API/CLI dispatch on the selected ref; verify the run's exact head before using its results.
+Pre-cutover control [run `37260849252`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37260849252)
+was dispatched at `c371860f` with `prepare_beta=true`: all five jobs passed.
+That control establishes dispatch admission, not verification of the later A68 source fix.
+All 13 focused trigger/path methods pass. All eight actual workflow mutations fail the real
+configuration test, with all 13 methods passing before and after restoration. The full
+949-method/98-suite protocol gate and offline app compilation are required before push.
+After push, exact-head CI is required through `workflow_dispatch` with `prepare_beta=true`;
+the verified run and exact head are recorded with the source exports. This closes the source
+finding; no PR is opened by this checkpoint. APK/client bytes, private signing, phone pause
+and **10 Pass / 22 Partial / 32 Pending** are unchanged.

@@ -3033,4 +3033,21 @@ uninstalled; beta 10/code 11 is last installed. Phone testing remains paused at 
 full-frame compositor or physical-display output, broader SSH reconnect, macOS/Windows and the remaining
 Pixel checklist are unverified. Live
 A105/A106 needs usable provider authentication; A25/A93 belong to the hosted-backend maintainers.
-No PR is opened; A68 waits until PR preparation is requested.
+A68 is source-fixed for branch readiness; no PR has been opened.
+
+**A68 workflow readiness (2026-10-05).** Source fix `7e91785c` limits Android
+push runs to `main` and retains pull-request path filters, without `merge_group`. Feature-branch
+pushes no longer duplicate PR checks or automatically prepare beta inputs. Manual
+`workflow_dispatch` with `prepare_beta=true` runs all five Android jobs; beta version overrides
+and **Private beta checks** are confined to that opt-in. The registered workflow `366764274`
+accepts API/CLI dispatch on the selected ref; verify the run's exact head before using its results.
+Pre-cutover control [run `37260849252`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37260849252)
+was dispatched at `c371860f` with `prepare_beta=true`: all five jobs passed.
+That control establishes dispatch admission, not verification of the later A68 source fix.
+All 13 focused trigger/path methods pass. All eight actual workflow mutations fail the real
+configuration test, with all 13 methods passing before and after restoration. The full
+949-method/98-suite protocol gate and offline app compilation are required before push.
+After push, exact-head CI is required through `workflow_dispatch` with `prepare_beta=true`;
+the verified run and exact head are recorded with the source exports. This closes the source
+finding; no PR is opened by this checkpoint. APK/client bytes, private signing, phone pause
+and **10 Pass / 22 Partial / 32 Pending** are unchanged.
