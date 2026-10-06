@@ -340,6 +340,22 @@ export const IconCircleCheck = () => (
 
 /* Stroked padlocks: the canvas lock moved out of the React Flow controls (whose filled 12px
    glyph set is why these used to be filled) into the dock, where every icon is an outline. */
+/** A clock face — when something ends (the live-link dialog's "Expires" row). */
+export const IconClock = () => (
+  <svg {...S}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+)
+
+/** One person — who someone is shown as (the live-link dialog's name row). */
+export const IconUser = () => (
+  <svg {...S}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+  </svg>
+)
+
 export const IconLock = () => (
   <svg {...S}>
     <rect x="4.5" y="10.5" width="15" height="10.5" rx="2.5" />
