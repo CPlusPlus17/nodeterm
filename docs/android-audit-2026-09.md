@@ -20,10 +20,13 @@ the audit's proposal, the handover's progress log says how and why.
 physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
 Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
 app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
-history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+history Find and exact-owned SSH End pass in the named cases. Two installed-beta failures are recorded:
 viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
-clears a draft without submitting it while tmux history is open (A128, in progress).
-The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+clears a draft without submitting it while tmux history is open (A128, source-fixed in
+`7e7d2c04`, with beta CI registration in `5484ab9f`). A128's affected source checks pass;
+thirty isolated mutations fail assertions, including four CI registration deletions. Integrated
+full gates, exact-head CI and an updated-APK physical retest remain pending. Neither fix has a
+new phone APK pass yet. The temporary
 phone profile, admitted public key and disposable host are retired. These bounded results do
 not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
 **10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
@@ -81,7 +84,8 @@ verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pu
 **Native custom-wheel checkpoint (2026-10-06, A86).** Both tmux copy key modes pass eight
 settled positions over real SSH and the input actor; three native distance mutants are caught.
 The [native receipt](android.md#native-custom-wheel-checks-2026-10-06) distinguishes this coverage
-from the remaining phone custom-binding/lifecycle/FPS matrix.
+from the later bounded Pixel 7a custom-binding/lifecycle cases; the wider gesture/reversal,
+lifecycle and FPS matrix remains open.
 
 | ID | Sev | Block | Effort | Area | Title |
 |---|---|---|---|---|---|
@@ -170,7 +174,7 @@ from the remaining phone custom-binding/lifecycle/FPS matrix.
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
-| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; cellular WireGuard SSH connection and smooth scrolling confirmed; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; native two-mode custom-binding distance/chunk/reversal checks and three mutants pass; phone reversal/lifecycle/FPS/custom bindings remain open · Scroll responsiveness is poor despite reachable tmux history |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; cellular WireGuard SSH connection and smooth scrolling confirmed; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; native two-mode custom-binding distance/chunk/reversal checks and three mutants pass; Pixel 7a adds bounded custom-binding/lifecycle cases, wider gesture/reversal/lifecycle/FPS matrix remains open · Scroll responsiveness is poor despite reachable tmux history |
 | [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
@@ -212,7 +216,7 @@ from the remaining phone custom-binding/lifecycle/FPS matrix.
 | [A125](#a125) | medium | | small | desktop/bug | ✅ source-fixed in `415dae9b`; eight bounded Linux Desktop reconnect cases pass at `5b7286b3` with A126; historical negative, 13 new/100 affected tests and six mutants retained; one two-host inactive-global native case passes at `59e4c93e`; phone/wider scope open · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
 | [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods, offline app compile, twelve callback cases and three assertion-caught mutants; updated APK physical check pending · Viewer exit falsely reports that the retained host session ended |
-| [A128](#a128) | high | BLOCK | medium | input/bug | 🔴 physically reproduced on beta 16, fix in progress · Composed Send clears a draft without submitting it while tmux history is open |
+| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; beta CI registration `5484ab9f`; affected checks and 30 assertion-caught mutations pass, integrated gates/CI/updated-APK physical retest pending · Composed Send clears a draft without submitting it while tmux history is open |
 
 ## A01
 
@@ -4838,9 +4842,12 @@ compiled callback recipe `/tmp/nodeterm-a127-verify.py`, SHA-256
 **Composed Send clears a draft without submitting it while tmux history is open (2026-10-06).**
 
 - Severity: **high (BLOCKS a reliable input release)**; effort: medium; area: input; kind: bug.
-- Status: **physically reproduced on beta 16/code 17; fix in progress**.
-- Location: `TerminalController.submit`, `TerminalScreen` Send, `TerminalActions.write`,
-  terminal-page `nt.submit` and `SshHostConnection.SshStream.write`.
+- Status: **source-fixed in `7e7d2c04`; beta CI registration in `5484ab9f`; integrated full
+  gates/exact-head CI and updated-APK physical retest pending**.
+- Location: `TerminalController.submit`, `TerminalScreen` Send, `ComposedCompletion`,
+  `ComposedPreparation`, `TerminalActions.submit`, `SshHostConnection.SshStream.submitComposed`,
+  `SshComposedInput`, `RelayHostConnection.Stream.submitComposed`, `PtyManager.submitComposed`,
+  `core/composed-tmux.ts` and `host-service.ts`'s `pty.submitComposed`.
 
 Two intended Pixel 7a cases reproduce input loss: composed Send in vi copy mode after a real
 SSH transport interruption, and composed Send on a healthy connection in emacs copy mode.
@@ -4853,16 +4860,52 @@ Evidence: `25-unsent-draft.xml`, `30-transport-settled.xml`,
 `35-native-copy-before.json`, `36-copy-mode-after-send.xml` and `37-native-copy-after.json`,
 bound by the [physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
 
-Current Send returns success when JavaScript is queued, then clears the draft. Native scroll
+Installed beta-16 Send returns success when JavaScript is queued, then clears the draft. Native scroll
 cancellation removes pending swipes but does not cancel host copy mode; raw stdin reaches the
 tmux history viewer rather than the foreground shell. Ordinary raw input, terminal reports and
 wheel events cannot globally acquire copy-mode cancellation semantics.
 
-The repair is being implemented as an explicit awaited composed-submission operation on the
-captured attached viewer, ordered after in-flight scrolling. It must preserve bracketed paste
-and separate Enter, keep Ctrl as a raw control byte without Enter, and retain the same draft on
-refusal, uncertainty or a stale viewer. Success describes submission to the attached pane/PTY,
-not execution of the command. Unknown outcomes must not replay. An additive relay verb requires
-the Android client and actual interop fixture in the same change; iOS implications are owed to
-@eneskirca. Source regression/mutation checks, a rebuilt private APK and physical retest remain
-pending at this checkpoint.
+The source fix awaits an explicit composed action on the captured viewer's input actor. It
+stops JavaScript momentum, removes unsent scrolling and orders Send behind the reserved
+in-flight scroll. Native attestation binds the attached viewer, server/session and exact
+pane/process generation; retirement refuses unsent work before queued SSH detach can run.
+Host history cancellation affects only that captured pane. Nonempty paste uses tmux-owned
+bracketed framing, followed 150 ms later by a separate Enter with a fresh identity/lifetime
+guard. Failure after paste is uncertain. Ctrl remains one raw byte without framing or Enter;
+payloads use private stdin/buffers, and no uncertainty replays.
+
+`ComposedCompletion` accepts one delivered receipt only for the same current viewer. The screen
+clears only an unchanged draft revision, including protection against editing away and back to
+identical text; a newly rearmed Ctrl survives. Refused, uncertain and stale completions retain
+input. `ComposedPreparation` treats a synchronous WebView provider throw as a refusal without
+leaving Send busy. Positive delivery means submission to the attested pane/PTY, not command
+execution. Direct Unix SSH and current local-tmux relay support this action. Legacy/unverifiable
+hosts, native Windows/session-host and SSH-project relay routes explicitly refuse, retaining the
+draft without a raw-input or `node.sendKeys` fallback.
+
+The additive **`pty.submitComposed {streamId, input:{kind, text, enter}}`** returns
+`{status:"delivered"|"refused"|"uncertain", message?}`. The Android client and actual
+`android/protocol/src/test/interop/host-fixture.ts` land with the host in `7e7d2c04`.
+**iOS @eneskirca** needs the same explicit awaited action, exact receipt, paste/Enter separation
+and draft-retention policy, including honest old-host refusal. Existing raw frame/report/wheel
+semantics are unchanged.
+
+The frozen candidate passes **170 distinct affected Kotlin methods / 8 suites**, **187 affected
+Vitest tests / 11 files**, full TypeScript and forced offline app compilation. Actual isolated
+SSH/tmux fixtures cover both copy modes, sibling-pane isolation, raw Ctrl, separately timed
+Enter, viewer retirement and uncertainty. All **26 source mutants** (17 Android, nine host)
+fail assertions; control/restored runs pass, including the supplementary 42-test host control
+with 11 native cases. `5484ab9f` registers the four host suites in private-beta CI. **Nine actual
+Gradle/JUnit configuration methods** pass; deleting each registration fails an assertion, with
+control/restored checks passing, for **30 assertion-caught mutations** total.
+Independent read-only source/evidence review finds no material issues.
+
+Aggregate V2: `/home/mgysin/.cache/nodeterm-android-work/a128-composed-submit-candidate-elbunqup/a128-composed-review-v2.json`,
+SHA-256 `34a0044207b64b5627f0a8653a9969234430a51b697d8ef589220f9e9a26b68f`.
+CI registration proof: `/home/mgysin/.cache/nodeterm-android-work/a128-ci-coverage-tzs459s8/proof/receipt.json`,
+SHA-256 `6f5b956e6c4ff2d9c0f8a6c070ba429b1cfe8c1175852c56bf30be159c5720f9`.
+These results cover source/configuration and isolated native fixtures. The actual helpers are
+used by Controller/Screen, but Compose/WebView/provider integration, integrated full gates,
+exact-head CI, rebuilt private APK and repaired physical tests remain pending. Installed beta
+16 and the original **10 Pass / 22 Partial / 32 Pending** ledger remain unchanged. See the
+[source checkpoint](android.md#composed-send-source-checkpoint-2026-10-06-a128).

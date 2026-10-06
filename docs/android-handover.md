@@ -12,10 +12,13 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
 Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
 app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
-history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+history Find and exact-owned SSH End pass in the named cases. Two installed-beta failures are recorded:
 viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
-clears a draft without submitting it while tmux history is open (A128, in progress).
-The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+clears a draft without submitting it while tmux history is open (A128, source-fixed in
+`7e7d2c04`, with beta CI registration in `5484ab9f`). A128's affected source checks pass;
+thirty isolated mutations fail assertions, including four CI registration deletions. Integrated
+full gates, exact-head CI and an updated-APK physical retest remain pending. Neither fix has a
+new phone APK pass yet. The temporary
 phone profile, admitted public key and disposable host are retired. These bounded results do
 not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
 **10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
@@ -71,8 +74,9 @@ verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pu
 **Native custom-wheel checkpoint (2026-10-06, A86).** A real SSH/tmux regression now verifies
 custom copy-mode bindings in both emacs and vi modes, distance across 20-notch chunks and
 FIFO-sensitive reversals. All eight settled native positions pass; three deliberately broken
-transport variants fail the expected distance assertion. This adds native coverage; phone custom
-bindings, lifecycle and FPS checks remain open. See [the native checks](android.md#native-custom-wheel-checks-2026-10-06).
+transport variants fail the expected distance assertion. The later Pixel 7a follow-up adds bounded
+custom-binding and lifecycle cases; wider gesture/reversal, lifecycle and FPS coverage remains
+open. See [the native checks](android.md#native-custom-wheel-checks-2026-10-06) and the physical receipt above.
 
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
@@ -379,6 +383,33 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### A128 composed Send source fix and beta CI registration (2026-10-06)
+
+`7e7d2c04` integrates explicit awaited actor submission on the captured viewer. Unsent momentum
+is cancelled; host history mode is cancelled only for that exact viewer/pane generation.
+Bracketed paste precedes a separate Enter by 150 ms with a fresh guard; Ctrl is one raw byte
+without Enter. One delivered same-current-view completion clears only an unchanged draft
+revision and preserves newly rearmed Ctrl. Refused, uncertain and stale outcomes retain the
+draft; post-paste failure is uncertain and never replays. The receipt confirms pane/PTY
+submission, not command execution. Direct Unix SSH and current local-tmux relay are supported;
+legacy/unverifiable, native Windows/session-host and SSH-project relay routes explicitly refuse.
+
+The additive `pty.submitComposed {streamId, input}` verb, Android client and actual interop fixture
+land together in `7e7d2c04`; iOS **@eneskirca** needs the same action/receipt and draft-retention
+rules. **170 distinct affected Kotlin methods / 8 suites**, **187 affected Vitest tests / 11
+files**, full TypeScript and forced offline app compilation pass. All **26 isolated source
+mutations** fail assertions, with control/restored runs passing. `5484ab9f` registers four host
+suites in private-beta CI; nine actual Gradle/JUnit configuration methods pass and four
+registration deletion mutants fail assertions, with passing control/restored checks. The total is **30 assertion-caught
+mutations**, not a repaired phone pass.
+
+The [source checkpoint](android.md#composed-send-source-checkpoint-2026-10-06-a128) binds aggregate
+V2 `34a0044207b64b5627f0a8653a9969234430a51b697d8ef589220f9e9a26b68f` and the CI registration
+receipt `6f5b956e6c4ff2d9c0f8a6c070ba429b1cfe8c1175852c56bf30be159c5720f9`.
+Independent read-only review finds no material source/evidence issues. Integrated full gates,
+exact-head CI, retained-signer private beta build/package and Compose/WebView/provider/physical
+A127/A128 retests remain pending. Installed beta 16 and the original 10/22/32 ledger are unchanged.
+
 ### Pixel 7a lifecycle and custom scrolling; A127/A128 discovered (2026-10-06)
 
 Trusted Wireless debugging is restored and the intended Pixel 7a's beta 16 installation is
@@ -391,9 +422,9 @@ These are bounded cases, not completed checklist rows.
 A127 reports a failed viewer as a dead session while the producer survives. Signed source fix
 `0d50075a` changes only the fallback wording and stream-exit documentation; three JVM methods,
 offline app compilation, twelve callback cases and three assertion-caught mutants pass.
-A128 loses composed input in copy mode: both vi after reconnect and healthy emacs clear the
-draft with no submitted command/marker. A128 is being implemented with explicit submission
-results and draft retention; it still needs regression/mutation, merged gates and a new APK.
+A128 loses composed input in copy mode on the installed beta 16: both vi after reconnect and
+healthy emacs clear the draft with no submitted command/marker. Its later `7e7d2c04` source fix
+and `5484ab9f` CI registration have the separate checks recorded in the entry above.
 Neither fix has an updated-device pass yet.
 
 The temporary phone profile and admitted public key are removed; the exact owned fixture stops
@@ -1349,11 +1380,13 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**Immediate follow-up:** finish A128's composed Send fix, retaining a draft on refusal or
-uncertainty and leaving host history mode before submission to the attached pane. A127's neutral
-viewer-close notice is source-fixed in `0d50075a`. Run meaningful regressions and assertion-caught
-mutations, merge both fixes, run the required offline/affected Desktop gates, build a retained-signer
-private beta and physically retest A127/A128 on the intended Pixel 7a. No updated APK is installed
+**Immediate follow-up:** A127's neutral viewer-close notice is source-fixed in `0d50075a`;
+A128's awaited composed Send is integrated in `7e7d2c04` with beta CI registration in `5484ab9f`.
+Affected source/configuration checks and thirty assertion-caught mutations pass. Run the required
+full offline protocol/app and affected Desktop gates on the integrated publication source,
+build/package a retained-signer private beta and physically retest A127/A128 on the intended
+Pixel 7a. Verify vi/emacs copy-mode Send, Ctrl, retirement/uncertainty draft retention and lifecycle
+completion using fresh disposable owned terminals. No updated APK is installed
 at this checkpoint. The latest [physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06)
 adds Start→Back/Home, process restart, custom emacs/vi dragging, bounded momentum, transport
 recovery, Find and exact-owned SSH End cases; it does not complete the original checklist.
@@ -1903,7 +1936,9 @@ Android 17/API 37 follow-up is recorded above. The original Pixel 10 Pro remains
 with testing paused and its ledger unchanged at 10 Pass /22 Partial /32 Pending. Fresh-phone
 results do not establish update/migration survival on the original phone.
 
-Finish A128 and physically retest it together with source-fixed A127 on a rebuilt private beta.
+Run integrated full gates and rebuild/package the private beta from the new source before
+physically retesting source-fixed A128 and A127; confirm all five Android jobs for the exact
+published HEAD. A128's thirty source/configuration mutations do not supply a phone pass.
 Use only the phone the user authorized, verify its identity and app focus before input, and use
 fresh disposable owned terminals with the current host source. Obtain a current main Wireless
 debugging endpoint only if the trusted connection is unavailable. The latest owned phone profile,

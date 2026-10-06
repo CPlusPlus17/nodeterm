@@ -9,10 +9,13 @@ where each fact comes from, and what is not done.
 physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
 Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
 app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
-history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+history Find and exact-owned SSH End pass in the named cases. Two installed-beta failures are recorded:
 viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
-clears a draft without submitting it while tmux history is open (A128, in progress).
-The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+clears a draft without submitting it while tmux history is open (A128, source-fixed in
+`7e7d2c04`, with beta CI registration in `5484ab9f`). A128's affected source checks pass;
+thirty isolated mutations fail assertions, including four CI registration deletions. Integrated
+full gates, exact-head CI and an updated-APK physical retest remain pending. Neither fix has a
+new phone APK pass yet. The temporary
 phone profile, admitted public key and disposable host are retired. These bounded results do
 not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
 **10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
@@ -68,8 +71,9 @@ verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pu
 **Native custom-wheel checkpoint (2026-10-06, A86).** A real SSH/tmux regression now verifies
 custom copy-mode bindings in both emacs and vi modes, distance across 20-notch chunks and
 FIFO-sensitive reversals. All eight settled native positions pass; three deliberately broken
-transport variants fail the expected distance assertion. This adds native coverage; phone custom
-bindings, lifecycle and FPS checks remain open. See [the native checks](#native-custom-wheel-checks-2026-10-06).
+transport variants fail the expected distance assertion. The later Pixel 7a follow-up adds bounded
+custom-binding and lifecycle cases; wider gesture/reversal, lifecycle and FPS coverage remains
+open. See [the native checks](#native-custom-wheel-checks-2026-10-06) and the physical receipt above.
 
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
@@ -423,6 +427,7 @@ describes as the future. The Android client implements what the host actually se
 | List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob, and beside it **`lan`** (new, `A74-refresh`): the computer's current LAN address and SSH host keys, which refresh the paired record | same blob (and never a `lan`), from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
 | Open an existing terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`; a reserved phone UUID uses only validated `nodeterm-phone`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
+| Input-bar Send (`A128`) | additive **`pty.submitComposed {streamId, input:{kind:"paste"\|"control", text, enter}}`** → `{status:"delivered"\|"refused"\|"uncertain", message?}`; current local-tmux host binds the attached stream to its captured viewer/pane generation; legacy, native Windows/session-host and SSH-project relay routes explicitly refuse | explicit actor submission to the captured Unix SSH viewer/pane; cancel host copy mode, paste with tmux-owned bracketed framing, then wait 150 ms before a separately guarded Enter; a control action is one raw byte with `enter:false` |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
 | Wake on open (`A103`, `A104`) | existing remote-viewer nudge wakes a mounted node or resolves one saved offscreen/closed-project node without switching views; exact owner/generation and Pause guards, no fresh shell or uncertain input replay | explicit Sleeping wake offer uses the agent's measured approval policy and host capabilities; the existing shell/WakeContext checks and user tap remain |
@@ -441,6 +446,14 @@ describes as the future. The Android client implements what the host actually se
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
 the shared pty. An `OP.Resized` still shows a "sized to another screen · fit this screen" hint.
+
+**Composed Send adoption (`A128`).** The additive method returns submission to the attested
+pane/PTY, not command execution. Refused, uncertain and stale completions retain the draft;
+uncertain input never replays or falls back to raw frames or `node.sendKeys`. Raw keystrokes,
+emulator replies and wheels retain their existing semantics. The Android client and actual
+`android/protocol/src/test/interop/host-fixture.ts` change together in `7e7d2c04`.
+iOS **@eneskirca** needs the same explicit awaited action, exact viewer/pane receipt, paste/Enter
+separation and draft-retention rules; it must treat an older or unsupported host as a refusal.
 
 ### Why typed host verbs
 
@@ -476,6 +489,45 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Composed Send source checkpoint (2026-10-06, A128)
+
+`7e7d2c04` fixes the physically reproduced beta-16 input loss; `5484ab9f` registers its four
+host suites in private-beta CI. The input bar awaits an explicit submission through the captured
+viewer's input actor. It stops JavaScript momentum, discards unsent scrolling and waits behind
+the reserved in-flight scroll. The host cancels history mode only on the exact captured
+viewer/pane generation. Nonempty paste uses tmux-owned bracketed framing; Enter is a separate
+write after 150 ms, with a fresh identity/lifetime guard. Any failure after paste is uncertain.
+Ctrl submits one raw control byte without framing or Enter. Payloads use private stdin/buffers.
+
+One-shot completion clears the draft only after a delivered receipt for the same current viewer
+and unchanged draft revision; editing away and back to identical text preserves the new draft.
+A newly rearmed Ctrl is preserved. Refused, uncertain and stale outcomes retain input without
+replay. Synchronous WebView preparation failure also retains the draft. Delivery means input
+submitted to the attested pane/PTY, not proof that its application executed the command.
+Direct Unix SSH and current local-tmux relay hosts support this operation; legacy or unverifiable
+hosts, native Windows/session-host and SSH-project relay routes explicitly refuse it.
+
+The frozen candidate passes **170 distinct affected Kotlin methods / 8 suites**, **187 affected
+Vitest tests / 11 files**, full TypeScript and forced offline app compilation. **26 isolated
+source mutations** fail assertions, with passing controls/restored runs: 17 Android
+transport/preparation/completion mutations and nine host mutations. Actual private native
+SSH/tmux fixtures cover emacs/vi copy mode, exact-pane/control input, separately timed Enter,
+retirement and uncertainty; the restored host control passes 42 tests including 11 native cases.
+The CI registration follow-up passes **nine actual Gradle/JUnit configuration methods**;
+deleting each of the four new host registrations fails an assertion, with control/restored runs
+passing. This gives **30 assertion-caught mutations** across source and CI registration.
+
+Private aggregate V2: `a128-composed-submit-candidate-elbunqup/a128-composed-review-v2.json`
+under `/home/mgysin/.cache/nodeterm-android-work`, SHA-256
+`34a0044207b64b5627f0a8653a9969234430a51b697d8ef589220f9e9a26b68f`.
+CI registration proof: `/home/mgysin/.cache/nodeterm-android-work/a128-ci-coverage-tzs459s8/proof/receipt.json`,
+SHA-256 `6f5b956e6c4ff2d9c0f8a6c070ba429b1cfe8c1175852c56bf30be159c5720f9`.
+Independent read-only source/evidence review finds no material issues. These are source,
+configuration and isolated native-fixture results. The completion/preparation helpers are used
+by the real Controller/Screen, but Compose/WebView/provider integration, integrated full gates,
+exact-head CI, a rebuilt retained-signer beta and repaired phone checks remain pending.
+The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
 ### Pixel 7a lifecycle, scroll and input follow-up (2026-10-06)
 
@@ -517,7 +569,9 @@ connection. Retry conditions, budget, generation checks and Reattach remain unch
 JVM methods, offline app compilation and twelve compiled actual-callback cases pass; three
 isolated mutants fail assertions, with passing control/restored runs. The callback fixture uses
 immediate Handler, viewer-slot and retry-admission fakes, not Android lifecycle or native liveness.
-A128's submission acknowledgement and history-mode handling are still being implemented.
+A128 is now source-fixed in `7e7d2c04`, with CI registration in `5484ab9f`; the
+[source checkpoint](#composed-send-source-checkpoint-2026-10-06-a128) records its separate checks.
+Neither source fix has an updated-APK physical pass at this checkpoint.
 
 The temporary phone profile and its displayed public-key admission were removed. The exact
 owned fixture exits successfully with generated private authentication removed and both

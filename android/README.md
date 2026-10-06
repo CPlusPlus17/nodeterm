@@ -10,13 +10,33 @@ it is talking to.
 physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
 Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
 app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
-history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+history Find and exact-owned SSH End pass in the named cases. Two installed-beta failures are recorded:
 viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
-clears a draft without submitting it while tmux history is open (A128, in progress).
-The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+clears a draft without submitting it while tmux history is open (A128, source-fixed in
+`7e7d2c04`, with beta CI registration in `5484ab9f`). A128's affected source checks pass;
+thirty isolated mutations fail assertions, including four CI registration deletions. Integrated
+full gates, exact-head CI and an updated-APK physical retest remain pending. Neither fix has a
+new phone APK pass yet. The temporary
 phone profile, admitted public key and disposable host are retired. These bounded results do
 not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
 **10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](../docs/android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+
+**Composed Send source checkpoint (2026-10-06, A128).** `7e7d2c04` awaits submission through
+the captured viewer's input actor, exits history on that exact pane and separates paste from a
+freshly guarded Enter by 150 ms. Ctrl remains one raw byte without Enter. Only one delivered
+receipt for the same current viewer clears an unchanged draft; edited drafts, rearmed Ctrl,
+refusals and uncertainty are preserved, with no replay or legacy raw/`node.sendKeys` fallback.
+Direct Unix SSH and current local-tmux relay are supported; legacy, native Windows/session-host
+and SSH-project relay routes explicitly refuse. A positive receipt means pane/PTY submission,
+not command execution. **170 distinct Kotlin methods / 8 suites**, **187 Vitest tests / 11
+files**, full TypeScript and offline app compilation pass; **26 source mutations fail assertions**.
+`5484ab9f` adds four private-beta CI registrations: nine actual Gradle configuration methods
+pass and four deletion mutations fail assertions, with passing control/restored checks
+(**30 assertion-caught mutations** total). Integrated full gates, exact-head CI and a rebuilt
+private APK/physical retest remain
+pending. See [the scoped proof](../docs/android.md#composed-send-source-checkpoint-2026-10-06-a128).
+The additive `pty.submitComposed` contract includes the Android client and actual interop fixture
+in the same source commit; **iOS @eneskirca** needs the same action, receipt and retention rules.
 
 **Desktop SSH reconnect checkpoint (2026-10-06, A125/A126).** A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases
@@ -69,8 +89,9 @@ verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pu
 **Native custom-wheel checkpoint (2026-10-06, A86).** A real SSH/tmux regression now verifies
 custom copy-mode bindings in both emacs and vi modes, distance across 20-notch chunks and
 FIFO-sensitive reversals. All eight settled native positions pass; three deliberately broken
-transport variants fail the expected distance assertion. This adds native coverage; phone custom
-bindings, lifecycle and FPS checks remain open. See [the native checks](../docs/android.md#native-custom-wheel-checks-2026-10-06).
+transport variants fail the expected distance assertion. The later Pixel 7a follow-up adds bounded
+custom-binding and lifecycle cases; wider gesture/reversal, lifecycle and FPS coverage remains
+open. See [the native checks](../docs/android.md#native-custom-wheel-checks-2026-10-06) and the physical receipt above.
 
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
