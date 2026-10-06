@@ -8,20 +8,33 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Pixel 7a follow-up (2026-10-06, A127/A128).** Installed beta 16/code 17 now has bounded
-physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
-Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
-app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
-history Find and exact-owned SSH End pass in the named cases. Two installed-beta failures are recorded:
-viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
-clears a draft without submitting it while tmux history is open (A128, source-fixed in
-`7e7d2c04`, with beta CI registration in `5484ab9f`). A128's affected source checks pass;
-thirty isolated mutations fail assertions, including four CI registration deletions. Integrated
-full gates, exact-head CI and an updated-APK physical retest remain pending. Neither fix has a
-new phone APK pass yet. The temporary
-phone profile, admitted public key and disposable host are retired. These bounded results do
-not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
-**10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+**Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
+from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
+Vanadium `154.0.8037.126.0`) against a fresh disposable Desktop from the same source.
+The 5.48-second same-signer update preserves the first-install time and saved temporary SSH
+profile; Sessions reopens without editing its pin or readmitting the phone key. One emacs
+copy-mode Send submits exactly once to the original producer, exits copy mode and leaves the
+sibling guard unchanged. The A127 viewer-only exit now shows a neutral connection-close notice,
+disables Send and retains the draft; manual Reattach preserves the same producer and complete
+same-grid history, and the retained draft submits once. These are bounded repaired-device cases;
+vi copy-mode recovery/Send also preserves the pane and full same-grid history, with the draft
+retained and Send disabled during the outage, then one native submission after recovery. One
+Ctrl+C action reaches the owned raw TTY consumer as exactly `03`, with no extra byte in a bounded
+0.8-second window. Actual phone-managed shell creation and exact owned SSH End pass too:
+the producer/pane/viewers end while the sibling guard and expected canvas node remain.
+Only the temporary profile/public-key admission are retired; the nonce-validated host stop
+removes generated private authentication and closes both owned listeners. Nine bounded cases
+and 303 raw-artifact hashes are recorded in the frozen report; ordinary native Quit is unverified.
+
+At exact merged `a79375c3`, full forced offline protocol checks pass **982 methods / 102 suites**,
+zero failures/errors/skips; offline app compilation, **187 affected Vitest tests / 11 files**
+and full TypeScript pass. [Android run `37523703627`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37523703627)
+passes all five jobs and ten required critical steps. The APK and installed public-code pull
+both hash to `c51433d4…`; actual retained-signer verification uses SDK 36, with SDK 37 tools
+unavailable. A127 is source-fixed in `0d50075a`; A128 in `7e7d2c04`, with beta CI registration
+`5484ab9f` and **30 assertion-caught source/configuration mutations**. Older beta-16 failures
+remain historical. This does not complete the 64-item checklist or the original Pixel 10 Pro
+ledger, which stays **10 Pass / 22 Partial / 32 Pending**. See [the bounded beta-17 receipt](android.md#pixel-7a-beta-17-upgrade-and-composed-send-2026-10-06).
 
 **Desktop SSH reconnect checkpoint (2026-10-06, A125/A126).** A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases
@@ -383,6 +396,30 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### Beta 17 installed; merged gates and bounded A127/A128 device cases (2026-10-06)
+
+Exact signed `a79375c3` passes full forced offline **982 methods / 102 suites**, zero failures,
+errors or skips, offline app Kotlin, **187 affected Vitest tests / 11 files** and full
+TypeScript. Android [run `37523703627`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37523703627)
+passes all five jobs and ten critical steps. Retained-signer beta 17/code 18 is installed on the
+intended Pixel 7a in 5.48 seconds, with exact prepared/installed APK hash `c51433d4…`; actual
+SDK-36 signing/verification is used and SDK-37 tools are unavailable.
+
+The single saved temporary SSH profile/first-install time survives update without pin editing
+or key readmission. A128 emacs copy-mode Send is native-verified exactly once on the original
+producer, with copy mode cancelled and the guard unchanged. A127's viewer-only exit shows the
+neutral notice, disables Send and retains the draft. Manual Reattach preserves the producer
+and complete same-grid history; the retained draft submits once. Controlled vi transport
+recovery preserves the draft/same pane/full capture, then explicit Send submits once and exits
+copy mode. One raw Ctrl+C produces exactly `03`, without any additional byte in a bounded
+0.8-second window. Actual phone-managed shell creation and exact owned SSH End pass too.
+Only the temporary profile/admitted public-key line are retired; the original authorization
+file is restored. The nonce-validated owned host stop passes with authentication removed,
+source/tools/build outputs unchanged and both listeners closed; ordinary Quit is unverified.
+The frozen physical report binds 303 raw hashes/nine bounded passes, SHA-256
+`ece4fa48d31fab55a9f5158f475b4415e9c116c8a2f1683ec48295bf42e55e6b`. See [the bounded beta-17 checkpoint](android.md#pixel-7a-beta-17-upgrade-and-composed-send-2026-10-06).
+The original Pixel 10 Pro ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
+
 ### A128 composed Send source fix and beta CI registration (2026-10-06)
 
 `7e7d2c04` integrates explicit awaited actor submission on the captured viewer. Unsent momentum
@@ -406,9 +443,13 @@ mutations**, not a repaired phone pass.
 The [source checkpoint](android.md#composed-send-source-checkpoint-2026-10-06-a128) binds aggregate
 V2 `34a0044207b64b5627f0a8653a9969234430a51b697d8ef589220f9e9a26b68f` and the CI registration
 receipt `6f5b956e6c4ff2d9c0f8a6c070ba429b1cfe8c1175852c56bf30be159c5720f9`.
-Independent read-only review finds no material source/evidence issues. Integrated full gates,
-exact-head CI, retained-signer private beta build/package and Compose/WebView/provider/physical
-A127/A128 retests remain pending. Installed beta 16 and the original 10/22/32 ledger are unchanged.
+Independent read-only review finds no material source/evidence issues. At that source-fix
+checkpoint integrated full gates, exact-head CI, private beta packaging and repaired-device
+checks were pending. The later beta-17 entry above records their bounded completion: merged
+982/102/app and affected Desktop gates, five green CI jobs, the same-signer update, emacs Send
+and A127 viewer-close/manual-Reattach. Later vi recovery/Send and raw Ctrl checks pass too;
+exact owned End/cleanup and the final report are verified separately in the latest entry.
+Wider physical/provider checks remain pending; the original 10/22/32 ledger is unchanged.
 
 ### Pixel 7a lifecycle and custom scrolling; A127/A128 discovered (2026-10-06)
 
@@ -425,7 +466,8 @@ offline app compilation, twelve callback cases and three assertion-caught mutant
 A128 loses composed input in copy mode on the installed beta 16: both vi after reconnect and
 healthy emacs clear the draft with no submitted command/marker. Its later `7e7d2c04` source fix
 and `5484ab9f` CI registration have the separate checks recorded in the entry above.
-Neither fix has an updated-device pass yet.
+Neither fix had an updated-device pass at that beta-16 baseline; later bounded beta-17
+repaired-device acceptance is recorded in the entry above.
 
 The temporary phone profile and admitted public key are removed; the exact owned fixture stops
 cleanly with authentication removed/listeners closed. This was a controlled SIGTERM stop,
@@ -1380,17 +1422,21 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**Immediate follow-up:** A127's neutral viewer-close notice is source-fixed in `0d50075a`;
-A128's awaited composed Send is integrated in `7e7d2c04` with beta CI registration in `5484ab9f`.
-Affected source/configuration checks and thirty assertion-caught mutations pass. Run the required
-full offline protocol/app and affected Desktop gates on the integrated publication source,
-build/package a retained-signer private beta and physically retest A127/A128 on the intended
-Pixel 7a. Verify vi/emacs copy-mode Send, Ctrl, retirement/uncertainty draft retention and lifecycle
-completion using fresh disposable owned terminals. No updated APK is installed
-at this checkpoint. The latest [physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06)
-adds Start→Back/Home, process restart, custom emacs/vi dragging, bounded momentum, transport
-recovery, Find and exact-owned SSH End cases; it does not complete the original checklist.
-After the next authorized push, confirm all five Android jobs on its exact HEAD. No PR is opened.
+**Immediate follow-up:** Beta 17/code 18 from `a79375c3` is installed; merged forced 982/102 protocol and app
+and affected Desktop gates pass, and exact-head Android run `37523703627` has all five jobs/ten
+critical steps green. A127's neutral viewer-close/manual-Reattach case and A128's emacs
+copy-mode Send are physically verified on the intended Pixel 7a. The controlled vi transport
+recovery/Send and single raw Ctrl+C cases pass too; actual managed creation, exact owned SSH End
+and final profile/key/host cleanup pass, with the frozen report bound to 303 raw hashes/nine
+bounded cases. Next device acceptance needs changed-host-key enforcement, deterministic
+held-receipt draft edit/rearm/stale-completion and uncertain-ack cases, other control combinations
+and broader lifecycle/Compose/WebView/provider flows where admitted. These existing gaps remain
+separate from the completed bounded cases. The [beta-17 checkpoint](android.md#pixel-7a-beta-17-upgrade-and-composed-send-2026-10-06)
+records the same-signer saved-profile update and bounded repaired-device cases; earlier beta-16
+Start→Back/Home, process restart, custom dragging/momentum, reconnect, Find and exact-owned
+SSH End evidence remains historical. Neither set completes the original checklist. Future
+publication changes require their own mandatory gates and all five exact-head Android jobs.
+No PR is opened.
 
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The controlled eight-case Linux Desktop reconnect matrix now verifies actual Canvas mounting and
@@ -1686,6 +1732,14 @@ of the new advertised action and receipt is owed to @eneskirca.
 
 Verified:
 
+- Exact merged `a79375c3` executes full forced 982/102 with zero failures/errors/skips plus app
+  Kotlin, affected 187/11 and full TypeScript; Android run `37523703627` has all five jobs/ten critical
+  steps green. Retained-signer beta 17/code18 is installed on the Pixel 7a, preserving the single
+  saved temporary SSH profile/first-install time without pin edit/key readmission. Bounded emacs
+  composed-Send, vi transport recovery, raw Ctrl and A127 viewer-close/manual-Reattach pass;
+  actual managed creation, exact owned End and cleanup/report pass too. The wider physical matrix
+  remains pending; the original Pixel 10 Pro 10/22/32 ledger is unchanged.
+
 - `A91` clears only an authoritative empty SSH listing, retaining uncertain cached listings and
   propagating cancellation without changing route/error/connection policy. Four new regressions,
   full protocol 688/67, offline app compile and six new isolated mutants pass. Historical beta9
@@ -1931,18 +1985,22 @@ source before editing. A100–A120 close retained history, typed read recovery, 
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
 host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
-Beta 16/code 17 from `2723845e` is installed on the separately authorized Pixel 7a; its latest
-Android 17/API 37 follow-up is recorded above. The original Pixel 10 Pro remains on beta 10/code 11
+Retained-signer beta 17/code18 from `a79375c3` is installed on the separately authorized Pixel
+7a after its beta 16/code17 update; the bounded Android 17/API 37 follow-up is recorded above. The original Pixel 10 Pro remains on beta 10/code 11
 with testing paused and its ledger unchanged at 10 Pass /22 Partial /32 Pending. Fresh-phone
 results do not establish update/migration survival on the original phone.
 
-Run integrated full gates and rebuild/package the private beta from the new source before
-physically retesting source-fixed A128 and A127; confirm all five Android jobs for the exact
-published HEAD. A128's thirty source/configuration mutations do not supply a phone pass.
+Merged full 982/102 protocol and app and affected Desktop gates plus exact-head all-five CI pass at
+`a79375c3`. Beta 17's bounded emacs/vi Send, vi transport recovery, raw Ctrl and A127 viewer-close/
+manual-Reattach cases plus actual managed creation/exact owned End/cleanup pass. The frozen
+nine-case report binds 303 raw hashes; broader control/refusal/uncertainty, provider and lifecycle
+cases still need their own controlled physical acceptance. A128's thirty
+source/configuration mutations remain separate from those device results.
 Use only the phone the user authorized, verify its identity and app focus before input, and use
 fresh disposable owned terminals with the current host source. Obtain a current main Wireless
-debugging endpoint only if the trusted connection is unavailable. The latest owned phone profile,
-public-key admission and QA host are already retired; preserve historical receipts. Resume the
+debugging endpoint only if the trusted connection is unavailable. The fresh beta 17 owned profile,
+public-key admission and QA host are retired with exact cleanup proof; keep beta 17 installed
+and preserve all historical receipts. Any further physical case needs a fresh owned fixture. Resume the
 expanded 64-item checklist without inheriting older passes for new flows. Real Claude rule
 persistence/full-question application needs usable provider authentication and remains separate
 from synthetic hook/producer tests. Preserve the older paired fixture and its original terminal.

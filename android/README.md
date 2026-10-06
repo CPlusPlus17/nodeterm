@@ -6,20 +6,33 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Pixel 7a follow-up (2026-10-06, A127/A128).** Installed beta 16/code 17 now has bounded
-physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
-Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
-app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
-history Find and exact-owned SSH End pass in the named cases. Two installed-beta failures are recorded:
-viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
-clears a draft without submitting it while tmux history is open (A128, source-fixed in
-`7e7d2c04`, with beta CI registration in `5484ab9f`). A128's affected source checks pass;
-thirty isolated mutations fail assertions, including four CI registration deletions. Integrated
-full gates, exact-head CI and an updated-APK physical retest remain pending. Neither fix has a
-new phone APK pass yet. The temporary
-phone profile, admitted public key and disposable host are retired. These bounded results do
-not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
-**10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](../docs/android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+**Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
+from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
+Vanadium `154.0.8037.126.0`) against a fresh disposable Desktop from the same source.
+The 5.48-second same-signer update preserves the first-install time and saved temporary SSH
+profile; Sessions reopens without editing its pin or readmitting the phone key. One emacs
+copy-mode Send submits exactly once to the original producer, exits copy mode and leaves the
+sibling guard unchanged. The A127 viewer-only exit now shows a neutral connection-close notice,
+disables Send and retains the draft; manual Reattach preserves the same producer and complete
+same-grid history, and the retained draft submits once. These are bounded repaired-device cases;
+vi copy-mode recovery/Send also preserves the pane and full same-grid history, with the draft
+retained and Send disabled during the outage, then one native submission after recovery. One
+Ctrl+C action reaches the owned raw TTY consumer as exactly `03`, with no extra byte in a bounded
+0.8-second window. Actual phone-managed shell creation and exact owned SSH End pass too:
+the producer/pane/viewers end while the sibling guard and expected canvas node remain.
+Only the temporary profile/public-key admission are retired; the nonce-validated host stop
+removes generated private authentication and closes both owned listeners. Nine bounded cases
+and 303 raw-artifact hashes are recorded in the frozen report; ordinary native Quit is unverified.
+
+At exact merged `a79375c3`, full forced offline protocol checks pass **982 methods / 102 suites**,
+zero failures/errors/skips; offline app compilation, **187 affected Vitest tests / 11 files**
+and full TypeScript pass. [Android run `37523703627`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37523703627)
+passes all five jobs and ten required critical steps. The APK and installed public-code pull
+both hash to `c51433d4…`; actual retained-signer verification uses SDK 36, with SDK 37 tools
+unavailable. A127 is source-fixed in `0d50075a`; A128 in `7e7d2c04`, with beta CI registration
+`5484ab9f` and **30 assertion-caught source/configuration mutations**. Older beta-16 failures
+remain historical. This does not complete the 64-item checklist or the original Pixel 10 Pro
+ledger, which stays **10 Pass / 22 Partial / 32 Pending**. See [the bounded beta-17 receipt](../docs/android.md#pixel-7a-beta-17-upgrade-and-composed-send-2026-10-06).
 
 **Composed Send source checkpoint (2026-10-06, A128).** `7e7d2c04` awaits submission through
 the captured viewer's input actor, exits history on that exact pane and separates paste from a
@@ -32,9 +45,14 @@ not command execution. **170 distinct Kotlin methods / 8 suites**, **187 Vitest 
 files**, full TypeScript and offline app compilation pass; **26 source mutations fail assertions**.
 `5484ab9f` adds four private-beta CI registrations: nine actual Gradle configuration methods
 pass and four deletion mutations fail assertions, with passing control/restored checks
-(**30 assertion-caught mutations** total). Integrated full gates, exact-head CI and a rebuilt
-private APK/physical retest remain
-pending. See [the scoped proof](../docs/android.md#composed-send-source-checkpoint-2026-10-06-a128).
+(**30 assertion-caught mutations** total). The subsequent merged `a79375c3` passes 982/102 protocol and app
+and affected Desktop gates plus all five CI jobs; retained-signer beta 17/code 18 is installed.
+Bounded emacs/vi Send, vi transport recovery, raw Ctrl and A127 viewer-close/manual-Reattach
+phone cases, actual managed shell creation, exact owned SSH End and cleanup pass. Nine bounded
+cases/303 raw hashes do not complete the original checklist; broader physical/provider acceptance
+remains pending. Installed APK/runtime provenance remains `a79375c3`; later docs-only publication
+checks do not represent another installed build. See [the source proof](../docs/android.md#composed-send-source-checkpoint-2026-10-06-a128)
+and [the bounded beta-17 checkpoint](../docs/android.md#pixel-7a-beta-17-upgrade-and-composed-send-2026-10-06).
 The additive `pty.submitComposed` contract includes the Android client and actual interop fixture
 in the same source commit; **iOS @eneskirca** needs the same action, receipt and retention rules.
 
