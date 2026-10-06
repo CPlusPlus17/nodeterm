@@ -386,6 +386,10 @@ interface Conn {
   controlPath: string
   master: ReturnType<Runners['spawnMaster']>
   hookEndpointPath?: string
+  /** The connect's setup chain has finished on this master (the moment `connected` is emitted):
+   *  the facts below are as final as they will get. A spawn that CREATES a session before this
+   *  would create it without the hook/account env and tmux.conf, for life. */
+  setupDone?: boolean
   /** The remote path of nodeterm's tmux.conf (`<remoteHome>/.nodeterm/tmux.conf`), written +
    * source-filed at connect. Threaded to `remoteTmuxCommand`'s `-f` so cold-start remote sessions
    * get mouse/clipboard/scrollback. Undefined if the write/source failed (fail-open). */
@@ -1069,6 +1073,7 @@ export class SshProjectManager {
           entry.codexRelayScriptPath = codexRuntime?.relay
           entry.codexRelayRuntimePath = codexRuntime?.runtime
           entry.codexCliPath = codexRuntime?.codex
+          entry.setupDone = true
           this.emitStatus({ projectId, status: 'connected' })
           if (hookEndpointPath) this.hookTunnelHealth(projectId, true)
           // The tunnel is live again on a master we just established (the reuse branch returned long
@@ -1560,6 +1565,34 @@ export class SshProjectManager {
   ): { conn: SshConnection; controlPath: string; remoteCwd?: string } | undefined {
     const c = this.conns.get(projectId)
     return c ? { conn: c.conn, controlPath: c.controlPath, remoteCwd: c.remoteCwd } : undefined
+  }
+
+  /**
+   * Everything a remote SPAWN needs from this connection, for spawns the renderer did not build —
+   * today the relay host's `pty.attach` (core `prepareRelayAttach`). The same facts the renderer
+   * reads off the `connected` event (`resolveSshRemote`), read here from the entry itself.
+   * `undefined` = no master for this scope.
+   */
+  spawnRefFor(scopeId: string):
+    | {
+        conn: SshConnection
+        controlPath: string
+        hookEndpointPath?: string
+        tmuxConfPath?: string
+        remoteHome?: string
+        setupDone: boolean
+      }
+    | undefined {
+    const c = this.conns.get(scopeId)
+    if (!c) return undefined
+    return {
+      conn: c.conn,
+      controlPath: c.controlPath,
+      hookEndpointPath: c.hookEndpointPath,
+      tmuxConfPath: c.tmuxConfPath,
+      remoteHome: c.remoteHome,
+      setupDone: c.setupDone === true
+    }
   }
 
   /** Does this project already have a master, or an attempt in flight? The pre-warm's gate — it

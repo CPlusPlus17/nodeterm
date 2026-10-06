@@ -635,6 +635,18 @@ ptyManager.setRemoteNodeOwner((nodeId) => {
     remote: ref ? { conn: ref.conn, controlPath: ref.controlPath } : undefined
   }
 })
+// WHERE a phone's relay `pty.attach` runs, and with what env — decided in core
+// (`PtyManager.prepareRelayAttach` / `core/relay-attach-plan.ts`) from THIS machine's records, never
+// from the phone's words. Before this the relay attach ran `tmux new-session -A` on the LOCAL socket
+// for any node id, so an SSH project's node opened on the phone first came up as a local shell in
+// this machine's `$HOME`, and a local node created by the phone got no agent/account/cwd env.
+// Same late-binding reason as above for `sshProjectManager`: an attach before the manager exists
+// sees no master and is refused, never spawned locally.
+ptyManager.setRelayNodeResolver({
+  placements: (nodeId) => workspaceStore.relayNodePlacements(nodeId),
+  refFor: (scopeId) => sshProjectManager?.spawnRefFor(scopeId),
+  projectIsRemote: (projectId) => !!workspaceStore.projectTargetInfo(projectId)?.ssh
+})
 const gitService = new GitService()
 
 // Project setup/archive runner (SDD: 2026-08-19-project-settings-trust). The trust store is keyed
@@ -4648,6 +4660,7 @@ app.whenReady().then(async () => {
       projectsOfNode: (nodeId) => workspaceStore.projectIdsForNode(nodeId),
       nodeOfSession: (sessionId) => ptyManager.nodeOfSession(sessionId),
       projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
+      projectIsRemote: (projectId) => !!workspaceStore.projectTargetInfo(projectId)?.ssh,
       hostDataDir: app.getPath('userData')
     }
   })

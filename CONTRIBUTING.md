@@ -495,6 +495,13 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
 
+- **A relay attach never decides where a session runs from what the phone sends.** The phone's
+  `pty.attach` goes through `PtyManager.prepareRelayAttach`, which routes an SSH project's node over
+  its project's master or refuses it, and gives a local node the env the desktop would. Never spawn
+  a session for a phone-named node id directly (`attachDetached` / `createDetached`): that is how an
+  SSH node became a local shell in this machine's `$HOME`. CLAUDE.md, "A remote node is NEVER
+  spawned locally".
+
 - **Phone keys and store links are platform-neutral.** New paired keys are stamped
   `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
   existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
