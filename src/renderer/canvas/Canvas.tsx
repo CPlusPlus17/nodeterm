@@ -14747,6 +14747,7 @@ export function Canvas() {
         <GlobalKanbanView />
       ) : perProjectKanbanOpen && (
         <KanbanView
+          ownerProjectId={activeProjectId}
           board={projectKanban ?? seedBoard}
           sessions={kanbanSessions}
           onChange={onKanbanChange}

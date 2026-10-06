@@ -46,6 +46,8 @@ import { relativeTime } from '../../lib/relativeTime'
 
 interface CardModalProps {
   session: KanbanSession
+  /** The card's canvas owner, including an inactive global-board swimlane. */
+  ownerProjectId?: string
   /** Column title shown as a chip; null = Ungrouped. */
   columnTitle: string | null
   /** The live board + its pruned commit — the Members/Due strip edits through them. */
@@ -67,7 +69,7 @@ interface CardModalProps {
 /** Trello-style card popup over the board. Scrim click / Esc close it; the board (and the
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / markdown view (the node itself is hidden under the board). */
-export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon }: CardModalProps) {
+export function CardModal({ session, ownerProjectId, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon }: CardModalProps) {
   const { api } = useSession()
   const idRef = useRef<string>()
   if (!idRef.current) idRef.current = nextDialogId()
@@ -447,6 +449,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
                   <ModalTerminal
                     key={session.id}
                     nodeId={session.id}
+                    ownerProjectId={ownerProjectId}
                     spawn={session.spawn}
                     searchOpen={searchOpen}
                     onCloseSearch={() => setSearchOpen(false)}

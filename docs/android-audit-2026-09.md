@@ -16,6 +16,21 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Desktop card reconnect repair (2026-10-06, A125; repaired native checks pending).**
+On baseline `11e22453`, a controlled Linux Desktop Modal soft/none outage reproduces the defect:
+Canvas reconnects to a new master/session while the same open card keeps its old session. A second
+trusted native input writes once to that stale session and never reaches the unchanged remote
+producer. Pane/server/process identity and full retained history remain intact at `80x24`.
+The source repair on this branch adds exact scope/node reattachment notifications, replaces only
+the lost card viewer and routes inactive global-board cards through their actual owner. The card
+stays open, rejoins the same persistKey with requireRemote and delivers no initial/pending agent
+launch command. **13 new behavioral cases / 100 affected tests** and full TypeScript pass. Six
+actual isolated mutants are caught by assertions, with passing control/restored runs. Repaired native controls,
+the scoped Linux matrix and exact-head publication remain pending. Earlier geometry refusals are
+fixture calibration, separate from the accepted product negative. No Android APK, wire/blob/pairing/
+SSH-visible file change or iOS client adoption is required. The original Pixel 10 Pro ledger stays
+paused at **10 Pass / 22 Partial / 32 Pending**; broader phone/outage/platform checks remain open.
+
 **Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a has a fresh,
 hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
 Vanadium WebView `145.0.7632.120.0`). Manual explicit-profile, high-port SSH and the existing
@@ -173,6 +188,7 @@ from the remaining phone custom-binding/lifecycle/FPS matrix.
 | [A122](#a122) | medium | | small | desktop/bug | ✅ source-fixed in `9613cec5`; 133 focused / 218 affected tests and six assertion-caught mutants; four Linux native cases pass · Focused Canvas/Modal xterm consumes the advertised native Quit chord |
 | [A123](#a123) | low | | small | desktop/bug | ✅ fixed in `db83fb7d`; 44 budget / 301 affected tests, two helper assertion mutants and Desktop native control/sole-call-removal/restored proof pass; later genuine Server 0/3/0 and derived Desktop compositor cell evidence verified · Restored addon context remains live after disposal and budget retirement |
 | [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; one Pixel 7a manual-SSH shell creation/input/reopen/app-restart case passes on `40731381` · Managed SSH New rejects an available absolute default shell as unavailable |
+| [A125](#a125) | medium | | small | desktop/bug | 🟡 source repaired on branch; native `11e22453` Modal stale-input defect reproduced; 13 new behavioral cases / 100 affected tests, full TypeScript and six assertion-caught mutants; repaired native/matrix/publication pending · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
 
 ## A01
 
@@ -4306,6 +4322,69 @@ cellular routes or the full background/outage/permission/64-item matrix. The ori
 beta-10 ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
 No phone payload, host verb or SSH-visible file contract changes. The shared host repair also
 benefits iOS managed creation; @eneskirca should note the host update, with no new client field.
+
+## A125
+
+**Open SSH card does not follow automatic reconnection; inactive cards use the active owner (2026-10-06).**
+
+- Severity: **medium**; effort: small; area: Desktop card/SSH renderer lifecycle; kind: bug.
+- Status: **source repaired on this branch; admitted native baseline reproduces the defect; repaired native controls/matrix/publication pending**.
+- Baseline: `11e22453235dbd8bf474dd8034a0eaf5778c3992`.
+- Locations: `ModalTerminal.tsx` exit listener and nodeId-only attachment effect; `CardModal.tsx`
+  stable card/view key; `GlobalKanbanView.tsx` owning swimlane; `TerminalNode.tsx`
+  `sshConnectionScope`/`resolveSshRemote`; `Canvas.tsx` active/inactive reconnect respawn.
+
+The baseline Modal exit callback only writes the ended banner, and its attachment effect depends
+only on nodeId. Canvas queues connection exit 255 and bumps its own respawnNonce after successful
+reconnection, while an inactive owner's branch only retires parked Canvas viewers. That transient
+nonce is intentionally not serialized into the global board's stored node projection. The global
+lane keeps modalNodeId and reads its latest card through byId; a selected-object cache is not the
+cause. The card also receives no explicit owning project, so the SSH helper assumes the active tab.
+
+The branch repair publishes renderer-only exact scope/node reattachment notifications at the existing
+coordinator's successful pending-node flush. Each Modal generation subscribes before async attach,
+marks itself lost before reporting remote 255/unavailable and replaces its own viewer only for a
+matching notification. Cleanup fences late async/refused results and detaches the exact viewer.
+Both boards pass the owner; scope resolution retains active ownership as the default for existing
+Canvas callers. The card remains mounted and creates with the original persistKey/requireRemote,
+without any initial/pending command or agent resume delivery. No persisted/wire contract changes.
+
+Nine actual mounted Modal/Global-board cases use the real LocalTransport and SshReconnector;
+four coordinator subscription cases cover failure/success, exact routing, co-viewers, racing
+status/promise completion and retired unsubscribe. All **100 affected tests in 11 files** pass
+with zero failures/skips, and full TypeScript passes using ordinary composite/incremental caches.
+Six isolated variants remove the 255 report, flush notification, scope/node filtering, global owner,
+late-dead guard or exact-viewer cleanup; each fails intended assertions (respectively 2/7/2/1/2/1
+failures), with **28-test** passing controls/restoration and bound unchanged candidate/main sources.
+
+**Admitted native baseline.** The genuine Linux Desktop Modal soft/none case on source/build
+`11e22453` admits selected Modal, hidden Canvas and remote pane at `80x24` before one producer
+paint. Initial trusted native input and complete URL controls pass. A single birth-pinned product
+ControlMaster SIGKILL produces exit 255; the product reconnects its master and Canvas (`pty-2`),
+but the same open Modal remains on `pty-1` through a six-second coherent recovered-state window.
+The second trusted native `g` produces one exact IPC write to `pty-1`, misses its two-second ACK
+deadline, and an additional 800 ms observation still shows producer count one. This is classified
+`MODAL_RECONNECT_INPUT_UNACKNOWLEDGED`, with fixture exit 3 in 26.43 seconds. Remote pane/server/
+producer identity and complete retained history remain unchanged before, during and after outage.
+Exact owned session/observer/master/daemon cleanup and generated-auth removal pass. Explicit
+fixture exit supplies no ordinary-Quit proof. Earlier geometry-calibration refusals stay separate.
+
+Native proof: `~/.cache/nodeterm-android-work/nodeterm-linux-ssh-reconnect-case-_r9f0qvs/proof/`.
+`receipt.json` SHA `18db5b3ebfeb32db1881a1183a259b68944ae9ff8fe6c95a7bb6b30c90faa1e5` records the
+verified product negative; `runtime-result.json` SHA
+`137bca085ceddb38db3f52fe0ce8a17fc74d1f1d785c1bff169e317457eee797` binds the actual input evidence.
+Separate Canvas controls at the old `11e22453` source are historical baseline controls, not
+repaired-Modal acceptance. Repaired native controls, full scoped Linux matrix and publication are
+pending. Broader Server/Android/phone outages, physical custom bindings/FPS, provider-authenticated
+answers and macOS/Windows remain unverified. The original Pixel 10 Pro beta-10 ledger stays paused
+at **10 Pass / 22 Partial / 32 Pending**. This Desktop renderer repair changes no Android APK,
+host-service verb, blob/pairing/mirror/SSH-visible file or iOS client adoption requirement.
+
+Private candidate proof: `~/.cache/nodeterm-android-work/modal-reconnect-candidate-g37ek98k/`
+(`candidate-result.json`, SHA `7a54a18e823f26067ac46f9022bc58670062a61d52084078deb0bdd9bb5c824d`;
+full source patch SHA `f17b1b919980c15a79ba286b1216898632eddf7cbe91ce3acb387f873e63a3bd`).
+Actual mutation proof: `~/.cache/nodeterm-android-work/modal-reconnect-mutations-qcaln9wi/`
+(`mutation-result.json`, SHA `ed1e89f8cf26c6a59da993087851ab39dc22ae1e0d240594274cb337cdb7611d`).
 
 ## Native Desktop wrapped-link and leave verification (A92/A121, 2026-10-05)
 

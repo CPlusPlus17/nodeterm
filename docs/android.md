@@ -5,6 +5,21 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Desktop card reconnect repair (2026-10-06, A125; repaired native checks pending).**
+On baseline `11e22453`, a controlled Linux Desktop Modal soft/none outage reproduces the defect:
+Canvas reconnects to a new master/session while the same open card keeps its old session. A second
+trusted native input writes once to that stale session and never reaches the unchanged remote
+producer. Pane/server/process identity and full retained history remain intact at `80x24`.
+The source repair on this branch adds exact scope/node reattachment notifications, replaces only
+the lost card viewer and routes inactive global-board cards through their actual owner. The card
+stays open, rejoins the same persistKey with requireRemote and delivers no initial/pending agent
+launch command. **13 new behavioral cases / 100 affected tests** and full TypeScript pass. Six
+actual isolated mutants are caught by assertions, with passing control/restored runs. Repaired native controls,
+the scoped Linux matrix and exact-head publication remain pending. Earlier geometry refusals are
+fixture calibration, separate from the accepted product negative. No Android APK, wire/blob/pairing/
+SSH-visible file change or iOS client adoption is required. The original Pixel 10 Pro ledger stays
+paused at **10 Pass / 22 Partial / 32 Pending**; broader phone/outage/platform checks remain open.
+
 **Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a has a fresh,
 hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
 Vanadium WebView `145.0.7632.120.0`). Manual explicit-profile, high-port SSH and the existing
@@ -440,6 +455,13 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+A125's renderer lifecycle/routing repair passes the bounded tests described in
+[the current card-reconnect notes](#desktop-card-reconnect-repair-2026-10-06).
+These fake-PTY/render-boundary tests and assertion-caught mutants establish repaired source
+behavior. The admitted `11e22453` native baseline separately proves the old open card routes
+trusted input to a stale session after master/Canvas recovery. Repaired native acceptance remains
+pending; the full same-grid retained history/pane/producer survives the baseline outage.
 
 **Fresh Pixel 7a verification and A124 (2026-10-05).** This separate phone runs Android 16 /
 API 36 and Vanadium WebView `145.0.7632.120.0`. Fresh installation of private beta 16/code 17
@@ -2288,6 +2310,11 @@ later fix left to a device.
 
 ## Known gaps
 
+A125's open Desktop SSH card reconnect defect is reproduced natively on `11e22453`, and its
+source repair/test/mutation checks pass on this branch. Repaired native controls, the scoped Linux
+matrix and exact-head publication remain pending. Unequal-grid fixture refusals are calibration
+results only; broader SSH outage/platform/phone verification is still open.
+
 Immediate Android push (`A25`) and fresh-different-desktop relay recovery (`A93`) need the hosted
 backend maintainers. The user has no service repository to supply. Same-owned-desktop paired-update
 recovery does not establish recovery on a fresh different identity; no backend fix is claimed.
@@ -3182,3 +3209,20 @@ Android CI still apply. This is native copy-mode transport/ordering evidence, no
 FPS, broader lifecycle/outage or macOS/Windows proof. Beta 16 and the original Pixel's
 **10 Pass / 22 Partial / 32 Pending** ledger remain unchanged. Next: continue the remaining
 physical matrix when the intended Pixel is reachable; A25/A93 still need the hosted backend.
+
+## Desktop card reconnect repair (2026-10-06)
+
+A125's source repair on this branch replaces a lost open SSH card viewer after the existing
+coordinator succeeds and routes inactive global-board cards through their owning project.
+The card stays open, keeps the original persistKey/requireRemote and never replays an initial,
+pending or agent launch command. Thirteen new behavioral cases and all 100 affected tests pass;
+full TypeScript and six actual assertion-caught isolated mutants pass with restored source hashes.
+See [audit A125](android-audit-2026-09.md#a125) for source, test boundaries and private receipts.
+The admitted `11e22453` native Modal baseline reproduces stale-session input after Canvas/master
+recovery while preserving the same remote pane/producer and full history at `80x24`. Earlier
+geometry refusals are retained as fixture negatives. Repaired native acceptance remains pending.
+No Android APK/external wire/file or iOS adoption change is needed.
+Next: verify repaired replacement-view/native input/history controls, then complete the scoped
+Linux matrix and exact-head publication gates. Broader device lifecycle,
+outage/provider/platform checks and A25/A93 backend dependencies remain separate; the original
+Pixel 10 Pro **10 Pass / 22 Partial / 32 Pending** ledger remains paused.

@@ -273,6 +273,7 @@ const Swimlane = memo(function Swimlane({
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
           session={byId.get(modalNodeId)!}
+          ownerProjectId={projectId}
           columnTitle={columnForNode(board, modalNodeId)?.title ?? null}
           board={board}
           onChangeBoard={commit}

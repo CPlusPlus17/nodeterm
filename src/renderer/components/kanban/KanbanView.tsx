@@ -79,6 +79,7 @@ export interface KanbanCreateOption {
 }
 
 export interface KanbanViewProps {
+  ownerProjectId?: string
   board: ProjectKanban
   sessions: KanbanSession[]
   onChange: (next: ProjectKanban) => void
@@ -141,7 +142,7 @@ function useCanvasCovered(): void {
 }
 
 export const KanbanView = memo(function KanbanView({
-  board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
+  ownerProjectId, board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
   onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems
 }: KanbanViewProps) {
   useCanvasCovered()
@@ -680,6 +681,7 @@ export const KanbanView = memo(function KanbanView({
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
           session={byId.get(modalNodeId)!}
+          ownerProjectId={ownerProjectId}
           columnTitle={columnForNode(board, modalNodeId)?.title ?? null}
           board={board}
           onChangeBoard={commit}

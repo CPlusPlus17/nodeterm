@@ -271,11 +271,15 @@ export const SLOW_REMOTE_SPAWN_NOTICE_MS = 1500
  * the project IS that SSH endpoint, otherwise the project × endpoint host attachment — a remote
  * node living in a local canvas (or in an SSH project pointed at a different host).
  *
- * A node only ever exists in the active project's React Flow, so the active project is its owner.
+ * Canvas nodes default to the active owner. A global-board card supplies its own project id.
  */
-export function sshConnectionScope(conn: SshConnection): string {
-  const { activeProjectId, getProject } = useProjects.getState()
-  return sshConnectionIdForProject(activeProjectId, conn, getProject(activeProjectId)?.ssh?.server)
+export function sshConnectionScope(
+  conn: SshConnection,
+  ownerProjectId = useProjects.getState().activeProjectId
+): string {
+  return sshConnectionIdForProject(
+    ownerProjectId, conn, useProjects.getState().getProject(ownerProjectId)?.ssh?.server
+  )
 }
 
 /**
@@ -357,7 +361,9 @@ export async function resolveSshRemote(
    * hosts — and the coalesced `tmux list-sessions` this shares with `create` would be two reads
    * instead of one.
    */
-  early?: { nodeId: string; pty: Pick<PtyApi, 'remoteSessionConfirmed'> }
+  early?: { nodeId: string; pty: Pick<PtyApi, 'remoteSessionConfirmed'> },
+  /** Global-board cards can belong to an inactive canvas; ordinary nodes use the active owner. */
+  ownerProjectId = useProjects.getState().activeProjectId
 ): Promise<
   | {
       controlPath: string
@@ -369,22 +375,21 @@ export async function resolveSshRemote(
     }
   | undefined
 > {
-  const activeProjectId = useProjects.getState().activeProjectId
-  const projectId = sshConnectionScope(conn)
+  const projectId = sshConnectionScope(conn, ownerProjectId)
   // A HOST ATTACHMENT dials for itself, HERE, because nothing else will. Canvas's active-project
   // effect pre-warms the attachments it can SEE in the stored canvas, but a node created at
   // runtime — the remote account-login retry drops one into whatever tab is active — never
   // appears in that pass, and would otherwise wait out the window under a scope no master exists
   // for and then sit offline forever. Idempotent and deduped, so the pre-warm and every node on
   // the machine collapse into one connect; the wait below is what actually blocks on it.
-  if (projectId !== activeProjectId) {
+  if (projectId !== ownerProjectId) {
     void connectHostAttachment(
       projectId,
       {
         conn,
         hostKey: sshHostKey(conn),
         remoteCwd: cwd,
-        ownerProjectId: activeProjectId
+        ownerProjectId
       },
       (scopeId, c, remoteCwd) => window.nodeTerminal.sshProject.connect(scopeId, c, remoteCwd),
       (scopeId) => window.nodeTerminal.sshProject.disconnect(scopeId)
