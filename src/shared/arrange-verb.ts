@@ -18,6 +18,24 @@ export const GROUP_ARRANGE_LAYOUTS = [...ARRANGE_LAYOUTS, 'lineage'] as const
 export type GroupArrangeLayout = (typeof GROUP_ARRANGE_LAYOUTS)[number]
 
 /**
+ * What the TOP LEVEL of the canvas can be laid out as, through `arrange --group top`: `tidy` is the
+ * Tidy canvas command itself (every top-level unit packed, each orchestrator at the top-left of the
+ * team it opened), `lineage` its bands. The id-list packs are not offered here — `--nodes` already
+ * says them, and a top-level grid that ignores lineage is exactly what Tidy no longer does.
+ */
+export const TOP_ARRANGE_LAYOUTS = ['tidy', 'lineage'] as const
+export type TopArrangeLayout = (typeof TOP_ARRANGE_LAYOUTS)[number]
+
+/**
+ * `--group` values that name the canvas's top level instead of a frame — the same words `move`
+ * reads as "out of every frame", so the two verbs agree about what `top` means.
+ */
+export function isTopLevelGroupArg(group: string | undefined): boolean {
+  const g = group?.trim()
+  return g === 'top' || g === 'none' || g === 'ungrouped'
+}
+
+/**
  * The shape gate for `arrange`'s flags, or `null` when the request is well-formed. Whether the
  * frame exists, has children or has any lineage is the canvas's to answer (`groupArrangeRefusal`);
  * this refuses only what no canvas could act on.
@@ -34,11 +52,17 @@ export type GroupArrangeLayout = (typeof GROUP_ARRANGE_LAYOUTS)[number]
 export function arrangeArgsRefusal(args: Record<string, string>): string | null {
   const hasNodes = !!args.nodes
   const hasGroup = !!args.group
-  if (!hasNodes && !hasGroup) return 'arrange requires --nodes <id,id> or --group <frameId>'
+  if (!hasNodes && !hasGroup) return 'arrange requires --nodes <id,id>, --group <frameId> or --group top'
   if (hasNodes && hasGroup) {
     return 'arrange takes --nodes <id,id> or --group <frameId>, not both — name the frame to arrange its own items, or list sibling nodes'
   }
   const layout = args.layout
+  if (hasGroup && isTopLevelGroupArg(args.group)) {
+    if (layout && !(TOP_ARRANGE_LAYOUTS as readonly string[]).includes(layout)) {
+      return `arrange --group top: --layout must be ${TOP_ARRANGE_LAYOUTS.join('|')}`
+    }
+    return null
+  }
   if (hasGroup && layout && !(GROUP_ARRANGE_LAYOUTS as readonly string[]).includes(layout)) {
     return `arrange --group: --layout must be ${GROUP_ARRANGE_LAYOUTS.join('|')}`
   }
@@ -61,6 +85,13 @@ export function arrangeGroupGuidanceLines(): string[] {
     '  nothing overflows. The frame\'s top-left stays where it is. `--layout lineage` stacks one row per',
     '  level of who opened whom among those children; it is refused, with the reason, when no opened-by',
     '  or `--after` connection joins two of them. Pass `--nodes` or `--group`, never both. This is the',
-    '  one call to make after `group`, or after opening stations into a frame.'
+    '  one call to make after `group`, or after opening stations into a frame.',
+    `- \`arrange --group top [--layout ${TOP_ARRANGE_LAYOUTS.join('|')}]\` — tidy the WHOLE canvas, exactly as the`,
+    '  user\'s Tidy canvas command does: every top-level node and frame (a frame moves as one unit) is',
+    '  packed without overlap, and each orchestrator is placed first, at the top-left of the nodes and',
+    '  frames it opened, with the team it opened packed directly to its right (opened-by only; an',
+    '  `--after` wait does not move anything). Nodes nobody opened are packed after the teams.',
+    '  `--layout lineage` instead stacks one row per level of opened-by and `--after`. Call it once',
+    '  after spawning teams, not after every open.'
   ]
 }

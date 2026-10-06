@@ -35,6 +35,7 @@ import { sshHostKey } from '@shared/ssh'
 import { normalizeNodeIcon } from '@shared/node-icon'
 import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
 import { isSafeNodeId } from '@shared/safe-id'
+import { openerByTarget, recordedOpenerOf } from '../lib/teamProgress'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
 import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
 import { useSettings } from './settings'
@@ -1374,10 +1375,22 @@ export function arrangeNodes(
   return nodes.map((nd) => (pos.has(nd.id) ? { ...nd, position: pos.get(nd.id)! } : nd))
 }
 
-/** One lineage rope, as the canvas persists it (`project.ropes`): "opened by" / "--after". */
+/**
+ * One lineage rope, as the canvas persists it (`project.ropes`): "opened by" or a wait (`--after`).
+ * The `id` is what tells the two apart (`waitRopeId`, lib/edgeModel): pass it through, or every
+ * rope reads as an opener rope.
+ */
 export interface LineageEdge {
+  id?: string
   source: string
   target: string
+}
+
+/** Every node's opener (rule 1 of lib/teamProgress — `data.openedBy` first, else the first opener
+ *  rope into it; wait ropes never), keyed by the opened node's id. */
+function openersOf(nodes: CanvasNode[], edges: readonly LineageEdge[]): Map<string, string> {
+  const byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  return openerByTarget(edges, (id) => recordedOpenerOf(byId.get(id)))
 }
 
 /**
@@ -1489,9 +1502,22 @@ export function lineageLayers(
     layers[level].push(nd.id)
   }
 
-  // Inside a layer, siblings sit together: a node follows its earliest opener's slot in the layer
-  // above, so the ropes fan out instead of crossing. Layer 0 and `loose` have no opener to follow
-  // and keep the canvas's own reading order.
+  // The member that OPENED each member (lifted like the ropes), for the slot rule below.
+  const openerOfMember = new Map<string, string>()
+  for (const [target, source] of openersOf(nodes, edges)) {
+    const to = tops.get(target)
+    const from = tops.get(source)
+    if (to && from && to !== from && live.has(to) && live.has(from) && !openerOfMember.has(to)) {
+      openerOfMember.set(to, from)
+    }
+  }
+
+  // Inside a layer, siblings sit together: a node follows its OPENER's slot in the layer above when
+  // the opener is there, else its earliest predecessor's, so the ropes fan out instead of crossing.
+  // Opener first because layering reads BOTH relations (a wait is a flow edge too, and longest-path
+  // keeps it pointing down) while a node has exactly one opener — the team it belongs to. A node
+  // opened by B that waits on A sits under B, with the rest of B's team. Layer 0 and `loose` have
+  // no opener to follow and keep the canvas's own reading order.
   layers.forEach((layer, level) => {
     if (level === 0) {
       layer.sort(byReadingOrder)
@@ -1499,6 +1525,9 @@ export function lineageLayers(
     }
     const above = new Map(layers[level - 1].map((id, i) => [id, i]))
     const slotOf = (id: string): number => {
+      const opener = openerOfMember.get(id)
+      const openerSlot = opener !== undefined ? above.get(opener) : undefined
+      if (openerSlot !== undefined) return openerSlot
       let best = Number.MAX_SAFE_INTEGER
       for (const from of preds.get(id) ?? []) {
         const slot = above.get(from)
@@ -1551,6 +1580,181 @@ export function arrangeByLineage(
     y += tallest + gap
   }
   return out
+}
+
+/** A laid-out rectangle of units, positions relative to its own top-left. */
+interface TidyBlock {
+  w: number
+  h: number
+  place: { id: string; x: number; y: number }[]
+}
+
+/** `arrangeNodes`' grid flow, over blocks: left to right, wrapping at `cols`, each row advancing
+ *  by its tallest block. */
+function flowBlocks(blocks: TidyBlock[], cols: number, gap: number): TidyBlock {
+  const place: TidyBlock['place'] = []
+  let x = 0
+  let y = 0
+  let rowH = 0
+  let w = 0
+  blocks.forEach((b, i) => {
+    if (i > 0 && i % cols === 0) {
+      x = 0
+      y += rowH + gap
+      rowH = 0
+    }
+    for (const p of b.place) place.push({ id: p.id, x: p.x + x, y: p.y + y })
+    w = Math.max(w, x + b.w)
+    x += b.w + gap
+    rowH = Math.max(rowH, b.h)
+  })
+  return { w, h: y + rowH, place }
+}
+
+/** Reading order of the canvas as it stands — Tidy canvas's own comparator, stable on array order. */
+const byReadingPosition = (a: CanvasNode, b: CanvasNode): number =>
+  a.position.y - b.position.y || a.position.x - b.position.x
+
+/**
+ * **Tidy canvas.** Packs every top-level node (a group frame is one rigid unit, its children ride
+ * along) into a non-overlapping layout — and keeps each ORCHESTRATOR legible: a unit that opened
+ * other units is placed first, at the top-left of its own cluster, with the units it opened packed
+ * in a grid directly to its right, and a unit THEY opened clustered the same way inside that grid.
+ * Clusters are packed in reading order of their orchestrators; every unit with no lineage at all is
+ * packed after them, below, exactly as the plain grid packs it.
+ *
+ * The relation is OPENER ONLY (rule 1 of lib/teamProgress, through `openerByTarget`: the node's
+ * recorded `data.openedBy` when it has one, else the first non-wait rope into it). Not waits:
+ * a wait is sequencing between peers — a verify panel's reviewers wait on the node they review,
+ * but the orchestrator opened them — so following waits would pull an orchestrator's team apart
+ * under whichever station it waits on. And a node has exactly one opener, so the clusters are a
+ * forest and the layout has one answer. (The bands of `arrangeByLineage` read both relations;
+ * they answer "in what order does work flow", this answers "whose team is this".)
+ *
+ * - **Ropes are lifted to the top-level unit that holds their end**, as `lineageLayers` does: an
+ *   orchestrator opens its stations inside a frame, and the frame is what moves. A rope internal
+ *   to one frame says nothing at this level. A frame whose children were opened by different units
+ *   belongs to the one that opened the most of them (ties: the earliest rope); a node's own opener
+ *   always wins for that node.
+ * - **A cycle never hangs.** Openers are not supposed to form one, but frames lift ropes into one
+ *   easily (A in frame F opens B outside, B opens C inside F) and project.json is hand-editable.
+ *   The member of a cycle that comes first in reading order loses its opener and leads the cluster.
+ * - **A rope whose end is gone is ignored** — the canvas prunes it, and an opener that is not here
+ *   cannot lead anything; its stations simply become loose.
+ * - **No lineage ⇒ exactly the plain grid**: `arrangeNodes(grid)` over the reading-order ids, the
+ *   transform this command has always run.
+ *
+ * Returns the SAME array when no unit moves (fewer than two units, or a canvas already tidied),
+ * which is the caller's signal to skip the undo entry and the project.json write. Pure.
+ */
+export function tidyCanvas(
+  nodes: CanvasNode[],
+  edges: readonly LineageEdge[] = [],
+  opts?: { gap?: number }
+): CanvasNode[] {
+  const units = nodes.filter((nd) => !nd.parentId).sort(byReadingPosition)
+  if (units.length < 2) return nodes
+  const gap = opts?.gap ?? 40
+  const order = new Map(units.map((u, i) => [u.id, i]))
+  const unitOf = containerAncestors(nodes, null)
+
+  // Opener of each UNIT. A node's own opener is its opener; a frame takes the unit that opened the
+  // most of its contents, ties going to the earliest rope.
+  const parent = new Map<string, string>()
+  const votes = new Map<string, Map<string, number>>()
+  for (const [target, source] of openersOf(nodes, edges)) {
+    const u = unitOf.get(target)
+    const o = unitOf.get(source)
+    if (!u || !o || u === o) continue
+    if (target === u) {
+      parent.set(u, o)
+      continue
+    }
+    const forU = votes.get(u) ?? new Map<string, number>()
+    forU.set(o, (forU.get(o) ?? 0) + 1) // first insertion = earliest rope, kept on a tie below
+    votes.set(u, forU)
+  }
+  for (const [u, forU] of votes) {
+    if (parent.has(u)) continue
+    let best: string | undefined
+    let bestN = 0
+    for (const [o, n] of forU) {
+      if (n > bestN) {
+        best = o
+        bestN = n
+      }
+    }
+    if (best !== undefined) parent.set(u, best)
+  }
+
+  // Break every cycle at its member that reads first.
+  for (const u of units) {
+    for (;;) {
+      const path: string[] = []
+      const onPath = new Set<string>()
+      let cur: string | undefined = u.id
+      while (cur !== undefined && !onPath.has(cur)) {
+        path.push(cur)
+        onPath.add(cur)
+        cur = parent.get(cur)
+      }
+      if (cur === undefined) break
+      const cycle = path.slice(path.indexOf(cur))
+      const lead = cycle.reduce((a, b) => ((order.get(a) ?? 0) <= (order.get(b) ?? 0) ? a : b))
+      parent.delete(lead)
+    }
+  }
+
+  const children = new Map<string, string[]>()
+  for (const u of units) {
+    const p = parent.get(u.id)
+    if (p === undefined) continue
+    const list = children.get(p) ?? []
+    list.push(u.id) // `units` is in reading order, so every list is too
+    children.set(p, list)
+  }
+
+  const roots = units.filter((u) => !parent.has(u.id) && children.has(u.id))
+  const loose = units.filter((u) => !parent.has(u.id) && !children.has(u.id)).map((u) => u.id)
+  const unmoved = (out: CanvasNode[]): CanvasNode[] =>
+    out.every((nd, i) => nd.position.x === nodes[i].position.x && nd.position.y === nodes[i].position.y)
+      ? nodes
+      : out
+  if (roots.length === 0) return unmoved(arrangeNodes(nodes, units.map((u) => u.id), { layout: 'grid', gap }))
+
+  const byId = new Map(units.map((u) => [u.id, u]))
+  const blockOf = (id: string): TidyBlock => {
+    const self = byId.get(id)!
+    const w = nodeW(self)
+    const h = nodeH(self)
+    const kids = children.get(id) ?? []
+    if (kids.length === 0) return { w, h, place: [{ id, x: 0, y: 0 }] }
+    const team = flowBlocks(kids.map(blockOf), Math.ceil(Math.sqrt(kids.length)), gap)
+    return {
+      w: w + gap + team.w,
+      h: Math.max(h, team.h),
+      place: [{ id, x: 0, y: 0 }, ...team.place.map((p) => ({ id: p.id, x: p.x + w + gap, y: p.y }))]
+    }
+  }
+  const clusters = flowBlocks(roots.map((r) => blockOf(r.id)), Math.ceil(Math.sqrt(roots.length)), gap)
+
+  const origin = {
+    x: Math.min(...units.map((u) => u.position.x)),
+    y: Math.min(...units.map((u) => u.position.y))
+  }
+  const pos = new Map(clusters.place.map((p) => [p.id, { x: origin.x + p.x, y: origin.y + p.y }]))
+  let out = nodes.map((nd) => {
+    const p = pos.get(nd.id)
+    return p && (p.x !== nd.position.x || p.y !== nd.position.y) ? { ...nd, position: p } : nd
+  })
+  if (loose.length > 0) {
+    out = arrangeNodes(out, loose, {
+      layout: 'grid',
+      gap,
+      origin: { x: origin.x, y: origin.y + clusters.h + gap }
+    })
+  }
+  return unmoved(out)
 }
 
 /**

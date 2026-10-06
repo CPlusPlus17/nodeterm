@@ -4211,7 +4211,17 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `control-unsupported-on-this-edition` reply and is never dropped on the way to an `ok`
   (`control-unsupported.test.ts` pins it). Off screen it works like the `--nodes` form: the
   stored nodes are laid out and written back through `commitCtlNodes`, and the lineage ropes are
-  the OWNING project's (`offCanvas.project.ropes`), never the live canvas's.
+  the OWNING project's (`offCanvas.project.ropes`, re-marked with `markLegacyWaitRopes` exactly as a
+  load would — a project that has not been opened since waits were marked still holds unmarked
+  ones), never the live canvas's. The rope **id** rides along on both paths: it is the only thing
+  that tells a wait from an opener, and stripping it (as the first revision did) makes every wait
+  read as an opener. **`arrange --group top [--layout tidy|lineage]`** (2026-10, issue #1114 — an
+  orchestrator asked for a programmatic Tidy) names the canvas's TOP LEVEL with the same words
+  `move` reads (`top`/`none`/`ungrouped`, `isTopLevelGroupArg`) and runs the user's own **Tidy
+  canvas** (`tidyCanvas`, default) or its bands (`arrangeByLineage`) — the same transforms as the
+  pane menu, nothing re-implemented. `grid`/`row`/`column` are refused there by name: `--nodes`
+  already says them, and a top-level grid that ignores lineage is what Tidy no longer is. Same
+  Server Edition refusal, same off-screen path.
   **Fan-in (`link`, 2026-07):** a spawned fan-out was previously write-only — nodes an agent
   opened were joined to it by a **rope** (`project.ropes`, explicitly *"Display-only — never
   context links"*), so an orchestrator could not read back what its own team produced and the
@@ -6646,9 +6656,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
 
 - **Context menus** (`components/ContextMenu.tsx`, portal, icons from `components/icons.tsx`):
   pane right-click = add nodes at cursor (terminal / Claude / sticky / open file) + select
-  all + fit + **Tidy canvas** (`arrangeAllNodes` — packs every top-level node, including group
-  frames as rigid units, into a non-overlapping grid via `arrangeNodes`, sorted by current
-  (y, x) so the pack roughly preserves reading order; mirrored in ⌘K as "Tidy canvas" and in the
+  all + fit + **Tidy canvas** (`arrangeAllNodes` → `tidyCanvas` — packs every top-level node,
+  including group frames as rigid units, without overlap, keeping each ORCHESTRATOR legible; see
+  the Tidy canvas bullet below; mirrored in ⌘K as "Tidy canvas" and in the
   keybinding registry as `canvas.tidy` (default ⌘/Ctrl+Shift+A, remappable); both
   hidden below 2 top-level nodes, where it could only be a visual no-op that still writes
   `project.json`) + restart-idle-agents (the bulk in-place agent restart, mirrored in ⌘K; both
@@ -6675,6 +6685,38 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ids it knows — so Delete, restart-agent, branch/transfer, terminal Search and Close can never
   be hidden, whatever settings.json says. The group-frame menu's colors strip answers to the same
   `colors` id; builders run through `tidySeparators` so a hidden row leaves no dangling rule.
+- **Tidy canvas keeps the orchestrator** (`tidyCanvas` in `state/workspace.ts`, 2026-10 — user
+  feedback: *"I lose the sense who is orchestrator"*). The old Tidy packed every top-level unit
+  into one reading-order grid, so an orchestrator landed wherever its (y, x) fell — routinely LAST,
+  after the stations it opened and the loose notes between them. Now a unit that opened other units
+  is placed first, at the top-left of its own cluster, with the units it opened packed in a ~square
+  grid directly to its RIGHT, and a sub-orchestrator's own team clustered the same way inside that
+  grid (recursive blocks, `flowBlocks` = `arrangeNodes`' row flow over rectangles). Clusters are
+  packed in reading order of their orchestrators; every unit with NO lineage is packed after them,
+  below, by the plain grid. Rules a refactor must keep:
+  **(1) The relation is the OPENER only, and it is `openerByTarget`** (`lib/teamProgress.ts`) —
+  the ONE definition team progress reads too (`data.openedBy` when recorded, else the first
+  non-wait rope into the node; `stationsByOpener` now sits on it), so the ring and the layout
+  cannot disagree about whose station a node is. Waits are NOT followed: a verify panel's
+  reviewers wait on the reviewed node, but the orchestrator opened all of them — following waits
+  would split its team under one of its own stations. And one opener per node makes the clusters
+  a forest, so the layout has one answer.
+  **(2) Ropes are lifted to the top-level unit** (the #1114 shape: a coordinator opens a lead
+  INSIDE a frame, so the frame joins the coordinator's team). A frame whose contents were opened
+  by different units belongs to the one that opened the MOST of them, ties to the earliest rope; a
+  plain node's own opener always wins for it. A rope internal to one frame is dropped.
+  **(3) A cycle never hangs** — lifting makes one easily (a in frame g opens b outside, b opens a2
+  inside g); the cycle member that reads first loses its opener and leads.
+  **(4) No lineage ⇒ exactly the old call**: `arrangeNodes(grid)` over the reading-order ids —
+  pinned against that call verbatim, waits-only canvases included. (Not byte-identical to the
+  pre-#836 *build*: `arrangeNodes` then placed in array order, ignoring the sort this action always
+  documented — see Arrange by lineage below.)
+  **(5) Same array when nothing moves**, so a second Tidy writes no undo entry and no
+  `project.json` (it still fits the view). The layout is idempotent by construction: every block
+  places its members in reading order, so a tidied canvas reads back in the order it was laid out.
+  A dead opener (deleted; the rope pruned, or a stored file's unpruned rope) leads nothing — its
+  stations fall loose. Desktop + Server Edition identical (pure renderer, no new IPC); kanban N/A
+  (a board has no geometry); Mobile N/A (no canvas). Agents reach it as `arrange --group top`.
 - **Arrange by lineage** (`arrangeByLineage` / `lineageLayers` in `state/workspace.ts`; pane menu
   beside Tidy canvas, ⌘K, and the registry command `canvas.tidyLineage`, which ships UNBOUND —
   ⌘⇧A is already the first tidy) — the second tidy: one row per LAYER of the lineage ropes
@@ -6702,9 +6744,15 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   in ARRAY order, which threw away the slot order `lineageLayers` computes (siblings under their
   opener) AND the reading-order sort `arrangeAllNodes` documents, with every existing test green
   because each asserted the layer LIST and never the positions. The interleaved case is now
-  asserted on positions. Desktop + Server Edition identical (pure renderer, no new IPC); kanban
-  N/A (a board shows cards, and geometry is exactly what a column layout discards); Mobile N/A
-  (no canvas).
+  asserted on positions. **Bands read BOTH relations, slots read the opener first** (2026-10):
+  layering follows openers AND waits (a wait is a flow edge too, and longest-path keeps it pointing
+  down — a verify panel reads target → reviewers → judge), but a node's slot in its band follows
+  its OPENER's slot when the opener is in the band above, else its earliest predecessor's, so a
+  node opened by B that waits on A sits under B with the rest of B's team. Kept as its own command
+  rather than folded into Tidy: bands answer "in what order does the work flow", Tidy answers
+  "whose team is this", and on a pipeline the two disagree. Desktop + Server Edition identical
+  (pure renderer, no new IPC); kanban N/A (a board shows cards, and geometry is exactly what a
+  column layout discards); Mobile N/A (no canvas).
 - **Arrange inside a group** (`arrangeGroupChildren` / `groupArrangeRefusal` in
   `state/workspace.ts`; the group-frame menu's **Tidy group** and **Arrange group by lineage**,
   ⌘K for the ONE selected frame, and the `arrange --group` control verb — one transform behind all

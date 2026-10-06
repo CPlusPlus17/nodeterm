@@ -7,10 +7,12 @@ import {
   fitGroupToChildren,
   groupArrangeRefusal,
   lineageLayers,
+  tidyCanvas,
   GROUP_PAD,
   GROUP_HEADER,
   type CanvasNode
 } from './workspace'
+import { markLegacyWaitRopes, pruneRopes, waitRopeId } from '../lib/edgeModel'
 
 // Minimal node stub: only the fields the layout fns read (id, position, width/height, parentId).
 const n = (id: string, x: number, y: number, w = 100, h = 50): CanvasNode =>
@@ -498,5 +500,158 @@ describe('groupArrangeRefusal', () => {
   it('agrees with the transform: a refusal is exactly a same-array result', () => {
     for (const id of ['ghost', 't', 'empty']) expect(arrangeGroupChildren(nodes, id)).toBe(nodes)
     expect(arrangeGroupChildren(nodes, 'g1')).not.toBe(nodes)
+  })
+})
+
+// Ropes as the canvas mints them: an opener is `ctrl-<source>-<target>`, a wait `ctrl-after-…`.
+const opens = (source: string, target: string) => ({ id: `ctrl-${source}-${target}`, source, target })
+const waits = (dep: string, node: string) => ({ id: waitRopeId(dep, node), source: dep, target: node })
+const withOpenedBy = (nd: CanvasNode, openedBy: string): CanvasNode =>
+  ({ ...nd, data: { ...nd.data, openedBy } }) as CanvasNode
+/** Today's Tidy canvas, verbatim: the reading-order grid over every top-level node. */
+const plainTidy = (nodes: CanvasNode[]) =>
+  arrangeNodes(
+    nodes,
+    nodes
+      .filter((x) => !x.parentId)
+      .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
+      .map((x) => x.id),
+    { layout: 'grid' }
+  )
+const positions = (nodes: CanvasNode[]) => nodes.map((x) => [x.id, x.position.x, x.position.y])
+
+describe('tidyCanvas', () => {
+  // The orchestrator reads LAST (bottom-right) and a loose note sits between its stations, which
+  // is exactly where the plain grid lost it: packed after everything else, away from its team.
+  const team = () => [n('s1', 0, 0), n('s2', 500, 0), n('note', 200, 300), n('orch', 1000, 800)]
+  const teamRopes = [opens('orch', 's1'), opens('orch', 's2')]
+
+  it('with no lineage, is exactly the plain reading-order grid', () => {
+    const nodes = [n('a', 300, 0), n('b', 0, 0), frame('g', 0, 400), child('k', 'g'), n('c', 900, 100)]
+    expect(positions(tidyCanvas(nodes, []))).toEqual(positions(plainTidy(nodes)))
+    // Waits alone are not lineage: sequencing between peers does not make anyone an orchestrator.
+    expect(positions(tidyCanvas(nodes, [waits('a', 'b'), waits('b', 'c')]))).toEqual(positions(plainTidy(nodes)))
+  })
+
+  it('puts the orchestrator first, at its cluster\'s top-left, with its team right beside it', () => {
+    const out = tidyCanvas(team(), teamRopes)
+    // origin = the units' bounding-box top-left = (0, 0)
+    expect(at(out, 'orch').position).toEqual({ x: 0, y: 0 })
+    // two stations → a 2-column team grid starting one gap right of the orchestrator
+    expect(at(out, 's1').position).toEqual({ x: 140, y: 0 })
+    expect(at(out, 's2').position).toEqual({ x: 280, y: 0 })
+    // the node nobody opened is packed after the cluster, below it
+    expect(at(out, 'note').position).toEqual({ x: 0, y: 90 })
+    // and the old grid did put the orchestrator last — what this test exists to catch
+    expect(at(plainTidy(team()), 'orch').position).not.toEqual({ x: 0, y: 0 })
+  })
+
+  it('clusters a nested team under its own orchestrator, inside the parent\'s team', () => {
+    // coord opened lead + solo; lead opened w1 + w2.
+    const nodes = [n('w1', 0, 0), n('w2', 900, 0), n('solo', 0, 500), n('lead', 400, 400), n('coord', 800, 800)]
+    const out = tidyCanvas(nodes, [opens('coord', 'lead'), opens('coord', 'solo'), opens('lead', 'w1'), opens('lead', 'w2')])
+    expect(at(out, 'coord').position).toEqual({ x: 0, y: 0 })
+    // coord's team, in reading order: lead (y 400) then solo (y 500), 2 columns.
+    expect(at(out, 'lead').position).toEqual({ x: 140, y: 0 })
+    // lead's own block: lead, then its team (w1, w2) to its right
+    expect(at(out, 'w1').position).toEqual({ x: 280, y: 0 })
+    expect(at(out, 'w2').position).toEqual({ x: 420, y: 0 })
+    // solo follows lead's whole block in coord's team row
+    expect(at(out, 'solo').position).toEqual({ x: 560, y: 0 })
+  })
+
+  it('keeps a frame as one rigid unit and lifts a rope into it to the frame', () => {
+    // The #1114 shape: a coordinator opens a lead INSIDE a frame; the frame is what moves.
+    const nodes = [frame('g', 0, 0, 300, 200), child('lead', 'g', 30, 70), child('w', 'g', 150, 70), n('coord', 600, 600)]
+    const out = tidyCanvas(nodes, [opens('coord', 'lead'), opens('lead', 'w')])
+    expect(at(out, 'coord').position).toEqual({ x: 0, y: 0 })
+    expect(at(out, 'g').position).toEqual({ x: 140, y: 0 })
+    // children keep their frame-relative spots
+    expect(at(out, 'lead').position).toEqual({ x: 30, y: 70 })
+    expect(at(out, 'w').position).toEqual({ x: 150, y: 70 })
+  })
+
+  it('follows openers, not waits: a verify panel stays the orchestrator\'s team', () => {
+    // orch opened the target and both reviewers; the reviewers WAIT on the target.
+    const nodes = [n('t', 0, 0), n('r1', 0, 300), n('r2', 300, 300), n('orch', 900, 900)]
+    const out = tidyCanvas(nodes, [opens('orch', 't'), waits('t', 'r1'), opens('orch', 'r1'), waits('t', 'r2'), opens('orch', 'r2')])
+    expect(at(out, 'orch').position).toEqual({ x: 0, y: 0 })
+    // one team of three (2 columns), in reading order — the target does not lead its reviewers
+    expect(at(out, 't').position).toEqual({ x: 140, y: 0 })
+    expect(at(out, 'r1').position).toEqual({ x: 280, y: 0 })
+    expect(at(out, 'r2').position).toEqual({ x: 140, y: 90 })
+  })
+
+  it('reads a legacy canvas (no openedBy, waits unmarked) through the load-time mark', () => {
+    // Saved before waits had their own id: the second rope into `x` is p's wait, minted as an opener.
+    const legacy = [opens('o', 'x'), opens('p', 'x')]
+    const nodes = [n('x', 0, 0), n('p', 400, 0), n('o', 800, 800)]
+    const out = tidyCanvas(nodes, markLegacyWaitRopes(legacy))
+    expect(at(out, 'o').position).toEqual({ x: 0, y: 0 })
+    expect(at(out, 'x').position).toEqual({ x: 140, y: 0 })
+  })
+
+  it('honours a recorded openedBy over a surviving rope that is not the opener\'s', () => {
+    // x records `o` as its opener; o is gone and its rope with it. p's surviving rope (an unmarked
+    // wait from an old file) must not promote p to x's orchestrator.
+    const nodes = [withOpenedBy(n('x', 0, 0), 'o'), n('p', 400, 0)]
+    expect(positions(tidyCanvas(nodes, [opens('p', 'x')]))).toEqual(positions(plainTidy(nodes)))
+    // Without the record, the legacy rope rule makes p the opener.
+    const unrecorded = [n('x', 0, 0), n('p', 400, 0)]
+    expect(at(tidyCanvas(unrecorded, [opens('p', 'x')]), 'p').position).toEqual({ x: 0, y: 0 })
+  })
+
+  it('drops a deleted station and lets a deleted orchestrator\'s team fall loose', () => {
+    const live = team().filter((x) => x.id !== 's2')
+    const ropes = pruneRopes(teamRopes, new Set(live.map((x) => x.id)))
+    const out = tidyCanvas(live, ropes)
+    expect(at(out, 'orch').position).toEqual({ x: 0, y: 0 })
+    expect(at(out, 's1').position).toEqual({ x: 140, y: 0 })
+    // orchestrator deleted: nothing leads anything, so it is the plain grid again — even with the
+    // dead rope still in hand (a stored file is not pruned).
+    const orphaned = team().filter((x) => x.id !== 'orch')
+    expect(positions(tidyCanvas(orphaned, teamRopes))).toEqual(positions(plainTidy(orphaned)))
+  })
+
+  it('survives an opener cycle, led by the member that reads first', () => {
+    const nodes = [n('b', 500, 0), n('a', 0, 0), n('c', 0, 500)]
+    const out = tidyCanvas(nodes, [opens('a', 'b'), opens('b', 'a')])
+    expect(at(out, 'a').position).toEqual({ x: 0, y: 0 })
+    expect(at(out, 'b').position).toEqual({ x: 140, y: 0 })
+    // A cycle that only exists once ropes are lifted to frames: a (in g) opens b, b opens a2 (in g).
+    const lifted = [frame('g', 0, 0), child('a', 'g'), child('a2', 'g'), n('b', 600, 0)]
+    const out2 = tidyCanvas(lifted, [opens('a', 'b'), opens('b', 'a2')])
+    expect(at(out2, 'g').position).toEqual({ x: 0, y: 0 })
+    expect(at(out2, 'b').position).toEqual({ x: 340, y: 0 })
+  })
+
+  it('gives a frame to the unit that opened most of its contents', () => {
+    const nodes = [frame('g', 0, 600), child('k1', 'g'), child('k2', 'g'), child('k3', 'g'), n('x', 0, 0), n('y', 400, 0)]
+    const out = tidyCanvas(nodes, [opens('x', 'k1'), opens('y', 'k2'), opens('y', 'k3')])
+    // y opened two of g's three children, so g is y's team; x leads nothing and packs loose.
+    expect(at(out, 'g').position.x).toBe(at(out, 'y').position.x + 100 + 40)
+    expect(at(out, 'g').position.y).toBe(at(out, 'y').position.y)
+    // A tie goes to the earliest rope: x opened k1 first, y opened k2 after.
+    const tied = tidyCanvas(nodes, [opens('x', 'k1'), opens('y', 'k2')])
+    expect(at(tied, 'g').position.x).toBe(at(tied, 'x').position.x + 100 + 40)
+    expect(at(tied, 'g').position.y).toBe(at(tied, 'x').position.y)
+  })
+
+  it('returns the SAME array when nothing moves', () => {
+    const once = tidyCanvas(team(), teamRopes)
+    expect(tidyCanvas(once, teamRopes)).toBe(once)
+    const single = [n('a', 5, 5)]
+    expect(tidyCanvas(single, [])).toBe(single)
+    const plain = plainTidy([n('a', 300, 0), n('b', 0, 0), n('c', 0, 300)])
+    expect(tidyCanvas(plain, [])).toBe(plain)
+  })
+})
+
+describe('lineageLayers slots siblings under their OPENER first', () => {
+  it('places a node opened by B under B even when it also waits on A', () => {
+    // o opened a and b; d was opened by a; c was opened by b but waits on a. c reads before d.
+    const nodes = [n('o', 0, 0), n('a', 0, 200), n('b', 300, 200), n('c', 0, 400), n('d', 300, 400)]
+    const { layers } = lineageLayers(nodes, [opens('o', 'a'), opens('o', 'b'), opens('a', 'd'), opens('b', 'c'), waits('a', 'c')])
+    expect(layers).toEqual([['o'], ['a', 'b'], ['d', 'c']])
   })
 })

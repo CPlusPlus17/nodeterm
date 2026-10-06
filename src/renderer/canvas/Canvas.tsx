@@ -9,7 +9,7 @@ import { VisibleMiniMap } from './VisibleMiniMap'
 import { MinimapDock } from './MinimapDock'
 import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
-import { arrangeArgsRefusal } from '@shared/arrange-verb'
+import { arrangeArgsRefusal, isTopLevelGroupArg, TOP_ARRANGE_LAYOUTS } from '@shared/arrange-verb'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
 import { commitOwnedLaunchAttempt, registerLaunchCommit } from '../terminal/launch-attempt'
 import { hasLaunchWriter, launchCommand } from '../terminal/launch-command'
@@ -826,6 +826,7 @@ import {
   alignNodes,
   arrangeByLineage,
   arrangeGroupChildren,
+  tidyCanvas,
   arrangeNodes,
   fitAncestorChain,
   groupArrangeRefusal,
@@ -8950,37 +8951,31 @@ export function Canvas() {
 
   // Pane-level "Tidy canvas": packs every top-level node (terminal, agent, sticky, editor, diff,
   // group frame — a frame moves as one unit, its children ride along untouched) into a
-  // non-overlapping grid via the same `arrangeNodes` selection/canvas-control already use.
-  // `arrangeNodes` no-ops on a mixed-container id set (workspace.ts commonParentId), which is why
-  // only top-level ids (`!n.parentId`) are collected here — a populated group frame would
-  // otherwise silently block the whole action. Sorted by current (y, x) first so the packed grid
-  // roughly preserves the canvas's existing reading order instead of falling back to array/
-  // persistence order (which puts every group frame first).
+  // non-overlapping layout, keeping each orchestrator at the top-left of the team it opened
+  // (`tidyCanvas`, state/workspace.ts — opener ropes only, lifted to the top-level unit; a canvas
+  // with no lineage gets exactly the reading-order grid this action always produced).
   const hasArrangeableNodes = useCallback((): boolean => {
     return nodesRef.current.filter((n) => !n.parentId).length >= 2
   }, [])
-  const arrangeAllNodes = useCallback(() => {
-    if (isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)) return
-    const targets = nodesRef.current
-      .filter((n) => !n.parentId)
-      .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
-    // Fewer than 2 nodes: nothing to tidy — and running arrangeNodes anyway would still emit a
-    // fresh node array (a no-op position rewrite), triggering an undo entry + markDirty + a
-    // project.json write for a canvas that visibly didn't change.
-    if (targets.length < 2) return
-    const ids = targets.map((n) => n.id)
-    setNodes((ns) => arrangeNodes(ns, ids, { layout: 'grid' }))
-    markDirty()
-    fitAll()
-  }, [setNodes, markDirty, fitAll])
-
-  // The lineage ropes as the layout reads them: `controlEdges` is the live copy of what the
-  // project persists as `ropes` ("opened by" and `--after`), which is exactly the relation the
-  // user means by "who opened whom".
+  // The lineage ropes as the layouts read them: `controlEdges` is the live copy of what the
+  // project persists as `ropes` ("opened by" and `--after`), already re-marked at load by
+  // `markLegacyWaitRopes`. The rope id rides along — it is what tells a wait from an opener.
   const lineageEdges = useCallback(
-    () => controlEdgesRef.current.map((e) => ({ source: e.source, target: e.target })),
+    () => controlEdgesRef.current.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     []
   )
+  const arrangeAllNodes = useCallback(() => {
+    if (isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)) return
+    const edges = lineageEdges()
+    // The SAME array means nothing moves (under 2 units, or already tidy): no undo entry, no
+    // project.json write. Decided against nodesRef BEFORE the write — see arrangeByLineageAction.
+    if (tidyCanvas(nodesRef.current as CanvasNode[], edges) !== nodesRef.current) {
+      setNodes((ns) => tidyCanvas(ns as CanvasNode[], edges))
+      markDirty()
+    }
+    fitAll()
+  }, [setNodes, markDirty, fitAll, lineageEdges])
+
   // Whether the lineage tidy has anything to say. Asked when the menu OPENS so the row can be
   // disabled with its reason instead of silently doing nothing on click: on a canvas nobody
   // spawned anything into, every node is loose and the result would just be a worse Tidy canvas.
@@ -14743,9 +14738,34 @@ export function Canvas() {
             // and the palette run — so this branch only parses, refuses by name and replies.
             if (verb === 'arrange' && args.group) {
               const gid = args.group.trim()
+              // Off canvas the lineage ropes are the OWNING project's, not the live canvas's — and a
+              // stored file may predate the wait mark, so it is re-marked exactly as a load would.
+              // The rope id rides along: it is what tells a wait from an opener.
+              const edges = (offCanvas ? markLegacyWaitRopes(offCanvas.project.ropes ?? []) : controlEdgesRef.current).map(
+                (e) => ({ id: e.id, source: e.source, target: e.target })
+              )
+              // `arrange --group top`: the user's Tidy canvas (or its lineage bands), on the canvas
+              // that owns the caller — the same pure transforms the pane menu runs.
+              if (isTopLevelGroupArg(gid)) {
+                const topLayout = TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'
+                const next = topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, edges)
+                const count = live.filter((nd) => !nd.parentId).length
+                if (next !== live) commitCtlNodes(next)
+                reply({
+                  ok: true,
+                  message:
+                    next !== live
+                      ? `arranged ${count} top-level item(s) as ${topLayout}`
+                      : count < 2
+                        ? 'fewer than two top-level items — nothing to arrange'
+                        : topLayout === 'lineage' && lineageLayers(live, edges).layers.length === 0
+                          ? 'no opened-by or --after connection joins two top-level items — nothing moved'
+                          : `the canvas is already arranged as ${topLayout} — nothing moved`,
+                  result: { count, group: 'top', layout: topLayout, changed: next !== live }
+                })
+                return
+              }
               const groupLayout = GROUP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'grid'
-              // Off canvas the lineage ropes are the OWNING project's, not the live canvas's.
-              const edges = (offCanvas ? offCanvas.project.ropes ?? [] : controlEdgesRef.current).map((e) => ({ source: e.source, target: e.target }))
               const refusal = groupArrangeRefusal(live, gid, groupLayout, edges)
               if (refusal) {
                 reply({ ok: false, error: `arrange: ${refusal}` })

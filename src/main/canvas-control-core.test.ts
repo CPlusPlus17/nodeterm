@@ -127,6 +127,9 @@ describe('parseControlRequest', () => {
       ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
     ] as const) {
       expect(body, name).toContain('- `arrange --group <frameId> [--layout grid|row|column|lineage] [--cols N]`')
+      // The whole-canvas form is in both bodies, and says what Tidy does with an orchestrator.
+      expect(body, name).toContain('- `arrange --group top [--layout tidy|lineage]` — tidy the WHOLE canvas')
+      expect(body, name).toMatch(/each orchestrator is placed first, at the top-left of the nodes and\s+frames it opened/)
       // The `--nodes` form is still there, and still says what it accepts.
       expect(body, name).toContain('`arrange --nodes <id,id> [--layout grid|row|column] [--cols N]`')
       expect(body, name).toMatch(/frame's direct children \(a frame nested\s+inside moves as one unit\)/)
@@ -145,6 +148,8 @@ describe('parseControlRequest', () => {
     const body = buildCanvasSkillBody('/x/shim.sh')
     expect(body).toContain("then `arrange --group <the new frame's id>`")
     expect(body).not.toContain('arrange --nodes <those same ids>')
+    // An orchestrator asked to tidy the canvas reaches for the user's own Tidy (#1114).
+    expect(body).toContain('"Tidy the canvas" / "clean up the layout" → `arrange --group top`')
   })
 
   it('run requires --node (#925)', () => {
@@ -278,7 +283,12 @@ describe('parseControlRequest', () => {
     expect(parseControlRequest('group', {})).toEqual({ error: 'group requires --nodes <id,id>' })
     expect(parseControlRequest('group', { nodes: 'a,b' })).toEqual({ verb: 'group', args: { nodes: 'a,b' } })
     expect(parseControlRequest('arrange', {})).toEqual({
-      error: 'arrange requires --nodes <id,id> or --group <frameId>'
+      error: 'arrange requires --nodes <id,id>, --group <frameId> or --group top'
+    })
+    // The whole-canvas form: Tidy canvas, from an agent (#1114).
+    expect(parseControlRequest('arrange', { group: 'top' })).toEqual({ verb: 'arrange', args: { group: 'top' } })
+    expect(parseControlRequest('arrange', { group: 'top', layout: 'grid' })).toEqual({
+      error: 'arrange --group top: --layout must be tidy|lineage'
     })
     expect(parseControlRequest('arrange', { nodes: 'a,b', layout: 'row' })).toEqual({
       verb: 'arrange',

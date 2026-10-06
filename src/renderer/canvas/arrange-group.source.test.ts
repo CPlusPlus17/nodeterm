@@ -79,7 +79,10 @@ describe('arrange inside a group (source pins)', () => {
     // `commitCtlNodes` is the one write for on- and off-screen projects (it marks dirty itself).
     expect(write).toMatch(/^if \(next !== live\) commitCtlNodes\(next\)/)
     // Off screen the lineage ropes are the owning project's, never the live canvas's.
-    expect(groupBranch).toContain('offCanvas ? offCanvas.project.ropes')
+    // A stored file may predate the wait mark, so it is re-marked as a load would.
+    expect(groupBranch).toContain('offCanvas ? markLegacyWaitRopes(offCanvas.project.ropes ?? [])')
+    // The rope id rides along — it is what tells a wait from an opener.
+    expect(groupBranch).toContain('({ id: e.id, source: e.source, target: e.target })')
     // A refusal names the verb and never reports ok.
     expect(groupBranch).toContain('reply({ ok: false, error: `arrange: ${refusal}` })')
   })
@@ -111,5 +114,24 @@ describe('arrange inside a group (source pins)', () => {
     const nodesForm = verb.slice(verb.indexOf('const ids ='))
     expect(nodesForm).toContain('fitAncestorChain(next, container, snapGridNow())')
     expect(nodesForm).not.toContain('fitGroupToChildren(')
+  })
+
+  it('Tidy canvas is tidyCanvas over the ropes WITH their ids, and a no-op writes nothing', () => {
+    const tidy = between('const arrangeAllNodes = useCallback(', '\n  // Whether the lineage tidy')
+    const guard = tidy.indexOf('tidyCanvas(nodesRef.current as CanvasNode[], edges) !== nodesRef.current')
+    expect(guard).toBeGreaterThan(-1)
+    expect(tidy.indexOf('setNodes((ns) => tidyCanvas(ns as CanvasNode[], edges))')).toBeGreaterThan(guard)
+    expect(tidy).not.toContain('arrangeNodes(')
+    expect(tidy).toContain('isKanbanOpen(')
+    const edges = between('const lineageEdges = useCallback(', 'const arrangeAllNodes')
+    expect(edges).toContain('({ id: e.id, source: e.source, target: e.target })')
+  })
+
+  it('arrange --group top runs the same Tidy canvas (or its bands) and writes only on a change', () => {
+    const top = groupBranch.slice(groupBranch.indexOf('if (isTopLevelGroupArg(gid))'), groupBranch.indexOf('const groupLayout'))
+    expect(top).toContain("TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'")
+    expect(top).toContain("topLayout === 'lineage' ? arrangeByLineage(live, edges) : tidyCanvas(live, edges)")
+    expect(top).toContain('if (next !== live) commitCtlNodes(next)')
+    expect(top).not.toMatch(/\barrangeNodes\(/)
   })
 })

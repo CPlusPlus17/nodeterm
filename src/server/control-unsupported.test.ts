@@ -445,7 +445,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     // `--group` must take that same named refusal rather than be ignored on the way to something
     // that answers ok.
     const handler = createServerEditionControlHandler(actions())
-    const forms: Record<string, string>[] = [{ nodes: 'a,b' }, { group: 'g1', layout: 'lineage' }]
+    const forms: Record<string, string>[] = [{ nodes: 'a,b' }, { group: 'g1', layout: 'lineage' }, { group: 'top' }]
     for (const args of forms) {
       const reply = await handler({ verb: 'arrange', nodeId: 'term-source', args, verified: true })
       expect(reply).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })

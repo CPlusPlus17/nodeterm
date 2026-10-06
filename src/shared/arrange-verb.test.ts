@@ -3,13 +3,15 @@ import {
   ARRANGE_LAYOUTS,
   GROUP_ARRANGE_LAYOUTS,
   arrangeArgsRefusal,
-  arrangeGroupGuidanceLines
+  arrangeGroupGuidanceLines,
+  isTopLevelGroupArg,
+  TOP_ARRANGE_LAYOUTS
 } from './arrange-verb'
 
 describe('arrangeArgsRefusal', () => {
   it('needs one of the two forms', () => {
-    expect(arrangeArgsRefusal({})).toBe('arrange requires --nodes <id,id> or --group <frameId>')
-    expect(arrangeArgsRefusal({ layout: 'row' })).toBe('arrange requires --nodes <id,id> or --group <frameId>')
+    expect(arrangeArgsRefusal({})).toBe('arrange requires --nodes <id,id>, --group <frameId> or --group top')
+    expect(arrangeArgsRefusal({ layout: 'row' })).toBe('arrange requires --nodes <id,id>, --group <frameId> or --group top')
   })
 
   it('accepts either form on its own', () => {
@@ -42,6 +44,23 @@ describe('arrangeArgsRefusal', () => {
   })
 })
 
+describe('arrange --group top', () => {
+  it('names the top level with the same words move reads', () => {
+    for (const g of ['top', 'none', 'ungrouped', ' top ']) expect(isTopLevelGroupArg(g)).toBe(true)
+    for (const g of [undefined, '', 'g1', 'topnot']) expect(isTopLevelGroupArg(g)).toBe(false)
+  })
+
+  it('takes tidy (the default) or lineage, and refuses anything else by name', () => {
+    expect(arrangeArgsRefusal({ group: 'top' })).toBeNull()
+    for (const layout of TOP_ARRANGE_LAYOUTS) expect(arrangeArgsRefusal({ group: 'top', layout })).toBeNull()
+    // A top-level grid that ignores lineage is what Tidy no longer is; --nodes still says it.
+    expect(arrangeArgsRefusal({ group: 'top', layout: 'grid' })).toBe('arrange --group top: --layout must be tidy|lineage')
+    // `tidy` names the whole canvas; on a frame it is not a layout.
+    expect(arrangeArgsRefusal({ group: 'g1', layout: 'tidy' })).toMatch(/--layout must be grid\|row\|column\|lineage/)
+    expect(arrangeArgsRefusal({ group: 'top', nodes: 'a,b' })).toMatch(/not both/)
+  })
+})
+
 describe('arrangeGroupGuidanceLines', () => {
   const text = arrangeGroupGuidanceLines().join('\n')
 
@@ -55,5 +74,12 @@ describe('arrangeGroupGuidanceLines', () => {
     expect(text).toContain('every frame around it')
     expect(text).toContain('top-left stays where it is')
     expect(text).toContain('never both')
+  })
+
+  it('documents the whole-canvas form with the layouts the parser accepts', () => {
+    expect(text).toContain(`arrange --group top [--layout ${TOP_ARRANGE_LAYOUTS.join('|')}]`)
+    expect(text).toContain("exactly as the\n  user's Tidy canvas command does")
+    expect(text).toMatch(/top-left of the nodes and\s+frames it opened/)
+    expect(text).toMatch(/opened-by only; an\s+`--after` wait does not move anything/)
   })
 })
