@@ -16,6 +16,18 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Pixel 7a follow-up (2026-10-06, A127/A128).** Installed beta 16/code 17 now has bounded
+physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
+Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
+app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
+history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
+clears a draft without submitting it while tmux history is open (A128, in progress).
+The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+phone profile, admitted public key and disposable host are retired. These bounded results do
+not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
+**10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+
 **Desktop SSH reconnect checkpoint (2026-10-06, A125/A126).** A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases
 pass at `5b7286b3`. Each loses one birth-pinned product ControlMaster, creates a new master/
@@ -199,6 +211,8 @@ from the remaining phone custom-binding/lifecycle/FPS matrix.
 | [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; one Pixel 7a manual-SSH shell creation/input/reopen/app-restart case passes on `40731381` · Managed SSH New rejects an available absolute default shell as unavailable |
 | [A125](#a125) | medium | | small | desktop/bug | ✅ source-fixed in `415dae9b`; eight bounded Linux Desktop reconnect cases pass at `5b7286b3` with A126; historical negative, 13 new/100 affected tests and six mutants retained; one two-host inactive-global native case passes at `59e4c93e`; phone/wider scope open · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
+| [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods, offline app compile, twelve callback cases and three assertion-caught mutants; updated APK physical check pending · Viewer exit falsely reports that the retained host session ended |
+| [A128](#a128) | high | BLOCK | medium | input/bug | 🔴 physically reproduced on beta 16, fix in progress · Composed Send clears a draft without submitting it while tmux history is open |
 
 ## A01
 
@@ -4782,3 +4796,73 @@ After push, exact-head CI is required through `workflow_dispatch` with `prepare_
 the verified run and exact head are recorded with the source exports. This closes the source
 finding; no PR is opened by this checkpoint. APK/client bytes, private signing, phone pause
 and **10 Pass / 22 Partial / 32 Pending** are unchanged.
+
+## A127
+
+**A closed SSH viewer falsely reports that its retained host session ended (2026-10-06).**
+
+- Severity: **medium**; effort: small; area: phone; kind: bug.
+- Status: **source-fixed in `0d50075a`; updated-APK physical retest pending**.
+- Location: `android/app/src/main/kotlin/dev/nodeterm/android/ui/TerminalController.kt`,
+  `sinkFor(...).onExit`; `android/protocol/src/main/kotlin/dev/nodeterm/protocol/host/HostConnection.kt`,
+  `TerminalSink.onExit`.
+
+On the intended Pixel 7a's beta 16/code 17, terminating only the owned attached tmux viewer
+reports SSH exit 1 and displays “The session ended (exit 1).” Native observations show the
+original server, exact producer pane/process generation, cwd and history still present.
+Manual Reattach opens another viewer onto that same shell. The stream's status does not
+establish producer death. Evidence is bound to the
+[physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06), particularly
+`26-after-channel-drop.xml`, `27-channel-settled.xml`, `27-native-channel-recover.json` and
+`channel-interruption.json`.
+
+The fix uses `TerminalExit.closedMessage`: every numeric exit describes the terminal connection
+closing; an unknown exit retains “Disconnected.” It clarifies the stream-exit contract without
+changing retry conditions, budgets, generation checks or Reattach. It does not infer liveness
+from stale listings or automatically retry arbitrary nonzero failures.
+
+Three actual JVM methods and offline app compilation pass. A compiled actual callback harness
+passes all twelve control/restored cases; three isolated mutants fail assertions, including a
+controller bypass of the neutral helper. The old callback baseline fails four assertions.
+The harness uses immediate Handler, viewer-slot and retry-admission fakes; it supplies no native
+producer-liveness, Android lifecycle or updated APK proof. Independent read-only review finds
+no material issues. No wire shape or iOS client change is required.
+
+Private proof: `/tmp/nodeterm-a127-proof.json`, SHA-256
+`75069aa576ae694cd1b7b8248a9b81c2364882eb37a00d1ccabb93157bf49f67`;
+compiled callback recipe `/tmp/nodeterm-a127-verify.py`, SHA-256
+`4956f76e79041e585bf9312395d24ccaa1af341539928f73d3cf3cb850e257cc`.
+
+## A128
+
+**Composed Send clears a draft without submitting it while tmux history is open (2026-10-06).**
+
+- Severity: **high (BLOCKS a reliable input release)**; effort: medium; area: input; kind: bug.
+- Status: **physically reproduced on beta 16/code 17; fix in progress**.
+- Location: `TerminalController.submit`, `TerminalScreen` Send, `TerminalActions.write`,
+  terminal-page `nt.submit` and `SshHostConnection.SshStream.write`.
+
+Two intended Pixel 7a cases reproduce input loss: composed Send in vi copy mode after a real
+SSH transport interruption, and composed Send on a healthy connection in emacs copy mode.
+The bar clears, but the exact original shell has no command or marker. In the healthy emacs
+case, copy mode remains active at position 70 and the full native capture is unchanged.
+The preceding automatic reconnect and history preservation pass; subsequent composed delivery
+fails. The receipt keeps the pre-Send capture separate from the actual post-Send capture.
+Evidence: `25-unsent-draft.xml`, `30-transport-settled.xml`,
+`32-native-after-explicit-send.json`, `35-copy-mode-draft.xml`,
+`35-native-copy-before.json`, `36-copy-mode-after-send.xml` and `37-native-copy-after.json`,
+bound by the [physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+
+Current Send returns success when JavaScript is queued, then clears the draft. Native scroll
+cancellation removes pending swipes but does not cancel host copy mode; raw stdin reaches the
+tmux history viewer rather than the foreground shell. Ordinary raw input, terminal reports and
+wheel events cannot globally acquire copy-mode cancellation semantics.
+
+The repair is being implemented as an explicit awaited composed-submission operation on the
+captured attached viewer, ordered after in-flight scrolling. It must preserve bracketed paste
+and separate Enter, keep Ctrl as a raw control byte without Enter, and retain the same draft on
+refusal, uncertainty or a stale viewer. Success describes submission to the attached pane/PTY,
+not execution of the command. Unknown outcomes must not replay. An additive relay verb requires
+the Android client and actual interop fixture in the same change; iOS implications are owed to
+@eneskirca. Source regression/mutation checks, a rebuilt private APK and physical retest remain
+pending at this checkpoint.

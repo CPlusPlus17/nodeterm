@@ -5,6 +5,18 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Pixel 7a follow-up (2026-10-06, A127/A128).** Installed beta 16/code 17 now has bounded
+physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
+Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
+app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
+history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
+clears a draft without submitting it while tmux history is open (A128, in progress).
+The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+phone profile, admitted public key and disposable host are retired. These bounded results do
+not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
+**10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+
 **Desktop SSH reconnect checkpoint (2026-10-06, A125/A126).** A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases
 pass at `5b7286b3`. Each loses one birth-pinned product ControlMaster, creates a new master/
@@ -464,6 +476,67 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Pixel 7a lifecycle, scroll and input follow-up (2026-10-06)
+
+The intended Pixel 7a runs the retained-signer, non-debuggable beta 16/code 17 from `2723845e`:
+APK SHA-256 `9c5309c8cfb225daf59f7fac70be1760fb0abdaac36cb55005b958f2186c8ce3`.
+Android 17/API 37 and Vanadium `154.0.8037.126.0` are observed device facts. The cached Desktop
+build is `59e4c93e`; `6c570d6a` changes only four documents. Android production behavior is
+equivalent to that checkpoint except for a class comment. This is baseline verification,
+not a phone pass for A127/A128.
+
+Manual high-port SSH with an explicit private profile and a compared host fingerprint works
+with Remote access off. Actual videos capture Creating before Back and Home; each produces
+exactly one registered plain shell in the selected local folder. Reopen and a real background
+app-process kill/restart retain the saved SSH profile and original pane/cwd. Both original and
+new shells remain distinguishable by their native pane/process generations.
+
+Custom wheel bindings `-N7` are observed in both emacs and vi copy tables. Held older-history
+drags move repeatedly before finger lift; a free flick continues from native position 784 to
+1029 after the ADB swipe returns. A new touch supplies a bounded stable interval below the
+history boundary; release can reposition the cursor. Native samples are aligned to ADB command
+bounds, not MotionEvent timestamps. These checks establish neither FPS nor instantaneous stop,
+the wider reversal/gesture matrix, or restoration of the original bindings: that pre-read
+failed, and all modified options disappear with the disposable fixture.
+
+Dropping only the phone's owned SSH handler disables Send and preserves its draft while the
+app automatically reattaches to the same shell with all 1800 generated history lines retained.
+Find sees an offscreen original marker among 1805 retained lines. SSH End removes only the
+owned Home shell; the guard and other shell survive, and canvas nodes remain as the SSH dialog
+describes. This does not verify relay canvas End.
+
+Two physical failures become [A127](android-audit-2026-09.md#a127) and
+[A128](android-audit-2026-09.md#a128). Terminating only the viewer reports exit 1 as session death
+despite the live producer and retained history. Composed Send in history mode clears the draft
+without a command/marker, both after vi-mode reconnect and on a healthy emacs-mode connection.
+Automatic transport recovery passes; composed command delivery in these cases fails.
+
+A127 is source-fixed in `0d50075a`: every numeric viewer exit now describes the closed terminal
+connection. Retry conditions, budget, generation checks and Reattach remain unchanged. Three
+JVM methods, offline app compilation and twelve compiled actual-callback cases pass; three
+isolated mutants fail assertions, with passing control/restored runs. The callback fixture uses
+immediate Handler, viewer-slot and retry-admission fakes, not Android lifecycle or native liveness.
+A128's submission acknowledgement and history-mode handling are still being implemented.
+
+The temporary phone profile and its displayed public-key admission were removed. The exact
+owned fixture exits successfully with generated private authentication removed and both
+listeners closed. Its controlled nonce stop uses SIGTERM for app/server cleanup; ordinary
+app Quit is not verified. No regular Desktop, other terminal or phone identity was changed.
+The original Pixel 10 Pro ledger stays **10 Pass / 22 Partial / 32 Pending**. Relay/QR/cellular,
+provider-authenticated launch, notification/permission paths, phone reboot and wider platforms
+still need their own acceptance.
+
+Private physical receipt: `nodeterm-new-phone-fixture-ise429xt/proof/physical-pixel7a-w1gr_uz5/qa-report.json`
+under the owner-only Android work cache, SHA-256
+`dfce110a6c2fb9d4ed8497bfc2ac6bf59311766a7bc36b866ace1d0dcb2d8408`, binding 125 raw artifacts.
+Its `sdk37ApksignerVerified` field lacks current SDK 37 tool/log provenance and is not relied
+upon. A separate correction preserves that frozen report and records the actual current SDK 36
+v2/v3, single retained-signer verification:
+`pixel7a-signature-provenance-correction-ox2gec9p/correction.json`, SHA-256
+`374244d6b231f1bcd0932515010215bd8683d1a6795b3528aa18522883977fde`.
+A127's private proof receipt is `/tmp/nodeterm-a127-proof.json`, SHA-256
+`75069aa576ae694cd1b7b8248a9b81c2364882eb37a00d1ccabb93157bf49f67`.
 
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases

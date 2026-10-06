@@ -6,6 +6,18 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Pixel 7a follow-up (2026-10-06, A127/A128).** Installed beta 16/code 17 now has bounded
+physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
+Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
+app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
+history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
+clears a draft without submitting it while tmux history is open (A128, in progress).
+The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+phone profile, admitted public key and disposable host are retired. These bounded results do
+not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
+**10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](../docs/android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
+
 **Desktop SSH reconnect checkpoint (2026-10-06, A125/A126).** A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases
 pass at `5b7286b3`. Each loses one birth-pinned product ControlMaster, creates a new master/

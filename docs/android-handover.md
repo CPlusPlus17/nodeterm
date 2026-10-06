@@ -3,10 +3,22 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A126`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A128`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+**Pixel 7a follow-up (2026-10-06, A127/A128).** Installed beta 16/code 17 now has bounded
+physical checks on Android 17 / API 37 and Vanadium `154.0.8037.126.0`, against disposable
+Desktop built from `59e4c93e` (production-equivalent to `6c570d6a`). Start→Back/Home creation,
+app-process restart, custom emacs/vi history dragging, momentum, transport recovery, retained
+history Find and exact-owned SSH End pass in the named cases. Two failures remain distinct:
+viewer exit falsely reports session death (A127, source-fixed in `0d50075a`), and composed Send
+clears a draft without submitting it while tmux history is open (A128, in progress).
+The A127 tests and mutation checks pass; neither new fix has a phone APK pass yet. The temporary
+phone profile, admitted public key and disposable host are retired. These bounded results do
+not complete the 64-item checklist; the original Pixel 10 Pro ledger remains
+**10 Pass / 22 Partial / 32 Pending**. See [the physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06).
 
 **Desktop SSH reconnect checkpoint (2026-10-06, A125/A126).** A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 Eight actual Linux Desktop **Canvas/Modal × soft/hard wraps × inner none/SGR mouse** cases
@@ -366,6 +378,29 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Pixel 7a lifecycle and custom scrolling; A127/A128 discovered (2026-10-06)
+
+Trusted Wireless debugging is restored and the intended Pixel 7a's beta 16 installation is
+hash/signer verified. Actual Start→Back and Start→Home videos, native registration/pane proof,
+background process restart, custom `-N7` emacs/vi held dragging and bounded momentum/touch-stop
+checks pass against the disposable cached `59e4c93e` Desktop. Transport reconnect preserves the
+pane/history and disables Send while disconnected. Offscreen Find and exact-owned SSH End pass.
+These are bounded cases, not completed checklist rows.
+
+A127 reports a failed viewer as a dead session while the producer survives. Signed source fix
+`0d50075a` changes only the fallback wording and stream-exit documentation; three JVM methods,
+offline app compilation, twelve callback cases and three assertion-caught mutants pass.
+A128 loses composed input in copy mode: both vi after reconnect and healthy emacs clear the
+draft with no submitted command/marker. A128 is being implemented with explicit submission
+results and draft retention; it still needs regression/mutation, merged gates and a new APK.
+Neither fix has an updated-device pass yet.
+
+The temporary phone profile and admitted public key are removed; the exact owned fixture stops
+cleanly with authentication removed/listeners closed. This was a controlled SIGTERM stop,
+not ordinary Quit acceptance. The original phone and regular Desktop remain untouched.
+The [physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06)
+records artifact hashes and limitations; the original ledger stays 10 Pass /22 Partial /32 Pending.
 
 ### Inactive global-card owner and bounded park/adopt verified (2026-10-06)
 
@@ -1314,6 +1349,16 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+**Immediate follow-up:** finish A128's composed Send fix, retaining a draft on refusal or
+uncertainty and leaving host history mode before submission to the attached pane. A127's neutral
+viewer-close notice is source-fixed in `0d50075a`. Run meaningful regressions and assertion-caught
+mutations, merge both fixes, run the required offline/affected Desktop gates, build a retained-signer
+private beta and physically retest A127/A128 on the intended Pixel 7a. No updated APK is installed
+at this checkpoint. The latest [physical receipt](android.md#pixel-7a-lifecycle-scroll-and-input-follow-up-2026-10-06)
+adds Start→Back/Home, process restart, custom emacs/vi dragging, bounded momentum, transport
+recovery, Find and exact-owned SSH End cases; it does not complete the original checklist.
+After the next authorized push, confirm all five Android jobs on its exact HEAD. No PR is opened.
+
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The controlled eight-case Linux Desktop reconnect matrix now verifies actual Canvas mounting and
 selected-view native keyboard recovery, with retained remote identity/full same-grid history,
@@ -1339,10 +1384,11 @@ usable provider authorization; the earlier HTTP 401 is not acceptance. A fresh P
 prove the original phone's same-signer update or key/pin survival. These physical and backend
 obligations remain distinct from optional wider host/platform/stress coverage.
 
-The new A86 native regression verifies custom copy-mode gains, chunked distance and reversals in
-two tmux key modes. It adds no phone, FPS or wider lifecycle completion; see the current native
-receipt below. The Pixel 7a is offline at this checkpoint, and its remaining physical checks need
-its current Wireless debugging address. The original phone's pause remains in effect.
+The A86 native regression verifies custom copy-mode gains, chunked distance and reversals in
+two tmux key modes. The later Pixel 7a follow-up adds physical held-drag checks with custom
+`-N7` bindings in both modes and bounded momentum/touch-stop sampling. FPS, the wider reversal/
+gesture/lifecycle matrix and other platforms remain open. Recheck the phone connection and
+focus before the next device action; the original phone's pause remains in effect.
 
 A124 now passes a physical managed plain-shell creation/registration/input/reopen/app-restart
 case on the separate Pixel 7a and frozen Desktop `40731381`. Retained-history Find and clipboard
@@ -1852,16 +1898,19 @@ source before editing. A100–A120 close retained history, typed read recovery, 
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
 host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
-Beta 16/code 17 is prepared from `2723845e` with local release checks complete, including
-A118's identity proof, A119's SSH profile choice and A120's confirmed password enrollment. Resume device checks only when asked, using current host source too.
-The phone remains on beta 10/code 11; newer prepared APKs have no device pass. Testing was explicitly
-paused. Preserve the 10 Pass / 22 Partial / 32 Pending ledger until actual evidence changes it.
+Beta 16/code 17 from `2723845e` is installed on the separately authorized Pixel 7a; its latest
+Android 17/API 37 follow-up is recorded above. The original Pixel 10 Pro remains on beta 10/code 11
+with testing paused and its ledger unchanged at 10 Pass /22 Partial /32 Pending. Fresh-phone
+results do not establish update/migration survival on the original phone.
 
-When the user resumes device work, use only the intended Pixel (ADB serial `55271FDCH000A6`),
-request its current main Wireless debugging endpoint, and use disposable owned terminals. Resume
-rotation/QA-host cleanup and the expanded 64-item checklist; do not inherit older Pass results for
-new flows. Test real Claude rule persistence and full-question application separately from synthetic
-hook/producer tests. Preserve the held rebuilt Desktop fixture and its original terminal.
+Finish A128 and physically retest it together with source-fixed A127 on a rebuilt private beta.
+Use only the phone the user authorized, verify its identity and app focus before input, and use
+fresh disposable owned terminals with the current host source. Obtain a current main Wireless
+debugging endpoint only if the trusted connection is unavailable. The latest owned phone profile,
+public-key admission and QA host are already retired; preserve historical receipts. Resume the
+expanded 64-item checklist without inheriting older passes for new flows. Real Claude rule
+persistence/full-question application needs usable provider authentication and remains separate
+from synthetic hook/producer tests. Preserve the older paired fixture and its original terminal.
 
 Immediate FCM and fresh-different-desktop relay refusal A93 need the hosted backend maintainers;
 the user has no backend repository to supply. A111 implements a host-owned launch API on current
