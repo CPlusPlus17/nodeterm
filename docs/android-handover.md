@@ -1682,15 +1682,15 @@ when it did not deliver. iOS can adopt `reason` unchanged; an older phone keeps 
 | Repo / branch | `CPlusPlus17/nodeterm`, branch `claude/android-ios-parity-75kfem` (pushed) |
 | Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; `2dd539f` this handover; then every fix and feature in the progress log, newest first (`git log` on the branch) |
 | PR | none (do not open one unless asked) |
-| CI | `.github/workflows/android.yml`: **Protocol**, **App** (`assembleDebug`), **App release** (R8, unsigned), **CodeQL (Kotlin)** and **Private beta checks** on exact takeover-branch pushes or opted-in manual runs. The private artifacts use authorized local builds; each requested push requires green Android workflow verification |
+| CI | `.github/workflows/android.yml`: **Protocol**, **App** (`assembleDebug`), **App release** (R8, unsigned), **CodeQL (Kotlin)** and **Private beta checks**. Android-relevant `main` pushes and pull requests retain their filters; takeover-branch pushes do not trigger Android. Use `workflow_dispatch` with `prepare_beta=true` on the exact published HEAD for all-five-job feature-branch verification and CI beta inputs. Each requested push still requires green exact-head Android verification. |
 
 What is in the tree:
 
 - `android/protocol` is pure Kotlin/JVM with no Android dependency. It holds the NaCl port, the relay
   client, the host RPC, pairing, direct SSH over sshj, the parsers, and the pure rules the app's
   screens use (most app logic lives here so it can be tested). The remote branch had 589 tests
-  before these continuation additions; the current full suite passes 688 tests in 67 suites with
-  zero failures, errors or skips. Its JVM tests
+  before these continuation additions; full forced offline checks at `2a6e005b` pass **982 methods /
+  102 suites**, with zero failures, errors or skips. Its JVM tests
   include desktop interop and SSH harnesses. The
   interop tests run the desktop's own `connectHostSession` / `createPairingService` through
   `android/protocol/src/test/interop/host-fixture.ts`; the SSH tests use Apache MINA sshd with a
