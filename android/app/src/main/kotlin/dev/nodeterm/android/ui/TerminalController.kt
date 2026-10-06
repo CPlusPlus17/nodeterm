@@ -45,6 +45,7 @@ import dev.nodeterm.protocol.host.PhoneLaunch
 import dev.nodeterm.protocol.host.StreamLease
 import dev.nodeterm.protocol.host.TerminalPage
 import dev.nodeterm.protocol.host.TerminalActions
+import dev.nodeterm.protocol.host.TerminalExit
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.ViewerSlot
@@ -263,7 +264,7 @@ class TerminalController(
                 if ((code == null || code == 0) && !disposed && autoReattach(requireLive = code == 0)) {
                     state = TermState.Ended(if (code == null) "Disconnected. Reconnecting…" else "Another screen took over this session. Reattaching…")
                 } else {
-                    state = TermState.Ended(if (code == null) "Disconnected." else "The session ended (exit $code).")
+                    state = TermState.Ended(TerminalExit.closedMessage(code))
                 }
             }
         }

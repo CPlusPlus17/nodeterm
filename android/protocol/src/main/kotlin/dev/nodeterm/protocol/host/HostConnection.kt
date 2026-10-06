@@ -18,7 +18,10 @@ interface TerminalSink {
     fun onOutput(bytes: ByteArray)
     /** The host reports the shared pty's real size (a desktop viewer sized it). */
     fun onResized(cols: Int, rows: Int) {}
-    /** The pane's process exited, or the attach failed. The stream is gone. */
+    /**
+     * This attached stream closed. [code] may describe the viewer or an attach failure, rather than
+     * the pane's process; even a nonzero exit does not establish that the host session ended.
+     */
     fun onExit(code: Int?)
 }
 
