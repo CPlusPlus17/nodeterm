@@ -3462,7 +3462,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   clips, so it can never add a line to the row (a height flip would refit xterm and SIGWINCH
   tmux). It is not on the kanban card modal: that header already carries the ⌘M toggle.
   **The composer sends only in `done` or an unknown state** (`canSendFromChat`,
-  `renderer/lib/chatSendGate.ts`) — never in `waiting`/`blocked`, not just never in `working`:
+  `renderer/lib/chatSendGate.ts`), with ONE exception: `working` for an agent in
+  `INPUT_QUEUE_CAPABLE` (claude — measured: a prompt submitted mid-turn waits in Claude Code's own
+  queue and reaches the model at the next tool boundary), where Enter QUEUES (`chatSendMode`) and
+  the bubble reads "Queued" until the transcript has it. Only a plain prompt queues (`canQueue`):
+  a slash command or `!` line mid-turn is unmeasured and waits. While the agent works the textarea
+  stays editable for every agent (`composerStandsDown`) — only sending is gated. Never in
+  `waiting`/`blocked`:
   PermissionRequest and AskUserQuestion both normalize to `waiting`, the pane then holds a TUI
   select dialog this view does not show, and `sendText`'s Enter would ANSWER it ("Yes" is the
   default highlight). It also refuses any node whose CLI has left the pane — hibernated, paused,
@@ -4222,10 +4228,43 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   frames, which `group` won't do; a cycle (a frame into itself or its own descendant) is refused.
   `arrange`/`align` now run in ONE coordinate space: all top-level, OR all children of one frame
   (`commonParentId` decides; a mixed set is refused, not silently subset-arranged — the old
-  behavior). When the ids are a frame's children, the frame is shrunk to hug the tidied layout
-  (`fitGroupToChildren`) — the fix for "grouping keeps scattered positions so the frame is too
-  wide". `move` also re-fits the source + destination frames. All pure + tested in
-  `state/workspace.test.ts` + `workspace.layout.test.ts`.
+  behavior). When the ids are a frame's children, that frame AND every ancestor frame are re-fitted
+  to hug the tidied layout (`fitAncestorChain` — fitting only the one frame left a nested frame
+  wider than its parent) — the fix for "grouping keeps scattered positions so the frame is too
+  wide". `arrange` fills its slots in the order the ids are LISTED (`arrangeNodes` used to place in
+  array order, which discarded every caller's sort). `move` also re-fits the source + destination
+  frames. All pure + tested in `state/workspace.test.ts` + `workspace.layout.test.ts`.
+  **`arrange --group <frameId> [--layout grid|row|column|lineage] [--cols N]`** names the FRAME
+  instead of listing its children: the frame's direct children are laid out and the frame chain is
+  re-fitted — `arrangeGroupChildren`, the SAME transform the frame's menu rows run (see
+  **Arrange inside a group** under Canvas interaction). The flag gate is the pure
+  `arrangeArgsRefusal` (`@shared/arrange-verb`), called in THREE places: `parseControlRequest`
+  (Server Edition), desktop main's control handler (which never runs `parseControlRequest` — the
+  `--issue` trap; with the gate only in the parser, all three refusals were missing on the desktop
+  and the request ran as a grid), and Canvas's `case 'arrange'` as the belt: `--nodes` and
+  `--group` together are refused rather than resolved silently, an unknown `--layout` on the
+  `--group` form is refused by name, and `--layout lineage` on the `--nodes` form is refused
+  instead of being delivered as a grid (any OTHER unknown word there still falls back to `grid`,
+  as it always has). What only the canvas knows — no such frame, an empty frame, no lineage among
+  the children — is `groupArrangeRefusal`, replied as `arrange: <reason>`; a frame already in
+  place answers `ok` with `changed: false` and writes nothing. The agent-facing text for the form
+  is `arrangeGroupGuidanceLines`, rendered into BOTH generated bodies from the same layout list the
+  gate checks. **Server Edition: refused by name** — `arrange` is not in `SERVER_V1_VERBS` in either
+  form (headless control keeps no measured node sizes), so `--group` gets the same permanent
+  `control-unsupported-on-this-edition` reply and is never dropped on the way to an `ok`
+  (`control-unsupported.test.ts` pins it). Off screen it works like the `--nodes` form: the
+  stored nodes are laid out and written back through `commitCtlNodes`, and the lineage ropes are
+  the OWNING project's (`offCanvas.project.ropes`, re-marked with `markLegacyWaitRopes` exactly as a
+  load would — a project that has not been opened since waits were marked still holds unmarked
+  ones), never the live canvas's. The rope **id** rides along on both paths: it is the only thing
+  that tells a wait from an opener, and stripping it (as the first revision did) makes every wait
+  read as an opener. **`arrange --group top [--layout tidy|lineage]`** (2026-10, issue #1114 — an
+  orchestrator asked for a programmatic Tidy) names the canvas's TOP LEVEL with the same words
+  `move` reads (`top`/`none`/`ungrouped`, `isTopLevelGroupArg`) and runs the user's own **Tidy
+  canvas** (`tidyCanvas`, default) or its bands (`arrangeByLineage`) — the same transforms as the
+  pane menu, nothing re-implemented. `grid`/`row`/`column` are refused there by name: `--nodes`
+  already says them, and a top-level grid that ignores lineage is what Tidy no longer is. Same
+  Server Edition refusal, same off-screen path.
   **Fan-in (`link`, 2026-07):** a spawned fan-out was previously write-only — nodes an agent
   opened were joined to it by a **rope** (`project.ropes`, explicitly *"Display-only — never
   context links"*), so an orchestrator could not read back what its own team produced and the
@@ -6660,9 +6699,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
 
 - **Context menus** (`components/ContextMenu.tsx`, portal, icons from `components/icons.tsx`):
   pane right-click = add nodes at cursor (terminal / Claude / sticky / open file) + select
-  all + fit + **Tidy canvas** (`arrangeAllNodes` — packs every top-level node, including group
-  frames as rigid units, into a non-overlapping grid via `arrangeNodes`, sorted by current
-  (y, x) so the pack roughly preserves reading order; mirrored in ⌘K as "Tidy canvas" and in the
+  all + fit + **Tidy canvas** (`arrangeAllNodes` → `tidyCanvas` — packs every top-level node,
+  including group frames as rigid units, without overlap, keeping each ORCHESTRATOR legible; see
+  the Tidy canvas bullet below; mirrored in ⌘K as "Tidy canvas" and in the
   keybinding registry as `canvas.tidy` (default ⌘/Ctrl+Shift+A, remappable); both
   hidden below 2 top-level nodes, where it could only be a visual no-op that still writes
   `project.json`) + restart-idle-agents (the bulk in-place agent restart, mirrored in ⌘K; both
@@ -6689,6 +6728,101 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ids it knows — so Delete, restart-agent, branch/transfer, terminal Search and Close can never
   be hidden, whatever settings.json says. The group-frame menu's colors strip answers to the same
   `colors` id; builders run through `tidySeparators` so a hidden row leaves no dangling rule.
+- **Tidy canvas keeps the orchestrator** (`tidyCanvas` in `state/workspace.ts`, 2026-10 — user
+  feedback: *"I lose the sense who is orchestrator"*). The old Tidy packed every top-level unit
+  into one reading-order grid, so an orchestrator landed wherever its (y, x) fell — routinely LAST,
+  after the stations it opened and the loose notes between them. Now a unit that opened other units
+  is placed first, at the top-left of its own cluster, with the units it opened packed in a ~square
+  grid directly to its RIGHT, and a sub-orchestrator's own team clustered the same way inside that
+  grid (recursive blocks, `flowBlocks` = `arrangeNodes`' row flow over rectangles). Clusters are
+  packed in reading order of their orchestrators; every unit with NO lineage is packed after them,
+  below, by the plain grid. Rules a refactor must keep:
+  **(1) The relation is the OPENER only, and it is `openerByTarget`** (`lib/teamProgress.ts`) —
+  the ONE definition team progress reads too (`data.openedBy` when recorded, else the first
+  non-wait rope into the node; `stationsByOpener` now sits on it), so the ring and the layout
+  cannot disagree about whose station a node is. Waits are NOT followed: a verify panel's
+  reviewers wait on the reviewed node, but the orchestrator opened all of them — following waits
+  would split its team under one of its own stations. And one opener per node makes the clusters
+  a forest, so the layout has one answer.
+  **(2) Ropes are lifted to the top-level unit** (the #1114 shape: a coordinator opens a lead
+  INSIDE a frame, so the frame joins the coordinator's team). A frame whose contents were opened
+  by different units belongs to the one that opened the MOST of them, ties to the earliest rope; a
+  plain node's own opener always wins for it. A rope internal to one frame is dropped.
+  **(3) A cycle never hangs** — lifting makes one easily (a in frame g opens b outside, b opens a2
+  inside g); the cycle member that reads first loses its opener and leads.
+  **(4) No lineage ⇒ exactly the old call**: `arrangeNodes(grid)` over the reading-order ids —
+  pinned against that call verbatim, waits-only canvases included. (Not byte-identical to the
+  pre-#836 *build*: `arrangeNodes` then placed in array order, ignoring the sort this action always
+  documented — see Arrange by lineage below.)
+  **(5) Same array when nothing moves**, so a second Tidy writes no undo entry and no
+  `project.json` (it still fits the view). The layout is idempotent by construction: every block
+  places its members in reading order, so a tidied canvas reads back in the order it was laid out.
+  A dead opener (deleted; the rope pruned, or a stored file's unpruned rope) leads nothing — its
+  stations fall loose. Desktop + Server Edition identical (pure renderer, no new IPC); kanban N/A
+  (a board has no geometry); Mobile N/A (no canvas). Agents reach it as `arrange --group top`.
+- **Arrange by lineage** (`arrangeByLineage` / `lineageLayers` in `state/workspace.ts`; pane menu
+  beside Tidy canvas, ⌘K, and the registry command `canvas.tidyLineage`, which ships UNBOUND —
+  ⌘⇧A is already the first tidy) — the second tidy: one row per LAYER of the lineage ropes
+  (`project.ropes`, i.e. "opened by" and `--after`), growing downward, so a coordinator sits above
+  the team it opened and that team above what IT opened. Four rules, each of which the naive
+  version gets wrong: **(1)** a rope is LIFTED to its top-level ancestor before it counts — an
+  agent opens a team INSIDE a frame, and the frame is the rigid unit that moves; a rope whose two
+  ends lift to the SAME object is internal to that frame and dropped, or the frame would be its own
+  opener. **(2)** a node's layer is its LONGEST path from a root, never its first — with `max`
+  every rope points strictly downward, which is the whole reason the result reads as a flow; a
+  reducer that keeps the LAST opener happens to be right in one edge order and wrong in the other,
+  so the test asserts BOTH. **(3)** nodes no rope touches are NOT layer 0 — they are a final
+  `loose` band, because a node with no lineage is not a root of anything and mixing the two puts
+  every sticky note beside the coordinator. **(4)** a cycle never hangs and never throws (the edge
+  that closes it contributes `0`): a rope cycle is not supposed to exist, but `--after` can be
+  hand-built into one and `project.json` is editable. The refusal is the transform returning the
+  SAME array — no usable rope, or under two top-level nodes — which is also what keeps a no-op out
+  of the undo stack and out of `project.json`; **that verdict is taken from `nodesRef` BEFORE the
+  write, never from a flag set inside the `setNodes` updater**, which runs when the state is
+  processed and is therefore still false on the next line (it would cost every run its `markDirty`
+  + `fitAll`). The pane row is then DISABLED with its reason while the palette OMITS it (no
+  disabled state there). Built ON `arrangeNodes` — one `row` placement per band from a shared left
+  origin — so packing, gap and the mixed-container refusal stay in ONE place. **That only holds
+  because `arrangeNodes` fills its slots in the order of the ids it is handed**: it used to place
+  in ARRAY order, which threw away the slot order `lineageLayers` computes (siblings under their
+  opener) AND the reading-order sort `arrangeAllNodes` documents, with every existing test green
+  because each asserted the layer LIST and never the positions. The interleaved case is now
+  asserted on positions. **Bands read BOTH relations, slots read the opener first** (2026-10):
+  layering follows openers AND waits (a wait is a flow edge too, and longest-path keeps it pointing
+  down — a verify panel reads target → reviewers → judge), but a node's slot in its band follows
+  its OPENER's slot when the opener is in the band above, else its earliest predecessor's, so a
+  node opened by B that waits on A sits under B with the rest of B's team. Kept as its own command
+  rather than folded into Tidy: bands answer "in what order does the work flow", Tidy answers
+  "whose team is this", and on a pipeline the two disagree. Desktop + Server Edition identical
+  (pure renderer, no new IPC); kanban N/A (a board shows cards, and geometry is exactly what a
+  column layout discards); Mobile N/A (no canvas).
+- **Arrange inside a group** (`arrangeGroupChildren` / `groupArrangeRefusal` in
+  `state/workspace.ts`; the group-frame menu's **Tidy group** and **Arrange group by lineage**,
+  ⌘K for the ONE selected frame, and the `arrange --group` control verb — one transform behind all
+  three, pinned by `canvas/arrange-group.source.test.ts`) — the two canvas tidies one level down:
+  organize a frame's own items, then size the frame to hold them. Four rules: **(1)** the members
+  are the frame's DIRECT children, so a nested frame moves as one rigid unit with its own children
+  untouched, exactly as Tidy canvas treats a top-level frame; `lineageLayers` /
+  `arrangeByLineage` take a `containerId` for this, a rope is lifted to the MEMBER that holds its
+  end, and a rope with an end outside the frame is dropped — the opener of a frame's whole team
+  usually sits outside it and says nothing about the order inside. **(2)** the layout starts at
+  the offset a fitted frame keeps its content at (`GROUP_PAD`, plus `GROUP_HEADER`), NOT at the
+  children's bounding box: `fitGroupToChildren` re-anchors a frame to hug its children, so
+  starting from the bounding box moves the frame to wherever its top-left child happened to sit,
+  while starting from the content origin makes the fit re-derive the SAME origin and the frame
+  only grows or shrinks to the right and downward (a frame that was off the grid still moves onto
+  it, by under one cell, when snapping is on). That is also why the action calls no `fitAll` — the
+  thing the user right-clicked must not slide out from under the cursor. **(3)** the fit walks UP
+  the parent chain, innermost first (`fitAncestorChain`): fitting only the frame leaves a parent
+  smaller than the child it holds, and `extent:'parent'` then clamps that child into an inverted
+  range. **(4)** the refusal is the SAME array — a missing or empty frame, a lineage layout with no
+  rope joining two of the children, or a frame whose contents already sit where the layout puts
+  them (compared by geometry, so a second click writes no undo entry and no `project.json`); as
+  with the canvas tidies the verdict is read off `nodesRef` BEFORE the write. The menu rows are
+  DISABLED with the reason `groupArrangeRefusal` gives, the palette OMITS a refused entry, and the
+  CLI replies that reason by name — one sentence, three surfaces. Desktop + Server Edition
+  identical for the menu and palette (pure renderer, no new IPC); the control verb is desktop-only
+  (see Grouping verbs); kanban N/A; Mobile N/A (no canvas).
 - **Add menu** = bottom dock (`Dock.tsx`) `+`, mirrored by the pane menu and command palette.
   `lib/addMenuSpec` is the one source for WHICH kinds are addable, and since 2026-09 also for how
   the two `ContextMenu` surfaces GROUP them: `New terminal` · `New remote…` · the account-capable
@@ -8350,6 +8484,19 @@ unix-socket forward over it. POSIX keeps OpenSSH untouched.
   Phone "Remove" (`pairing-service.revokeDevice`) revokes ALL phone pins and cuts ALL phone relay
   sessions, before the SSH key and the device entry go — all-phones because no box key maps to a
   device; a failure reports `local:false` and keeps the device listed to retry.
+- **Phone pairing is platform-neutral, and revoke still speaks the iOS-era stamp.** New keys are
+  stamped `nodeterm-mobile-<deviceId>` (`pairing-core.deviceCommentFor`); `filterAuthorizedKeys`
+  matches BOTH that and the legacy `nodeterm-ios-<deviceId>` (`deviceCommentsFor`), because every
+  iPhone paired before Android existed carries the old stamp — drop the legacy leg and "Remove"
+  reports a phone removed while its SSH key stays live. The device name is what the phone sends
+  (Android sends one), sanitized to one ≤64-code-point line; with none it is `'Phone'`, EXCEPT the
+  iOS app — which has never sent a name — is recognised by its fixed key comment `nodeterm-ios` and
+  keeps `'iPhone'`. Store links go through `renderer/lib/links.ts` `mobileStoreLinks()`; the Play
+  link is hidden by the single `ANDROID_APP_PUBLISHED` flag until the listing exists, and
+  `mobileStore.guard.test.ts` refuses a direct store URL anywhere else in the renderer. `LicenseSource` includes
+  `'google'` (a Play purchase bridged from the phone, `google:<orderId>`), with its own
+  `licenseCopy` sentence. `settings.mobileLiveActivities` keeps its key; the UI says "Live updates
+  on phone".
 - **A Windows desktop pairs relay-only — no SSH key, and do not "fix" that by writing one.** The
   phone's direct-SSH path is POSIX sh + tmux end to end (nodeterm-ios `HostCommands`, `TmuxBinary`,
   the typed `tmux new-session -A` attach, workspace paths with no `%APPDATA%` candidate). Windows
@@ -9338,11 +9485,13 @@ For every OTHER test dir, two layers, both needed:
   1. **Desktop** (Electron) — the primary app (`src/main` + `src/renderer` via the preload).
   2. **Server Edition** (Linux, browser) — `src/server` + the `src/renderer/bridge` shim (see
      the `src/server/` bullet above and docs/SERVER.md).
-  3. **Mobile companion** — *nodeterm mobile*, a **separate PRIVATE repo** (`nodeterm-ios`)
-     — outside contributors cannot see or PR it, so a mobile implication is raised in the
-     desktop PR and **@eneskirca** is mentioned to carry it over
-     (SwiftUI + SwiftTerm/Citadel, tmux-integrated, talks the `TerminalTransport`/RemoteTransport
-     protocol).
+  3. **Mobile companion** — *nodeterm mobile*, two **separate PRIVATE repos**: `nodeterm-ios`
+     (SwiftUI + SwiftTerm/Citadel) and `eneskirca/nodeterm-android` (Kotlin/Compose, in
+     development) — outside contributors cannot see or PR either, so a mobile implication is
+     raised in the desktop PR and **@eneskirca** is mentioned to carry it over. Both are
+     tmux-integrated, talk the same `TerminalTransport`/RemoteTransport protocol and the same
+     pairing/relay/mirror wire contracts, so a desktop change must not assume the phone is an
+     iPhone (copy, defaults, store links — see **Phone pairing is platform-neutral**).
 
   **The canvas and the kanban board are TWO VIEWS of the same nodes — treat the board as a
   first-class surface, not an afterthought.** Every session/node feature you add to a canvas node

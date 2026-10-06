@@ -325,6 +325,7 @@ import { initCanvasControl, installCanvasSkillInto } from './canvas-control'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
 import { issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
+import { arrangeArgsRefusal } from '../shared/arrange-verb'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { createControlForwarder, type ControlForwardReply } from './control-forward'
 import { claimOpenedBrowser } from './browser-open-claim'
@@ -4168,6 +4169,12 @@ app.whenReady().then(async () => {
     // placement, same reason. Whether a named station exists and can report is the renderer's.
     const afterSuccessRefusal = afterSuccessFlagRefusal(verb, args)
     if (afterSuccessRefusal) return { ok: false, error: afterSuccessRefusal, message: afterSuccessRefusal }
+    // `arrange`'s flag shape (`--nodes` with `--group`, an unknown `--layout` on the `--group` form,
+    // `--layout lineage` on the `--nodes` form): same placement, same reason. This handler never
+    // runs `parseControlRequest`, so without the gate here those requests reached the renderer and
+    // ran as a grid.
+    const arrangeRefusal = verb === 'arrange' ? arrangeArgsRefusal(args) : null
+    if (arrangeRefusal) return { ok: false, error: arrangeRefusal, message: arrangeRefusal }
     // A station's report about ITSELF: recorded in main's store, board-logged on its own card, and
     // never forwarded — there is no canvas work in it, and the renderer hears the store's push.
     if (verb === 'report-outcome') {

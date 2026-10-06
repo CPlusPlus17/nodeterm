@@ -120,10 +120,12 @@ applicable here":
 
 1. **Desktop** (Electron)
 2. **Server Edition** (Linux, browser)
-3. **Mobile companion** — *nodeterm mobile*, a **private** repo (`nodeterm-ios`, SwiftUI). You
-   cannot open a PR against it, so this is normally a follow-up note rather than same-PR
-   work: say in your PR what the mobile side would need, and **mention @eneskirca** so it
-   gets picked up there. "Not applicable" is a fine answer — just make it a stated one.
+3. **Mobile companion** — *nodeterm mobile*, two **private** repos: `nodeterm-ios` (SwiftUI) and
+   `eneskirca/nodeterm-android` (Kotlin, in development). You cannot open a PR against either, so
+   this is normally a follow-up note rather than same-PR work: say in your PR what the mobile side
+   would need, and **mention @eneskirca** so it gets picked up there. "Not applicable" is a fine
+   answer — just make it a stated one. Never assume the phone is an iPhone in desktop copy or
+   defaults.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
@@ -180,7 +182,9 @@ opener's `ctrl-<source>-<node>` shape: rope ORDER does not survive the canvas pr
 deleted nodes, so the id is the only thing that tells a wait from an opener. A node opened by a
 control verb also RECORDS its opener (`data.openedBy`); readers that ask "who opened this"
 (`stationsByOpener`, the station-failure notice) prefer that record and still require the opener's
-rope to exist.
+rope to exist. In the renderer that rule is ONE function, `openerByTarget` (`lib/teamProgress.ts`):
+team progress and Tidy canvas both read it, and so must anything new that asks "who opened this
+node" — and pass the rope `id` through, or every wait reads as an opener.
 
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
@@ -497,6 +501,13 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   a session for a phone-named node id directly (`attachDetached` / `createDetached`): that is how an
   SSH node became a local shell in this machine's `$HOME`. CLAUDE.md, "A remote node is NEVER
   spawned locally".
+
+- **Phone keys and store links are platform-neutral.** New paired keys are stamped
+  `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
+  existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
+  `mobileStoreLinks()` in `src/renderer/lib/links.ts` — the Play link stays hidden behind
+  `ANDROID_APP_PUBLISHED` until the listing exists, and a guard test refuses direct store URLs anywhere else in the renderer.
+
 - **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
   in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
   never write a desktop peer there), and revoke only through `src/main/remote/peer-revoke.ts`, which
