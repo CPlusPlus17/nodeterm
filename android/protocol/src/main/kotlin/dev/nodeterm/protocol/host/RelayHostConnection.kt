@@ -65,6 +65,8 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
     private inner class Stream(val id: Long, override val fresh: Boolean, val sink: TerminalSink) : TerminalStream {
         private val snapshot = SnapshotReassembler()
         private var outSeq = 0L
+        @Volatile private var composedRetired = false
+        override fun retireComposed() { composedRetired = true }
 
         fun accept(frame: Frame) {
             when (frame.op) {
@@ -94,6 +96,31 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
                 put("dir", if (up) "up" else "down")
                 put("lines", lines)
             })
+        }
+
+        override suspend fun submitComposed(input: ComposedInput): ComposedInputResult {
+            if (!input.valid()) return ComposedInputResult.refused("Send is too large or invalid. The draft was kept.")
+            if (composedRetired || streams[id] !== this) return ComposedInputResult.refused()
+            val normalized = input.normalized()
+            val fields = buildJsonObject {
+                put("kind", if (normalized is ComposedInput.Control) "control" else "paste")
+                put("text", when (normalized) { is ComposedInput.Paste -> normalized.text; is ComposedInput.Control -> normalized.text })
+                put("enter", normalized is ComposedInput.Paste && normalized.enter)
+            }
+            val answer = try {
+                J.obj(call("pty.submitComposed", buildJsonObject { put("streamId", id); put("input", fields) }))
+            } catch (error: HostUnansweredException) {
+                return ComposedInputResult.uncertain()
+            } catch (_: HostException) {
+                // A legacy unknown method is an explicit refusal, never raw input or node.sendKeys.
+                return ComposedInputResult.refused("Send is unavailable on this host or terminal. Update nodeterm on the computer or use its terminal; the draft was kept.")
+            }
+            if (composedRetired || streams[id] !== this) return ComposedInputResult.uncertain()
+            return when (answer?.s("status")) {
+                "delivered" -> ComposedInputResult.DELIVERED
+                "refused" -> ComposedInputResult.refused(answer.s("message") ?: "Send was refused. The draft was kept.")
+                else -> ComposedInputResult.uncertain()
+            }
         }
 
         override suspend fun searchHistory(query: String): TerminalHistory.Result {

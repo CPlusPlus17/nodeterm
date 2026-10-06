@@ -73,6 +73,7 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.protocol.model.ExternalLink
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.TerminalCopy
+import dev.nodeterm.protocol.host.ComposedCompletion
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,9 +86,13 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     // the previous cursor when the text is set from code, so after a dictation the cursor sat where it
     // was before it (at 0 in an empty draft) and the next keystroke went into the middle of the words.
     var draft by remember { mutableStateOf(TextFieldValue()) }
+    var draftRevision by remember { mutableStateOf(0L) }
     // The mic (audit A59) writes what it hears into the draft and nothing else: it has no way to send.
     // Its words go at the end of the draft, and so does the cursor, so typing after it continues there.
-    val dictation = remember { DictationController(context.applicationContext) { draft = cursorAtEnd(it) } }
+    val dictation = remember { DictationController(context.applicationContext) {
+        draft = cursorAtEnd(it)
+        draftRevision++
+    } }
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) dictation.start(draft.text) else dictation.denied()
     }
@@ -257,9 +262,13 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                 // keyboard marking the word it composes, changes no text and ends nothing: the field
                 // reports those too, which its String overload did not.
                 val send: () -> Unit = {
-                    if (controller.submit(draft.text, enter = true)) {
-                        draft = TextFieldValue()
-                        dictation.edited()
+                    val sentRevision = draftRevision
+                    controller.submit(draft.text, enter = true) {
+                        ComposedCompletion.clearUnchangedDraft(sentRevision, draftRevision) {
+                            draft = TextFieldValue()
+                            draftRevision++
+                            dictation.edited()
+                        }
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -268,6 +277,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         onValueChange = {
                             val typed = it.text != draft.text
                             draft = it
+                            draftRevision++
                             if (typed) dictation.edited()
                         },
                         modifier = Modifier.weight(1f),
@@ -296,7 +306,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                             )
                         }
                     }
-                    IconButton(onClick = send, enabled = controller.attached) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
+                    IconButton(onClick = send, enabled = controller.attached && !controller.submitting) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
                 }
             }
             // Over the whole body, key row and input bar included: they have nothing to do while copying,

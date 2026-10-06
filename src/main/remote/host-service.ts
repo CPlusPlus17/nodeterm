@@ -29,6 +29,7 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
 import { IPC } from '../../shared/ipc'
 import { REF_MAX_LEN } from '../../shared/presence'
 import { validHistoryQuery, type HistorySearch } from '../../core/terminal-history'
+import { COMPOSED_INPUT_UNCERTAIN, COMPOSED_INPUT_UNSUPPORTED, parseComposedInput, type ComposedInput, type ComposedInputResult } from '../../shared/composed-input'
 import type { CanvasMutation, CanvasState, DirEntry, KanbanColumn, KanbanLabel, PtyCreateOptions } from '../../shared/types'
 import type { AgentId } from '../../shared/agents/config'
 import { PtyManager, type DetachedSinks } from '../../core/pty-manager'
@@ -67,6 +68,8 @@ const FRESH_PROBE_BUDGET_MS = 750
 
 // The slice of pty-manager the host needs. PtyManager satisfies this; tests pass a fake.
 export interface HostPtyManager {
+  /** Explicit composer action on this exact attached viewer. Absent on older implementations. */
+  submitComposed?(sessionId: string, input: ComposedInput, current: () => boolean): Promise<ComposedInputResult>
   /** Search all retained output of this attached generation. Absent on older hosts. */
   historySearch?(sessionId: string, query: string): Promise<HistorySearch>
   createDetached(options: PtyCreateOptions, sinks: DetachedSinks): string
@@ -669,6 +672,22 @@ export function createHostHandlers(
     }).catch((error: unknown) => socket.respond(req.id, false, { message: error instanceof Error ? error.message : 'History search failed.' }))
   }
 
+  function handleSubmitComposed(req: RpcRequest): void {
+    const p = asRecord(req.params)
+    const streamId = num(p.streamId, -1)
+    const stream = streams.get(streamId)
+    const input = parseComposedInput(p.input)
+    if (!input) { socket.respond(req.id, false, { message: 'Invalid composed terminal input.' }); return }
+    if (!stream?.sessionId) { socket.respond(req.id, false, { message: 'This terminal is no longer attached.' }); return }
+    if (!pty.submitComposed) { socket.respond(req.id, false, { message: COMPOSED_INPUT_UNSUPPORTED }); return }
+    const current = (): boolean => streams.get(streamId) === stream
+    void pty.submitComposed(stream.sessionId, input, current).then((result) => {
+      // Once dispatched, a detached viewer can still have received input. Never turn that into a
+      // proven refusal or retry; the client also binds completion to its own presentation ticket.
+      socket.respond(req.id, true, result)
+    }).catch(() => socket.respond(req.id, true, { status: 'uncertain', message: COMPOSED_INPUT_UNCERTAIN }))
+  }
+
   // Serve a typed `git.*` verb against the injected GitService slice, jailed to the shared roots
   // like `fs.*`. Unlike fs (silent empty degrade — the Explorer just shows nothing), a denied or
   // failed git op answers with an EXPLICIT error: the source-control sheet must say why.
@@ -1117,6 +1136,9 @@ export function createHostHandlers(
           break
         case 'pty.historySearch':
           handleHistorySearch(req)
+          break
+        case 'pty.submitComposed':
+          handleSubmitComposed(req)
           break
         case 'fs.list':
         case 'fs.read':

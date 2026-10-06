@@ -285,6 +285,13 @@ async function runRelay(): Promise<void> {
   let sessionCounter = 0
 
   const pty: HostPtyManager = {
+    async submitComposed(sessionId, input, current) {
+      emit({ event: 'submitComposed', sessionId, input })
+      if (!current()) return { status: 'refused', message: 'This terminal is no longer attached.' }
+      if (process.env.FIXTURE_COMPOSED_INPUT === 'refused') return { status: 'refused', message: 'The fixture pane changed.' }
+      if (process.env.FIXTURE_COMPOSED_INPUT === 'uncertain') return { status: 'uncertain', message: 'The fixture acknowledgment was lost.' }
+      return { status: 'delivered' }
+    },
     async historySearch(sessionId, query) {
       emit({ event: 'historySearch', sessionId, query })
       return searchTerminalHistory('old.* Ω 😀\n' + 'recent\n'.repeat(500), query)
@@ -332,6 +339,7 @@ async function runRelay(): Promise<void> {
       return !persistKey.includes('gone')
     }
   }
+  if (process.env.FIXTURE_COMPOSED_INPUT === 'unsupported') delete pty.submitComposed
 
   const store = await seedDesktopState()
   // The folder the WorkspaceStore just wrote the project file into (`project.cwd` in projects.list).

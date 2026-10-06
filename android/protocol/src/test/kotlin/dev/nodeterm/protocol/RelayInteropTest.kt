@@ -16,6 +16,8 @@ import dev.nodeterm.protocol.host.RelayApprovalRefusedException
 import dev.nodeterm.protocol.host.RelayApprovalRequiredException
 import dev.nodeterm.protocol.host.RelayApprovalTimeoutException
 import dev.nodeterm.protocol.host.TerminalSink
+import dev.nodeterm.protocol.host.ComposedInput
+import dev.nodeterm.protocol.host.ComposedInputResult
 import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
@@ -41,6 +43,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -406,6 +410,53 @@ class RelayInteropTest {
             assertEquals(".* Ω 😀", request.str("query"))
             stream.detach()
             assertFailsWith<HostException> { stream.searchHistory("old") }
+        }
+    }
+
+    @Test fun `composed Send uses the real attached-stream host RPC and normalized full paste`() = runBlocking<Unit> {
+        val h = start()
+        connect(h).connection.use { conn ->
+            val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+            val text = "a full prompt exceeding sixteen characters\nΩ 😀\u001b"
+            assertEquals(ComposedInputResult.DELIVERED, stream.submitComposed(ComposedInput.Paste(text, true)))
+            val event = h.awaitEvent("submitComposed")
+            assertEquals("sess-1", event.str("sessionId"))
+            val input = event.getValue("input").jsonObject
+            assertEquals("paste", input.str("kind")); assertEquals(text.replace("\n", "\r").replace("\u001b", ""), input.str("text"))
+            assertEquals(true, input.getValue("enter").jsonPrimitive.boolean)
+            assertEquals(ComposedInputResult.DELIVERED, stream.submitComposed(ComposedInput.Control("\u0003")))
+            val control = h.awaitEvent("submitComposed").getValue("input").jsonObject
+            assertEquals("control", control.str("kind")); assertEquals("\u0003", control.str("text"))
+            assertFalse(control.getValue("enter").jsonPrimitive.boolean)
+            stream.detach()
+        }
+    }
+
+    @Test fun `composed relay refusal uncertainty and legacy unsupported keep explicit outcomes without fallback`() = runBlocking<Unit> {
+        for ((mode, expected) in listOf("refused" to ComposedInputResult.Status.REFUSED,
+            "uncertain" to ComposedInputResult.Status.UNCERTAIN, "unsupported" to ComposedInputResult.Status.REFUSED)) {
+            val h = start(extra = mapOf("FIXTURE_COMPOSED_INPUT" to mode))
+            connect(h).connection.use { conn ->
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val result = stream.submitComposed(ComposedInput.Paste("must keep draft", true))
+                assertEquals(expected, result.status, mode)
+                assertTrue(result.message.orEmpty().isNotBlank(), mode)
+                if (mode != "unsupported") assertEquals("sess-1", h.awaitEvent("submitComposed").str("sessionId"))
+                stream.detach()
+            }
+        }
+    }
+
+    @Test fun `retired or detached relay viewer refuses composed Send before invoking host`() = runBlocking<Unit> {
+        val h = start()
+        connect(h).connection.use { conn ->
+            val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+            stream.retireComposed()
+            assertEquals(ComposedInputResult.Status.REFUSED, stream.submitComposed(ComposedInput.Paste("old", true)).status)
+            stream.write("raw unchanged")
+            assertEquals("raw unchanged", h.awaitEvent("write").str("data"))
+            stream.detach()
+            assertEquals(ComposedInputResult.Status.REFUSED, stream.submitComposed(ComposedInput.Paste("detached", true)).status)
         }
     }
 

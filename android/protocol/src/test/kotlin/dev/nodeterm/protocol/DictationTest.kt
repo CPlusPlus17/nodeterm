@@ -274,7 +274,10 @@ class DictationTest {
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(controller, "private fun on(event: Dictation.Event)"),
             "Dictation.step(state, event)", "state = step.state", "step.draft?.let(setDraft)")
         // The screen hands it the draft's setter and nothing else.
-        assertTrue("DictationController(context.applicationContext) { draft = cursorAtEnd(it) }" in screen, screen)
+        val setter = AppSourcePins.blockAfter(screen, "DictationController(context.applicationContext)")
+        assertTrue("draft = cursorAtEnd(it)" in setter, setter)
+        for (send in listOf("submit(", ".write(", "raw(", "key(", "js("))
+            assertFalse(send in setter, "Dictation's setter must not send: $setter")
         assertEquals(1, Regex("""DictationController\(""").findAll(screen).count())
     }
 

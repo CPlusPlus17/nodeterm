@@ -33,6 +33,10 @@ import dev.nodeterm.android.AppGraph
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.Capability
+import dev.nodeterm.protocol.host.ComposedInput
+import dev.nodeterm.protocol.host.ComposedInputResult
+import dev.nodeterm.protocol.host.ComposedPreparation
+import dev.nodeterm.protocol.host.ComposedCompletion
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.TransportKind
@@ -152,7 +156,13 @@ class TerminalController(
     /** A desktop viewer sized the shared pty differently from this screen. */
     var sizedElsewhere by mutableStateOf<Pair<Int, Int>?>(null)
         private set
-    var ctrlArmed by mutableStateOf(false)
+    private var ctrlState by mutableStateOf(false)
+    private var ctrlRevision = 0L
+    var ctrlArmed: Boolean
+        get() = ctrlState
+        set(value) { if (value != ctrlState) { ctrlState = value; ctrlRevision++ } }
+    var submitting by mutableStateOf(false)
+        private set
 
     /** A one-line message over the terminal (dismissable), e.g. a session the desktop refused to add. */
     var notice by mutableStateOf<String?>(null)
@@ -923,19 +933,43 @@ class TerminalController(
      * character with a control byte is sent as that byte alone, with no Enter (^Z then Enter is not
      * ^Z); anything else just disarms the chip and is sent as typed.
      *
-     * Returns whether the text went to the attached stream. False while nothing is attached: nothing
-     * is sent, Ctrl stays armed, and the caller keeps its draft (A41 — it used to clear it).
+     * Admission is not delivery: [onDelivered] clears the unchanged draft only after this same
+     * viewer confirms the explicit composed action. Refusal, stale views and uncertain writes keep
+     * it, and no delivery is retried. Raw keys, emulator replies and wheels use their original path.
      */
-    fun submit(text: String, enter: Boolean): Boolean {
-        when (val send = InputBar.plan(attached, ctrlArmed, text, enter)) {
+    fun submit(text: String, enter: Boolean, onDelivered: () -> Unit): Boolean {
+        if (submitting) return false
+        val input = when (val send = InputBar.plan(attached, ctrlArmed, text, enter)) {
             InputBar.Send.NotAttached -> return false
-            is InputBar.Send.Control -> {
-                ctrlArmed = false
-                raw(send.bytes)
+            is InputBar.Send.Control -> ComposedInput.Control(send.bytes)
+            is InputBar.Send.Paste -> ComposedInput.Paste(send.text, send.enter)
+        }
+        val expected = stream ?: return false
+        val actor = actions ?: return false
+        val view = webView ?: return false
+        if (!input.valid()) { notice = "Send is too large or invalid. The draft was kept."; return false }
+        val completionPolicy = ComposedCompletion(ctrlRevision)
+        submitting = true
+        // Stop JS momentum before the actor discards queued scroll and awaits its in-flight call.
+        val stoppedScroll = ComposedPreparation.cancelMomentum { complete ->
+            view.evaluateJavascript("nt.cancelScroll()") {
+                complete(webView === view && stream === expected && actions === actor && attached)
             }
-            is InputBar.Send.Paste -> {
-                ctrlArmed = false
-                js("nt.submit('${b64(send.text.toByteArray(Charsets.UTF_8))}', ${send.enter})")
+        }
+        graph.scope.launch {
+            var result = ComposedInputResult.uncertain()
+            try {
+                result = if (withTimeoutOrNull(3_000) { stoppedScroll.await() } == true)
+                    actor.submit(input) else ComposedInputResult.refused()
+            } finally {
+                val completion = result
+                main.post {
+                    submitting = false
+                    val current = webView === view && stream === expected && actions === actor && attached
+                    completionPolicy.complete(completion, current, ctrlRevision, { ctrlArmed = false }, onDelivered)
+                    if (current && completion.status != ComposedInputResult.Status.DELIVERED)
+                        notice = completion.message ?: "Send could not be confirmed. Check the terminal before sending the retained draft again."
+                }
             }
         }
         return true

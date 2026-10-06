@@ -33,6 +33,11 @@ interface TerminalStream {
     fun resize(cols: Int, rows: Int)
     /** Scroll tmux's own history (its mouse is on): `lines` wheel notches, clamped host-side. */
     suspend fun scroll(up: Boolean, lines: Int)
+    /** Explicit input-bar Send to this attested viewer/pane; never silently fall back to raw input. */
+    suspend fun submitComposed(input: ComposedInput): ComposedInputResult =
+        ComposedInputResult.refused("Send from history is unavailable on this host. Update nodeterm on the computer; the draft was kept.")
+    /** Retire unsent composed actions immediately, before a queued raw-I/O detach can run. */
+    fun retireComposed() {}
     /** Search all history retained by this terminal's host; a legacy host says unsupported. */
     suspend fun searchHistory(query: String): dev.nodeterm.protocol.model.TerminalHistory.Result =
         throw HostException("History search is unavailable on this host. Update nodeterm on the computer.")

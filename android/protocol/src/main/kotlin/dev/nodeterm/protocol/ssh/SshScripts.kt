@@ -277,7 +277,7 @@ object SshScripts {
      * there also gets its remote tmux.conf (`-f`) and the hook/account `-e` env, none of which the
      * phone has.
      */
-    fun attach(nodeId: String, socket: String, phoneCreation: String? = null): String {
+    fun attach(nodeId: String, socket: String, phoneCreation: String? = null, inputHandshake: Boolean = false): String {
         val target = target(nodeId)
         val s = socket(socket)
         return """
@@ -290,7 +290,21 @@ object SshScripts {
             ${if (socket == TmuxNames.PHONE_SOCKET) "\"${'$'}NT_TMUX\" -L $s set-option -t ${q("=$target:")} mouse on \\; set-option -t ${q("=$target:")} status off \\; set-option -t ${q("=$target:")} destroy-unattached off || exit 1" else ""}
             TERM=xterm-256color; export TERM
             $LOCALE
+            ${if (inputHandshake) "nt_tty=\$(tty 2>/dev/null) || exit $NO_SESSION_EXIT\nprintf 'NT-INPUT-VIEW %s\\n' \"\$nt_tty\"" else ""}
             exec "${'$'}NT_TMUX" -u -L $s attach-session -t ${q("=$target")}
+        """.trimIndent()
+    }
+
+    /** Same existing phone-shell ownership checks for attachment-bound composed input. */
+    internal fun composedPrelude(nodeId: String, socket: String, phoneCreation: String?): String {
+        val name = target(nodeId)
+        socket(socket)
+        return """
+            $PRELUDE
+            $PHONE_GUARD
+            [ -n "${'$'}NT_TMUX" ] || exit 127
+            ${if (socket == TmuxNames.PHONE_SOCKET) "nt_phone_owned ${q(name)} || exit 3" else ""}
+            ${phonePin(socket, phoneCreation)}
         """.trimIndent()
     }
 

@@ -89,6 +89,8 @@ import { releasePty, type ReleasablePty } from './pty-release'
 import { terminateWindowsProcessTree } from '../session-host/windows-process-tree'
 import { effectiveSize, type PtySize } from './pty-size'
 import { trackTmuxPainter } from './tmux-painter'
+import { captureComposedViewer, submitComposedTmux, type ComposedViewerReceipt } from './composed-tmux'
+import { COMPOSED_INPUT_UNSUPPORTED, parseComposedInput, type ComposedInput, type ComposedInputResult } from '../shared/composed-input'
 import { machOArch, archMismatch } from './macho-arch'
 import { writeScrollback, readScrollback, deleteScrollback } from './scrollback-store'
 import { claudeConfigDirFor } from './claude-config-dir'
@@ -625,6 +627,8 @@ function releaseSpawnSlotOnOutput(session: Session | undefined, release: SpawnSl
 
 interface Session {
   proc: pty.IPty
+  /** Attachment-time receipt of this relay viewer's exact local tmux pane; never re-resolved. */
+  composedViewer?: Promise<ComposedViewerReceipt | null>
   /** Private ownership receipt and bounded takeover claim for this exact local app painter. */
   closeTmuxPainter?: () => void
   nativeWindowsPane?: NativeWindowsPane
@@ -1083,6 +1087,7 @@ export class PtyManager {
   /** Serialize complete background deliveries per node: probe/cancel/send must keep stream chunks
    * in arrival order. A slow pane must not hold up answers to unrelated nodes. */
   private backgroundWrites = new Map<string, Promise<unknown>>()
+  private composedSubmissions = new Map<string, Promise<ComposedInputResult>>()
   /** The child-process seam for shadow clients. Undefined in production, where `ControlModeClient`
    *  uses `child_process` (see tmux-control-client.ts); tests inject a fake spawner. */
   private readonly controlSpawn: ControlSpawn | undefined
@@ -3847,6 +3852,13 @@ export class PtyManager {
       this.ensureReapTimer()
     }
     this.sessions.set(sessionId, session)
+    if (useLocalTmux && sinks && options.persistKey && this.tmuxPath) {
+      const tmux = this.tmuxPath
+      session.composedViewer = captureComposedViewer(TMUX_SOCKET, sessionName(options.persistKey), proc.pid, {
+        current: () => this.sessions.get(sessionId) === session,
+        run: async (args) => (await runAsync(tmux, args, { timeout: 1000, maxBuffer: 64 * 1024, encoding: 'utf8' })).stdout
+      })
+    }
     // Index by node id even when the session is NOT tmux-persisted (`persisted` only governs
     // scrollback snapshots): co-attach must work for a plain-shell session too. Detached
     // (relay-served) ptys are deliberately NOT indexed — the relay path keeps its own session,
@@ -4327,6 +4339,36 @@ export class PtyManager {
     if (clientId !== null && session.nodeId && presenceHub.peerCount() > 1)
       presenceHub.noteTyping(clientId, session.nodeId)
     session.proc.write(data)
+  }
+
+  /** Explicit composer action on this captured viewer only. Raw input never enters this path. */
+  async submitComposed(sessionId: string, value: ComposedInput, current: () => boolean): Promise<ComposedInputResult> {
+    const input = parseComposedInput(value)
+    const session = this.sessions.get(sessionId)
+    if (!input) return { status: 'refused', message: 'Invalid composed terminal input.' }
+    if (!session || !current()) return { status: 'refused', message: 'This terminal is no longer attached.' }
+    if (!session.composedViewer || session.sshRemote || session.sessionHost || session.nativeWindowsPane || !this.tmuxPath)
+      return { status: 'refused', message: COMPOSED_INPUT_UNSUPPORTED }
+    const tmux = this.tmuxPath
+    const receipt = session.composedViewer
+    const valid = (): boolean => current() && this.sessions.get(sessionId) === session
+    const previous = this.composedSubmissions.get(sessionId) ?? Promise.resolve()
+    const writing = previous.then(async (): Promise<ComposedInputResult> => {
+      const viewer = await receipt
+      if (!viewer || !valid()) return { status: 'refused', message: 'This terminal viewer changed. Reattach before sending.' }
+      return submitComposedTmux(viewer, input, {
+        current: valid,
+        run: async (args, body) => {
+          if (body === undefined) return (await runAsync(tmux, args, { timeout: 1000, maxBuffer: 64 * 1024, encoding: 'utf8' })).stdout
+          const result = await runWithStdin(tmux, args, body) as { stdout: string }
+          return result.stdout
+        }
+      })
+    })
+    this.composedSubmissions.set(sessionId, writing)
+    try { return await writing } finally {
+      if (this.composedSubmissions.get(sessionId) === writing) this.composedSubmissions.delete(sessionId)
+    }
   }
 
   /**

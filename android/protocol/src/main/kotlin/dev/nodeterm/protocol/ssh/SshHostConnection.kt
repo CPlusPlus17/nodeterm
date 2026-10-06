@@ -22,6 +22,8 @@ import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.SshAuthRefusedException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
+import dev.nodeterm.protocol.host.ComposedInput
+import dev.nodeterm.protocol.host.ComposedInputResult
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.HookReplies
@@ -383,8 +385,13 @@ class SshHostConnection private constructor(private val client: SSHClient, priva
                 val session = client.startSession()
                 try {
                     session.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
-                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId, socket, phoneCreation)))
-                    SshStream(session, cmd, fresh = false, sink = sink, nodeId = nodeId, socket = socket).also {
+                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId, socket, phoneCreation, inputHandshake = true)))
+                    val deadline = WATCHDOG.schedule({ runCatching { session.close() } }, 10, TimeUnit.SECONDS)
+                    val viewer = try {
+                        val tty = ManagedViewHandshake.read(cmd.inputStream, "NT-INPUT-VIEW ")
+                        captureInputViewer(nodeId, socket, tty, phoneCreation)
+                    } finally { deadline.cancel(false) }
+                    SshStream(session, cmd, fresh = false, sink = sink, nodeId = nodeId, socket = socket, inputViewer = viewer, phoneCreation = phoneCreation).also {
                         opened = it
                         it.start()
                     }
@@ -439,13 +446,15 @@ class SshHostConnection private constructor(private val client: SSHClient, priva
                     channel.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
                     val command = channel.exec("/bin/sh -c " + SshScripts.q(SshScripts.attachManaged(adoption, ad, profilePath = profilePath)))
                     val deadline = WATCHDOG.schedule({ runCatching { channel.close() } }, 10, TimeUnit.SECONDS)
+                    var viewer: SshInputViewer? = null
                     try {
                         val tty = ManagedViewHandshake.read(command.inputStream)
                         val (attached, confirmed) = run(SshScripts.attachManaged(adoption, ad, attach = false, clientTty = tty, profilePath = profilePath), timeoutSec = 8, outputLimit = 256)
                         if (attached != 0 || confirmed.trim() != "NT-MANAGED-VERIFIED") throw HostException("The created terminal could not confirm this SSH viewer. Check it on the computer; no replacement was started.")
+                        viewer = captureInputViewer(r.nodeId, r.socket, tty, null)
                     } finally { deadline.cancel(false) }
                     // The host already created and launched this generation; this attach is warm.
-                    SshStream(channel, command, fresh = false, sink = sink, nodeId = r.nodeId, socket = r.socket).also {
+                    SshStream(channel, command, fresh = false, sink = sink, nodeId = r.nodeId, socket = r.socket, inputViewer = viewer, phoneCreation = null).also {
                         opened = it; it.start()
                     }
                 } catch (e: Exception) {
@@ -457,6 +466,12 @@ class SshHostConnection private constructor(private val client: SSHClient, priva
             opened?.let { s -> withContext(NonCancellable) { s.detach() } }
             throw e
         }
+    }
+
+    private fun captureInputViewer(nodeId: String, socket: String, tty: String, creation: String?): SshInputViewer? {
+        val (code, raw) = run(SshComposedInput.capture(nodeId, socket, tty, creation), timeoutSec = 5, outputLimit = 2048)
+        // Viewing remains supported if an older host cannot attest composed input. Send refuses.
+        return if (code == 0) SshComposedInput.parse(raw, tty, nodeId) else null
     }
 
     /** Node ids of the desktop's SSH projects → `user@host`, from the latest listing. */
@@ -605,13 +620,17 @@ class SshHostConnection private constructor(private val client: SSHClient, priva
         override val fresh: Boolean,
         private val sink: TerminalSink,
         private val nodeId: String,
-        private val socket: String
+        private val socket: String,
+        private val inputViewer: SshInputViewer?,
+        private val phoneCreation: String?
     ) : TerminalStream {
         private val stdin: OutputStream = cmd.outputStream
         private val io: ExecutorService = Executors.newSingleThreadExecutor { r ->
             Thread(r, "nodeterm-ssh-writer").apply { isDaemon = true }
         }
         @Volatile private var ended = false
+        @Volatile private var composedRetired = false
+        override fun retireComposed() { composedRetired = true }
 
         fun start() {
             Thread({
@@ -661,6 +680,50 @@ class SshHostConnection private constructor(private val client: SSHClient, priva
                 stdin.write(bytes)
                 stdin.flush()
             }
+        }
+
+        override suspend fun submitComposed(input: ComposedInput): ComposedInputResult {
+            val result = CompletableDeferred<ComposedInputResult>()
+            val viewer = inputViewer ?: return ComposedInputResult.refused("Couldn't verify this terminal for Send. Reattach and try again; the draft was kept.")
+            if (!input.valid() || ended || composedRetired) return ComposedInputResult.refused()
+            val normalized = input.normalized()
+            try {
+                // The SAME writer executor follows every accepted raw write/resize/wheel. No side
+                // channel may overtake a reserved scroll, and nothing retargets a replacement stream.
+                io.execute {
+                    if (ended || composedRetired) { result.complete(ComposedInputResult.refused()); return@execute }
+                    var pasted = false
+                    val answer = try {
+                        fun dispatch(part: ComposedInput): ComposedInputResult {
+                            val (code, raw) = run(SshComposedInput.send(nodeId, socket, phoneCreation, viewer, part),
+                                timeoutSec = 10, stdin = if (part is ComposedInput.Paste) part.text else null,
+                                uncertainWrite = true, outputLimit = 256)
+                            return when {
+                                code == 0 && raw.trim() == "nt-composed-refused" -> ComposedInputResult.refused()
+                                code == 0 && raw.trim() == "nt-composed-delivered" && !ended && !composedRetired -> ComposedInputResult.DELIVERED
+                                else -> ComposedInputResult.uncertain()
+                            }
+                        }
+                        if (normalized is ComposedInput.Paste && normalized.text.isNotEmpty() && normalized.enter) {
+                            val paste = dispatch(normalized.copy(enter = false))
+                            if (paste.status != ComposedInputResult.Status.DELIVERED) paste else {
+                                pasted = true
+                                // Preserve the original input bar's paste/Enter separation. Recheck
+                                // the entire captured native receipt after this interval, never retarget.
+                                Thread.sleep(150)
+                                if (ended || composedRetired) ComposedInputResult.uncertain()
+                                else dispatch(ComposedInput.Paste("", enter = true)).let {
+                                    if (it.status == ComposedInputResult.Status.DELIVERED) it else ComposedInputResult.uncertain()
+                                }
+                            }
+                        } else dispatch(normalized)
+                    } catch (_: HostUnansweredException) { ComposedInputResult.uncertain() }
+                    catch (error: HostException) { if (pasted) ComposedInputResult.uncertain() else ComposedInputResult.refused(error.message ?: "Send was refused. The draft was kept.") }
+                    catch (_: Exception) { ComposedInputResult.uncertain() }
+                    result.complete(answer)
+                }
+            } catch (_: RejectedExecutionException) { return ComposedInputResult.refused() }
+            return result.await()
         }
 
         override fun resize(cols: Int, rows: Int) {

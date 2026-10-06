@@ -21,6 +21,8 @@ import dev.nodeterm.protocol.git.GitReplies
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.ResumeOffer
 import dev.nodeterm.protocol.host.TerminalActions
+import dev.nodeterm.protocol.host.ComposedInput
+import dev.nodeterm.protocol.host.ComposedInputResult
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
@@ -36,6 +38,7 @@ import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.NothingFoundException
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import dev.nodeterm.protocol.ssh.SshScripts
+import dev.nodeterm.protocol.ssh.SshInputViewer
 import dev.nodeterm.protocol.ssh.PhoneTerminals
 import dev.nodeterm.protocol.ssh.SshTerminalCreationRefusedException
 import kotlinx.coroutines.CoroutineStart
@@ -44,6 +47,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.boolean
@@ -576,6 +580,219 @@ class SshTransportTest {
     }
 
     private fun tmuxAvailable() = runCatching { ProcessBuilder("tmux", "-V").start().waitFor() == 0 }.getOrDefault(false)
+
+    /** A private raw-byte consumer distinguishes bracketed paste from Enter and timestamps both. */
+    private fun composedRecorder(host: SshTestHost, pane: String, name: String): File {
+        val bytes = File(host.home, "$name.bytes")
+        val script = File(host.home, "$name.cjs").apply { writeText("""
+            const fs = require('node:fs');
+            const out = process.argv[2], b = Buffer.alloc(1);
+            process.stdout.write('\x1b[?2004h');
+            fs.writeFileSync(out + '.ready', 'ready');
+            while (true) {
+              const n = fs.readSync(0, b, 0, 1, null); if (!n) break;
+              fs.appendFileSync(out, b.subarray(0, n));
+              fs.appendFileSync(out + '.times', JSON.stringify({ byte: b[0], at: Number(process.hrtime.bigint() / 1000000n) }) + '\n');
+            }
+        """.trimIndent()) }
+        val command = "stty raw -echo; node ${SshScripts.q(script.path)} ${SshScripts.q(bytes.path)}"
+        assertEquals(0, host.tmux("send-keys", "-t", pane, "-l", "--", command).first)
+        assertEquals(0, host.tmux("send-keys", "-t", pane, "Enter").first)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!File(bytes.path + ".ready").exists() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertTrue(File(bytes.path + ".ready").exists(), "private native raw consumer started")
+        // Readiness belongs to the consumer; allow tmux's parser to process its DEC2004 output.
+        // Exact observed delimiters below, rather than a nonportable format name, prove framing.
+        Thread.sleep(50)
+        return bytes
+    }
+
+    private fun awaitComposedBytes(file: File, expected: String) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while ((!file.exists() || file.readText() != expected) && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertEquals(expected, if (file.exists()) file.readText() else "", "actual pane input bytes")
+    }
+
+    @Test fun `composed SSH Send exits emacs and vi history and separates real bracketed paste from Enter`() = runBlocking<Unit> {
+        for (mode in listOf("emacs", "vi")) SshTestHost().use { host ->
+            val adoption = managedAdoption(host)
+            val pane = adoption.receipt.paneId
+            val bytes = composedRecorder(host, pane, "composed-$mode")
+            assertEquals(0, host.tmux("new-window", "-d", "-t", "=nt-${adoption.receipt.nodeId}", *paneShell).first)
+            val sibling = host.tmux("list-panes", "-s", "-t", "=nt-${adoption.receipt.nodeId}", "-F", "#{pane_id}|#{pane_pid}").second.lines().first { !it.startsWith("$pane|") }.trim()
+            val siblingPane = sibling.substringBefore('|')
+            val siblingBytes = composedRecorder(host, siblingPane, "sibling-$mode")
+            val siblingBefore = host.tmux("capture-pane", "-p", "-t", siblingPane, "-S", "-").second
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                try {
+                    assertEquals(0, host.tmux("set-option", "-w", "-t", pane, "mode-keys", mode).first)
+                    assertEquals(0, host.tmux("copy-mode", "-t", pane).first)
+                    assertEquals("1", host.tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}").second.trim())
+                    assertEquals(ComposedInputResult.DELIVERED, stream.submitComposed(ComposedInput.Paste("full prompt\nΩ 😀\u001b[201~", true)))
+                    val expected = "\u001b[200~full prompt\rΩ 😀[201~\u001b[201~\r"
+                    awaitComposedBytes(bytes, expected)
+                    assertEquals("0", host.tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}").second.trim())
+                    val times = File(bytes.path + ".times").readLines().map { kotlinx.serialization.json.Json.parseToJsonElement(it).jsonObject }
+                    val endAt = times[times.lastIndex - 1].getValue("at").jsonPrimitive.content.toLong()
+                    val enterAt = times.last().getValue("at").jsonPrimitive.content.toLong()
+                    assertTrue(enterAt - endAt >= 100, "paste delimiter and Enter must be separated, actual ${enterAt - endAt}ms")
+                    println("composed native $mode: bytes=${expected.toByteArray().size} paste-to-enter=${enterAt - endAt}ms once; sibling untouched")
+                    assertEquals(sibling, host.tmux("display-message", "-p", "-t", siblingPane, "#{pane_id}|#{pane_pid}").second.trim())
+                    assertEquals(siblingBefore, host.tmux("capture-pane", "-p", "-t", siblingPane, "-S", "-").second)
+                    assertFalse(siblingBytes.exists(), "no input reached the sibling")
+                } finally { stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH Ctrl is one raw byte with no paste or Enter`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val pane = adoption.receipt.paneId
+            val bytes = composedRecorder(host, pane, "control")
+            host.connect().use { conn ->
+                val stream = conn.attachManagedSession(adoption, 80, 24, Sink())
+                try {
+                    assertEquals(0, host.tmux("copy-mode", "-t", pane).first)
+                    assertEquals(ComposedInputResult.DELIVERED, stream.submitComposed(ComposedInput.Control("\u0003")))
+                    awaitComposedBytes(bytes, "\u0003")
+                } finally { stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH refuses a replaced pane or changed selection without following either`() = runBlocking<Unit> {
+        for (replace in listOf(false, true)) SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val pane = adoption.receipt.paneId
+            val bytes = composedRecorder(host, pane, "old")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                try {
+                    if (replace) assertEquals(0, host.tmux("respawn-pane", "-k", "-t", pane, *paneShell).first)
+                    else {
+                        assertEquals(0, host.tmux("new-window", "-d", "-t", "=nt-${adoption.receipt.nodeId}", *paneShell).first)
+                        assertEquals(0, host.tmux("select-window", "-t", "=nt-${adoption.receipt.nodeId}:1").first)
+                    }
+                    assertEquals(ComposedInputResult.Status.REFUSED, stream.submitComposed(ComposedInput.Paste("must not arrive", true)).status)
+                    assertFalse(bytes.exists(), "no bytes reached the old consumer")
+                    assertFalse(host.tmux("capture-pane", "-p", "-t", "=nt-${adoption.receipt.nodeId}:", "-S", "-").second.contains("must not arrive"))
+                } finally { stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH lost paste acknowledgement is uncertain once and never sends Enter or retries`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val bytes = composedRecorder(host, adoption.receipt.paneId, "uncertain")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink()); var submissions = 0
+                host.onCommand = { command, channel -> if (command.contains("load-buffer") && command.contains("nt-composed-delivered")) { submissions++; channel.omitExitStatus = true } }
+                try {
+                    assertEquals(ComposedInputResult.Status.UNCERTAIN, stream.submitComposed(ComposedInput.Paste("exactly once", true)).status)
+                    awaitComposedBytes(bytes, "\u001b[200~exactly once\u001b[201~")
+                    assertEquals(1, submissions); assertFalse(conn.isConnected)
+                } finally { host.onCommand = null; stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH queued behind raw IO is refused immediately on viewer retirement`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val bytes = composedRecorder(host, adoption.receipt.paneId, "retired")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                val field = stream.javaClass.getDeclaredField("io").apply { isAccessible = true }
+                val io = field.get(stream) as java.util.concurrent.ExecutorService
+                val started = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
+                io.execute { started.countDown(); release.await(5, TimeUnit.SECONDS) }
+                assertTrue(started.await(2, TimeUnit.SECONDS))
+                try {
+                    val result = async(start = CoroutineStart.UNDISPATCHED) { stream.submitComposed(ComposedInput.Paste("retired", true)) }
+                    yield(); stream.retireComposed(); release.countDown()
+                    assertEquals(ComposedInputResult.Status.REFUSED, result.await().status)
+                    assertFalse(bytes.exists(), "retirement did not wait for the queued detach")
+                } finally { release.countDown(); stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH final native queue refuses a viewer detached after shell preflight`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val bytes = composedRecorder(host, adoption.receipt.paneId, "late-detach")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                try {
+                    val tty = host.tmux("list-clients", "-t", "=nt-${adoption.receipt.nodeId}", "-F", "#{client_name}").second.trim()
+                    assertTrue(tty.startsWith("/dev/"))
+                    val lookup = ProcessBuilder("/bin/sh", "-c", "command -v tmux").start()
+                    val realTmux = lookup.inputStream.bufferedReader().readText().trim(); assertEquals(0, lookup.waitFor())
+                    val bin = File(host.home, "late-bin").apply { mkdirs() }
+                    File(bin, "tmux").apply {
+                        writeText("""
+                            #!/bin/sh
+                            for nt_arg do
+                              if [ "${'$'}nt_arg" = load-buffer ]; then
+                                ${SshScripts.q(realTmux)} -L node-terminal detach-client -t ${SshScripts.q(tty)} || exit 3
+                                break
+                              fi
+                            done
+                            exec ${SshScripts.q(realTmux)} "${'$'}@"
+                        """.trimIndent()); setExecutable(true)
+                    }
+                    host.commandPath = bin.path + ":" + System.getenv("PATH")
+                    assertTrue(stream.submitComposed(ComposedInput.Paste("must not arrive", true)).status != ComposedInputResult.Status.DELIVERED)
+                    assertFalse(bytes.exists(), "the final native queue did not write after a valid preflight lost its viewer")
+                    assertTrue(host.tmux("list-buffers", "-F", "#{buffer_name}").second.lines().none { it.startsWith("nt-paste-") }, "owned temporary buffer was removed")
+                } finally { host.commandPath = null; stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH losing the viewer after acknowledged paste retains uncertainty without Enter`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val bytes = composedRecorder(host, adoption.receipt.paneId, "paste-only")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                var enterAttempts = 0
+                host.onCommand = { command, _ ->
+                    if (command.contains("nt-composed-delivered") && !command.contains("load-buffer")) {
+                        enterAttempts++
+                        assertEquals(0, host.tmux("new-window", "-t", "=nt-${adoption.receipt.nodeId}", *paneShell).first)
+                    }
+                }
+                try {
+                    assertEquals(ComposedInputResult.Status.UNCERTAIN, stream.submitComposed(ComposedInput.Paste("keep draft", true)).status)
+                    awaitComposedBytes(bytes, "\u001b[200~keep draft\u001b[201~")
+                    assertEquals(1, enterAttempts, "one guarded Enter attempt; no retry")
+                } finally { host.onCommand = null; stream.detach() }
+            }
+        }
+    }
+
+    @Test fun `composed SSH refuses process birth drift even when numeric client server and pane IDs still match`() = runBlocking<Unit> {
+        for (which in listOf("viewer", "server", "pane")) SshTestHost().use { host ->
+            val adoption = managedAdoption(host); val bytes = composedRecorder(host, adoption.receipt.paneId, "birth-$which")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                try {
+                    val field = stream.javaClass.getDeclaredField("inputViewer").apply { isAccessible = true }
+                    val original = field.get(stream) as SshInputViewer
+                    fun drift(value: String) = if (value.startsWith("linux:")) value.substringBeforeLast(':') + ":" + (value.substringAfterLast(':').toLong() + 1)
+                        else value.dropLast(1) + if (value.last() == '0') "1" else "0"
+                    val changed = when (which) {
+                        "viewer" -> original.copy(viewerBirth = drift(original.viewerBirth))
+                        "server" -> original.copy(serverBirth = drift(original.serverBirth))
+                        else -> original.copy(paneBirth = drift(original.paneBirth))
+                    }
+                    // A lease whose PID was reused has this shape: all numeric tmux fields match,
+                    // but its captured native birth belongs to another generation.
+                    field.set(stream, changed)
+                    assertEquals(ComposedInputResult.Status.REFUSED, stream.submitComposed(ComposedInput.Paste("must not arrive", true)).status, which)
+                    assertFalse(bytes.exists(), which)
+                } finally { stream.detach() }
+            }
+        }
+    }
 
     // No locale at all, like an sshd exec channel on a stock macOS host (audit A03): passing the JVM's
     // own LANG through is what hid that bug.

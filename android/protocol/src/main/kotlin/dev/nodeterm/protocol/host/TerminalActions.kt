@@ -2,6 +2,7 @@ package dev.nodeterm.protocol.host
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -20,6 +21,7 @@ class TerminalActions(
     private sealed interface Action {
         class Scroll(val up: Boolean, var notches: Int) : Action
         class Input(val data: String) : Action
+        class Composed(val input: ComposedInput, val result: CompletableDeferred<ComposedInputResult>, var dispatched: Boolean = false) : Action
     }
 
     private val lock = Any()
@@ -29,6 +31,7 @@ class TerminalActions(
     // Include the currently awaited scroll / write in the budgets.
     private var scrollNotches = 0
     private var inputChars = 0
+    private var inFlightComposed: Action.Composed? = null
 
     private val drain = scope.launch {
         try {
@@ -49,27 +52,46 @@ class TerminalActions(
                                 Action.Scroll(head.up, chunk)
                             }
                             is Action.Input -> pending.removeFirst()
+                            is Action.Composed -> pending.removeFirst().also { inFlightComposed = head }
                             null -> null
                         }
                     } ?: break
                     coroutineContext.ensureActive()
-                    if (!isCurrent()) break
+                    if (!isCurrent()) {
+                        if (action is Action.Composed) action.result.complete(ComposedInputResult.refused())
+                        break
+                    }
                     try {
                         when (action) {
                             is Action.Scroll -> stream.scroll(action.up, action.notches)
                             is Action.Input -> stream.write(action.data)
+                            is Action.Composed -> {
+                                val admitted = synchronized(lock) {
+                                    if (closed || !isCurrent() || action.result.isCompleted) false
+                                    else { action.dispatched = true; true }
+                                }
+                                if (!admitted) {
+                                    action.result.complete(ComposedInputResult.refused())
+                                } else {
+                                    val result = stream.submitComposed(action.input)
+                                    action.result.complete(if (isCurrent()) result else ComposedInputResult.uncertain())
+                                }
+                            }
                         }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
                         // A timed-out/refused relay RPC need not disconnect the transport. Do
                         // not retry uncertain movement, but keep explicit input usable (Esc).
                         synchronized(lock) { if (!closed && action is Action.Scroll) discardScrollLocked() }
+                        if (action is Action.Composed) action.result.complete(
+                            ComposedInputResult.uncertain())
                     }
                     synchronized(lock) {
                         if (!closed) when (action) {
                             is Action.Scroll -> scrollNotches -= action.notches
                             is Action.Input -> inputChars -= action.data.length
+                            is Action.Composed -> { inputChars -= action.input.size; inFlightComposed = null }
                         }
                     }
                 }
@@ -107,6 +129,32 @@ class TerminalActions(
     /** Automatic emulator replies (DSR/DA etc.) are ordered writes, never gesture barriers. */
     fun report(data: String): Boolean = addInput(data, cancelScroll = false)
 
+    /** Await one captured-view Send, behind the reserved scroll and ahead of any later gesture. */
+    suspend fun submit(input: ComposedInput): ComposedInputResult {
+        if (!input.valid()) return ComposedInputResult.refused("Send is too large or invalid. The draft was kept.")
+        val result = CompletableDeferred<ComposedInputResult>()
+        val action = Action.Composed(input.normalized(), result)
+        synchronized(lock) {
+            if (closed || !drain.isActive || !isCurrent() ||
+                pending.count { it !is Action.Scroll } >= MAX_PENDING_RUNS || input.size > MAX_INPUT_CHARS - inputChars)
+                return ComposedInputResult.refused("Terminal input is busy or no longer attached. The draft was kept.")
+            discardScrollLocked()
+            pending.addLast(action)
+            inputChars += action.input.size
+            wake.trySend(Unit)
+        }
+        try { return result.await() }
+        catch (cancelled: CancellationException) {
+            // A cancelled caller may retire an unsent action. Once dispatched its result is
+            // uncertain; stopping the wait never resubmits it or redirects it to another viewer.
+            synchronized(lock) {
+                if (pending.remove(action)) inputChars -= action.input.size
+                action.result.complete(if (action.dispatched) ComposedInputResult.uncertain() else ComposedInputResult.refused())
+            }
+            throw cancelled
+        }
+    }
+
     /**
      * A new touch interrupts old momentum without discarding accepted input or emulator replies.
      * The single already reserved/awaited scroll is allowed to finish; later movement is new work.
@@ -120,7 +168,7 @@ class TerminalActions(
     private fun addInput(data: String, cancelScroll: Boolean): Boolean = synchronized(lock) {
         if (closed || !drain.isActive || !isCurrent()) return false
         if (data.isEmpty()) return true
-        val retainedRuns = if (cancelScroll) pending.count { it is Action.Input } else pending.size
+        val retainedRuns = if (cancelScroll) pending.count { it !is Action.Scroll } else pending.size
         if (retainedRuns >= MAX_PENDING_RUNS || data.length > MAX_INPUT_CHARS - inputChars) return false
         if (cancelScroll) discardScrollLocked()
         pending.addLast(Action.Input(data))
@@ -136,7 +184,11 @@ class TerminalActions(
     }
 
     private fun retireLocked() {
+        if (!closed) stream.retireComposed()
         closed = true
+        inFlightComposed?.let { it.result.complete(if (it.dispatched) ComposedInputResult.uncertain() else ComposedInputResult.refused()) }
+        inFlightComposed = null
+        pending.filterIsInstance<Action.Composed>().forEach { it.result.complete(ComposedInputResult.refused()) }
         pending.clear()
         scrollNotches = 0
         inputChars = 0
