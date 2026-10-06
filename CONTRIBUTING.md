@@ -182,7 +182,9 @@ opener's `ctrl-<source>-<node>` shape: rope ORDER does not survive the canvas pr
 deleted nodes, so the id is the only thing that tells a wait from an opener. A node opened by a
 control verb also RECORDS its opener (`data.openedBy`); readers that ask "who opened this"
 (`stationsByOpener`, the station-failure notice) prefer that record and still require the opener's
-rope to exist.
+rope to exist. In the renderer that rule is ONE function, `openerByTarget` (`lib/teamProgress.ts`):
+team progress and Tidy canvas both read it, and so must anything new that asks "who opened this
+node" — and pass the rope `id` through, or every wait reads as an opener.
 
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
