@@ -3,6 +3,7 @@ import { FIND_DECORATIONS } from '../../lib/palette'
 import { ptyRefusal } from '@shared/pty-refusal'
 
 import { patchImeModeSwitch } from '../../terminal/ime-mode-switch'
+import { bindXtermInput } from '../../terminal/xterm-input'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -365,10 +366,21 @@ export function ModalTerminal({ nodeId, ownerProjectId = owningProjectId(), spaw
       }
       sessionId = res.sessionId
       sessionIdRef.current = res.sessionId
+      // Acquire before output/seed parsing can produce terminal replies. Release only this view;
+      // a surviving co-viewer immediately becomes the response owner for this session generation.
+      const disposeInput = bindXtermInput(term, api.pty, res.sessionId, (d) => {
+        if (!dead) transport.write(res.sessionId, d)
+      })
+      cleanups.push(disposeInput)
+      // Core removes subscribers before killing a destroyed/recycled generation, so its exit
+      // event need not arrive. Retire the input lease without changing the card's UI/launch path.
+      cleanups.push(transport.onClosed(res.sessionId, disposeInput))
+      cleanups.push(transport.onRecycled(res.sessionId, disposeInput))
       cleanups.push(transport.onData(res.sessionId, (d) => term.write(d)))
       cleanups.push(
         transport.onExit(res.sessionId, (code) => {
           if (dead) return
+          disposeInput()
           term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n')
           if (code === 255) reportConnectionLost()
         })
@@ -379,7 +391,6 @@ export function ModalTerminal({ nodeId, ownerProjectId = owningProjectId(), spaw
         cleanups.push(
           transport.onSize(res.sessionId, (size) => term.resize(size.cols, size.rows))
         )
-      term.onData((d) => sessionId && transport.write(sessionId, d))
       // DELIBERATELY omitted vs. TerminalNode: no flow-control pause (transport.setFlow) and no
       // onResync handler. The pty's pacing/backpressure comes from the canvas node's client — the
       // modal is a transient, always-on-top second view and never drives the shared session's flow.

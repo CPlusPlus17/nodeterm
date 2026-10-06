@@ -3,6 +3,7 @@ import { FIND_DECORATIONS } from '../lib/palette'
 import { ptyRefusal } from '@shared/pty-refusal'
 
 import { patchImeModeSwitch } from '../terminal/ime-mode-switch'
+import { bindXtermInput } from '../terminal/xterm-input'
 import { createDeferredBlur } from '../terminal/deferred-blur'
 import { installGlassCellBackgrounds, scheduleGlassCellAlpha, setGlassCellAlpha } from '../terminal/glass-cell-backgrounds'
 
@@ -3221,6 +3222,25 @@ export function TerminalNode({
         let offData: (() => void) | undefined
         if (onDisposed()) return
         sessionId = sid
+        // Before any seed/queued output is parsed, bind one responder for this actual session.
+        // The shared cleanups survive Canvas park/adoption and release on exit/final disposal.
+        const disposeInput = bindXtermInput(term, api.pty, sid, (input) => {
+          if (life.dead) return
+          // Lone Esc / Ctrl-C while the agent works: Claude Code fires no interrupt hook.
+          if (showStatus && (input === '\x1b' || input === '\x03')) inferInterruptAfterSettle(id)
+          // A wake still holds input until its resume line is submitted, as before.
+          if (wakeInputBufferRef.current.offer(input).kind !== 'passthrough') return
+          transport.write(sid, input)
+        })
+        cleanups.push(disposeInput)
+        cleanups.push(
+          transport.onExit(sid, (code) => {
+            if (life.dead) return
+            disposeInput()
+            term.write(`\r\n\x1b[90m[process exited with code ${code}]\x1b[0m\r\n`)
+            if (code === 255 && sshProjectId) sshDropHandler?.(sshProjectId, id)
+          })
+        )
         // `?? true`: an absent flag is an older core over the relay, not a plain shell.
         sessionPersistent = persistent ?? true
         // Published for the mount-stable observer effect, which cannot see this closure.
@@ -3254,6 +3274,7 @@ export function TerminalNode({
         if (transport.onClosed) {
           cleanups.push(
             transport.onClosed(sid, ({ by }) => {
+              disposeInput()
               setCo(termKey, { closed: { by } })
               term.write('\r\n\x1b[90m[session closed by another user]\x1b[0m\r\n')
             })
@@ -3269,6 +3290,7 @@ export function TerminalNode({
         if (transport.onRecycled) {
           cleanups.push(
             transport.onRecycled(sid, (info) => {
+              disposeInput()
               if (recycleAction(info) === 'ended') {
                 disposeParkedTerminal(termKey) // the park holds a dead pty either way
                 setCo(termKey, { ended: true })
@@ -3429,30 +3451,6 @@ export function TerminalNode({
           // Seed written — release the PTY output that arrived while it was in flight.
           if (!toreDown) gate.open()
         }
-        cleanups.push(
-          transport.onExit(sid, (code) => {
-            term.write(`\r\n\x1b[90m[process exited with code ${code}]\x1b[0m\r\n`)
-            // ssh exiting 255 on an SSH-project terminal is a CONNECTION drop (sleep/wake,
-            // network change, NAT idle) — the remote tmux session survives. Report it so the
-            // reconnect coordinator can re-establish the master and respawn this node.
-            if (code === 255 && sshProjectId) sshDropHandler?.(sshProjectId, id)
-          })
-        )
-        cleanups.push(
-          term.onData((input) => {
-            // Lone Esc / Ctrl-C while the agent works: Claude Code fires NO hook on a user
-            // interrupt, so probe the cancelled turn (still-silent working → done). Exact
-            // match — arrow keys etc. arrive as multi-byte \x1b[… sequences.
-            if (showStatus && (input === '\x1b' || input === '\x03')) inferInterruptAfterSettle(id)
-            // While a wake is in flight, HOLD this input rather than write it: the resume line is
-            // sitting un-submitted in the pane and a keystroke would splice into it. The buffer is
-            // bounded — a `queueFull`/`buffered` verdict means "held, do not write". Flushed (or
-            // dropped) when the resume resolves; see `wakeInputBufferRef`. `passthrough` is the
-            // ordinary case and is byte-for-byte the old behaviour.
-            if (wakeInputBufferRef.current.offer(input).kind !== 'passthrough') return
-            transport.write(sid, input)
-          }).dispose
-        )
         // Deliver a command only after the fresh shell settles, and never blind: zsh's init
         // (rc files / ZLE setup) resets the tty with a FLUSH that can eat part of a queued
         // line — a long agent launch line then sat at the prompt mangled (unbalanced quote →

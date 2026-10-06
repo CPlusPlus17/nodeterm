@@ -5,6 +5,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NodeTerminalApi, PtyCreateOptions, PtyCreateResult, Project } from '@shared/types'
+import type { Terminal } from '@xterm/xterm'
+import { bindXtermInput } from '../../terminal/xterm-input'
 import { sshAttachmentId } from '@shared/ssh'
 import { ModalTerminal, type ModalSpawn } from './ModalTerminal'
 import { GlobalKanbanView } from './GlobalKanbanView'
@@ -26,11 +28,19 @@ const boundary = vi.hoisted(() => {
     unicode = { activeVersion: '6' }
     buffer = { active: { length: 0, getLine: () => undefined } }
     parser = { registerOscHandler: vi.fn() }
-    write = vi.fn()
+    write = vi.fn((data: string) => {
+      if (data.includes('\x1b[c')) this._core.coreService.triggerDataEvent('\x1b[?1;2c')
+      if (data.includes('\x1b[>c')) this._core.coreService.triggerDataEvent('\x1b[>0;276;0c')
+    })
     resize = vi.fn()
     focus = vi.fn()
     dispose = vi.fn()
     input: ((data: string) => void) | undefined
+    _core = {
+      coreService: { triggerDataEvent: (data: string, _user = false): void => { this.input?.(data) } },
+      _handleTextAreaFocus: (): void => { this._core.coreService.triggerDataEvent('\x1b[I') },
+      _handleTextAreaBlur: (): void => { this._core.coreService.triggerDataEvent('\x1b[O') }
+    }
     constructor() { terminals.push(this) }
     open(): void {}
     loadAddon(): void {}
@@ -38,10 +48,14 @@ const boundary = vi.hoisted(() => {
     attachCustomKeyEventHandler(): void {}
     hasSelection(): boolean { return false }
     getSelection(): string { return '' }
-    onData(listener: (data: string) => void): void { this.input = listener }
+    onData(listener: (data: string) => void): { dispose(): void } {
+      this.input = listener
+      return { dispose: () => { if (this.input === listener) this.input = undefined } }
+    }
   }
   return { api: null as unknown, terminals, Terminal: FakeTerminal }
 })
+
 vi.mock('@xterm/xterm', () => ({ Terminal: boundary.Terminal }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit(): void {} } }))
 vi.mock('@xterm/addon-search', () => ({ SearchAddon: class {
@@ -76,6 +90,8 @@ let write: ReturnType<typeof vi.fn>
 let connect: ReturnType<typeof vi.fn>
 let exits: Map<string, (code: number) => void>
 let outputs: Map<string, (data: string) => void>
+let terminations: Map<string, () => void>
+const peerCleanups: Array<() => void> = []
 const result = (id: string): PtyCreateResult => ({ sessionId: id, fresh: false, screen: 'warm\n' })
 const project = (id: string, nodes: Project['nodes'] = [], remote = false): Project => ({
   id, name: id, color: '#fff', nodes, viewport: { x: 0, y: 0, zoom: 1 },
@@ -105,6 +121,7 @@ beforeEach(() => {
   boundary.terminals.length = 0
   exits = new Map()
   outputs = new Map()
+  terminations = new Map()
   kill = vi.fn()
   write = vi.fn()
   create = vi.fn(async () => result(`session-${create.mock.calls.length}`))
@@ -115,6 +132,8 @@ beforeEach(() => {
       remoteSessionConfirmed: vi.fn(async () => true),
       onData: (id: string, cb: (data: string) => void) => { outputs.set(id, cb); return () => { outputs.delete(id) } },
       onExit: (id: string, cb: (code: number) => void) => { exits.set(id, cb); return () => { exits.delete(id) } },
+      onClosed: (id: string, cb: () => void) => { terminations.set(`closed:${id}`, cb); return () => { terminations.delete(`closed:${id}`) } },
+      onRecycled: (id: string, cb: () => void) => { terminations.set(`recycled:${id}`, cb); return () => { terminations.delete(`recycled:${id}`) } },
       onSize: () => () => {}
     },
     sshProject: { connect, disconnect: vi.fn(async () => {}) },
@@ -134,6 +153,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   await act(async () => root.unmount())
+  peerCleanups.splice(0).forEach((off) => off())
   rec.dispose()
   setSshDropHandler(null)
   resetHostAttachmentDials()
@@ -254,5 +274,93 @@ describe('ModalTerminal SSH reconnect', () => {
     expect(document.querySelector('.kanban-modal')).toBe(modal)
     expect(create).toHaveBeenCalledTimes(2)
     expect(useProjects.getState().activeProjectId).toBe('active')
+  })
+})
+
+describe('mounted Modal response-owner lifecycle with real LocalTransport', () => {
+  const query = '\x1b[c\x1b[>c'
+  const replies = ['\x1b[?1;2c', '\x1b[>0;276;0c']
+  function peer(sessionId: string) {
+    const term = new boundary.Terminal()
+    const api = boundary.api as NodeTerminalApi
+    const off = bindXtermInput(term as unknown as Terminal, api.pty, sessionId,
+      (data) => api.pty.write(sessionId, data))
+    peerCleanups.push(off)
+    return { term, off }
+  }
+
+  it('owns replies before synchronous first output and create-screen seed are parsed', async () => {
+    const api = boundary.api as NodeTerminalApi
+    const onData = api.pty.onData
+    api.pty.onData = (sid, callback) => {
+      const off = onData(sid, callback)
+      callback(query)
+      return off
+    }
+    create.mockResolvedValueOnce({ ...result('session-1'), screen: query })
+    await mount()
+    expect(write.mock.calls.map(([sid, data]) => [sid, data])).toEqual([
+      ['session-1', replies[0]], ['session-1', replies[1]],
+      ['session-1', replies[0]], ['session-1', replies[1]]
+    ])
+  })
+
+  it('does not duplicate its primary peer replies, but every view still sends reply-shaped user input', async () => {
+    const canvas = peer('session-1')
+    create.mockResolvedValueOnce({ ...result('session-1'), coAttachMouse: true })
+    await mount()
+    const modal = boundary.terminals[1]
+    canvas.term.write(query)
+    outputs.get('session-1')!(query)
+    expect(write.mock.calls).toEqual(replies.map((r) => ['session-1', r]))
+    canvas.term._core.coreService.triggerDataEvent(replies.join(''), true)
+    modal._core.coreService.triggerDataEvent(replies.join(''), true)
+    expect(write.mock.calls.slice(2)).toEqual([
+      ['session-1', replies.join('')], ['session-1', replies.join('')]
+    ])
+    canvas.off()
+    outputs.get('session-1')!(query)
+    // The co-attach flag never permanently prevents the surviving Modal from answering.
+    expect(write.mock.calls.slice(4)).toEqual(replies.map((r) => ['session-1', r]))
+  })
+
+  it('retires an exited Modal before reattach and gives its old-generation peer the response lease', async () => {
+    await mount()
+    const oldModal = boundary.terminals[0]
+    const follower = peer('session-1')
+    act(() => exits.get('session-1')!(255))
+    follower.term.write(query)
+    oldModal._core.coreService.triggerDataEvent('late user', true)
+    expect(write.mock.calls).toEqual(replies.map((r) => ['session-1', r]))
+    await reconnect('owner')
+    const replacement = boundary.terminals[2]
+    replacement._core.coreService.triggerDataEvent(replies[0])
+    follower.term._core.coreService.triggerDataEvent(replies[1])
+    expect(write.mock.calls.slice(2)).toEqual([
+      ['session-2', replies[0]], ['session-1', replies[1]]
+    ])
+    expect(kill).toHaveBeenCalledWith('session-1', expect.stringMatching(/^modal-/))
+  })
+
+  it('releases only the closing Modal and immediately promotes a surviving same-session peer', async () => {
+    await mount()
+    const modal = boundary.terminals[0], follower = peer('session-1')
+    await act(async () => root.render(null))
+    modal._core.coreService.triggerDataEvent('closed', true)
+    follower.term.write(query)
+    expect(write.mock.calls).toEqual(replies.map((r) => ['session-1', r]))
+    expect(kill).toHaveBeenCalledTimes(1)
+    expect(kill).toHaveBeenCalledWith('session-1', expect.stringMatching(/^modal-/))
+  })
+
+  it.each(['closed', 'recycled'])('retires a %s generation without requiring an exit event or replaying a launch', async (event) => {
+    await mount({ spawn: { ...spawn, initialCommand: 'never replay this' } })
+    const modal = boundary.terminals[0], follower = peer('session-1')
+    act(() => terminations.get(`${event}:session-1`)!())
+    modal._core.coreService.triggerDataEvent('retired', true)
+    follower.term.write(query)
+    expect(write.mock.calls).toEqual(replies.map((r) => ['session-1', r]))
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(drop).not.toHaveBeenCalled()
   })
 })

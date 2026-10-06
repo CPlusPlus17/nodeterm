@@ -16,20 +16,25 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Desktop card reconnect repair (2026-10-06, A125; repaired native checks pending).**
-On baseline `11e22453`, a controlled Linux Desktop Modal soft/none outage reproduces the defect:
-Canvas reconnects to a new master/session while the same open card keeps its old session. A second
-trusted native input writes once to that stale session and never reaches the unchanged remote
-producer. Pane/server/process identity and full retained history remain intact at `80x24`.
-The source repair on this branch adds exact scope/node reattachment notifications, replaces only
-the lost card viewer and routes inactive global-board cards through their actual owner. The card
-stays open, rejoins the same persistKey with requireRemote and delivers no initial/pending agent
-launch command. **13 new behavioral cases / 100 affected tests** and full TypeScript pass. Six
-actual isolated mutants are caught by assertions, with passing control/restored runs. Repaired native controls,
-the scoped Linux matrix and exact-head publication remain pending. Earlier geometry refusals are
-fixture calibration, separate from the accepted product negative. No Android APK, wire/blob/pairing/
-SSH-visible file change or iOS client adoption is required. The original Pixel 10 Pro ledger stays
-paused at **10 Pass / 22 Partial / 32 Pending**; broader phone/outage/platform checks remain open.
+**Desktop reconnect follow-up (2026-10-06, A125/A126; native acceptance pending).**
+A125's renderer lifecycle/owner repair is committed in `415dae9b`; its documented 13 new
+behavioral cases, 100 affected tests, TypeScript and six assertion-caught mutants pass. The
+`11e22453` native baseline remains the separate stale-Modal-input proof. The first fresh
+`415dae9b` Modal soft/none control creates replacement Modal and Canvas viewers, but both send
+automatic device-attribute replies: the retained producer receives 18 unexpected bytes (A126).
+ACK 1 passed; ACK 2 was not attempted. The original wrapper/runtime exits 1/2 remain unclassified
+in their receipts; the later root/peer diagnosis is separate. This supplies no native positive.
+A126's response-owner source repair is on the branch after independent source/test review.
+**16 new cases** comprise nine installed-xterm cases, one explicit fallback shim and six mounted
+Modal cases with fake rendering and real helper/LocalTransport/coordinator. **294 unique affected
+tests / 17 files**, full TypeScript with ordinary incremental caches and nine assertion-caught
+isolated mutants pass; both 25-test control/restored runs pass. One renderer scopes automatic
+responses to `api.pty` plus the actual session, with live promotion and preserved genuine input/
+focus. Actual Canvas mount/park, native DOM keyboard delivery, repaired native matrix and final
+gates/publication remain pending. Unsupported private shapes warn and preserve input but may
+still duplicate replies; cross-window/Server-client ownership is not established. No Android
+APK/wire/file or iOS client change is required. The original Pixel 10 Pro ledger stays paused at
+**10 Pass / 22 Partial / 32 Pending**; broader phone/outage/platform checks remain open.
 
 **Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a has a fresh,
 hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
@@ -188,7 +193,8 @@ from the remaining phone custom-binding/lifecycle/FPS matrix.
 | [A122](#a122) | medium | | small | desktop/bug | ✅ source-fixed in `9613cec5`; 133 focused / 218 affected tests and six assertion-caught mutants; four Linux native cases pass · Focused Canvas/Modal xterm consumes the advertised native Quit chord |
 | [A123](#a123) | low | | small | desktop/bug | ✅ fixed in `db83fb7d`; 44 budget / 301 affected tests, two helper assertion mutants and Desktop native control/sole-call-removal/restored proof pass; later genuine Server 0/3/0 and derived Desktop compositor cell evidence verified · Restored addon context remains live after disposal and budget retirement |
 | [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; one Pixel 7a manual-SSH shell creation/input/reopen/app-restart case passes on `40731381` · Managed SSH New rejects an available absolute default shell as unavailable |
-| [A125](#a125) | medium | | small | desktop/bug | 🟡 source repaired on branch; native `11e22453` Modal stale-input defect reproduced; 13 new behavioral cases / 100 affected tests, full TypeScript and six assertion-caught mutants; repaired native/matrix/publication pending · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
+| [A125](#a125) | medium | | small | desktop/bug | 🟡 source repaired in `415dae9b`; native `11e22453` stale-input baseline and 13 new behavioral / 100 affected tests, TypeScript and six mutants retained; repaired native acceptance pending after A126 · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
+| [A126](#a126) | medium | | small | desktop/bug | 🟡 response-owner source repaired on branch; independently reviewed 16 new cases / 294 unique affected tests in 17 files, full TypeScript and nine assertion mutants; actual Canvas/native matrix/publication pending; original `415dae9b` failure retains unclassified exits/ACK 2 not attempted · Co-view xterms send duplicate automatic terminal replies into the retained process |
 
 ## A01
 
@@ -4328,7 +4334,7 @@ benefits iOS managed creation; @eneskirca should note the host update, with no n
 **Open SSH card does not follow automatic reconnection; inactive cards use the active owner (2026-10-06).**
 
 - Severity: **medium**; effort: small; area: Desktop card/SSH renderer lifecycle; kind: bug.
-- Status: **source repaired on this branch; admitted native baseline reproduces the defect; repaired native controls/matrix/publication pending**.
+- Status: **source repaired in `415dae9b`; admitted native baseline reproduces the defect; repaired native acceptance remains pending after A126**.
 - Baseline: `11e22453235dbd8bf474dd8034a0eaf5778c3992`.
 - Locations: `ModalTerminal.tsx` exit listener and nodeId-only attachment effect; `CardModal.tsx`
   stable card/view key; `GlobalKanbanView.tsx` owning swimlane; `TerminalNode.tsx`
@@ -4341,7 +4347,7 @@ nonce is intentionally not serialized into the global board's stored node projec
 lane keeps modalNodeId and reads its latest card through byId; a selected-object cache is not the
 cause. The card also receives no explicit owning project, so the SSH helper assumes the active tab.
 
-The branch repair publishes renderer-only exact scope/node reattachment notifications at the existing
+The `415dae9b` repair publishes renderer-only exact scope/node reattachment notifications at the existing
 coordinator's successful pending-node flush. Each Modal generation subscribes before async attach,
 marks itself lost before reporting remote 255/unavailable and replaces its own viewer only for a
 matching notification. Cleanup fences late async/refused results and detaches the exact viewer.
@@ -4374,8 +4380,11 @@ Native proof: `~/.cache/nodeterm-android-work/nodeterm-linux-ssh-reconnect-case-
 verified product negative; `runtime-result.json` SHA
 `137bca085ceddb38db3f52fe0ce8a17fc74d1f1d785c1bff169e317457eee797` binds the actual input evidence.
 Separate Canvas controls at the old `11e22453` source are historical baseline controls, not
-repaired-Modal acceptance. Repaired native controls, full scoped Linux matrix and publication are
-pending. Broader Server/Android/phone outages, physical custom bindings/FPS, provider-authenticated
+repaired-Modal acceptance. The first fresh `415dae9b` control creates replacement Modal and
+Canvas viewers but exposes [A126](#a126) duplicate automatic replies before ACK 2 is attempted.
+Its original unclassified exits and later diagnosis remain separate; repaired native controls,
+full scoped Linux matrix and final gates/publication are pending. Broader Server/Android/phone outages,
+physical custom bindings/FPS, provider-authenticated
 answers and macOS/Windows remain unverified. The original Pixel 10 Pro beta-10 ledger stays paused
 at **10 Pass / 22 Partial / 32 Pending**. This Desktop renderer repair changes no Android APK,
 host-service verb, blob/pairing/mirror/SSH-visible file or iOS client adoption requirement.
@@ -4385,6 +4394,78 @@ Private candidate proof: `~/.cache/nodeterm-android-work/modal-reconnect-candida
 full source patch SHA `f17b1b919980c15a79ba286b1216898632eddf7cbe91ce3acb387f873e63a3bd`).
 Actual mutation proof: `~/.cache/nodeterm-android-work/modal-reconnect-mutations-qcaln9wi/`
 (`mutation-result.json`, SHA `ed1e89f8cf26c6a59da993087851ab39dc22ae1e0d240594274cb337cdb7611d`).
+
+## A126
+
+**Co-view xterms duplicate automatic terminal replies into the retained process (2026-10-06).**
+
+- Severity: **medium**; effort: small; area: Desktop renderer terminal input; kind: bug.
+- Status: **response-owner source repair on branch; independent source/test review, bounded
+  regressions/TypeScript/mutations pass; actual Canvas/native acceptance and final gates/publication pending**.
+- Observed source/build: `415dae9b66b74c5165fab312e6c4cda3ed78a957` (A125 repair).
+- Locations: `TerminalNode.tsx` and `ModalTerminal.tsx` unconditional xterm `onData` forwarding;
+  candidate `src/renderer/terminal/xterm-input.ts`; installed xterm 5.5 `CoreService.triggerDataEvent`.
+
+**Retained failure and subsequent diagnosis.** One owned product ControlMaster SIGKILL triggers
+normal automatic recovery in the fresh Linux Desktop Modal soft/none control. Replacement Modal
+and Canvas create requests use the new session. Both views then send automatic DA1/DA2 responses
+(7 and 11 bytes each). The retained strict producer records 18 unexpected bytes with SHA
+`5df79d99ea5f3f007797bd1da48825081c9b5db6800cd1c8935c92218c3ab7ed`, exactly matching
+`ESC[?1;2c` followed by `ESC[>0;276;0c`. Its initial trusted native `g` ACK is clean; final count
+remains one, and ACK 2 is **not attempted**. Replaying output to two xterms must not inject a second
+set of automatic replies into the live inner process. Do not whitelist these bytes in the producer.
+
+The original wrapper/runtime exit codes are **1/2**; the retained receipt remains
+`admission-or-verification-unclassified`. Root and peer review subsequently diagnose A126 from
+that unexpected-input digest and actual xterm source. This later interpretation does not rewrite
+the receipt or turn the failed run into a positive. Completed before-outage/gap observations retain
+their own same-grid history/pane/producer evidence; no complete recovered history, native input,
+wrapped-link matrix or broader outage/platform result is established by this failed control.
+
+Proof: `~/.cache/nodeterm-android-work/nodeterm-linux-ssh-reconnect-case-_llfwbzw/proof/`.
+`receipt.json` SHA `91d894114b86b167c072a27b7e53ddadbd711cf3dcbed6f18ebdd184d3b48cdf`;
+`runtime-result.json` SHA `b3eab62f56c7a3d755498c84def73b320144be22937531c91568a4ae66f05930`.
+The earlier `11e22453` A125 stale-card product negative, historical Canvas controls and geometry
+calibration failures retain their original source bindings and classifications.
+
+**Source repair and bounded verification.** The independently reviewed `xterm-input.ts` repair
+uses xterm 5.5's actual input origin: public `onData` erases that flag. One live automatic-response
+owner is scoped to the exact `api.pty` object and actual session id within one renderer. Exit,
+closed/recycled subscription and final disposal release it, promoting another live view. Genuine
+keyboard/paste/SGR mouse input and actual DOM focus/blur from every view remain intact. For
+automatic DEC1004 focus-state replies, prefer the connected textarea that is its owner document's
+actual active element; a stale focus class is insufficient. Canvas park retains the xterm,
+subscription and lease, and adoption does not rebind or rewrap it. The actual Canvas mount/park
+path has source review, not mounted/native acceptance. An unsupported private xterm shape warns
+explicitly and preserves public input through a fallback where duplicate replies remain possible.
+The legacy `onBinary` path is unchanged; no new integration proof is claimed.
+
+Sixteen new cases comprise **nine installed xterm 5.5 dependency cases**, **one explicit unsupported-
+shape shim case** and **six mounted Modal cases** with fake rendering and real helper,
+LocalTransport and SshReconnector. They exercise automatic parser replies, reply-shaped genuine
+input/paste, actual SGR mouse-origin dispatch, real private browser focus/blur, focus-query election,
+live promotion/retirement, exact API/session scopes, nested origin restoration and synchronous
+first output. All **294 unique affected tests in 17 files** pass with zero failures/skips; full
+TypeScript passes with ordinary composite/incremental caches. This does not turn public
+`Terminal.input` origin checks into native/DOM keyboard delivery or actual Canvas mounting proof.
+
+Nine actual isolated variants remove ownership, user origin, API/session scope, promotion,
+focused-query election, genuine-focus origin, pre-output binding or Modal generation retirement.
+Each fails intended AssertionErrors (respectively **9/3/1/2/8/2/1/1/3** failures). Both **25-test**
+control/restored runs pass, with candidate/main bindings and restored source hashes retained.
+Private final candidate proof: `~/.cache/nodeterm-android-work/a126-response-owner-candidate-g0ish79q/`.
+`candidate-final-result.json` SHA
+`21009c892e4c2dc0ec676d6c09ad67b8a8a34ef9cd06ccf8b43d45a3bb551f12`;
+source patch SHA `495104f45339832a0b04f98e09177ce57bd63d5c698f5c11563c056c11f4756d`.
+Actual mutation proof: `~/.cache/nodeterm-android-work/a126-response-owner-mutations-hwj1f9iq/`,
+`mutation-result.json` SHA `73f4a110bbf6256c81796fb062d7aec485a8d04ba3138fcdacfe206765cbfc50`.
+The earlier receipt's wording counted all ten helper cases as installed-xterm cases; the final
+receipt preserves that history and explicitly qualifies the one fallback shim separately.
+
+Actual Canvas mount/park, native DOM keyboard delivery, fresh repaired native controls/matrix and
+final exact-head gates/CI publication remain pending. Renderer-local ownership supplies no
+cross-window or Server-client ownership guarantee, device completion, Android wire/file change
+or iOS adoption. The original Pixel 10 Pro ledger remains paused at **10 Pass / 22 Partial / 32 Pending**.
 
 ## Native Desktop wrapped-link and leave verification (A92/A121, 2026-10-05)
 

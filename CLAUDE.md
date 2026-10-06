@@ -5363,6 +5363,16 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
 
 ## Conventions
 
+**Co-view terminal replies have one live owner (A126).** Within one renderer, scope automatic
+xterm responses to the exact `api.pty` object and actual session id, with live promotion on
+exit/closed/recycled subscription or final disposal. Preserve genuine keyboard/paste/SGR mouse
+input and actual DOM focus/blur from every view; automatic DEC1004 focus-state replies prefer the
+connected textarea that is its owner document's active element. Canvas park retains the
+subscription/lease, and adoption must not rewrap or rebind it. Pin origin regressions to actual
+xterm 5.5. An unsupported private shape must warn and preserve input through a public fallback;
+that fallback can still duplicate replies. This renderer-local invariant claims no cross-window
+or Server-client ownership guarantee and changes no Android/iOS wire contract.
+
 **Retained history search is host-owned (A100).** `pty.historySearch` addresses an existing stream,
 not caller-supplied node paths. Capture the attached retained generation or exact resolved tmux
 pane; reject replacement during capture. Search literal, case-sensitive text with bounded query,

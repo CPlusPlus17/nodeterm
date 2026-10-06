@@ -5,20 +5,25 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Desktop card reconnect repair (2026-10-06, A125; repaired native checks pending).**
-On baseline `11e22453`, a controlled Linux Desktop Modal soft/none outage reproduces the defect:
-Canvas reconnects to a new master/session while the same open card keeps its old session. A second
-trusted native input writes once to that stale session and never reaches the unchanged remote
-producer. Pane/server/process identity and full retained history remain intact at `80x24`.
-The source repair on this branch adds exact scope/node reattachment notifications, replaces only
-the lost card viewer and routes inactive global-board cards through their actual owner. The card
-stays open, rejoins the same persistKey with requireRemote and delivers no initial/pending agent
-launch command. **13 new behavioral cases / 100 affected tests** and full TypeScript pass. Six
-actual isolated mutants are caught by assertions, with passing control/restored runs. Repaired native controls,
-the scoped Linux matrix and exact-head publication remain pending. Earlier geometry refusals are
-fixture calibration, separate from the accepted product negative. No Android APK, wire/blob/pairing/
-SSH-visible file change or iOS client adoption is required. The original Pixel 10 Pro ledger stays
-paused at **10 Pass / 22 Partial / 32 Pending**; broader phone/outage/platform checks remain open.
+**Desktop reconnect follow-up (2026-10-06, A125/A126; native acceptance pending).**
+A125's renderer lifecycle/owner repair is committed in `415dae9b`; its documented 13 new
+behavioral cases, 100 affected tests, TypeScript and six assertion-caught mutants pass. The
+`11e22453` native baseline remains the separate stale-Modal-input proof. The first fresh
+`415dae9b` Modal soft/none control creates replacement Modal and Canvas viewers, but both send
+automatic device-attribute replies: the retained producer receives 18 unexpected bytes (A126).
+ACK 1 passed; ACK 2 was not attempted. The original wrapper/runtime exits 1/2 remain unclassified
+in their receipts; the later root/peer diagnosis is separate. This supplies no native positive.
+A126's response-owner source repair is on the branch after independent source/test review.
+**16 new cases** comprise nine installed-xterm cases, one explicit fallback shim and six mounted
+Modal cases with fake rendering and real helper/LocalTransport/coordinator. **294 unique affected
+tests / 17 files**, full TypeScript with ordinary incremental caches and nine assertion-caught
+isolated mutants pass; both 25-test control/restored runs pass. One renderer scopes automatic
+responses to `api.pty` plus the actual session, with live promotion and preserved genuine input/
+focus. Actual Canvas mount/park, native DOM keyboard delivery, repaired native matrix and final
+gates/publication remain pending. Unsupported private shapes warn and preserve input but may
+still duplicate replies; cross-window/Server-client ownership is not established. No Android
+APK/wire/file or iOS client change is required. The original Pixel 10 Pro ledger stays paused at
+**10 Pass / 22 Partial / 32 Pending**; broader phone/outage/platform checks remain open.
 
 **Fresh-phone checkpoint (2026-10-05, A124).** A separate Pixel 7a has a fresh,
 hash-verified, non-debuggable beta 16/code 17 installation (Android 16 / API 36,
@@ -456,12 +461,16 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
-A125's renderer lifecycle/routing repair passes the bounded tests described in
-[the current card-reconnect notes](#desktop-card-reconnect-repair-2026-10-06).
-These fake-PTY/render-boundary tests and assertion-caught mutants establish repaired source
-behavior. The admitted `11e22453` native baseline separately proves the old open card routes
-trusted input to a stale session after master/Canvas recovery. Repaired native acceptance remains
-pending; the full same-grid retained history/pane/producer survives the baseline outage.
+A125's renderer lifecycle/routing repair is committed in `415dae9b`; its bounded tests and
+mutants are described in [the card-reconnect notes](#desktop-card-reconnect-repair-2026-10-06).
+The admitted `11e22453` baseline retains its stale-input/history proof. The first fresh repaired
+control exposes [A126](android-audit-2026-09.md#a126): duplicate automatic replies reach the
+producer after replacement-view creation. Only ACK 1 passes; ACK 2 is not attempted, and the
+original unclassified exits remain unchanged. A126's independently reviewed source repair passes
+16 new cases and 294 unique affected tests/17 files, full incremental TypeScript and nine assertion
+mutants with 25-test control/restored runs. These actual-xterm and fake-rendering Modal checks do not
+establish actual Canvas mount/park, native DOM keyboard delivery, complete recovered native input/
+history controls or the scoped matrix; those and final gates/publication remain pending.
 
 **Fresh Pixel 7a verification and A124 (2026-10-05).** This separate phone runs Android 16 /
 API 36 and Vanadium WebView `145.0.7632.120.0`. Fresh installation of private beta 16/code 17
@@ -2310,10 +2319,13 @@ later fix left to a device.
 
 ## Known gaps
 
-A125's open Desktop SSH card reconnect defect is reproduced natively on `11e22453`, and its
-source repair/test/mutation checks pass on this branch. Repaired native controls, the scoped Linux
-matrix and exact-head publication remain pending. Unequal-grid fixture refusals are calibration
-results only; broader SSH outage/platform/phone verification is still open.
+A125's `415dae9b` source repair has bounded test/mutation proof, but native acceptance is
+pending after the first fresh control exposes A126 duplicate automatic-response input pollution.
+A126's response-owner source repair has independent source/test review, 294 unique affected tests,
+full incremental TypeScript and nine assertion-caught mutants. Actual Canvas mount/park, native DOM
+keyboard and repaired native controls/matrix/final publication remain pending. The `11e22453`
+baseline and unequal-grid fixture negatives retain their separate evidence. Broader SSH outage,
+platform/phone and cross-window/Server-client response ownership remain unverified.
 
 Immediate Android push (`A25`) and fresh-different-desktop relay recovery (`A93`) need the hosted
 backend maintainers. The user has no service repository to supply. Same-owned-desktop paired-update
@@ -3218,11 +3230,16 @@ The card stays open, keeps the original persistKey/requireRemote and never repla
 pending or agent launch command. Thirteen new behavioral cases and all 100 affected tests pass;
 full TypeScript and six actual assertion-caught isolated mutants pass with restored source hashes.
 See [audit A125](android-audit-2026-09.md#a125) for source, test boundaries and private receipts.
-The admitted `11e22453` native Modal baseline reproduces stale-session input after Canvas/master
-recovery while preserving the same remote pane/producer and full history at `80x24`. Earlier
-geometry refusals are retained as fixture negatives. Repaired native acceptance remains pending.
+The admitted `11e22453` baseline retains its stale-Modal-input and same-grid history proof.
+A125 is committed in `415dae9b`, but its first fresh native control exposes A126: replacement
+Modal/Canvas viewers duplicate automatic DA1/DA2 replies into the retained producer. ACK 1 passed;
+ACK 2 was not attempted. Original unclassified wrapper/runtime exits 1/2 and later diagnosis remain
+separate; this establishes no recovered native positive or complete recovered-history pass.
+See [audit A126](android-audit-2026-09.md#a126) for exact receipt hashes and the source repair's bounded verification.
 No Android APK/external wire/file or iOS adoption change is needed.
-Next: verify repaired replacement-view/native input/history controls, then complete the scoped
-Linux matrix and exact-head publication gates. Broader device lifecycle,
+A126 source/test review, 16 new cases, 294 unique affected tests/17 files, incremental TypeScript
+and nine assertion-caught mutants pass; both 25-test control/restored runs pass. Actual Canvas
+mount/park and native DOM keyboard delivery remain unverified. Next complete fresh repaired native
+input/history controls, the scoped Linux matrix and final exact-head gates/publication. Broader device lifecycle,
 outage/provider/platform checks and A25/A93 backend dependencies remain separate; the original
 Pixel 10 Pro **10 Pass / 22 Partial / 32 Pending** ledger remains paused.
