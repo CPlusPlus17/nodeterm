@@ -19,8 +19,12 @@ Forced offline checks at `5b7286b3` execute **950 tests / 98 suites**, zero fail
 and both protocol/app Kotlin compile tasks. These are disposable QA hosts; no new APK or regular
 Desktop installation is included. Publication requires fresh offline gates and all five Android
 CI jobs for the exact published HEAD; its private bundle and final report carry that run's result.
-The earlier negative/unclassified DA controls remain historical. Native park/adoption, inactive
-global-card, Server/cross-window, GPU, phone and broader outage/platform checks remain open.
+A separate Linux two-host soft/none case passes at `59e4c93e`: one quiet park/adopt cycle,
+inactive B global-card warm reconnect while A stays active and unchanged, **3 native ACKs / 2
+complete URL activations**, retained same-grid history and exact owned cleanup. See [the bounded two-host follow-up](#inactive-global-card-owner-and-bounded-parkadopt-2026-10-06).
+The earlier negative/unclassified controls remain historical. Phone release/backend checks still
+need their own acceptance; wider parking, Server/cross-window, outage/platform and GPU coverage
+remain separate.
 Unsupported private shapes preserve input with a warning but may duplicate replies. Android
 wire/file/iOS adoption is unchanged. The original Pixel 10 Pro ledger stays paused at
 **10 Pass / 22 Partial / 32 Pending**.
@@ -481,14 +485,62 @@ Desktop installation is included. Publication requires fresh offline gates and a
 CI jobs for the exact published HEAD; its private bundle and final report carry that run's result.
 See [the reconnect notes](#desktop-card-reconnect-repair-2026-10-06) and
 [audit A126](android-audit-2026-09.md#a126) for receipt hashes and the remaining scope.
-Actual Canvas mounting and selected-view native keyboard recovery are verified in this bounded
-matrix. Native park/adoption, inactive global-card routing, Server/cross-window ownership, GPU
-pressure/compositor, repeated or broader outage/backoff, phone/provider and macOS/Windows checks
-remain open. The synthetic key-only hosts do not establish PAM, power-loss, agent-launch or ordinary
-Quit behavior. Unsupported private xterm shapes warn and retain input but may duplicate replies;
-legacy onBinary is unchanged. No Android wire/file or iOS client change is required. A25/A93 still
-need hosted-backend maintainers. The original Pixel 10 Pro ledger remains paused at
-**10 Pass / 22 Partial / 32 Pending**.
+Actual Canvas mounting and selected-view native keyboard recovery pass in the eight-case matrix;
+one additional two-host soft/none case verifies a quiet park/adopt cycle and inactive global-card
+recovery with the active host unchanged. See [the bounded two-host follow-up](#inactive-global-card-owner-and-bounded-parkadopt-2026-10-06). Remaining Android release acceptance needs a
+reachable intended phone for lifecycle/outage, answer/notification/permission and live-provider
+checks; A25/A93 need hosted-backend maintainers. Further host coverage includes streaming/expiry/
+eviction while parked, repeated or broader outage/backoff, Server/cross-window response ownership,
+GPU pressure/full-frame display output and macOS/Windows. The synthetic key-only hosts do not
+establish real-user PAM, power-loss, agent-launch or ordinary Quit behavior. Unsupported private
+xterm shapes warn and retain input but may duplicate replies; legacy onBinary is unchanged.
+No Android wire/file or iOS client change is required. The original Pixel 10 Pro ledger remains
+paused at **10 Pass / 22 Partial / 32 Pending**.
+
+### Inactive global-card owner and bounded park/adopt (2026-10-06)
+
+One actual Linux Desktop two-host case passes at source/build
+`59e4c93e5b1256e9882205700d4907a5d43a8e20`, tree
+`0f4753c65b858003a0d1560c3cf278cbffb48fd0`, in **27.39 seconds**. Two distinct private OpenSSH
+hosts have independent owner projects, client/host keys, remote PID namespaces and private
+home/tmp mounts. The namespace setup is source-reviewed; no separate raw mount-namespace probe
+is retained. Each
+remote plain-shell producer paints once; both panes stay `80x24` with soft wraps and inner mouse
+reporting disabled. This extends native acceptance of the existing A125/A126 repairs; it adds no
+product repair, regression-test count, mutation count, APK or regular Desktop installation.
+
+The actual B global-board card stays open through ordinary native Ctrl+K project switches
+B → A → B → A. Before the outage, B's detached parked terminal and its adopted terminal preserve
+the same installed xterm/core, input/focus wrappers, ordered subscriptions and API binding, quiet
+whole renderer buffer, native SSH client/master and remote history. Its SID provenance is the
+actual primary create and acknowledged native Canvas `g1`, plus the carried original writer and
+subscriptions with no create/detach/client replacement. Canvas keeps that SID in a lifecycle
+closure; no current/adopted React SID ref or post-adopt Canvas-input result is claimed.
+
+With actual A active and its Canvas mounted, inactive B's Modal receives native `g2`. One
+birth-pinned B-only product ControlMaster SIGKILL then triggers automatic recovery. The same
+open B card warms a fresh selected Modal viewer/session on B's new master and acknowledges native
+`g3`; there is no inactive-B Canvas create or launch replay. All **3 native `g` ACKs**, **2 complete
+wrapped URL activations**, hover/plain-click/Ctrl-click/leave controls, zero unexpected input and
+one paint per role pass. B retains its pane/server/producer/cwd and complete same-grid history
+before, during, after and at final observation. A's master/client/pane/producer/grid/history,
+zero input and owner routing stay unchanged within the acceptance window. Exact owned observer,
+session/master/daemon cleanup and generated-auth removal pass; explicit fixture exit supplies no
+ordinary-Quit proof.
+
+Private proof: `~/.cache/nodeterm-android-work/nodeterm-linux-ssh-global-owner-6lens2kd/proof/`.
+`receipt.json` SHA `e923f8fca25e05aa9869ab3bd22e4b2444147e41621c2bf0a8ca38465ece78c3`;
+`runtime-result.json` SHA `313413ea48f371b6fbc62e2d03c14af7f0b0fcd0c573110c9d18137f0da13adb`.
+Root acceptance: `~/.cache/nodeterm-android-work/a125-a126-global-owner-root-mq6v7w7z/root-acceptance.json`,
+SHA `7cb20c71a52dfc3bf968073170867b6e7ff199957e23a664a5ffebb5e3ab453d`.
+Independent review: `~/.cache/nodeterm-android-work/ssh-global-owner-independent-review-kn_5dsw4/independent-review.json`,
+SHA `7fc9ace6926a5004ee5a8c817d664fde59f8cf6d83d26a9e1ca5fa3a03cd869a`.
+The exact-source full build binds **2,465 tracked inputs / 136 output artifacts**; snapshot SHA
+`dc188476bfa29bdf5c71f02a20582a843cdb7a30455dfa42b748adcee939be65`, build receipt SHA
+`278094c8102eed6cf5e191cbbcf4ec861b518158c810f9f3ee46ce6a0de4f377`. Source/runtime/held outputs
+stay unchanged. This quiet cycle does not establish streaming while parked, expiry/eviction,
+foreign-host attachments, Server/cross-window ownership, broader outage/backoff, GPU stress,
+phone/provider or other-platform behavior. The paused physical ledger is unchanged.
 
 **Fresh Pixel 7a verification and A124 (2026-10-05).** This separate phone runs Android 16 /
 API 36 and Vanadium WebView `145.0.7632.120.0`. Fresh installation of private beta 16/code 17
@@ -2341,10 +2393,13 @@ A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The eight controlled Linux Desktop reconnect cases, 294 affected tests, incremental TypeScript,
 15 isolated assertion mutants and exact-source forced950/98/app gates pass. The `11e22453`
 stale-input baseline, unequal-grid refusals and first `415dae9b` control's unclassified exits/
-18-byte DA diagnosis retain separate provenance. Remaining native park/adoption, inactive global-
-card routing, Server/cross-window response ownership, GPU pressure, phone and broader/repeated
-outage or other-platform scenarios are unverified. The matrix uses disposable QA hosts, with
-no new APK or regular Desktop installation.
+18-byte DA diagnosis retain separate provenance. The additional two-host soft/none case at
+`59e4c93e` verifies one quiet park/adopt cycle and inactive global-card recovery with active A
+unchanged; see [the bounded two-host follow-up](#inactive-global-card-owner-and-bounded-parkadopt-2026-10-06). These disposable QA-host results add no APK or regular
+Desktop installation. Remaining release acceptance needs a reachable intended phone for the
+physical lifecycle/outage, answer/notification/permission and live-provider checks. Wider parking,
+Server/cross-window response ownership, repeated outage/backoff, GPU/display and other-platform
+coverage remain separate from those device and hosted-backend obligations.
 
 Immediate Android push (`A25`) and fresh-different-desktop relay recovery (`A93`) need the hosted
 backend maintainers. The user has no service repository to supply. Same-owned-desktop paired-update
@@ -2361,7 +2416,8 @@ matrix remains open; those native results do not promote the paused device check
   checks pass, including A123 native retirement control/mutant/restored. A genuine Server retirement
   pilot, derived Desktop compositor cell comparison and single Desktop SSH reconnect pilot also pass.
   Repeated/page-wide GPU pressure,
-  full-frame compositor/display output, broader SSH reconnect and macOS/Windows remain unverified. Synthetic installed-
+  full-frame compositor/display output, SSH reconnect beyond the accepted eight-case and two-host
+  global-card checks, and macOS/Windows remain unverified. Synthetic installed-
   Fedora-PAM setup passes; real-user
   policy and Android setup/lifecycle still need their own checks.
   See [the latest native receipt](#native-setup-timing-installed-pam-and-remaining-desktop-checks-2026-10-05).
@@ -3276,11 +3332,22 @@ ACK 1; ACK 2 is not attempted. Its unclassified wrapper/runtime exits 1/2 remain
 later A126 diagnosis. Those failed controls are not rewritten as repaired-source positives.
 See [audit A125](android-audit-2026-09.md#a125) and [audit A126](android-audit-2026-09.md#a126) for exact evidence.
 
-Actual Canvas mounting and selected-view native keyboard recovery are verified in this bounded
-matrix. Native park/adoption, inactive global-card routing, Server/cross-window ownership, GPU
-pressure/compositor, repeated or broader outage/backoff, phone/provider and macOS/Windows checks
-remain open. The synthetic key-only hosts do not establish PAM, power-loss, agent-launch or ordinary
-Quit behavior. Unsupported private xterm shapes warn and retain input but may duplicate replies;
-legacy onBinary is unchanged. No Android wire/file or iOS client change is required. A25/A93 still
-need hosted-backend maintainers. The original Pixel 10 Pro ledger remains paused at
-**10 Pass / 22 Partial / 32 Pending**.
+**Two-host follow-up (2026-10-06).** One Linux Desktop soft/none case at `59e4c93e` passes in
+27.39 seconds: an ordinary quiet B park/adopt cycle, then inactive B's continuously open global
+card reconnects while A remains active and unchanged. Three native `g` ACKs, two complete URL
+activations, zero unexpected input, one paint per role, same-grid retained history and exact owned
+cleanup pass. Carried SID provenance is primary create/native Canvas `g1` plus unchanged writer/
+subscriptions/client; no adopted Canvas-input/current SID-ref result is claimed. See [the bounded two-host follow-up](#inactive-global-card-owner-and-bounded-parkadopt-2026-10-06)
+for exact source/proof hashes and the remaining scope; no new repair or product test count is added.
+
+Actual Canvas mounting and selected-view native keyboard recovery pass in the eight-case matrix;
+one additional two-host soft/none case verifies a quiet park/adopt cycle and inactive global-card
+recovery with the active host unchanged. See [the bounded two-host follow-up](#inactive-global-card-owner-and-bounded-parkadopt-2026-10-06). Remaining Android release acceptance needs a
+reachable intended phone for lifecycle/outage, answer/notification/permission and live-provider
+checks; A25/A93 need hosted-backend maintainers. Further host coverage includes streaming/expiry/
+eviction while parked, repeated or broader outage/backoff, Server/cross-window response ownership,
+GPU pressure/full-frame display output and macOS/Windows. The synthetic key-only hosts do not
+establish real-user PAM, power-loss, agent-launch or ordinary Quit behavior. Unsupported private
+xterm shapes warn and retain input but may duplicate replies; legacy onBinary is unchanged.
+No Android wire/file or iOS client change is required. The original Pixel 10 Pro ledger remains
+paused at **10 Pass / 22 Partial / 32 Pending**.
