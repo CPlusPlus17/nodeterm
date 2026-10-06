@@ -289,6 +289,10 @@ jobs:
       - name: Phone delivery and ack tests
         run: >-
           npx vitest run
+          src/core/composed-tmux.test.ts
+          src/core/composed-tmux.realtmux.test.ts
+          src/core/pty-composed-input.test.ts
+          src/main/remote/host-composed-input.test.ts
           src/core/pty-background-write.test.ts
           src/core/pty-background-write-over.test.ts
           src/core/pty-shadow.test.ts

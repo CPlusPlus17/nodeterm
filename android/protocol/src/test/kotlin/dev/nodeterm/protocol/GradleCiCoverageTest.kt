@@ -108,6 +108,11 @@ class GradleCiCoverageTest {
     }
 
     @Test
+    fun `private beta checks execute the composed input host regressions`() {
+        composedInputCoverage(read(androidWorkflow))
+    }
+
+    @Test
     fun `the release shrinker supports the declared Kotlin compiler and Gradle wrapper`() {
         androidToolchain(
             read(File(InteropHarness.repoRoot, "android/build.gradle.kts")),
@@ -498,6 +503,28 @@ class GradleCiCoverageTest {
                         "job $id uploads an APK outside the unsigned release input contract: $path",
                     )
                 }
+            }
+        }
+
+        /** A128: a release candidate must run the host submission tests, including real tmux. */
+        internal fun composedInputCoverage(yaml: String) {
+            val beta = jobs(yaml)["beta-checks"] ?: throw AssertionError("no private beta checks job")
+            val matching = steps(beta).filter { value(it, "name") == "Phone delivery and ack tests" }
+            assertEquals(1, matching.size, "private beta checks need exactly one phone delivery test step")
+            val step = matching.single()
+            val run = step.indexOfFirst { it.startsWith("run:") }
+            assertTrue(run >= 0 && step[run] == "run: >-", "phone delivery tests must use the understood folded command")
+            val arguments = step.drop(run + 1).takeWhile { !Regex("^[A-Za-z_-]+:").containsMatchIn(it) }
+                .flatMap { it.split(Regex("\\s+")).filter(String::isNotEmpty) }
+            assertTrue(arguments.all { Regex("[A-Za-z0-9./=_-]+").matches(it) }, "extend the command reader before introducing shell syntax")
+            assertEquals(listOf("npx", "vitest", "run"), arguments.take(3), "phone delivery checks must execute Vitest")
+            for (path in listOf(
+                "src/core/composed-tmux.test.ts",
+                "src/core/composed-tmux.realtmux.test.ts",
+                "src/core/pty-composed-input.test.ts",
+                "src/main/remote/host-composed-input.test.ts",
+            )) {
+                assertEquals(1, arguments.drop(3).count { it == path }, "private beta phone delivery checks must execute $path exactly once")
             }
         }
 
