@@ -29,6 +29,12 @@ The frozen full Desktop build passes in **29.3 seconds**. The first push has all
 green in [run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878),
 verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pushes need their own gates and CI.
 
+**Native custom-wheel checkpoint (2026-10-06, A86).** A real SSH/tmux regression now verifies
+custom copy-mode bindings in both emacs and vi modes, distance across 20-notch chunks and
+FIFO-sensitive reversals. All eight settled native positions pass; three deliberately broken
+transport variants fail the expected distance assertion. This adds native coverage; phone custom
+bindings, lifecycle and FPS checks remain open. See [the native checks](#native-custom-wheel-checks-2026-10-06).
+
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
@@ -2286,6 +2292,10 @@ Immediate Android push (`A25`) and fresh-different-desktop relay recovery (`A93`
 backend maintainers. The user has no service repository to supply. Same-owned-desktop paired-update
 recovery does not establish recovery on a fresh different identity; no backend fix is claimed.
 
+The [native custom-wheel checks](#native-custom-wheel-checks-2026-10-06) verify two copy-mode tables,
+chunked distance and reversals over actual SSH/tmux. The broader phone custom-binding/lifecycle/FPS
+matrix remains open; those native results do not promote the paused device checklist.
+
 - **Remaining native matrix.** Linux DOM Desktop/Server and GPU-enabled Desktop link checks pass
   (four hardware Canvas WebGL2 plus four intentional DOM Modal cases). Native File-menu Quit,
   outside-terminal Ctrl+Q and one real tmux Canvas pilot also pass. A122 fixes focused-terminal
@@ -3135,3 +3145,40 @@ After push, exact-head CI is required through `workflow_dispatch` with `prepare_
 the verified run and exact head are recorded with the source exports. This closes the source
 finding; no PR is opened by this checkpoint. APK/client bytes, private signing, phone pause
 and **10 Pass / 22 Partial / 32 Pending** are unchanged.
+
+## Native custom wheel checks (2026-10-06)
+
+`SshTransportTest` adds `SSH scrolling honors custom wheel bindings in both copy key tables`.
+It uses the actual SSH connection and `TerminalActions` with a native tmux server in a private
+`TMUX_TMPDIR`. It seeds 750 output lines, selects each copy key mode and installs asymmetric
+wheel bindings. Requests of 37, 23 and 29 notches exceed one transport chunk; the host bindings
+define the history distance rather than a client-side normalization.
+
+| Mode | Up/down row gains | Up37 | Then down23 | Then up29 | Queued up37/down73/up29 |
+| --- | --- | --- | --- | --- | --- |
+| Emacs / copy-mode | 3 / 2 | 111 | 65 | 152 | 87 |
+| Vi / copy-mode-vi | 7 / 4 | 259 | 167 | 370 | 203 |
+
+Each native `scroll_position` must settle for 300 ms within an eight-second deadline. The queued
+sequence reaches the live bottom before returning to history, making its final result sensitive
+to direction ordering. The fixture verifies exact restoration of the original local mouse/mode
+overrides and both affected wheel bindings, including absent overrides.
+
+The targeted offline control passes **one test, zero failures/errors/skips**, in 14.135 seconds.
+A separately isolated network/PID/home/source control and restored run each pass the same eight
+positions. Three actual transport mutants fail the exact first-distance assertion: reversed
+direction and a dropped wheel write produce 0; clamp20→1 produces 6, versus 111 expected.
+Setup/cleanup assertions do not count as caught mutations. The first idle-copy-mode cancellation
+mistake stopped the test before scrolling; its negative receipt remains separate from the corrected
+control and earns no product finding or mutation credit.
+
+Source base is `e6dc6ef3` plus the new test (SHA-256
+`5cd81c49f36744393d98fcfabd6c73ee086f5cb25e1940ce43811c1ac17fe3cc`). Private control proof:
+`~/.cache/nodeterm-android-work/a86-custom-wheel-native-kkvz22xp/`; mutation proof:
+`~/.cache/nodeterm-android-work/a86-native-wheel-mutation-yo4k_bju/proof/`.
+The mutation receipt binds all 2,462 tracked files unchanged before/after; production sources
+are unchanged. Before publication, the full offline protocol/app gates and exact-head five-job
+Android CI still apply. This is native copy-mode transport/ordering evidence, not phone gestures,
+FPS, broader lifecycle/outage or macOS/Windows proof. Beta 16 and the original Pixel's
+**10 Pass / 22 Partial / 32 Pending** ledger remain unchanged. Next: continue the remaining
+physical matrix when the intended Pixel is reachable; A25/A93 still need the hosted backend.

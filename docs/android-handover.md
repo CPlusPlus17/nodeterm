@@ -32,6 +32,12 @@ The frozen full Desktop build passes in **29.3 seconds**. The first push has all
 green in [run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878),
 verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pushes need their own gates and CI.
 
+**Native custom-wheel checkpoint (2026-10-06, A86).** A real SSH/tmux regression now verifies
+custom copy-mode bindings in both emacs and vi modes, distance across 20-notch chunks and
+FIFO-sensitive reversals. All eight settled native positions pass; three deliberately broken
+transport variants fail the expected distance assertion. This adds native coverage; phone custom
+bindings, lifecycle and FPS checks remain open. See [the native checks](android.md#native-custom-wheel-checks-2026-10-06).
+
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
@@ -1245,6 +1251,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+The new A86 native regression verifies custom copy-mode gains, chunked distance and reversals in
+two tmux key modes. It adds no phone, FPS or wider lifecycle completion; see the current native
+receipt below. The Pixel 7a is offline at this checkpoint, and its remaining physical checks need
+its current Wireless debugging address. The original phone's pause remains in effect.
+
 A124 now passes a physical managed plain-shell creation/registration/input/reopen/app-restart
 case on the separate Pixel 7a and frozen Desktop `40731381`. Retained-history Find and clipboard
 checks pass too, and both owned QA profiles/hosts are cleaned up. Remaining background/lifecycle,
@@ -2435,3 +2446,17 @@ Next: continue the remaining background/lifecycle/outage, notification/answer/pe
 live-provider device matrix using fresh owned fixtures. Single-case success does not verify
 managed End, power loss, original Pixel update/migration, QR/relay/cellular routes, FPS or all
 64 checklist items. A25/A93 backend dependencies and other-platform checks remain separate.
+
+## Native custom wheel checks (2026-10-06)
+
+A86 adds one real SSH/tmux regression covering both copy key modes, asymmetric host wheel gains,
+distance across 20-notch chunks and FIFO-sensitive queued reversals. The eight native positions
+settle for 300 ms; original mouse/mode overrides and wheel bindings are restored. Targeted control
+and isolated control/restored runs pass. Three transport mutations fail the exact distance assertion;
+the earlier idle-copy-mode setup failure remains separate and is not a product finding.
+See [the native receipt and exact positions](android.md#native-custom-wheel-checks-2026-10-06).
+Only test/docs change; APK, production transport and iOS wire/file contracts are unchanged.
+The Pixel 7a is offline, so remaining phone custom-binding/lifecycle/FPS and release checks still
+need a reachable device. The original phone stays paused at **10 Pass / 22 Partial / 32 Pending**.
+Before push, run both required offline gates; after push, verify all five Android jobs against the
+exact head. Continue physical checks when the intended phone returns; A25/A93 remain backend work.

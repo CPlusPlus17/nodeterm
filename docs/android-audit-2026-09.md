@@ -42,6 +42,11 @@ verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pu
 
 ## Index
 
+**Native custom-wheel checkpoint (2026-10-06, A86).** Both tmux copy key modes pass eight
+settled positions over real SSH and the input actor; three native distance mutants are caught.
+The [native receipt](android.md#native-custom-wheel-checks-2026-10-06) distinguishes this coverage
+from the remaining phone custom-binding/lifecycle/FPS matrix.
+
 | ID | Sev | Block | Effort | Area | Title |
 |---|---|---|---|---|---|
 | [A01](#a01) | high | BLOCK | small | build/bug | ✅ fixed in `af1f820` · Direct-SSH terminal writes and resizes run on the Android main thread, which breaks the SSH connection as soon as the keyboard opens |
@@ -129,7 +134,7 @@ verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pu
 | [A83](#a83) | medium | | small | build/risk | ✅ fixed in `fa71cb08`; actual release/R8 verified, full phone validation pending · AGP 8.9.1 R8 cannot parse Kotlin 2.2 metadata during a successful release build |
 | [A84](#a84) | low | | small | tests/bug | ✅ fixed in `1d6b04cc`; full protocol 606/606 pass, two mutants caught · Real SSH tests share Readline state and inherit a login-shell command-not-found hook |
 | [A85](#a85) | medium | | small | terminal/bug | ✅ fixed in `febe022a`; code-3 update verifies viewport/font/keyboard resizing and pre-attach tmux history; final protocol609/app type-check pass · WRAP_CONTENT WebView layout parameters force a one-row terminal despite a large native viewport |
-| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; cellular WireGuard SSH connection and smooth scrolling confirmed; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; reversal/lifecycle/FPS/custom bindings remain open · Scroll responsiveness is poor despite reachable tmux history |
+| [A86](#a86) | medium | | medium | performance/gap | 🟡 primary drag/coast complaint user-confirmed resolved in code 7; cellular WireGuard SSH connection and smooth scrolling confirmed; Pixel drag/coast/Esc/stable-viewport new-touch stop pass, protocol658/49 gesture mutants pass; native two-mode custom-binding distance/chunk/reversal checks and three mutants pass; phone reversal/lifecycle/FPS/custom bindings remain open · Scroll responsiveness is poor despite reachable tmux history |
 | [A87](#a87) | medium | | medium | runtime/bug | ✅ fixed in `3cffb49d`; protocol658/type-check pass, 31 routing JS/actor/wiring mutations caught; normal drag/coast user-confirmed in beta 6; remaining device checks open · Automatic xterm reports cancel a swipe and discard queued movement |
 | [A88](#a88) | medium | | small | tooling/bug | ✅ fixed in `fed68fb3`, `f5fd3821`; actual V3.0 label reproduced, 39 Python tests per SDK36/37 and ten new mutations pass; all five CI37061593216 jobs green · New SDK signer labels make private-beta verification reject the expected certificate |
 | [A89](#a89) | medium | | small | runtime/bug | ✅ fixed in `c4b1f6cf`; real xterm redraw/hit-target regression and three CSS mutants pass; protocol658/type-check/code-7 delivery and Pixel continuous drag/coast/Esc/stable-viewport new-touch stop and user drag/coast confirmation pass; other device checks open · Repaint detaches the touched text span and loses continued drag/release events |
@@ -2900,6 +2905,17 @@ and smooth scrolling.
 Earlier new-touch checks opened the IME and resized tmux, so those results were inconclusive.
 Custom tmux wheel bindings and FPS remain open. Existing checklist item 20 covers these checks;
 the checklist remains 64 items.
+
+**Native custom-wheel follow-up (2026-10-06).** A new `SshTransportTest` method runs the actual
+`SshHostConnection` and `TerminalActions` against private native tmux over SSH. Emacs copy-mode
+uses up/down row gains 3/2, vi uses 7/4. Staged requests exceeding the 20-notch transport limit
+reach all expected positions; queued up37/down73/up29 returns through the live bottom and exposes
+FIFO reordering. All eight positions settle for 300 ms and original bindings/options are restored.
+Native control/restored runs pass; reversed direction, dropped wheel write and host clamp20→1
+each fail the exact emacs up37 distance assertion (111 expected, 0/0/6 observed).
+The first test-setup cancellation failure is preserved separately and earns no mutation credit.
+See [the native receipt](android.md#native-custom-wheel-checks-2026-10-06). No production behavior,
+APK or wire/file contract changes; the phone/FPS/lifecycle matrix and original device ledger remain open.
 
 ## A87
 

@@ -20,6 +20,7 @@ import dev.nodeterm.protocol.git.SourceControl
 import dev.nodeterm.protocol.git.GitReplies
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.ResumeOffer
+import dev.nodeterm.protocol.host.TerminalActions
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
@@ -40,7 +41,9 @@ import dev.nodeterm.protocol.ssh.SshTerminalCreationRefusedException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.boolean
@@ -1139,6 +1142,138 @@ class SshTransportTest {
             tmux("send-keys", "-X", "-t", pane, "cancel")
             val resetMouse = tmux("set-option", "-u", "-t", pane, "mouse")
             assertEquals(0, resetMouse.first, resetMouse.second)
+        }
+    }
+
+    @Test
+    fun `SSH scrolling honors custom wheel bindings in both copy key tables`() = runBlocking<Unit> {
+        val pane = "=nt-term-a-1:"
+        fun checkedTmux(vararg args: String): String {
+            val (code, out) = tmux(*args)
+            assertEquals(0, code, "tmux ${args.joinToString(" ")}: $out")
+            return out.trimEnd()
+        }
+        fun cancelCopyMode() {
+            val active = checkedTmux("display-message", "-p", "-t", pane, "#{pane_in_mode}")
+            assertTrue(active == "0" || active == "1", "missing native pane_in_mode: $active")
+            if (active == "1") checkedTmux("send-keys", "-X", "-t", pane, "cancel")
+        }
+        fun localOption(window: Boolean, name: String): String? =
+            checkedTmux(*(if (window) arrayOf("show-options", "-w", "-t", pane)
+            else arrayOf("show-options", "-t", pane))).lineSequence()
+                .singleOrNull { it.startsWith("$name ") }?.substringAfter(' ')
+        fun wheelBindings(table: String): List<String> = checkedTmux("list-keys", "-T", table)
+            .lineSequence().filter {
+                Regex("^bind-key(?:\\s+-r)?\\s+-T\\s+${Regex.escape(table)}\\s+Wheel(?:Up|Down)Pane(?:\\s|$)")
+                    .containsMatchIn(it)
+            }.toList()
+
+        data class Mode(val keys: String, val table: String, val upGain: Int, val downGain: Int)
+        val modes = listOf(Mode("emacs", "copy-mode", 3, 2), Mode("vi", "copy-mode-vi", 7, 4))
+        val originalMouse = localOption(window = false, "mouse")
+        val originalModeKeys = localOption(window = true, "mode-keys")
+        val originalBindings = modes.associate { it.table to wheelBindings(it.table) }
+        // list-keys emits tmux source syntax. Save only the affected private-server bindings and
+        // local overrides, including absence, so a failed assertion cannot change another test.
+        val restore = File.createTempFile("custom-wheel-restore-", ".conf", home)
+        restore.writeText(buildString {
+            appendLine(if (originalMouse == null) "set-option -u -t $pane mouse"
+                else "set-option -t $pane mouse $originalMouse")
+            appendLine(if (originalModeKeys == null) "set-option -u -w -t $pane mode-keys"
+                else "set-option -w -t $pane mode-keys $originalModeKeys")
+            for (mode in modes) {
+                appendLine("unbind-key -T ${mode.table} WheelUpPane")
+                appendLine("unbind-key -T ${mode.table} WheelDownPane")
+                originalBindings.getValue(mode.table).forEach { appendLine(it) }
+            }
+        })
+        try {
+            checkedTmux("set-option", "-t", pane, "mouse", "on")
+            checkedTmux("clear-history", "-t", pane)
+            val marker = "custom_wheel_done_${System.nanoTime()}"
+            val command = "i=1; while [ \"${'$'}i\" -le 750 ]; do " +
+                "printf 'custom_wheel_%04d\\n' \"${'$'}i\"; i=${'$'}((i+1)); done; printf '$marker\\n'"
+            checkedTmux("send-keys", "-t", pane, "-l", "--", command)
+            checkedTmux("send-keys", "-t", pane, "Enter")
+            waitForPane("node-terminal", "nt-term-a-1", marker)
+
+            connect().use { conn ->
+                val sink = Sink()
+                val stream = conn.attach("term-a-1", 100, 30, sink)
+                val actions = TerminalActions(this, stream) { true }
+                try {
+                    sink.waitFor(marker)
+                    val history = checkedTmux("display-message", "-p", "-t", pane, "#{history_size}").toInt()
+                    assertTrue(history > 400, "all exact positions must stay below the retained-history boundary")
+                    fun position(): Int {
+                        val state = checkedTmux("display-message", "-p", "-t", pane, "#{pane_in_mode}|#{scroll_position}").split('|')
+                        assertEquals("1", state.first(), "custom wheel scrolling must remain in copy mode")
+                        return assertNotNull(state.getOrNull(1)?.toIntOrNull(), "missing native scroll_position: $state")
+                    }
+                    suspend fun awaitPosition(mode: Mode, stage: String, expected: Int) {
+                        yield() // Dispatch the actor's queued calls before measuring the native pane.
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+                        var actual = position()
+                        var stableSince: Long? = null
+                        while (System.nanoTime() < deadline) {
+                            val now = System.nanoTime()
+                            if (actual == expected) {
+                                if (stableSince == null) stableSince = now
+                                if (now - stableSince >= TimeUnit.MILLISECONDS.toNanos(300)) break
+                            } else stableSince = null
+                            delay(25) // Let TerminalActions drain; SSH writes also finish asynchronously.
+                            actual = position()
+                        }
+                        assertEquals(expected, actual, "${mode.keys} $stage (up=${mode.upGain}, down=${mode.downGain})")
+                        assertTrue(stableSince != null && System.nanoTime() - stableSince >= TimeUnit.MILLISECONDS.toNanos(300),
+                            "${mode.keys} $stage must settle, not briefly cross the expected position")
+                        println("custom-wheel native ${mode.keys} $stage: upGain=${mode.upGain} downGain=${mode.downGain} scroll_position=$actual expected=$expected stableMs=300")
+                    }
+                    for (mode in modes) {
+                        cancelCopyMode()
+                        checkedTmux("set-option", "-w", "-t", pane, "mode-keys", mode.keys)
+                        checkedTmux("bind-key", "-T", mode.table, "WheelUpPane", "send-keys", "-X", "-N", mode.upGain.toString(), "scroll-up")
+                        checkedTmux("bind-key", "-T", mode.table, "WheelDownPane", "send-keys", "-X", "-N", mode.downGain.toString(), "scroll-down")
+                        checkedTmux("copy-mode", "-t", pane)
+                        assertEquals(0, position())
+
+                        // Each call exceeds SSH's 20-wheel limit: TerminalActions must deliver
+                        // every notch, while the host's own asymmetric bindings define row gain.
+                        assertTrue(actions.scroll(up = true, notches = 37))
+                        awaitPosition(mode, "up37", 37 * mode.upGain)
+                        assertTrue(actions.scroll(up = false, notches = 23))
+                        awaitPosition(mode, "down23", 37 * mode.upGain - 23 * mode.downGain)
+                        assertTrue(actions.scroll(up = true, notches = 29))
+                        awaitPosition(mode, "up29", 66 * mode.upGain - 23 * mode.downGain)
+
+                        cancelCopyMode()
+                        checkedTmux("copy-mode", "-t", pane)
+                        assertEquals(0, position())
+                        // Queue both reversals before yielding. Down73 reaches the live bottom;
+                        // its clamp makes the final position sensitive to FIFO direction order.
+                        assertTrue(actions.scroll(up = true, notches = 37))
+                        assertTrue(actions.scroll(up = false, notches = 73))
+                        assertTrue(actions.scroll(up = true, notches = 29))
+                        awaitPosition(mode, "queued up37 down73 up29", 29 * mode.upGain)
+                    }
+                } finally {
+                    actions.close()
+                    stream.detach()
+                }
+            }
+        } finally {
+            try {
+                cancelCopyMode()
+            } finally {
+                try {
+                    checkedTmux("source-file", restore.path)
+                    assertEquals(originalMouse, localOption(window = false, "mouse"))
+                    assertEquals(originalModeKeys, localOption(window = true, "mode-keys"))
+                    modes.forEach { assertEquals(originalBindings.getValue(it.table), wheelBindings(it.table)) }
+                } finally {
+                    restore.delete()
+                }
+            }
         }
     }
 

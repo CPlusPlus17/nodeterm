@@ -30,6 +30,12 @@ The frozen full Desktop build passes in **29.3 seconds**. The first push has all
 green in [run `37375870878`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37375870878),
 verified against exact head `40731381c646ccd3425af597b116b5371daf0a63`. Later pushes need their own gates and CI.
 
+**Native custom-wheel checkpoint (2026-10-06, A86).** A real SSH/tmux regression now verifies
+custom copy-mode bindings in both emacs and vi modes, distance across 20-notch chunks and
+FIFO-sensitive reversals. All eight settled native positions pass; three deliberately broken
+transport variants fail the expected distance assertion. This adds native coverage; phone custom
+bindings, lifecycle and FPS checks remain open. See [the native checks](../docs/android.md#native-custom-wheel-checks-2026-10-06).
+
 **Current source checkpoint (2026-10-05, A100–A124).** The branch adds retained terminal history search,
 trusted project env/shell and per-agent launch policy, offscreen Sleeping wake, remembered hook
 rules and complete held Claude questions. Direct SSH supports Source Control, selected-profile
@@ -1569,3 +1575,13 @@ Next: continue the remaining background/lifecycle/outage, notification/answer/pe
 live-provider device matrix using fresh owned fixtures. Single-case success does not verify
 managed End, power loss, original Pixel update/migration, QR/relay/cellular routes, FPS or all
 64 checklist items. A25/A93 backend dependencies and other-platform checks remain separate.
+
+## Native custom wheel checks (2026-10-06)
+
+A86 now has a real SSH/tmux regression for both copy key modes, custom host gains, chunked distance
+and queued reversals. All eight settled native positions and control/restored runs pass; three
+transport regressions fail the intended distance assertion. Original bindings/options are restored.
+See [the native receipt](../docs/android.md#native-custom-wheel-checks-2026-10-06).
+This adds test coverage without changing beta 16, production transport or iOS wire/file contracts.
+Phone custom-binding/lifecycle/FPS, the broader release matrix and A25/A93 backend work remain open.
+The original Pixel checklist remains paused at **10 Pass / 22 Partial / 32 Pending**.
