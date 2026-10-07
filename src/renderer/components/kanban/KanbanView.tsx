@@ -297,6 +297,19 @@ export const KanbanView = memo(function KanbanView({
   // Which machine this board's nodes run on — only a local board shows this machine's LIVE chips
   // (R57). A primitive, so the memoized cards are not re-rendered by it.
   const liveLinkSource = projectSessionSource(projectId)
+  // The card face's Ports chip: this board is always the project on the canvas, which is the one
+  // the dev-port scanner covers. Stable identities, because SessionCard is memoized.
+  const portsRemote = useProjects((s) => !!s.getProject(projectId)?.ssh)
+  const cardPorts = useMemo(() => ({ projectId, remote: portsRemote }), [projectId, portsRemote])
+  const openPort = useCallback(
+    (nodeId: string, url: string) => {
+      // Same hand-over as the card modal's chip: the browser node is placed beside the node ON THE
+      // CANVAS, so the board hands over to the canvas to show it.
+      window.dispatchEvent(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: nodeId } }))
+      onOpenNode(nodeId)
+    },
+    [onOpenNode]
+  )
   // Per-user display: whether `closed` columns are on screen (localStorage, never the board).
   const showClosed = useKanbanDisplay((s) => s.byProject[projectId]?.showClosed === true)
   const setShowClosed = useKanbanDisplay((s) => s.setShowClosed)
@@ -932,6 +945,8 @@ export const KanbanView = memo(function KanbanView({
             onTravel={onOpenNode}
             columnCategory={category}
             liveLinkSource={liveLinkSource}
+            ports={cardPorts}
+            onOpenPort={openPort}
           />
         ))
       })

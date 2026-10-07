@@ -106,6 +106,20 @@ const Swimlane = memo(function Swimlane({
   const [labelFilter, setLabelFilter] = useState<string[]>([])
   const [collapsed, setCollapsed] = useState(false)
   const activePortsProjectId = useProjects((s) => s.activeProjectId)
+  // The card face's Ports chip, for the active project's lane only: the dev-port scanner covers the
+  // project on the canvas and nothing else, so a background lane would show a stale or empty list.
+  const portsRemote = useProjects((s) => !!s.getProject(projectId)?.ssh)
+  const cardPorts = useMemo(
+    () => (projectId === activePortsProjectId ? { projectId, remote: portsRemote } : undefined),
+    [projectId, activePortsProjectId, portsRemote]
+  )
+  const openPort = useCallback(
+    (nodeId: string, url: string) => {
+      window.dispatchEvent(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: nodeId } }))
+      onOpenNode(nodeId, projectId)
+    },
+    [onOpenNode, projectId]
+  )
   const customAgents = useSettings((s) => s.settings.customAgents)
   const disabledAgents = useSettings((s) => s.settings.disabledAgents)
 
@@ -236,6 +250,8 @@ const Swimlane = memo(function Swimlane({
           onTravel={travel}
           columnCategory={category}
           liveLinkSource={liveLinkSource}
+          ports={cardPorts}
+          onOpenPort={openPort}
         />
       ))
     }]
