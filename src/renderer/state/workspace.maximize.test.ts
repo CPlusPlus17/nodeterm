@@ -9,6 +9,7 @@ import {
 } from './workspace'
 import type { CanvasNode } from './workspace'
 import { maximizeTargetRect } from '../lib/nodeMaximize'
+import { NODE_MIN_SIZES } from '../lib/nodeSizing'
 
 // Maximize-to-viewport (issue #399): the node is RESIZED to the visible canvas and toggles back
 // to the exact rect it had — the restore is the half users cannot do by hand, so it is the half
@@ -269,5 +270,26 @@ describe('placeNodeInRect (zone snap, issue #394 v1)', () => {
     expect(placeNodeInRect([group('g', { x: 0, y: 0 })], 'g', RECT)[0].width).toBe(600)
     expect(placeNodeInRect([collapsed], 'c', RECT)[0].width).toBe(320)
     expect(placeNodeInRect([term('a', { x: 1, y: 2 })], 'nope', RECT)).toEqual([term('a', { x: 1, y: 2 })])
+  })
+})
+
+describe('NODE_MIN_SIZES clamp (programmatic resizes bypass the NodeResizer)', () => {
+  // A third zone of a zoomed-in viewport is narrower than a terminal's 260 floor.
+  const TINY = { x: 10, y: 20, width: 200, height: 100 }
+
+  it('zone snap and maximize never shrink a node below its kind minimum', () => {
+    const min = NODE_MIN_SIZES.terminal
+    for (const place of [placeNodeInRect, maximizeNodeToRect]) {
+      const a = place([term('a', { x: 0, y: 0 })], 'a', TINY)[0]
+      expect(a.position).toEqual({ x: 10, y: 20 })
+      expect(a.width).toBe(min.width)
+      expect(a.height).toBe(min.height)
+      expect(a.data.expandedHeight).toBe(min.height)
+    }
+  })
+
+  it('a clamped maximized node refits idempotently', () => {
+    const maxed = maximizeNodeToRect([term('a', { x: 0, y: 0 })], 'a', TINY)
+    expect(refitMaximizedNode(maxed, 'a', TINY)).toBe(maxed)
   })
 })

@@ -22,7 +22,7 @@ import { agentAccountColor } from '@shared/agents/account-color'
 import { boundAccountId } from '@shared/agents/account-binding'
 import { agentEnvSnapshot } from '../lib/agentEnv'
 import { uuid } from '@renderer/lib/uuid'
-import { expandRectToGrid, snapNodeToGrid, type Rect } from '../lib/nodeSizing'
+import { expandRectToGrid, NODE_MIN_SIZES, snapNodeToGrid, type Rect } from '../lib/nodeSizing'
 import { claudeCliCapsNow, grokCliCapsNow } from './permissionMode'
 import { ensureGrokTakenIds, grokTakenIdsNow } from './grokSessionIds'
 import { mintFreeGrokSessionId } from '@shared/agents/grok-session-mint'
@@ -2109,6 +2109,12 @@ export function placeNodeInRect(
   return withNodeRect(nodes, node, rect, {})
 }
 
+/** `rect`'s size raised to the node kind's NodeResizer minimum. */
+function clampToMinSize(node: CanvasNode, rect: { width: number; height: number }) {
+  const min = NODE_MIN_SIZES[node.type ?? 'terminal'] ?? { width: 0, height: 0 }
+  return { width: Math.max(rect.width, min.width), height: Math.max(rect.height, min.height) }
+}
+
 /**
  * The shared placement core: put `node` at the ROOT-space `rect` (converted to parent-relative),
  * patch its data, and re-fit the ancestor frames in the same transform — `extent:'parent'` would
@@ -2126,18 +2132,22 @@ function withNodeRect(
   const root = rootPosition(node, nodes)
   const originX = root.x - node.position.x
   const originY = root.y - node.position.y
+  // A programmatic resize bypasses the NodeResizer's minimums (lib/nodeSizing.ts), and a zone
+  // of a zoomed-in viewport is routinely smaller than a kind's floor — clamp here, once, for
+  // maximize, zones, refit and restore alike.
+  const { width, height } = clampToMinSize(node, rect)
   const next = nodes.map((n) =>
     n.id === node.id
       ? {
           ...n,
           position: { x: rect.x - originX, y: rect.y - originY },
-          width: rect.width,
-          height: rect.height,
-          style: { ...n.style, width: rect.width, height: rect.height },
+          width,
+          height,
+          style: { ...n.style, width, height },
           // Drop the stale measurement in the same tick: flowToNodeStates prefers `measured` over
           // `width`/`height`, and a commit racing the re-measure would persist the OLD size.
           measured: undefined,
-          data: { ...n.data, expandedHeight: rect.height, ...dataPatch }
+          data: { ...n.data, expandedHeight: height, ...dataPatch }
         }
       : n
   )
@@ -2172,11 +2182,12 @@ export function refitMaximizedNode(
   // the node already has. Returning the same array keeps the workspace out of the dirty/save path
   // and lets the caller decide by identity whether anything actually moved.
   const root = rootPosition(node, nodes)
+  const size = clampToMinSize(node, rect)
   if (
     samePx(root.x, rect.x) &&
     samePx(root.y, rect.y) &&
-    samePx(nodeW(node) || (node.style?.width as number) || 0, rect.width) &&
-    samePx(nodeH(node) || (node.style?.height as number) || 0, rect.height)
+    samePx(nodeW(node) || (node.style?.width as number) || 0, size.width) &&
+    samePx(nodeH(node) || (node.style?.height as number) || 0, size.height)
   ) {
     return nodes
   }
