@@ -16,6 +16,14 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
+An independent five-second timer settles PATH/environment probes when the child callback never
+arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
+37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
+and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
+acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+See [the scoped source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
+
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
 offline app compilation and full TypeScript. [Android run `37678829862`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37678829862),
@@ -393,6 +401,7 @@ lifecycle and FPS matrix remains open.
 | [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 was installed at that checkpoint; beta 21 now passes bounded active-output/background and A133 same-page checks, with original A132 attribution and wider lifecycle acceptance pending · Buffered output and unready-page commands outlive their terminal viewer |
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Original completion marker absent after all 1200 rows; fresh normal-Fedora 40-ms raw/capture discriminator passes, historical attribution pending |
 | [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
+| [A134](#a134) | medium | | small | desktop/bug | **Source-fixed; startup verification pending** · Independent five-second fallback and owned-child/pipe cleanup; focused 37/three files plus five Windows-only skips, seven caught mutants and full TS pass; real startup and native/phone acceptance pending |
 
 ## A01
 
@@ -5424,3 +5433,27 @@ At that copy/link pilot, browser navigation and Share were untested. The later s
 pilot is linked above; unrelated TUI/lifecycle checks remain unverified.
 The exact owned target/logger exit naturally; fixture/profile/key/reverse/timeout cleanup is
 separately recorded in the linked checkpoint. No full-device or A129/A130 acceptance is claimed.
+
+## A134
+
+**Login-shell executable-resolution probe can outlive its child timeout**
+
+- Severity: **medium**; effort: small; area: desktop; kind: bug.
+- Status: **Source-fixed; focused controls pass; real startup and native/phone acceptance pending.**
+
+`execFile`'s timeout sends a signal, while its callback can still await process/stream completion.
+The shared PATH/environment resolver previously relied on that callback to settle cached callers.
+The passive original-create diagnostic at `70fde6b0` reaches the PATH await and no later stage
+within its bound; the actual child's signal/profile/stream cause is unproven. This does not prove
+native attachment or a shell absence, and the earlier V8/V9 negatives remain separate.
+
+The local helper adds an independent five-second Promise fallback, guards settlement once and
+ignores late callback values. It kills only its returned child while exitCode/signalCode are null
+and releases that child's pipes; no descendant/PID/group search or global termination is added.
+Parsing, shared-cache/coalescing, inherited fallback and Windows behavior remain. Focused checks
+pass: 37 tests/three affected files, five existing Windows-only skips, seven assertion-caught mutants
+with healthy/restored controls and full TypeScript. A separate controlled real-child comparison
+also passes; real startup remains pending and every push requires fresh full gates/CI. See the
+[canonical stage/source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
+This shared Desktop behavior also benefits the iOS companion; @eneskirca needs no wire change.
+The installed beta21 artifact and original 64-row ledger are unchanged.

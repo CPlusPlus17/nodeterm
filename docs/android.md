@@ -5,6 +5,14 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
+An independent five-second timer settles PATH/environment probes when the child callback never
+arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
+37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
+and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
+acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+See [the scoped source checkpoint](#login-shell-probe-completion-deadline-2026-10-08-a134).
+
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
 offline app compilation and full TypeScript. [Android run `37678829862`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37678829862),
@@ -659,6 +667,44 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Login-shell probe completion deadline (2026-10-08, A134)
+
+The passive V13 diagnostic at `70fde6b0`, using unchanged `ef4caec2` Desktop outputs, admits the
+original renderer/main observers and one normal factory action. Its original create reaches
+`M1-path-before` but no later stage before the unchanged 100-second diagnostic bound. It sends
+zero producer input and does not establish native attachment, PTY/history or phone acceptance.
+The login-shell child's profile behavior, signal handling and pending stream/close cause remain
+unproven. Post-retirement empty kernel rows cannot classify its earlier lifetime.
+
+The local `src/core/exec-path.ts` change gives PATH and named-environment probes their own
+five-second Promise deadline. Failure preserves the inherited-PATH/null fallback and settles
+cache/coalesced callers once; late callbacks cannot replace the result. Cleanup uses only the
+returned `ChildProcess`, signals it only while both exit fields are null, and releases its owned
+stdio. It never searches for or signals descendants, reused PIDs, process groups or other servers.
+Normal parsing and Windows behavior stay unchanged. Every push requires fresh exact-revision
+gates/CI; a real post-fix startup result remains pending.
+
+Private `a129-native-v13-actual-stage-peer-j29xcq9l/review.json`, SHA-256
+`1c41cedcdc2619944b5a447263ab9b7ad2f8547b0474bf5905ae83b74075e586`, binds the actual stage
+observation and its limits. Source-bound `exec-path-deadline-proof-ubzqduoa/run-v3/receipt.json`,
+SHA-256 `81b76c97a2dcc2e6c87d13ff6e4ef35d13279c6b5a82e131ef31c8b15dbaa3e2`, records
+**37 passing tests in three affected files**, five existing Windows-only skips, full TypeScript,
+and **seven assertion-caught mutants** with healthy/restored leaf controls (29 pass, five skips).
+After correcting six caller mocks to use Node's direct stdout callback, the expanded nine-file
+union passes **161 tests**, with the same five Windows skips. The single-user regression also
+checks that desktop attachment preserves phone viewers; its separate `-D` mutant is caught.
+These checks do not establish real startup.
+A separate controlled TERM-ignoring child comparison leaves the original unresolved at 6253.53 ms;
+the candidate settles null at 5006.04 ms with its exact child gone by 6254.08 ms and both namespaces
+empty after exit (`exec-path-real-comparison-zxccybzi/actual-ado4gout/receipt.json`, SHA-256
+`0137631a112b7881506bcf40cd689fa98b96766e1fd6f5311bcf5084329f48c6`); this does not classify V13.
+Independent static source review `exec-path-deadline-independent-p2a62fmt/source-review.json`,
+SHA-256 `4bbf36ff60dbf9b738956309f3243f1da4aea9a4fe67f843b5634fa255ab3829`, reports no
+source issue; it does not independently execute the controls or establish runtime acceptance.
+This shared Desktop fix also benefits iOS companion terminal creation: flag it for @eneskirca,
+with no mirror, RPC or wire change. Installed beta21/source `ef4caec2` and the original
+**10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 
 ### Beta 20 publication and bounded output checks (2026-10-07)
 

@@ -3,10 +3,18 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A133`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A134`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
+An independent five-second timer settles PATH/environment probes when the child callback never
+arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
+37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
+and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
+acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+See [the scoped source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
 
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
@@ -552,6 +560,15 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Login-shell completion deadline (2026-10-08, A134)
+
+Passive original-create records stop at the PATH wait, without classifying the child cause.
+The local shared Desktop helper now settles fallback on its own five-second timer and releases
+only its returned child/pipes. Focused checks pass (37 tests/three files, five Windows-only skips,
+seven caught mutants and full TypeScript); real startup verification remains pending.
+Installed beta21 and native/phone acceptance are unchanged. See the
+[scoped source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
 
 ### Fresh native diagnostics and Browser/Share pilot (2026-10-08)
 
@@ -1724,6 +1741,12 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+**Login-shell probe (`A134`):** the independent deadline and focused/mutation controls are complete.
+The controlled real-child comparison also passes. Run the required checks before each push,
+then observe one original native create through settlement without PTY probes or replay.
+The concrete child cause and A129/A130 native/phone acceptance remain unverified;
+preserve the installed beta21 artifact.
+
 **Viewer queue follow-up (`A131`):** source is fixed/published in `11fbff08`. Current
 `ef4caec2` passes forced 1033/110/app/TypeScript and all-five/ten-step CI; retained-signer beta
 21/code 22 is installed. Its bounded 1200-row/40-ms output case continues during backgrounding
@@ -1746,8 +1769,10 @@ A129/A130 need trusted HTTPS/WSS and real native/session-host relay; direct SSH 
 overlay. Separate V8/V9 native Desktop pilots stop at empty capture before producer input.
 V8's eight-second gate is shorter than supported cold-create budgets. V9's 30-second gate still
 has 280 empty captures; two complete ten-thread snapshots observe different empty daemon
-generations, not proven original creation or attachment. Next passively observe the original spawn
-and create dispatch/settlement without replay or another blind readiness run. [Scoped receipts](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+generations, not proven original creation or attachment. The later passive V13 observation reaches
+only the original PATH wait. A134 locally bounds that probe; after required checks, use one fresh
+original startup observation without replay. Native/phone acceptance and the child cause stay
+unverified. [Scoped receipts](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
 retain both negatives and exact owned cleanup without product attribution or A129/A130 acceptance.
 Held Send receipt/draft/Ctrl races, uncertainty and wider lifecycle/notification cases remain.
 
@@ -2377,7 +2402,10 @@ current availability/wake authorization persists; do not repeatedly request unlo
 trusted endpoint and usable foreground are valid. Obtain a current main Wireless debugging
 endpoint only if that trusted connection is unavailable. Every new physical case requires a fresh
 owned fixture and untouched sibling guard; never restart a retired fixture. Resume the expanded
-64-item checklist without inheriting older passes for new flows. Next are A129/A130 native app
+64-item checklist without inheriting older passes for new flows. First finish A134's required
+publication checks, then one fresh original native-create observation with no capture/input replay.
+Its controlled real-child comparison passes; the observed PATH wait does not prove its child cause.
+Next are A129/A130 native app
 history/held Live-touch acceptance, remaining lifecycle/background/notification and held composed
 Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
 and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those

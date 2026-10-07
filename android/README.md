@@ -6,6 +6,14 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
+An independent five-second timer settles PATH/environment probes when the child callback never
+arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
+37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
+and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
+acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+See [the scoped source checkpoint](../docs/android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
+
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
 offline app compilation and full TypeScript. [Android run `37678829862`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37678829862),
