@@ -288,7 +288,29 @@ async function runRelay(): Promise<void> {
   let sinks: DetachedSinks | null = null
   let sessionCounter = 0
 
+  let releaseScroll: (() => void) | null = null
+  let firstScroll = true
+  let historyCalls = 0
+  const holdScroll = process.env.FIXTURE_HISTORY_HOLD === '1'
   const pty: HostPtyManager = {
+    async scrollAttached(clientId, sessionId, up, lines, capture, current) {
+      historyCalls++
+      emit({ event: 'scrollAttached', sessionId, up, lines, capture })
+      if (!current()) return { status: 'refused', message: 'This terminal is no longer attached.' }
+      const outcome = process.env.FIXTURE_HISTORY_RESULT
+      if (outcome === 'refused' || outcome === 'uncertain') return { status: outcome, message: 'Explicit history fixture ' + outcome }
+      if (alternative) {
+        const result = await alternative.scroll(up, lines, capture, current)
+        if (holdScroll && firstScroll) {
+          firstScroll = false
+          await new Promise<void>(resolve => { releaseScroll = resolve; emit({ event: 'history-scroll-held' }) })
+        }
+        return result
+      }
+      // Explicit ordinary tmux recorder. Native tests above use actual backend/emulator code.
+      for (let i = 0; i < lines; i++) pty.write(clientId, sessionId, `\x1b[<${up ? 64 : 65};1;1M`)
+      return { status: 'input' }
+    },
     async submitComposed(sessionId, input, current) {
       emit({ event: 'submitComposed', sessionId, input })
       if (!current()) return { status: 'refused', message: 'This terminal is no longer attached.' }
@@ -346,6 +368,32 @@ async function runRelay(): Promise<void> {
     }
   }
   if (process.env.FIXTURE_COMPOSED_INPUT === 'unsupported') delete pty.submitComposed
+  if (process.env.FIXTURE_HISTORY_SCROLL === 'unsupported') delete pty.scrollAttached
+  if (process.env.FIXTURE_HISTORY_ADVERTISE_FALSE === '1') {
+    // Explicit negotiation seam: the actual attach response omits the capability once, while
+    // the recorder route remains observable if a broken client sends an unadvertised RPC.
+    const route = pty.scrollAttached
+    let read = 0
+    Object.defineProperty(pty, 'scrollAttached', { configurable: true,
+      get: () => ++read === 1 ? undefined : route })
+  }
+
+  // Explicit test-only control channel; product traffic still crosses the actual E2EE handlers.
+  if (process.env.FIXTURE_HISTORY_SCROLL || holdScroll || process.env.FIXTURE_HISTORY_ADVERTISE_FALSE === '1') {
+    let controls = Promise.resolve()
+    createInterface({ input: process.stdin }).on('line', line => {
+      controls = controls.then(async () => {
+        if (line === 'history-state') emit({ event: 'history-state', calls: historyCalls })
+        else if (line === 'history-release') {
+          if (!releaseScroll) throw new Error('No held history fixture response')
+          const release = releaseScroll; releaseScroll = null; release()
+        } else if (alternative) await alternative.control(line)
+        else throw new Error('No native history fixture backend')
+        emit({ event: 'history-control-done', command: line })
+      }).catch(() => emit({ event: 'fatal', message: 'History fixture control failed' }))
+    })
+  }
+
 
   const store = await seedDesktopState()
   // The folder the WorkspaceStore just wrote the project file into (`project.cwd` in projects.list).

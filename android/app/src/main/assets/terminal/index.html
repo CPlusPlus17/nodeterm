@@ -11,6 +11,12 @@
   /* Touches must land on the screen: xterm replaces text spans on every redraw. */
   .xterm-screen { touch-action: none; }
   .xterm-rows, .xterm-rows * { pointer-events: none; }
+  #history-view { position: absolute; inset: 0; padding: 2px 2px 2px 4px; background: #000;
+    color: #e6e6e6; overflow: hidden; touch-action: none; z-index: 2; }
+  #history-rows, #history-rows * { pointer-events: none; white-space: pre; }
+  #history-tools { position: absolute; right: 6px; bottom: 6px; background: #222; padding: 4px; }
+  #history-tools button { color: #fff; background: #333; border: 1px solid #888; padding: 6px 12px; }
+  #history-note { font: 12px sans-serif; margin-right: 8px; }
 </style>
 </head>
 <body>

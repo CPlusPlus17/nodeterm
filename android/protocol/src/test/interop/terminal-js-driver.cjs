@@ -76,6 +76,11 @@ function cancelAnimationFrame(id) { animationFrames.delete(id) }
 let copySheetRaw = null
 let copySheetCalls = 0
 let confirmCalls = 0
+let lastScrollEpoch = 0
+let historyCloses = 0
+const liveWrites = []
+let liveResets = 0
+const historyResponses = (input.historyResponses || []).slice()
 const bridge = {
   copyLimit() {
     copyLimitCalls++
@@ -104,7 +109,14 @@ const bridge = {
   onScroll(up, notches) {
     scrolls.push([up, notches])
     scrollFrames.push({ frame: frameNumber, time: frameTime, up, notches })
-  }
+  },
+  onScrollView(up, notches, epoch) {
+    lastScrollEpoch = epoch
+    this.onScroll(up, notches)
+    const response = historyResponses.shift()
+    if (response) sandbox.window.nt.showScrollView(Buffer.from(JSON.stringify(response)).toString('base64'), epoch)
+  },
+  onHistoryClose() { historyCloses++ }
 }
 
 const screenIn = input.screen || { cols: 80, rows: 24, lines: [] }
@@ -203,8 +215,8 @@ class Terminal {
   onData(fn) { this.dataCallback = fn }
   onBinary(fn) { this.binaryCallback = fn }
   onKey(fn) { this.keyCallback = fn }
-  write() {}
-  reset() {}
+  write(data) { liveWrites.push(typeof data === 'string' ? data : new TextDecoder().decode(data)) }
+  reset() { liveResets++ }
   focus() {
     if (textareaFocused) return
     textareaFocused = true
@@ -233,16 +245,25 @@ const documentListeners = {}
 function listen(listeners, type, fn) {
   ;(listeners[type] = listeners[type] || []).push(fn)
 }
-const element = {
-  addEventListener(type, fn) {
-    ;(hostListeners[type] = hostListeners[type] || []).push(fn)
+const domElements = []
+function domElement() {
+  const listeners = {}
+  const item = { style: {}, hidden: false, textContent: '', children: [],
+    appendChild(child) { this.children.push(child) },
+    replaceChildren(...children) { this.children = children },
+    addEventListener(type, fn) { listen(listeners, type, fn) },
+    dispatch(type) { for (const fn of listeners[type] || []) fn({ stopPropagation() {}, preventDefault() {} }) }
   }
+  domElements.push(item)
+  return item
 }
+const element = domElement()
+element.addEventListener = (type, fn) => listen(hostListeners, type, fn)
 
 const sandbox = {
   Terminal,
   FitAddon: { FitAddon: FitAddonStub },
-  document: { getElementById: () => element, visibilityState: 'visible',
+  document: { getElementById: () => element, createElement: domElement, visibilityState: 'visible',
     addEventListener(type, fn) { listen(documentListeners, type, fn) } },
   window: { NodetermBridge: bridge, requestAnimationFrame, cancelAnimationFrame,
     addEventListener(type, fn) { listen(windowListeners, type, fn) } },
@@ -350,8 +371,11 @@ function actions(items) {
     else if (action.report !== undefined) emitData(action.report, false)
     else if (action.mouse !== undefined) emitData(action.mouse, true)
     else if (action.binary !== undefined) createdTerm.binaryCallback(action.binary)
+    else if (action.history) nt.showScrollView(Buffer.from(JSON.stringify(action.history)).toString('base64'), action.epoch === undefined ? lastScrollEpoch : action.epoch)
+    else if (action.live) domElements.find(e => e.textContent === 'Live').dispatch('click')
   }
 }
+actions(input.actions)
 function runFrame(delay) {
   if (!animationFrames.size) return
   if (++frameNumber > 300) fail('scroll animation did not drain within 300 frames')
@@ -388,7 +412,7 @@ for (const tap of input.taps || []) {
   dispatch('touchstart', { touches: start, changedTouches: start, timeStamp: tap.startTime || 0, preventDefault() {} })
   let ex = x
   let ey = y
-  for (const move of tap.moves || (tap.move ? [tap.move] : [])) {
+  for (const [moveIndex, move] of (tap.moves || (tap.move ? [tap.move] : [])).entries()) {
     ex = x + move[0]
     ey = y + move[1]
     const moved = []
@@ -396,6 +420,7 @@ for (const tap of input.taps || []) {
     for (let i = 0; i < fingers; i++) moved.push(touchAt(ex + i * 50, ey))
     dispatch('touchmove', { touches: moved, changedTouches: moved, timeStamp: move[2] || 0,
       preventDefault() { movePrevented = true } })
+    actions((tap.moveActions || [])[moveIndex])
   }
   if (tap.endTime !== undefined) frameTime = Math.max(frameTime, tap.endTime)
   dispatch('touchend', {
@@ -433,6 +458,8 @@ process.stdout.write(
     linkHandler: handled,
     taps: tapped,
     copySheet,
-    confirmCalls
+    confirmCalls,
+    history: { hidden: domElements.find(e => e.id === 'history-view').hidden,
+      rows: domElements.find(e => e.id === 'history-rows').children.map(e => e.textContent) }, liveWrites, liveResets, historyCloses
   }) + '\n'
 )

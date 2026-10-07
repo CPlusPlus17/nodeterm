@@ -297,6 +297,14 @@ jobs:
           src/core/native-windows-pane.test.ts
           src/session-host/composed-input-host.test.ts
           src/main/remote/host-composed-input.test.ts
+          src/core/history-scroll-view.test.ts
+          src/core/native-history-scroll.test.ts
+          src/core/pty-history-scroll.test.ts
+          src/core/session-host-history-scroll.test.ts
+          src/session-host/terminal-scroll.test.ts
+          src/session-host/history-scroll-host.test.ts
+          src/main/remote/host-history-scroll.test.ts
+          src/main/remote/android-history-fixture.test.ts
           src/core/pty-background-write.test.ts
           src/core/pty-background-write-over.test.ts
           src/core/pty-shadow.test.ts

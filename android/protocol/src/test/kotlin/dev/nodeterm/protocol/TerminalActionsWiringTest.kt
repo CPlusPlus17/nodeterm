@@ -17,7 +17,7 @@ class TerminalActionsWiringTest {
         val attach = AppSourcePins.blockAfter(source, "private fun attach()")
         AppSourcePins.assertInOrder(attach, "retireActions()", "nt.suspendScroll()", "slot.begin()")
         AppSourcePins.assertInOrder(attach, "if (!slot.accept(ticket, lease)) return@post",
-            "actions = TerminalActions(graph.scope, s) { slot.isCurrent(ticket) && stream === s }", "nt.resumeScroll()")
+            "actor = TerminalActions(graph.scope, s, onScrollView", "actions = actor", "nt.resumeScroll()")
         assertEquals(1, Regex("""\bTerminalActions\(""").findAll(source).count())
     }
 
@@ -41,9 +41,9 @@ class TerminalActionsWiringTest {
         val source = controller()
         val input = AppSourcePins.blockAfter(source, "fun onInput(data:")
         AppSourcePins.assertInOrder(input, "val s = stream ?: return", "if (!page.isCurrent(gen)) return", "writeInput(out, s)")
-        val scroll = AppSourcePins.blockAfter(source, "fun onScroll(up:")
+        val scroll = AppSourcePins.blockAfter(source, "fun onScrollView(up:")
         AppSourcePins.assertInOrder(scroll, "val input = actions ?: return", "if (!page.isCurrent(gen)) return",
-            "if (!input.scroll(up, notches)) inputBusy()")
+            "if (!input.scroll(up, notches, displayEpoch) && !input.scrollPaused) inputBusy()")
         assertFalse(scroll.contains("launch"), "A suspended relay RPC must not run in a per-gesture coroutine")
         val write = AppSourcePins.blockAfter(source, "private fun writeInput(")
         AppSourcePins.assertInOrder(write, "val input = actions ?: return", "expected == null || stream !== expected",
@@ -88,9 +88,18 @@ class TerminalActionsWiringTest {
         val resume = AppSourcePins.blockAfter(source, "fun acceptResume()")
         assertEquals(2, Regex("""writeAfterScrollCancel\(offer\.keys, s\)""").findAll(resume).count())
         val cancel = AppSourcePins.blockAfter(source, "private fun writeAfterScrollCancel(")
-        AppSourcePins.assertInOrder(cancel, "val wv = webView ?: return", "wv.evaluateJavascript(\"nt.cancelScroll()\") {",
+        AppSourcePins.assertInOrder(cancel, "val wv = webView ?: return", "actions?.closeScrollView()", "wv.evaluateJavascript(\"nt.cancelScroll();nt.closeScrollView()\") {",
             "webView === wv && stream === expected && attached", "writeInput(data, expected)")
         assertFalse(Regex("""\b(?:stream|s)\??\.write\(""").containsMatchIn(source),
             "Installed-viewer input must not bypass its ordered queue")
+    }
+
+    @Test
+    fun `history callback checks viewer page and epoch inside the posted main runnable`() {
+        val attach = AppSourcePins.blockAfter(controller(), "private fun attach()")
+        AppSourcePins.assertInOrder(attach, "onScrollView = { result, epoch, displayEpoch ->", "main.post {",
+            "!slot.isCurrent(ticket)", "stream !== s", "actions !== actor", "webView !== view",
+            "!page.isCurrent(generation)", "actor.scrollEpoch != epoch", "when (result)", "nt.showScrollView(")
+        assertTrue(attach.contains("nt.scrollFailed($" + "displayEpoch)"))
     }
 }

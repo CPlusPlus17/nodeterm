@@ -62,10 +62,13 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
     /** Socket state changes before pending RPCs resume and before the close listener runs. */
     internal val isReady: Boolean get() = socket.isReady
 
-    private inner class Stream(val id: Long, override val fresh: Boolean, val sink: TerminalSink) : TerminalStream {
+    private inner class Stream(val id: Long, override val fresh: Boolean, val sink: TerminalSink, val scrollV1: Boolean) : TerminalStream {
         private val snapshot = SnapshotReassembler()
         private var outSeq = 0L
         @Volatile private var composedRetired = false
+        private var scrollViewId: String? = null
+        private var scrollViewEpoch = 0L
+        override fun clearScrollView() { synchronized(this) { scrollViewId = null; scrollViewEpoch++ } }
         override fun retireComposed() { composedRetired = true }
 
         fun accept(frame: Frame) {
@@ -91,11 +94,41 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         }
 
         override suspend fun scroll(up: Boolean, lines: Int) {
-            call("pty.scroll", buildJsonObject {
-                put("streamId", id)
-                put("dir", if (up) "up" else "down")
-                put("lines", lines)
-            })
+            // Relay backend identity is unknown. Never assume an older host is tmux and inject wheels.
+            scrollView(up, lines)
+        }
+
+        override suspend fun scrollView(up: Boolean, lines: Int): TerminalScrollView.Result {
+            if (lines !in 1..20 || composedRetired || streams[id] !== this)
+                return TerminalScrollView.Result.Refused("This terminal is no longer ready to scroll.")
+            if (!scrollV1) return TerminalScrollView.Result.Refused("History scrolling needs an updated nodeterm on the computer.")
+            val (epoch, viewId) = synchronized(this) { scrollViewEpoch to scrollViewId }
+            val body = try {
+                call("pty.scrollV1", buildJsonObject {
+                    put("streamId", id); put("dir", if (up) "up" else "down"); put("lines", lines)
+                    viewId?.let { put("viewId", it) }
+                })
+            } catch (_: HostUnansweredException) {
+                clearScrollView()
+                return TerminalScrollView.Result.Uncertain("Scroll could not be confirmed. Check the terminal before scrolling again.")
+            } catch (_: HostException) {
+                clearScrollView()
+                return TerminalScrollView.Result.Uncertain("Scrolling failed without a confirmed result. Scroll was not repeated.")
+            }
+            val result = TerminalScrollView.parse(body)
+                ?: TerminalScrollView.Result.Uncertain("The computer returned an invalid history page. Scroll was not repeated.")
+            return synchronized(this) {
+                if (composedRetired || streams[id] !== this || epoch != scrollViewEpoch) {
+                    // Closing a viewer cannot turn an already-written wheel into a safe refusal.
+                    if (result is TerminalScrollView.Result.Input || result is TerminalScrollView.Result.Uncertain)
+                        TerminalScrollView.Result.Uncertain("This scroll may have reached the terminal before the view closed. Scroll was not repeated.")
+                    else TerminalScrollView.Result.Refused("This history view was closed.")
+                }
+                else {
+                    scrollViewId = (result as? TerminalScrollView.Result.History)?.viewId
+                    result
+                }
+            }
         }
 
         override suspend fun submitComposed(input: ComposedInput): ComposedInputResult {
@@ -132,6 +165,7 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         }
 
         override suspend fun detach() {
+            clearScrollView()
             streams.remove(id)
             runCatching { call("pty.kill", buildJsonObject { put("streamId", id) }) }
         }
@@ -142,6 +176,7 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
          * cancellation handler; the host's answer is not waited for.
          */
         fun abandon() {
+            clearScrollView()
             streams.remove(id)
             socket.request("pty.kill", buildJsonObject { put("streamId", id) }) {}
         }
@@ -221,7 +256,7 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
                         } else {
                             // Registered HERE, on the reader thread, before the snapshot frames that
                             // follow the response are processed.
-                            val s = Stream(streamId, o.b("fresh") == true, sink)
+                            val s = Stream(streamId, o.b("fresh") == true, sink, (o["scrollV1"] as? JsonPrimitive)?.let { !it.isString && it.content == "true" } == true)
                             streams[streamId] = s
                             // A caller cancelled while the request was on the wire never gets this
                             // stream, and the host has already reserved it (a viewer on the node: an

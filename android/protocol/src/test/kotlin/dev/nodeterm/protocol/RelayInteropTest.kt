@@ -16,6 +16,7 @@ import dev.nodeterm.protocol.host.RelayApprovalRefusedException
 import dev.nodeterm.protocol.host.RelayApprovalRequiredException
 import dev.nodeterm.protocol.host.RelayApprovalTimeoutException
 import dev.nodeterm.protocol.host.TerminalSink
+import dev.nodeterm.protocol.host.TerminalScrollView
 import dev.nodeterm.protocol.host.ComposedInput
 import dev.nodeterm.protocol.host.ComposedInputResult
 import dev.nodeterm.protocol.model.AccountNames
@@ -38,15 +39,19 @@ import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.double
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
@@ -480,6 +485,148 @@ class RelayInteropTest {
                 assertEquals("\u0003", h.awaitEvent("composed-native-write").str("data"))
                 stream.detach()
                 assertEquals(ComposedInputResult.Status.REFUSED, stream.submitComposed(ComposedInput.Paste("stale", true)).status)
+            }
+        }
+    }
+
+    @Test fun `native retained history producer reaches Android without wheel input`() = runBlocking<Unit> {
+        alternativeHistoryProducer("native-windows")
+    }
+    @Test fun `session host retained history producer reaches Android without wheel input`() = runBlocking<Unit> {
+        alternativeHistoryProducer("session-host")
+    }
+    private suspend fun alternativeHistoryProducer(backend: String) {
+        val h = start(extra = mapOf("FIXTURE_COMPOSED_BACKEND" to backend, "FIXTURE_HISTORY_SCROLL" to "off"))
+        connect(h).connection.use { conn ->
+            h.awaitEvent("composed-backend-ready")
+            val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+            var page = assertIs<TerminalScrollView.Result.History>(stream.scrollView(true, 20))
+            val observed = h.awaitEvent("history-native-result")
+            assertEquals("history", observed.str("status"))
+            assertTrue(observed.getValue("writes").jsonArray.isEmpty(), "Mouse-off scrolling must deliver zero raw input")
+            assertEquals(60, page.offset); assertTrue(page.totalRows > 200); assertEquals(24, page.rows.size)
+            val view = page.viewId
+            val original = page
+            h.command("history-more-output"); h.awaitEvent("history-control-done")
+            assertIs<TerminalScrollView.Result.History>(stream.scrollView(false, 20))
+            page = assertIs(stream.scrollView(true, 20))
+            assertEquals(original, page, "Live output and normal-buffer trimming cannot rewrite an existing viewer snapshot")
+            repeat(8) { if (page.hasOlder) page = assertIs(stream.scrollView(true, 20)) }
+            assertEquals(view, page.viewId, "Every further page belongs to the same immutable viewer capture")
+            assertFalse(page.hasOlder)
+            assertTrue(page.rows.any { it.text.startsWith("H0000") }, "Pre-attach history must reach the oldest page")
+            val newer = assertIs<TerminalScrollView.Result.History>(stream.scrollView(false, 1))
+            assertEquals(page.offset - 3, newer.offset); assertEquals(view, newer.viewId)
+            val other = conn.attach("term-abc-1", 80, 24, RecordingSink())
+            val otherPage = assertIs<TerminalScrollView.Result.History>(other.scrollView(true, 1))
+            assertTrue(view != otherPage.viewId, "A different attached viewer never adopts this viewer's viewId")
+            stream.clearScrollView()
+            val fresh = assertIs<TerminalScrollView.Result.History>(stream.scrollView(true, 1))
+            assertTrue(view != fresh.viewId, "Returning to live makes a later gesture capture a new view")
+            stream.detach(); other.detach()
+            assertIs<TerminalScrollView.Result.Refused>(stream.scrollView(true, 1))
+        }
+    }
+    @Test fun `actual backend mouse encoders interop as typed input without history fallback`() = runBlocking<Unit> {
+        for (backend in listOf("native-windows", "session-host")) for ((mode, up, down) in listOf(
+            Triple("default", "\u001b[M`!!", "\u001b[Ma!!"),
+            Triple("sgr", "\u001b[<64;1;1M", "\u001b[<65;1;1M"),
+            Triple("pixels", "\u001b[<64;0;0M", "\u001b[<65;0;0M"))) {
+            val h = start(extra = mapOf("FIXTURE_COMPOSED_BACKEND" to backend, "FIXTURE_HISTORY_SCROLL" to mode))
+            connect(h).connection.use { conn ->
+                h.awaitEvent("composed-backend-ready")
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                for ((direction, expected) in listOf(true to up, false to down)) {
+                    assertEquals(TerminalScrollView.Result.Input, stream.scrollView(direction, 2))
+                    val observed = h.awaitEvent("history-native-result")
+                    assertEquals("input", observed.str("status"))
+                    assertEquals(listOf(expected, expected), observed.getValue("writes").jsonArray.map { it.jsonPrimitive.content }, "$backend/$mode")
+                }
+                stream.detach()
+            }
+        }
+    }
+    @Test fun `unadvertised relay scrolling refuses without guessing legacy tmux or typing wheels`() = runBlocking<Unit> {
+        for (extra in listOf(mapOf("FIXTURE_HISTORY_SCROLL" to "unsupported"),
+            mapOf("FIXTURE_COMPOSED_BACKEND" to "native-windows", "FIXTURE_HISTORY_SCROLL" to "off", "FIXTURE_HISTORY_ADVERTISE_FALSE" to "1"))) {
+            val h = start(extra = extra)
+            connect(h).connection.use { conn ->
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val result = stream.scrollView(true, 1)
+                h.command("history-state")
+                assertEquals(0, h.awaitEvent("history-state").getValue("calls").jsonPrimitive.int,
+                    "An unadvertised method must be refused locally before any backend call")
+                h.awaitEvent("history-control-done")
+                assertIs<TerminalScrollView.Result.Refused>(result)
+                stream.detach()
+            }
+        }
+    }
+    @Test fun `a held real history reply cannot restore a token after explicit live exit`() = runBlocking<Unit> {
+        for (backend in listOf("native-windows", "session-host")) {
+            val h = start(extra = mapOf("FIXTURE_COMPOSED_BACKEND" to backend, "FIXTURE_HISTORY_SCROLL" to "off", "FIXTURE_HISTORY_HOLD" to "1"))
+            connect(h).connection.use { conn ->
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val pending = async(start = CoroutineStart.UNDISPATCHED) { stream.scrollView(true, 1) }
+                h.awaitEvent("history-scroll-held")
+                stream.clearScrollView()
+                h.command("history-release"); h.awaitEvent("history-control-done")
+                assertIs<TerminalScrollView.Result.Refused>(pending.await(), "A late reply may not become this viewer's current token")
+                assertIs<TerminalScrollView.Result.History>(stream.scrollView(true, 1), "A later explicit gesture captures a new view")
+                stream.detach()
+            }
+        }
+    }
+    @Test fun `a held actual wheel result remains uncertain after live exit or viewer retirement without replay`() = runBlocking<Unit> {
+        for (backend in listOf("native-windows", "session-host")) for (retire in listOf(false, true)) {
+            val h = start(extra = mapOf("FIXTURE_COMPOSED_BACKEND" to backend, "FIXTURE_HISTORY_SCROLL" to "sgr", "FIXTURE_HISTORY_HOLD" to "1"))
+            connect(h).connection.use { conn ->
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val pending = async(start = CoroutineStart.UNDISPATCHED) { stream.scrollView(true, 2) }
+                h.awaitEvent("history-scroll-held")
+                h.awaitEvent("scrollAttached")
+                val observed = h.awaitEvent("history-native-result")
+                assertEquals("input", observed.str("status"))
+                assertEquals(listOf("\u001b[<64;1;1M", "\u001b[<64;1;1M"), observed.getValue("writes").jsonArray.map { it.jsonPrimitive.content })
+                stream.clearScrollView()
+                if (retire) stream.retireComposed()
+                h.command("history-release"); h.awaitEvent("history-control-done")
+                assertIs<TerminalScrollView.Result.Uncertain>(pending.await(), "Written wheels cannot become a confirmed refusal when the view closes")
+                h.command("history-mouse-off"); h.awaitEvent("history-control-done")
+                assertTrue(h.drainEvents().none { it.str("event") in setOf("history-native-result", "scrollAttached") }, "A sent scroll must never be retried")
+                stream.detach()
+            }
+        }
+    }
+    @Test fun `typed relay refusal and uncertainty preserve their outcomes without input fallback`() = runBlocking<Unit> {
+        for (status in listOf("refused", "uncertain")) {
+            val h = start(extra = mapOf("FIXTURE_HISTORY_RESULT" to status))
+            connect(h).connection.use { conn ->
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val result = stream.scrollView(true, 1)
+                if (status == "refused") assertIs<TerminalScrollView.Result.Refused>(result)
+                else assertIs<TerminalScrollView.Result.Uncertain>(result)
+                stream.detach()
+            }
+        }
+    }
+    @Test fun `actual runtime mouse changes apply only after leaving immutable history`() = runBlocking<Unit> {
+        for (backend in listOf("native-windows", "session-host")) {
+            val h = start(extra = mapOf("FIXTURE_COMPOSED_BACKEND" to backend, "FIXTURE_HISTORY_SCROLL" to "off"))
+            connect(h).connection.use { conn ->
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val page = assertIs<TerminalScrollView.Result.History>(stream.scrollView(true, 1))
+                h.awaitEvent("history-native-result")
+                h.command("history-mouse-sgr"); h.awaitEvent("history-control-done")
+                assertEquals(page.viewId, assertIs<TerminalScrollView.Result.History>(stream.scrollView(true, 1)).viewId,
+                    "Application tracking changes never inject input into a retained history view")
+                stream.clearScrollView()
+                assertEquals(TerminalScrollView.Result.Input, stream.scrollView(true, 1))
+                assertEquals(listOf("\u001b[<64;1;1M"), h.awaitEvent("history-native-result").getValue("writes").jsonArray.map { it.jsonPrimitive.content })
+                h.command("history-mouse-off"); h.awaitEvent("history-control-done")
+                assertIs<TerminalScrollView.Result.History>(stream.scrollView(true, 1))
+                assertTrue(h.awaitEvent("history-native-result").getValue("writes").jsonArray.isEmpty())
+                stream.detach()
             }
         }
     }

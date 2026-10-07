@@ -65,6 +65,11 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
     fun awaitEvent(name: String, timeoutMs: Long = 10_000): JsonObject =
         await(timeoutMs) { it["event"]?.toString() == "\"$name\"" }
 
+    /** Call only after an awaited producer control barrier; inspect every earlier leftover event. */
+    internal fun drainEvents(): List<JsonObject> = synchronized(seen) {
+        ArrayList(seen).also { out -> seen.clear(); lines.drainTo(out) }
+    }
+
     override fun close() {
         // Taken before node exits: after that its children are re-parented and unreachable from here.
         val descendants = process.descendants().toList()

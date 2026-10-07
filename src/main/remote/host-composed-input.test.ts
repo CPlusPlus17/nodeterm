@@ -10,7 +10,14 @@ function fixture(submitComposed?: HostPtyManager['submitComposed']) {
   const write = vi.fn()
   const pty: HostPtyManager = { createDetached: () => 'unused', attachDetached: () => 'owned-generation',
     captureSnapshot: async () => 'screen', sessionExists: async () => true,
-    submitComposed, write, resize: () => {}, setFlow: () => {}, kill: () => {} }
+    submitComposed,
+    // This isolated fake explicitly represents a tmux viewer; production resolves the backend.
+    scrollAttached: async (clientId, sessionId, up, lines, _capture, current) => {
+      if (!current()) return { status: 'refused', message: 'detached' }
+      for (let i = 0; i < lines; i++) write(clientId, sessionId, `\x1b[<${up ? 64 : 65};1;1M`)
+      return { status: 'input' }
+    },
+    write, resize: () => {}, setFlow: () => {}, kill: () => {} }
   const fs: HostFsOps = { listDir: async () => [], readText: async () => '', readBinary: async () => '', writeText: async () => true }
   const handlers = createHostHandlers(pty, socket, fs, () => [])
   const attach = async (): Promise<number> => {
@@ -63,12 +70,13 @@ describe('pty.submitComposed viewer-scoped RPC', () => {
     expect(submit).toHaveBeenCalledTimes(1)
     expect(f.write).not.toHaveBeenCalled()
   })
-  it('leaves terminal reports and scrolling on their ordinary raw viewer route', async () => {
+  it('keeps reports raw and routes an explicitly known tmux viewer separately from composed input', async () => {
     const submit = vi.fn(async (): Promise<ComposedInputResult> => ({ status: 'delivered' }))
     const f = fixture(submit), streamId = await f.attach()
     const report = '\x1b[12;34R'
     f.handlers.onFrame({ op: OP.Input, streamId, seq: 0, payload: new TextEncoder().encode(report) })
     f.handlers.onRpc({ id: 'scroll', method: 'pty.scroll', params: { streamId, dir: 'up', lines: 2 } })
+    await flush()
     expect(f.write.mock.calls.map((call) => call[2])).toEqual([report, '\x1b[<64;1;1M', '\x1b[<64;1;1M'])
     expect(submit).not.toHaveBeenCalled()
   })

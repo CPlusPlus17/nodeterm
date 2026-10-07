@@ -16,10 +16,11 @@ import kotlin.coroutines.coroutineContext
 class TerminalActions(
     scope: CoroutineScope,
     private val stream: TerminalStream,
+    private val onScrollView: (TerminalScrollView.Result, Long, Int) -> Unit = { _, _, _ -> },
     private val isCurrent: () -> Boolean,
 ) {
     private sealed interface Action {
-        class Scroll(val up: Boolean, var notches: Int) : Action
+        class Scroll(val up: Boolean, var notches: Int, val epoch: Long = 0, val displayEpoch: Int = 0) : Action
         class Input(val data: String) : Action
         class Composed(val input: ComposedInput, val result: CompletableDeferred<ComposedInputResult>, var dispatched: Boolean = false) : Action
     }
@@ -32,6 +33,11 @@ class TerminalActions(
     private var scrollNotches = 0
     private var inputChars = 0
     private var inFlightComposed: Action.Composed? = null
+    private var historyEpoch = 0L
+    private var scrollBlocked = false
+    val scrollPaused: Boolean get() = synchronized(lock) { scrollBlocked }
+    /** Rechecked after a UI runnable reaches the main thread, not only before it is posted. */
+    val scrollEpoch: Long get() = synchronized(lock) { historyEpoch }
 
     private val drain = scope.launch {
         try {
@@ -49,7 +55,7 @@ class TerminalActions(
                                 val chunk = minOf(head.notches, MAX_SCROLL_CALL)
                                 head.notches -= chunk
                                 if (head.notches == 0) pending.removeFirst()
-                                Action.Scroll(head.up, chunk)
+                                Action.Scroll(head.up, chunk, historyEpoch, head.displayEpoch)
                             }
                             is Action.Input -> pending.removeFirst()
                             is Action.Composed -> pending.removeFirst().also { inFlightComposed = head }
@@ -63,7 +69,17 @@ class TerminalActions(
                     }
                     try {
                         when (action) {
-                            is Action.Scroll -> stream.scroll(action.up, action.notches)
+                            is Action.Scroll -> {
+                                val result = stream.scrollView(action.up, action.notches)
+                                synchronized(lock) {
+                                    if (!closed && isCurrent() && historyEpoch == action.epoch) {
+                                        if (result is TerminalScrollView.Result.Refused || result is TerminalScrollView.Result.Uncertain) {
+                                            discardScrollLocked(); scrollBlocked = true
+                                        }
+                                        onScrollView(result, action.epoch, action.displayEpoch)
+                                    }
+                                }
+                            }
                             is Action.Input -> stream.write(action.data)
                             is Action.Composed -> {
                                 val admitted = synchronized(lock) {
@@ -83,7 +99,13 @@ class TerminalActions(
                     } catch (error: Exception) {
                         // A timed-out/refused relay RPC need not disconnect the transport. Do
                         // not retry uncertain movement, but keep explicit input usable (Esc).
-                        synchronized(lock) { if (!closed && action is Action.Scroll) discardScrollLocked() }
+                        synchronized(lock) {
+                            if (!closed && action is Action.Scroll && isCurrent() && historyEpoch == action.epoch) {
+                                discardScrollLocked()
+                                scrollBlocked = true
+                                onScrollView(TerminalScrollView.Result.Uncertain("Scroll could not be confirmed. Scroll was not repeated."), action.epoch, action.displayEpoch)
+                            }
+                        }
                         if (action is Action.Composed) action.result.complete(
                             ComposedInputResult.uncertain())
                     }
@@ -103,16 +125,17 @@ class TerminalActions(
     }
 
     /** False means the caller must report busy rather than silently discard a gesture. */
-    fun scroll(up: Boolean, notches: Int): Boolean = synchronized(lock) {
+    fun scroll(up: Boolean, notches: Int, displayEpoch: Int = 0): Boolean = synchronized(lock) {
         if (closed || !drain.isActive || !isCurrent()) return false
+        if (scrollBlocked) return false
         if (notches <= 0) return false
         if (notches > MAX_SCROLL_NOTCHES - scrollNotches) return false
         val tail = pending.lastOrNull()
-        if (tail is Action.Scroll && tail.up == up) {
+        if (tail is Action.Scroll && tail.up == up && tail.displayEpoch == displayEpoch) {
             tail.notches += notches
         } else {
             if (pending.size >= MAX_PENDING_RUNS) return false
-            pending.addLast(Action.Scroll(up, notches))
+            pending.addLast(Action.Scroll(up, notches, displayEpoch = displayEpoch))
         }
         scrollNotches += notches
         wake.trySend(Unit)
@@ -139,6 +162,7 @@ class TerminalActions(
                 pending.count { it !is Action.Scroll } >= MAX_PENDING_RUNS || input.size > MAX_INPUT_CHARS - inputChars)
                 return ComposedInputResult.refused("Terminal input is busy or no longer attached. The draft was kept.")
             discardScrollLocked()
+            clearHistoryLocked()
             pending.addLast(action)
             inputChars += action.input.size
             wake.trySend(Unit)
@@ -162,15 +186,19 @@ class TerminalActions(
     fun cancelScroll(): Boolean = synchronized(lock) {
         if (closed || !drain.isActive || !isCurrent()) return false
         discardScrollLocked()
+        scrollBlocked = false
         true
     }
+
+    /** Returning to live, resizing, or explicit Send also invalidates already posted pages. */
+    fun closeScrollView() = synchronized(lock) { discardScrollLocked(); clearHistoryLocked() }
 
     private fun addInput(data: String, cancelScroll: Boolean): Boolean = synchronized(lock) {
         if (closed || !drain.isActive || !isCurrent()) return false
         if (data.isEmpty()) return true
         val retainedRuns = if (cancelScroll) pending.count { it !is Action.Scroll } else pending.size
         if (retainedRuns >= MAX_PENDING_RUNS || data.length > MAX_INPUT_CHARS - inputChars) return false
-        if (cancelScroll) discardScrollLocked()
+        if (cancelScroll) { discardScrollLocked(); clearHistoryLocked() }
         pending.addLast(Action.Input(data))
         inputChars += data.length
         wake.trySend(Unit)
@@ -184,7 +212,7 @@ class TerminalActions(
     }
 
     private fun retireLocked() {
-        if (!closed) stream.retireComposed()
+        if (!closed) { clearHistoryLocked(); stream.retireComposed() }
         closed = true
         inFlightComposed?.let { it.result.complete(if (it.dispatched) ComposedInputResult.uncertain() else ComposedInputResult.refused()) }
         inFlightComposed = null
@@ -205,6 +233,8 @@ class TerminalActions(
             }
         }
     }
+
+    private fun clearHistoryLocked() { historyEpoch++; scrollBlocked = false; stream.clearScrollView() }
 
     companion object {
         private const val MAX_PENDING_RUNS = 64

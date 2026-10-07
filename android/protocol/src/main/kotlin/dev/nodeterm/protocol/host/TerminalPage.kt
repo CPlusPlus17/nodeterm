@@ -21,6 +21,8 @@ class TerminalPage {
     private var ready = false
     private var replacing = false
     private val pending = ArrayList<String>()
+    val currentGeneration: Int
+        @Synchronized get() = generation
 
     /** The current page has loaded and runs JavaScript as it is offered. */
     val isReady: Boolean

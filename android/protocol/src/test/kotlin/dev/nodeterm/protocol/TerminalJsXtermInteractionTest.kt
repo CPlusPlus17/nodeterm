@@ -96,5 +96,20 @@ class TerminalJsXtermInteractionTest {
         assertEquals(listOf("touchstart", "touchmove", "touchmove", "touchend"),
             stable["hostEvents"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertTrue(stable["notches"]!!.jsonPrimitive.int > 5, "the rest of the drag and release coast survive a real repaint")
+        val history = reply["history"]!!.jsonObject
+        assertTrue(history["visible"]!!.jsonPrimitive.boolean)
+        assertTrue(history["rowReplaced"]!!.jsonPrimitive.boolean)
+        assertTrue(history["layerConnected"]!!.jsonPrimitive.boolean)
+        assertTrue(history["noHtml"]!!.jsonPrimitive.boolean)
+        assertEquals(0, history["resets"]!!.jsonPrimitive.int)
+        assertTrue(history["applicationCursor"]!!.jsonPrimitive.boolean, "Live parsing continues behind the separate history layer")
+        assertFalse(history["bracketedPaste"]!!.jsonPrimitive.boolean)
+        assertTrue(history["liveText"]!!.jsonPrimitive.content.contains("live output behind"))
+        assertEquals(listOf("https://old.example/x"), history["openedUrls"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("界 https://old.example/x", "<b>inert captured text</b>"),
+            history["copySnapshot"]!!.jsonObject["lines"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertTrue(history["events"]!!.jsonArray.any { "report" in it.jsonObject }, "The real live parser still answers cursor queries")
+        assertTrue(history["events"]!!.jsonArray.count { "scroll" in it.jsonObject } > 1, "Replacing history rows preserves the rest of the drag and coast")
+        assertTrue(history["closedAfterInput"]!!.jsonPrimitive.boolean, "An old queued page cannot reopen after actual paste input")
     }
 }

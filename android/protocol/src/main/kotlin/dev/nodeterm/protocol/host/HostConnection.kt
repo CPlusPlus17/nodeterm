@@ -33,6 +33,13 @@ interface TerminalStream {
     fun resize(cols: Int, rows: Int)
     /** Scroll tmux's own history (its mouse is on): `lines` wheel notches, clamped host-side. */
     suspend fun scroll(up: Boolean, lines: Int)
+    /** Known direct-SSH tmux and explicit test streams retain their original input scroll path. */
+    suspend fun scrollView(up: Boolean, lines: Int): TerminalScrollView.Result {
+        scroll(up, lines)
+        return TerminalScrollView.Result.Input
+    }
+    /** An explicit input/lifecycle barrier retires this viewer's retained-history token. */
+    fun clearScrollView() {}
     /** Explicit input-bar Send to this attested viewer/pane; never silently fall back to raw input. */
     suspend fun submitComposed(input: ComposedInput): ComposedInputResult =
         ComposedInputResult.refused("Send from history is unavailable on this host. Update nodeterm on the computer; the draft was kept.")

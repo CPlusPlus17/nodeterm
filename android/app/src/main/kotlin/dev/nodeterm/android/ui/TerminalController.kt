@@ -52,6 +52,7 @@ import dev.nodeterm.protocol.host.TerminalActions
 import dev.nodeterm.protocol.host.TerminalExit
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
+import dev.nodeterm.protocol.host.TerminalScrollView
 import dev.nodeterm.protocol.host.ViewerSlot
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.ExternalLink
@@ -303,6 +304,8 @@ class TerminalController(
         fun onResize(c: Int, r: Int) {
             main.post {
                 if (c <= 0 || r <= 0 || !page.isCurrent(gen)) return@post
+                actions?.closeScrollView()
+                js("nt.closeScrollView()")
                 cols = c
                 rows = r
                 sizedElsewhere = null
@@ -325,9 +328,14 @@ class TerminalController(
 
         @JavascriptInterface
         fun onScroll(up: Boolean, notches: Int) {
+            onScrollView(up, notches, 0)
+        }
+
+        @JavascriptInterface
+        fun onScrollView(up: Boolean, notches: Int, displayEpoch: Int) {
             val input = actions ?: return
             if (!page.isCurrent(gen)) return
-            if (!input.scroll(up, notches)) inputBusy()
+            if (!input.scroll(up, notches, displayEpoch) && !input.scrollPaused) inputBusy()
         }
 
         /** A new touch or page/input barrier stops unsent momentum without typing into the pane. */
@@ -336,6 +344,11 @@ class TerminalController(
             val input = actions ?: return
             if (!page.isCurrent(gen)) return
             input.cancelScroll()
+        }
+
+        @JavascriptInterface
+        fun onHistoryClose() {
+            if (page.isCurrent(gen)) actions?.closeScrollView()
         }
 
         /** xterm mouse/focus/protocol reports preserve a pending gesture and an armed Ctrl. */
@@ -365,7 +378,8 @@ class TerminalController(
         fun openUrl(url: String) {
             if (!page.isCurrent(gen)) return
             val link = ExternalLink.parse(url) ?: return
-            main.post { if (!disposed) linkOffer = link }
+            val expected = stream
+            main.post { if (!disposed && page.isCurrent(gen) && stream === expected) linkOffer = link }
         }
 
         /** The buffer's lines and links for the Copy sheet, as `nt.copySheet` built them (audit A32). */
@@ -373,8 +387,9 @@ class TerminalController(
         fun onCopySheet(json: String) {
             if (!page.isCurrent(gen)) return
             val snapshot = TerminalCopy.parse(json)
+            val expected = stream
             main.post {
-                if (disposed) return@post
+                if (disposed || !page.isCurrent(gen) || stream !== expected) return@post
                 if (snapshot == null) toast(COPY_SHEET_FAILED, Toast.LENGTH_SHORT) else copySheet = snapshot
             }
         }
@@ -562,6 +577,7 @@ class TerminalController(
     private fun retireActions() {
         actions?.close()
         actions = null
+        js("nt.closeScrollView()")
     }
 
     private fun inputBusy() {
@@ -583,7 +599,8 @@ class TerminalController(
     /** A native resume must wait for JS to discard its unsent swipe, then check the viewer again. */
     private fun writeAfterScrollCancel(data: String, expected: TerminalStream) {
         val wv = webView ?: return
-        wv.evaluateJavascript("nt.cancelScroll()") {
+        actions?.closeScrollView()
+        wv.evaluateJavascript("nt.cancelScroll();nt.closeScrollView()") {
             if (webView === wv && stream === expected && attached) writeInput(data, expected)
         }
     }
@@ -800,7 +817,23 @@ class TerminalController(
                     // since this one began. Then the stream is let go of instead of installed (A40).
                     main.post {
                         if (!slot.accept(ticket, lease)) return@post
-                        actions = TerminalActions(graph.scope, s) { slot.isCurrent(ticket) && stream === s }
+                        val view = webView
+                        val generation = page.currentGeneration
+                        lateinit var actor: TerminalActions
+                        actor = TerminalActions(graph.scope, s, onScrollView = { result, epoch, displayEpoch ->
+                            main.post {
+                                if (disposed || stopped || !slot.isCurrent(ticket) || stream !== s ||
+                                    actions !== actor || webView !== view || !page.isCurrent(generation) ||
+                                    actor.scrollEpoch != epoch) return@post
+                                when (result) {
+                                    is TerminalScrollView.Result.History -> js("nt.showScrollView('${b64(result.json().toByteArray(Charsets.UTF_8))}',$displayEpoch)")
+                                    TerminalScrollView.Result.Input -> js("nt.closeScrollView(false,$displayEpoch)")
+                                    is TerminalScrollView.Result.Refused -> { js("nt.scrollFailed($displayEpoch)"); notice = result.message }
+                                    is TerminalScrollView.Result.Uncertain -> { js("nt.scrollFailed($displayEpoch)"); notice = result.message }
+                                }
+                            }
+                        }) { slot.isCurrent(ticket) && stream === s }
+                        actions = actor
                         js("nt.resumeScroll()")
                         attachedAt = System.currentTimeMillis()
                         state = TermState.Attached
@@ -950,9 +983,10 @@ class TerminalController(
         if (!input.valid()) { notice = "Send is too large or invalid. The draft was kept."; return false }
         val completionPolicy = ComposedCompletion(ctrlRevision)
         submitting = true
+        actor.closeScrollView()
         // Stop JS momentum before the actor discards queued scroll and awaits its in-flight call.
         val stoppedScroll = ComposedPreparation.cancelMomentum { complete ->
-            view.evaluateJavascript("nt.cancelScroll()") {
+            view.evaluateJavascript("nt.cancelScroll();nt.closeScrollView()") {
                 complete(webView === view && stream === expected && actions === actor && attached)
             }
         }

@@ -113,6 +113,25 @@ class GradleCiCoverageTest {
     }
 
     @Test
+    fun `private beta checks execute every native history regression`() {
+        historyScrollCoverage(read(androidWorkflow))
+    }
+
+    @Test
+    fun `the history coverage reader rejects removal of each distinct regression`() {
+        val yaml = read(androidWorkflow)
+        assertEquals(8, historyScrollPaths.size, "Every distinct history layer has a mandatory regression")
+        assertEquals(8, historyScrollPaths.toSet().size)
+        historyScrollCoverage(yaml)
+        for (path in historyScrollPaths) {
+            val changed = yaml.lines().filterNot { it.trim() == path }.joinToString("\n")
+            assertTrue(changed != yaml, "the control must actually contain $path")
+            assertFailsWith<AssertionError>(path) { historyScrollCoverage(changed) }
+        }
+        historyScrollCoverage(yaml)
+    }
+
+    @Test
     fun `the release shrinker supports the declared Kotlin compiler and Gradle wrapper`() {
         androidToolchain(
             read(File(InteropHarness.repoRoot, "android/build.gradle.kts")),
@@ -530,6 +549,31 @@ class GradleCiCoverageTest {
             )) {
                 assertEquals(1, arguments.drop(3).count { it == path }, "private beta phone delivery checks must execute $path exactly once")
             }
+        }
+
+        internal val historyScrollPaths = listOf(
+            "src/core/history-scroll-view.test.ts",
+            "src/core/native-history-scroll.test.ts",
+            "src/core/pty-history-scroll.test.ts",
+            "src/core/session-host-history-scroll.test.ts",
+            "src/session-host/terminal-scroll.test.ts",
+            "src/session-host/history-scroll-host.test.ts",
+            "src/main/remote/host-history-scroll.test.ts",
+            "src/main/remote/android-history-fixture.test.ts",
+        )
+
+        /** A129: all backend, snapshot and public relay layers execute in the private beta gate. */
+        internal fun historyScrollCoverage(yaml: String) {
+            val beta = jobs(yaml)["beta-checks"] ?: throw AssertionError("no private beta checks job")
+            val step = steps(beta).single { value(it, "name") == "Phone delivery and ack tests" }
+            val run = step.indexOfFirst { it.startsWith("run:") }
+            assertTrue(run >= 0 && step[run] == "run: >-", "history tests require the understood folded command")
+            val arguments = step.drop(run + 1).takeWhile { !Regex("^[A-Za-z_-]+:").containsMatchIn(it) }
+                .flatMap { it.split(Regex("\\s+")).filter(String::isNotEmpty) }
+            assertTrue(arguments.all { Regex("[A-Za-z0-9./=_-]+").matches(it) }, "extend the reader before adding shell syntax")
+            assertEquals(listOf("npx", "vitest", "run"), arguments.take(3))
+            for (path in historyScrollPaths)
+                assertEquals(1, arguments.drop(3).count { it == path }, "private beta history checks must execute $path exactly once")
         }
 
         /** The top-level `jobs:` of a workflow, as each job's non-comment lines (its id line excluded). */

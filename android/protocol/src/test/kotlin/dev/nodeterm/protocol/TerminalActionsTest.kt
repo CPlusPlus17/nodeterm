@@ -357,11 +357,12 @@ class TerminalActionsTest {
             assertTrue(actions.scroll(false, 4))
             release.complete(Unit)
             yield()
-            assertEquals(listOf("scroll:true:20", "input:\u001b"), stream.log)
+            assertEquals(listOf("scroll:true:20", "input:\u001b", "scroll:false:4"), stream.log,
+                "Failure of the old gesture cannot cancel a new gesture admitted after explicit input")
             assertTrue(actions.write("next"))
             assertTrue(actions.scroll(false, 2))
             yield()
-            assertEquals(listOf("scroll:true:20", "input:\u001b", "input:next", "scroll:false:2"), stream.log)
+            assertEquals(listOf("scroll:true:20", "input:\u001b", "scroll:false:4", "input:next", "scroll:false:2"), stream.log)
         } finally { actions.close() }
     }
 

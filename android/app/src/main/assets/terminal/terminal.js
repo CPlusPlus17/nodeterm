@@ -25,6 +25,66 @@
   term.loadAddon(fit)
   var host = document.getElementById('term')
   term.open(host)
+  // Retained host history is inert text in its own stable layer. Live xterm remains mounted and
+  // parses every byte behind it, preserving parser state, reports, modes and the live buffer.
+  var historyPage = null
+  var displayEpoch = 0
+  var historyLayer = document.createElement('div')
+  historyLayer.id = 'history-view'
+  historyLayer.hidden = true
+  var historyRows = document.createElement('div')
+  historyRows.id = 'history-rows'
+  var historyTools = document.createElement('div')
+  historyTools.id = 'history-tools'
+  var historyNote = document.createElement('span')
+  historyNote.id = 'history-note'
+  var liveButton = document.createElement('button')
+  liveButton.textContent = 'Live'
+  historyTools.appendChild(historyNote)
+  historyTools.appendChild(liveButton)
+  historyLayer.appendChild(historyRows)
+  historyLayer.appendChild(historyTools)
+  host.appendChild(historyLayer)
+  function closeScrollView(invalidate, expectedEpoch) {
+    if (expectedEpoch !== undefined && expectedEpoch !== displayEpoch) return
+    if (invalidate !== false) displayEpoch++
+    historyPage = null
+    historyLayer.hidden = true
+    historyRows.replaceChildren()
+  }
+  function cancelInputScroll() { cancelScroll(); closeScrollView() }
+  liveButton.addEventListener('touchstart', function (e) { e.stopPropagation() })
+  liveButton.addEventListener('click', function (e) {
+    e.stopPropagation()
+    cancelInputScroll()
+    if (typeof bridge.onHistoryClose === 'function') bridge.onHistoryClose()
+  })
+  historyLayer.addEventListener('click', function (e) {
+    var cell = cellAt(e.clientX, e.clientY)
+    var url = cell ? linkAt(cell.row, cell.col) : null
+    if (url) { e.preventDefault(); openUrl(url) }
+  })
+  function showScrollView(b64, epoch) {
+    if (!scrollActive || epoch !== displayEpoch) return
+    var page
+    try { page = JSON.parse(b64ToText(b64)) } catch (e) { return }
+    if (!page || page.status !== 'history' || !Array.isArray(page.rows) || !page.rows.length || page.rows.length > 200) return
+    historyPage = page
+    var rowHeight = measuredScrollStep()
+    historyRows.style.fontFamily = 'monospace'
+    historyRows.style.fontSize = fontSize + 'px'
+    historyRows.style.lineHeight = rowHeight + 'px'
+    historyRows.replaceChildren()
+    page.rows.forEach(function (row) {
+      var line = document.createElement('div')
+      line.textContent = row.text || ' '
+      line.style.height = rowHeight + 'px'
+      historyRows.appendChild(line)
+    })
+    historyNote.textContent = page.olderTruncated && !page.hasOlder ? 'Earlier output was dropped' : 'History'
+    historyLayer.hidden = false
+    // Do not cancel/restart the touch or animation here: a response may arrive mid-drag.
+  }
 
   var lastCols = 0
   var lastRows = 0
@@ -80,7 +140,7 @@
     var fromUser = userInput
     userInput = false
     if (mouseReport(d) || (!fromUser && (hasInputOrigin || generatedReport(d)))) bridge.onReport(d)
-    else { cancelScroll(); bridge.onInput(d) }
+    else { cancelInputScroll(); bridge.onInput(d) }
   })
   // In this xterm bundle onBinary is used only by the legacy mouse encoding.
   term.onBinary(function (d) { userInput = false; bridge.onReport(d) })
@@ -148,6 +208,16 @@
   }
 
   function bufferView() {
+    if (historyPage) return {
+      cols: historyPage.cols,
+      history: true,
+      length: historyPage.rows.length,
+      line: function (row) {
+        var line = historyPage.rows[row]
+        return line ? { isWrapped: line.isWrapped, section: line.section,
+          text: function (trim) { return trim ? line.text.replace(/\s+$/, '') : line.text } } : undefined
+      }
+    }
     var buf = term.buffer.active
     return {
       cols: term.cols,
@@ -159,17 +229,38 @@
     }
   }
 
+  function historyCellWidth(text) {
+    var service = term._core && term._core.unicodeService
+    return service && typeof service.getStringCellWidth === 'function' ? service.getStringCellWidth(text) : text.length
+  }
+  function historyStringIndex(text, col) {
+    var service = term._core && term._core.unicodeService
+    if (!service || typeof service.wcwidth !== 'function') return col
+    var cell = 0
+    var index = 0
+    while (index < text.length) {
+      var code = text.codePointAt(index)
+      var width = service.wcwidth(code)
+      if (cell + width > col) return index
+      cell += width
+      index += code > 65535 ? 2 : 1
+    }
+    return index + Math.max(0, col - cell)
+  }
+
   // Whether `row` runs into `row + 1`: the next row carries xterm's soft-wrap flag, or `row` is full
   // to its last column and the next row starts at column 0 with a non-space (a repainted wrap). A
   // heuristic: the buffer cannot tell a repainted wrap from text that exactly fills the row.
   function continuesOnNextRow(view, row) {
     var next = view.line(row + 1)
     if (!next) return false
+    var current = view.line(row)
+    if (current && current.section && current.section !== next.section) return false
     if (next.isWrapped) return true
     var cur = view.line(row)
     if (!cur) return false
     var raw = cur.text(false)
-    if (raw.length < view.cols || raw[view.cols - 1] === ' ') return false
+    if ((view.history ? historyCellWidth(raw) : raw.length) < view.cols || raw[raw.length - 1] === ' ') return false
     var nextRaw = next.text(false)
     return nextRaw.length > 0 && nextRaw[0] !== ' '
   }
@@ -185,15 +276,17 @@
     var start = row
     while (start > 0 && row - start < MAX_JOIN_ROWS - 1 && continuesOnNextRow(view, start - 1)) start--
     var text = ''
+    var rowOffsets = []
     var r = start
     for (;;) {
       var joins = r - start + 1 < MAX_JOIN_ROWS && continuesOnNextRow(view, r)
       var lineText = view.line(r).text(!joins)
-      text += joins ? lineText.padEnd(view.cols).slice(0, view.cols) : lineText
+      rowOffsets.push(text.length)
+      text += joins ? (view.history ? lineText + ' '.repeat(Math.max(0, view.cols - historyCellWidth(lineText))) : lineText.padEnd(view.cols).slice(0, view.cols)) : lineText
       if (!joins) break
       r++
     }
-    return { text: text, startRow: start, rows: r - start + 1 }
+    return { text: text, startRow: start, rows: r - start + 1, rowOffsets: rowOffsets }
   }
 
   /** An ILink range (1-based, inclusive) for a token at `startIndex..+len` of a paragraph. */
@@ -224,11 +317,12 @@
 
   /** The URL at a buffer cell: an OSC 8 link's, else a URL in the text's paragraph. */
   function linkAt(row, col) {
-    var osc8 = osc8UrlAt(row, col)
+    var osc8 = historyPage ? null : osc8UrlAt(row, col)
     if (osc8) return osc8
     var p = paragraphContaining(bufferView(), row)
     if (!p) return null
-    var idx = (row - p.startRow) * term.cols + col
+    var idx = historyPage ? p.rowOffsets[row - p.startRow] + historyStringIndex(historyPage.rows[row].text, col)
+      : (row - p.startRow) * term.cols + col
     var tokens = matchUrlTokens(p.text)
     for (var i = 0; i < tokens.length; i++) {
       var t = tokens[i]
@@ -248,13 +342,16 @@
     var cw = rect.width / term.cols
     var ch = rect.height / term.rows
     if (cw <= 0 || ch <= 0) return null
-    return { col: Math.floor(dx / cw), row: Math.floor(dy / ch) + term.buffer.active.viewportY }
+    var row = Math.floor(dy / ch)
+    if (historyPage && (row >= historyPage.rows.length || Math.floor(dx / cw) >= historyPage.cols)) return null
+    return { col: Math.floor(dx / cw), row: row + (historyPage ? 0 : term.buffer.active.viewportY) }
   }
 
   // A mouse click on a link (a phone with a mouse, while the pane does not report the mouse; xterm's
   // own link handling stands aside when it does). On a touch screen the tap handler below runs first.
   term.registerLinkProvider({
     provideLinks: function (y, callback) {
+      if (historyPage) { callback(undefined); return }
       var p = paragraphContaining(bufferView(), y - 1)
       if (!p) {
         callback(undefined)
@@ -282,6 +379,28 @@
   var SNAPSHOT_ROWS = 500
   var SNAPSHOT_LINKS = 50
   function snapshot() {
+    if (historyPage) {
+      var captured = historyPage.rows
+      var lines = []
+      captured.forEach(function (row, index) {
+        if (row.isWrapped && lines.length && captured[index - 1].section === row.section) {
+          var previous = captured[index - 1].text
+          lines[lines.length - 1] += ' '.repeat(Math.max(0, historyPage.cols - historyCellWidth(previous))) + row.text
+        }
+        else lines.push(row.text)
+      })
+      var links = []
+      for (var hr = 0; hr < captured.length;) {
+        var paragraph = paragraphContaining(bufferView(), hr)
+        if (!paragraph) break
+        matchUrlTokens(paragraph.text).forEach(function (token) {
+          var href = httpHref(token.url)
+          if (href && links.indexOf(href) < 0 && links.length < SNAPSHOT_LINKS) links.push(href)
+        })
+        hr = Math.max(hr + 1, paragraph.startRow + paragraph.rows)
+      }
+      return { lines: lines, links: links, firstVisible: 0 }
+    }
     var buf = term.buffer.active
     var view = bufferView()
     var end = buf.length
@@ -442,7 +561,8 @@
         var notches = Math.min(20, next.notches)
         next.notches -= notches
         if (!next.notches) pendingScroll.shift()
-        bridge.onScroll(next.up, notches)
+        if (typeof bridge.onScrollView === 'function') bridge.onScrollView(next.up, notches, displayEpoch)
+        else bridge.onScroll(next.up, notches)
       }
       scheduleScroll()
     })
@@ -513,13 +633,16 @@
   window.nt = {
     write: function (b64) { term.write(b64ToBytes(b64)) },
     // The attach snapshot: the current screen, painted before live output.
-    paint: function (b64) { cancelScroll(); term.reset(); term.write(b64ToText(b64).replace(/\r?\n/g, '\r\n')) },
-    reset: function () { cancelScroll(); term.reset() },
+    paint: function (b64) { cancelInputScroll(); term.reset(); term.write(b64ToText(b64).replace(/\r?\n/g, '\r\n')) },
+    reset: function () { cancelInputScroll(); term.reset() },
+    showScrollView: showScrollView,
+    closeScrollView: closeScrollView,
+    scrollFailed: function (epoch) { if (epoch === displayEpoch) cancelScroll() },
     cancelScroll: cancelScroll,
-    suspendScroll: function () { scrollActive = false; cancelScroll() },
+    suspendScroll: function () { scrollActive = false; cancelInputScroll() },
     resumeScroll: function () { scrollActive = true },
     // Native raw chips cancel on this JS thread before their input reaches the host.
-    raw: function (b64) { cancelScroll(); bridge.onInput(b64ToText(b64)) },
+    raw: function (b64) { cancelInputScroll(); bridge.onInput(b64ToText(b64)) },
     focus: function () { term.focus() },
     blur: function () { term.blur() },
     // The ⌨ chip (audit A46): the Kotlin side has just given the WebView Android's focus and asks
@@ -530,7 +653,7 @@
     focusForKeyboard: function () { term.blur(); term.focus() },
     // The Copy sheet (audit A32): what the buffer holds, as JSON, for the app to show.
     copySheet: function () { bridge.onCopySheet(JSON.stringify(snapshot())) },
-    setFontSize: function (n) { cancelScroll(); fontSize = n; term.options.fontSize = n; doFit(true) },
+    setFontSize: function (n) { cancelInputScroll(); fontSize = n; term.options.fontSize = n; doFit(true) },
     refit: function () { doFit(true) },
     // A composed line from the native input bar. `term.paste` frames it as a bracketed paste when
     // the client side asked for one, so a multi-line prompt reaches an agent CLI as ONE paste; the
@@ -539,7 +662,7 @@
     // Special keys from the native key row. Arrows follow the pane's DECCKM state, which this
     // emulator tracks because it parses the very stream the pane writes.
     key: function (name) {
-      cancelScroll()
+      cancelInputScroll()
       var app = term.modes.applicationCursorKeysMode
       var csi = app ? '\x1bO' : '\x1b['
       var map = {
@@ -551,10 +674,10 @@
       if (seq) bridge.onInput(seq)
     },
     submit: function (b64, enter) {
-      cancelScroll()
+      cancelInputScroll()
       var text = b64ToText(b64)
       if (text) term.paste(text)
-      if (enter) setTimeout(function () { cancelScroll(); bridge.onInput('\r') }, text ? 150 : 0)
+      if (enter) setTimeout(function () { cancelInputScroll(); bridge.onInput('\r') }, text ? 150 : 0)
     }
   }
 

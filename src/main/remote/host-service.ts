@@ -29,6 +29,8 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
 import { IPC } from '../../shared/ipc'
 import { REF_MAX_LEN } from '../../shared/presence'
 import { validHistoryQuery, type HistorySearch } from '../../core/terminal-history'
+import { HistoryScrollView } from '../../core/history-scroll-view'
+import type { NativeScrollResult } from '../../shared/history-scroll'
 import { COMPOSED_INPUT_UNCERTAIN, COMPOSED_INPUT_UNSUPPORTED, parseComposedInput, type ComposedInput, type ComposedInputResult } from '../../shared/composed-input'
 import type { CanvasMutation, CanvasState, DirEntry, KanbanColumn, KanbanLabel, PtyCreateOptions } from '../../shared/types'
 import type { AgentId } from '../../shared/agents/config'
@@ -68,6 +70,9 @@ const FRESH_PROBE_BUDGET_MS = 750
 
 // The slice of pty-manager the host needs. PtyManager satisfies this; tests pass a fake.
 export interface HostPtyManager {
+  /** Mode-aware movement on this exact attached viewer; absent means no safe wheel route. */
+  scrollAttached?(clientId: number | null, sessionId: string, up: boolean, lines: number,
+    capture: boolean, current: () => boolean): Promise<NativeScrollResult>
   /** Explicit composer action on this exact attached viewer. Absent on older implementations. */
   submitComposed?(sessionId: string, input: ComposedInput, current: () => boolean): Promise<ComposedInputResult>
   /** Search all retained output of this attached generation. Absent on older hosts. */
@@ -296,6 +301,9 @@ interface Stream {
   seq: number
   /** True while the PTY is paused due to relay backpressure. */
   paused: boolean
+  history: HistoryScrollView
+  scrollTail: Promise<void>
+  pendingScroll: number
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -395,6 +403,7 @@ export function createHostHandlers(
     // Report AFTER the delete: `detached` may consult the live viewer set via its own bookkeeping,
     // and a callback that throws must not leave the stream registered.
     if (stream) {
+      stream.history.clear()
       try {
         remoteViewer?.detached(stream.persistKey)
       } catch {
@@ -525,7 +534,8 @@ export function createHostHandlers(
       }
     }
     const streamId = ++streamCounter
-    const stream: Stream = { sessionId: '', persistKey: nodeId, seq: 0, paused: false }
+    const stream: Stream = { sessionId: '', persistKey: nodeId, seq: 0, paused: false,
+      history: new HistoryScrollView(), scrollTail: Promise.resolve(), pendingScroll: 0 }
     const sinks = makeSinks(streamId, stream, p.resizedFrames === true)
 
     // Reserve while the capture/settings preparation is async. Respond, snapshot and live attach
@@ -568,7 +578,8 @@ export function createHostHandlers(
       .then((result) => {
         // The stream may have been killed/closed while the capture was in flight.
         if (!result || !streams.has(streamId)) return
-        socket.respond(req.id, true, { streamId, fresh: result.prepared.fresh })
+        socket.respond(req.id, true, { streamId, fresh: result.prepared.fresh,
+          ...(pty.scrollAttached ? { scrollV1: true } : {}) })
         // Snapshot first (current screen) — then live output begins on attach.
         sendSnapshot(streamId, stream, result.snapshot)
         try {
@@ -635,28 +646,89 @@ export function createHostHandlers(
     }
   }
 
-  /**
-   * Scroll a remote client's view of the session's tmux history.
-   *
-   * Scrolling belongs to tmux (its mouse is on and the pane lives on the alternate screen, so the
-   * client's emulator has no scrollback of its own). This stream's pty IS a tmux client, so the
-   * wheel is simply written into it as an SGR mouse event and tmux does the rest — no tmux command
-   * channel, no copy-mode bookkeeping on our side. The phone drives this because it cannot deliver
-   * the wheel itself: its own emulator would swallow the gesture.
-   *
-   * `lines` is untrusted (it arrives from a remote client) — clamp it, and address the wheel to
-   * cell 1,1 so a hostile value cannot be interpolated anywhere interesting.
-   */
+  /** One FIFO per captured viewer. A mixed scroll may write input, so it is never replayed. */
+  function queueScroll(req: RpcRequest, stream: Stream, work: () => Promise<void>): void {
+    if (stream.pendingScroll >= 32) {
+      socket.respond(req.id, true, { status: 'refused', message: 'Terminal scrolling is busy. Try again.' })
+      return
+    }
+    stream.pendingScroll++
+    const turn = stream.scrollTail.then(work)
+    stream.scrollTail = turn.catch(() => {}).then(() => { stream.pendingScroll-- })
+    void turn.catch(() => {
+      stream.history.clear()
+      socket.respond(req.id, true, {
+        status: 'uncertain', message: 'The scrolling result is unknown. It was not retried.'
+      })
+    })
+  }
+
+  // Compatibility RPC: only a positively resolved tmux viewer may receive the old SGR wheels.
+  // Native retained history needs the negotiated page response; never inject wheels when off.
   function handleScroll(req: RpcRequest): void {
     const p = asRecord(req.params)
-    const stream = streams.get(num(p.streamId, -1))
-    if (stream) {
-      const up = str(p.dir) !== 'down'
-      const notches = Math.min(20, Math.max(1, Math.floor(num(p.lines, 1))))
-      const seq = `\x1b[<${up ? 64 : 65};1;1M`
-      for (let i = 0; i < notches; i++) pty.write(getClientId(), stream.sessionId, seq)
+    const streamId = num(p.streamId, -1), stream = streams.get(streamId)
+    if (!stream) { socket.respond(req.id, true, {}); return }
+    if (!stream.sessionId || !pty.scrollAttached) {
+      socket.respond(req.id, false, { message: 'Safe scrolling is not served on this attached terminal.' }); return
     }
-    socket.respond(req.id, true, {})
+    const sessionId = stream.sessionId
+    const current = (): boolean => streams.get(streamId) === stream && stream.sessionId === sessionId
+    const up = str(p.dir) !== 'down', notches = Math.min(20, Math.max(1, Math.floor(num(p.lines, 1))))
+    queueScroll(req, stream, async () => {
+      if (!current()) { socket.respond(req.id, false, { message: 'This terminal is no longer attached.' }); return }
+      const result = await pty.scrollAttached!(getClientId(), sessionId, up, notches, false, current)
+      if (result.status === 'input') { stream.history.clear(); socket.respond(req.id, true, {}); return }
+      socket.respond(req.id, false, { message: result.status === 'history'
+        ? 'Update the phone app to browse this terminal’s retained history.' : result.message })
+    })
+  }
+
+  function handleScrollV1(req: RpcRequest): void {
+    const p = asRecord(req.params)
+    const streamId = num(p.streamId, -1), stream = streams.get(streamId)
+    const refuse = (message: string): void => socket.respond(req.id, true, { status: 'refused', message })
+    if (!Number.isInteger(streamId) || !stream?.sessionId) { refuse('This terminal is no longer attached.'); return }
+    if (!pty.scrollAttached) { refuse('Update nodeterm on the computer to browse terminal history.'); return }
+    if ((p.dir !== 'up' && p.dir !== 'down') || !Number.isInteger(p.lines) ||
+        (p.lines as number) < 1 || (p.lines as number) > 20 ||
+        (p.viewId !== undefined && (typeof p.viewId !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p.viewId)))) {
+      refuse('Invalid terminal history movement.'); return
+    }
+    const up = p.dir === 'up', notches = p.lines as number, viewId = p.viewId as string | undefined
+    const sessionId = stream.sessionId
+    const current = (): boolean => streams.get(streamId) === stream && stream.sessionId === sessionId
+    queueScroll(req, stream, async () => {
+      if (!current()) { refuse('This terminal is no longer attached.'); return }
+      let capture: boolean
+      try { capture = stream.history.needsCapture(viewId) }
+      catch (error) { refuse(error instanceof Error ? error.message : 'This history view expired.'); return }
+      // Once history is open it is an inert, immutable view. Application output enabling mouse
+      // reporting underneath it must not redirect these gestures into foreground input.
+      if (!capture) {
+        try { socket.respond(req.id, true, stream.history.page(up, notches)) }
+        catch (error) {
+          stream.history.clear()
+          refuse(error instanceof Error ? error.message : 'Terminal history could not be read.')
+        }
+        return
+      }
+      const result = await pty.scrollAttached!(getClientId(), sessionId, up, notches, capture, current)
+      if (result.status === 'input') { stream.history.clear(); socket.respond(req.id, true, result); return }
+      if (result.status !== 'history') { stream.history.clear(); socket.respond(req.id, true, result); return }
+      if (!current()) { refuse('The terminal detached while its history was read.'); return }
+      try {
+        if (capture) {
+          if (!result.capture) throw new Error('The computer did not return terminal history.')
+          stream.history.install(result.capture)
+        }
+        socket.respond(req.id, true, stream.history.page(up, notches))
+      } catch (error) {
+        stream.history.clear()
+        refuse(error instanceof Error ? error.message : 'Terminal history could not be read.')
+      }
+    })
   }
 
   function handleHistorySearch(req: RpcRequest): void {
@@ -1134,6 +1206,9 @@ export function createHostHandlers(
         case 'pty.scroll':
           handleScroll(req)
           break
+        case 'pty.scrollV1':
+          handleScrollV1(req)
+          break
         case 'pty.historySearch':
           handleHistorySearch(req)
           break
@@ -1226,6 +1301,7 @@ export function createHostHandlers(
       }
       streams.clear()
       for (const stream of closing) {
+        stream.history.clear()
         try {
           remoteViewer?.detached(stream.persistKey)
         } catch {

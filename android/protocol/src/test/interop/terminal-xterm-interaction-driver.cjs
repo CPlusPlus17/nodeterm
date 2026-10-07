@@ -37,11 +37,16 @@ win.cancelAnimationFrame = id => frames.delete(id)
 let terminal
 let ready = false
 let events = []
+let lastDisplayEpoch = 0
+let copySnapshot
+let openedUrls = []
 win.NodetermBridge = {
   copyLimit: () => 400000, onResize() {}, onInput: data => events.push({ input: data }),
   onReport: data => events.push({ report: data }), onScroll: (up, notches) => events.push({ scroll: { up, notches } }),
   onScrollStop: () => events.push({ stop: true }),
-  onCopy() {}, onCopyTooLarge() {}, onCopySheet() {}, openUrl() {}, onReady() { ready = true }
+  onScrollView: (up, notches, epoch) => { lastDisplayEpoch = epoch; events.push({ scroll: { up, notches } }) },
+  onCopy() {}, onCopyTooLarge() {}, onCopySheet(raw) { copySnapshot = JSON.parse(raw) },
+  openUrl(url) { openedUrls.push(url) }, onReady() { ready = true }
 }
 win.eval(fs.readFileSync(path.join(assets, 'xterm.js'), 'utf8'))
 const Original = win.Terminal
@@ -163,8 +168,45 @@ async function main() {
     }
     const repaint = { removedSpan: await repaintGesture(false), pageHitTarget: await repaintGesture(true),
       touchAction: win.getComputedStyle(target).getPropertyValue('touch-action') }
+    let resets = 0
+    const originalReset = terminal.reset.bind(terminal)
+    terminal.reset = () => { resets++; originalReset() }
+    const captured = { status: 'history', viewId: 'b3b8e879-6449-4c8c-8529-4c02d6885878', offset: 3,
+      totalRows: 5, cols: 52, olderTruncated: false, hasOlder: false, hasNewer: true,
+      rows: [{ text: '界 https://old.example/x', isWrapped: false, section: 'normal' },
+        { text: '<b>inert captured text</b>', isWrapped: false, section: 'alternate' }] }
+    win.nt.showScrollView(Buffer.from(JSON.stringify(captured)).toString('base64'), lastDisplayEpoch)
+    const layer = win.document.getElementById('history-view')
+    const oldRow = win.document.getElementById('history-rows').firstElementChild
+    events = []
+    const beganHistory = now + 10
+    touch('touchstart', 500, beganHistory, layer)
+    touch('touchmove', 480, beganHistory + 20, layer)
+    drainFrames()
+    win.nt.showScrollView(Buffer.from(JSON.stringify(captured)).toString('base64'), lastDisplayEpoch)
+    await write('\x1b[?1h\x1b[?2004l\x1b[Hlive output behind retained history\x1b[6n')
+    touch('touchmove', 380, beganHistory + 60, layer)
+    touch('touchend', 380, beganHistory + 65, layer)
+    drainFrames()
+    win.nt.copySheet()
+    // A cell after the wide CJK prefix must map to the displayed URL, not the live buffer.
+    const tap = new win.TouchEvent('touchstart', { bubbles: true, cancelable: true,
+      touches: [{ clientX: 84, clientY: 12 }], changedTouches: [{ clientX: 84, clientY: 12 }] })
+    layer.dispatchEvent(tap)
+    layer.dispatchEvent(new win.TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [],
+      changedTouches: [{ clientX: 84, clientY: 12 }] }))
+    const history = { visible: !layer.hidden, rowReplaced: !oldRow.isConnected, layerConnected: layer.isConnected,
+      noHtml: !layer.querySelector('b'), rows: [...win.document.getElementById('history-rows').children].map(row => row.textContent),
+      copySnapshot, openedUrls, resets, applicationCursor: terminal.modes.applicationCursorKeysMode,
+      bracketedPaste: terminal.modes.bracketedPasteMode,
+      liveText: terminal.buffer.active.getLine(terminal.buffer.active.baseY).translateToString(true),
+      events: events.slice() }
+    const oldEpoch = lastDisplayEpoch
+    terminal.paste('explicit input')
+    win.nt.showScrollView(Buffer.from(JSON.stringify(captured)).toString('base64'), oldEpoch)
+    history.closedAfterInput = layer.hidden
     process.stdout.write(JSON.stringify({ rows: terminal.rows, cols: terminal.cols,
-      mouseMode: terminal.modes.mouseTrackingMode, results, kinetic, repaint }) + '\n')
+      mouseMode: terminal.modes.mouseTrackingMode, results, kinetic, repaint, history }) + '\n')
   } finally {
     terminal.dispose()
     dom.window.close()
