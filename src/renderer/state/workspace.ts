@@ -1420,10 +1420,14 @@ export function arrangeNodes(
   ids: string[],
   opts?: { layout?: ArrangeLayout; cols?: number; gap?: number; origin?: { x: number; y: number } }
 ): CanvasNode[] {
-  const byId = new Map(nodes.map((nd) => [nd.id, nd]))
-  const members = [...new Set(ids)].flatMap((id) => byId.get(id) ?? [])
+  let byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  let members = [...new Set(ids)].flatMap((id) => byId.get(id) ?? [])
   // Only meaningful within one coordinate space (see commonParentId) — mixed containers → no-op.
   if (members.length === 0 || new Set(members.map((m) => m.parentId ?? null)).size > 1) return nodes
+  const memberIds = new Set(members.map((m) => m.id))
+  nodes = restoreMaximizedWhere(nodes, (nd) => memberIds.has(nd.id))
+  byId = new Map(nodes.map((nd) => [nd.id, nd]))
+  members = [...memberIds].flatMap((id) => byId.get(id) ?? [])
   const layout = opts?.layout ?? 'grid'
   const gap = opts?.gap ?? 40
   const origin = opts?.origin ?? {
@@ -1632,12 +1636,13 @@ export function arrangeByLineage(
   opts?: { gap?: number; origin?: { x: number; y: number }; containerId?: string | null }
 ): CanvasNode[] {
   const containerId = opts?.containerId ?? null
-  const topLevel = nodes.filter((nd) => (nd.parentId ?? null) === containerId)
-  if (topLevel.length < 2) return nodes
+  if (nodes.filter((nd) => (nd.parentId ?? null) === containerId).length < 2) return nodes
   const { layers, loose } = lineageLayers(nodes, edges, containerId)
   // No rope reached two different members: every node would land in the single `loose` band,
   // which is a worse `Tidy canvas`, not a lineage view.
   if (layers.length === 0) return nodes
+  nodes = restoreMaximizedWhere(nodes, (nd) => (nd.parentId ?? null) === containerId)
+  const topLevel = nodes.filter((nd) => (nd.parentId ?? null) === containerId)
 
   const gap = opts?.gap ?? 40
   const origin = opts?.origin ?? {
@@ -1727,8 +1732,10 @@ export function tidyCanvas(
   edges: readonly LineageEdge[] = [],
   opts?: { gap?: number }
 ): CanvasNode[] {
+  if (nodes.filter((nd) => !nd.parentId).length < 2) return nodes
+  // Every unit moves, and a frame is packed at the size its (maximized) child inflated it to.
+  nodes = restoreMaximizedWhere(nodes, () => true)
   const units = nodes.filter((nd) => !nd.parentId).sort(byReadingPosition)
-  if (units.length < 2) return nodes
   const gap = opts?.gap ?? 40
   const order = new Map(units.map((u, i) => [u.id, i]))
   const unitOf = containerAncestors(nodes, null)
@@ -2192,6 +2199,53 @@ export function refitMaximizedNode(
     return nodes
   }
   return withNodeRect(nodes, node, rect, { premaxRect })
+}
+
+/**
+ * Take every maximized node `pick` selects back to its remembered rect. A layout pass packs nodes
+ * by size: left maximized, a node is packed at full-viewport size, keeps a restore rect that later
+ * teleports it onto the new layout, and the panel-pin refit snaps it back to fullscreen.
+ */
+function restoreMaximizedWhere(nodes: CanvasNode[], pick: (n: CanvasNode) => boolean): CanvasNode[] {
+  return nodes.reduce(
+    (acc, n) => (n.data.premaxRect && pick(n) ? restoreMaximizedNode(acc, n.id) : acc),
+    nodes
+  )
+}
+
+/**
+ * The ids whose user gesture ENDED in `changes` having actually moved or resized the node: a drag
+ * end (`dragging: false`, which React Flow emits only when positions changed) or a resize end that
+ * followed at least one live `resizing: true` change for that id. React Flow's resizer emits
+ * `resizing: false` on every mouseup — a plain click on a grab band included — so the end alone is
+ * not evidence of a resize. `resizing` is the caller's gesture memory (ids mid-resize), carried
+ * across change batches and updated here. A re-measure carries neither flag.
+ */
+export function movedGestureEnds(
+  changes: readonly { type: string; id?: string; dragging?: boolean; resizing?: boolean }[],
+  resizing: Set<string>
+): Set<string> {
+  const ids = new Set<string>()
+  for (const c of changes) {
+    if (!c.id) continue
+    if (c.type === 'position' && c.dragging === false) ids.add(c.id)
+    else if (c.type === 'dimensions' && c.resizing === true) resizing.add(c.id)
+    else if (c.type === 'dimensions' && c.resizing === false && resizing.delete(c.id)) ids.add(c.id)
+  }
+  return ids
+}
+
+/**
+ * A user drag or resize ends maximize MODE for those nodes where they now stand: the node is no
+ * longer the viewport-sized window "Restore" assumes, so keeping `premaxRect` would leave a stale
+ * Restore in the header and let the panel-pin refit snap the user's placement back to fullscreen.
+ * `ids` comes from movedGestureEnds; programmatic placements never reach onNodesChange.
+ */
+export function endMaximizeOnUserGeometry(nodes: CanvasNode[], ids: ReadonlySet<string>): CanvasNode[] {
+  if (!nodes.some((n) => ids.has(n.id) && n.data.premaxRect)) return nodes
+  return nodes.map((n) =>
+    ids.has(n.id) && n.data.premaxRect ? { ...n, data: { ...n.data, premaxRect: undefined } } : n
+  )
 }
 
 /**

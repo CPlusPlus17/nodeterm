@@ -834,6 +834,8 @@ import {
   claudeLaunchCommand,
   toggleCollapsed,
   canToggleCollapse,
+  endMaximizeOnUserGeometry,
+  movedGestureEnds,
   alignNodes,
   arrangeByLineage,
   arrangeGroupChildren,
@@ -4650,6 +4652,8 @@ export function Canvas() {
     setNodes((ns) => (ns.some((n) => n.selected) ? ns.map((n) => ({ ...n, selected: false })) : ns))
   }, [ephSelId, setNodes])
 
+  // Ids mid-resize (a `resizing: true` change seen, its end not yet): see movedGestureEnds.
+  const resizingIdsRef = useRef(new Set<string>())
   const handleNodesChange: typeof onNodesChange = useCallback(
     (changes) => {
       // Ephemeral nodes (subagent / loop) live outside the managed state. Persist their drag
@@ -4709,9 +4713,12 @@ export function Canvas() {
         ? snapResizeChanges(managed, nodesRef.current, snapSettings.gridSize || GRID)
         : managed
       onNodesChange(snapped)
+      // A user drag/resize of a maximized node ends maximize mode where it now stands.
+      const ended = movedGestureEnds(managed, resizingIdsRef.current)
+      if (ended.size) setNodes((ns) => endMaximizeOnUserGeometry(ns, ended))
       if (snapped.some((c) => c.type !== 'select')) markDirty()
     },
-    [onNodesChange, markDirty, ephParentPosition]
+    [onNodesChange, setNodes, markDirty, ephParentPosition]
   )
 
   // Resolve a node's agent id, with a tags fallback for not-yet-migrated legacy nodes and a
