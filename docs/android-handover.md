@@ -3,18 +3,20 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A129`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A130`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Native history source checkpoint (2026-10-07, A129 — source-fixed; publication pending).**
-Candidate commits `0818bbed` (backend) and `2d693263` (host/Android/producer/CI) implement
+**Native history published source checkpoint (2026-10-07, A129 — physical acceptance pending).**
+Signed backend `0818bbed` and host/Android/producer/CI `2d693263` are included in the signed,
+pushed integration `1add0408`. They implement
 `pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
 history. A valid viewer token continues paging its immutable snapshot despite live application
 mouse-mode changes; Live, actual user input, resize or an explicit new intent clears that view.
-A new intent checks the actual backend mode before any wheel input. These are local source
-proofs; full publication verification and physical acceptance are still pending.
+A new intent checks the actual backend mode before any wheel input. Source publication and
+mandatory verification pass; actual app/WebView, physical ConPTY and phone acceptance remain
+unverified.
 
 Keep the proof layers separate: **34 emulator tests / 3 files + 20 assertion-caught mutants**;
 **343 backend tests / 37 files + 21 assertion-caught mutants**, with four existing Windows-only
@@ -26,15 +28,31 @@ checks pass **11 methods** and catch **eight configuration-input deletions**; th
 additional production mutations. No aggregate combines these layers or earlier attempts.
 The root helper/RPC receipt is `a129-history-view-proof-v4-67xv3v57/mutation-result.json`, SHA-256
 `fe62c4f299afa9a7254ddb8aaf8e052386e71f7742917565c90363a8fb025583`.
-The final integration revision, fresh full publication gates, exact-head CI and any new APK are
-**pending**. These checks establish component/recorder and browser-harness boundaries, not
-physical ConPTY, full Desktop/WebView or phone acceptance.
+At exact `1add0408`, forced fresh offline protocol checks pass **1012 methods / 105 suites**
+with zero failures/errors/skips; offline app compilation, **568 affected Vitest tests / 52 files**
+with exactly four existing Windows process-tree skips, and full TypeScript pass.
+[Android run `37602046133`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37602046133),
+attempt 1, passes all five jobs and ten required steps. Private
+`a129-publication-biru7yjl/gates.json`, `ci-result.json` and `final-report.json` bind this source.
+The retained-signer **beta 18/code 19** APK is ready and **not installed on the intended phone**, SHA-256
+`19d55ee177335064b1edb4874b6d27216862d16a7d30ebe476875c566cd263e0`. Actual SDK 36 artifact
+checks pass; SDK 37 artifact verification is unavailable. These are source/component/recorder
+and browser-harness boundaries, not full Desktop/WebView or phone acceptance. The regular
+Desktop is not deployed and no PR is opened.
 The separate published A128 checkpoint `944223ef` has **984 protocol methods / 102 suites**,
 **360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
 [Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
 Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
 binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
 to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
+
+**Held Live-button source follow-up (2026-10-07, A130 — focused fix; publication pending).**
+Signed `9da36320` stops old momentum and the native pending-scroll queue on touch-down, preserving
+history and its display epoch until click. Three new LiveTouch JVM methods pass within
+**48 methods / 7 suites** in control and restored runs, with zero failures/errors/skips.
+**Three semantic mutants** (old handler, premature history close, parent gesture) fail assertions.
+Final integration gates/CI, a new APK and actual WebView/physical acceptance remain pending
+at this focused checkpoint; the `1add0408` held-touch failure remains historical.
 
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
@@ -434,7 +452,7 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
-### A129 native history implementation (2026-10-07, source-fixed; publication pending)
+### A129 native history implementation (2026-10-07, published source; acceptance pending)
 
 At `ce1121ba`, actual Kotlin/E2EE host calls through native and session-host emulators reproduce
 five foreground SGR wheel writes for an up-three/down-two history scroll with mouse reporting
@@ -442,8 +460,10 @@ off. The native writer boundaries are recorders and the host PTY bridge is a com
 there is no full Desktop, WebView gesture, kernel PTY, physical ConPTY or phone claim.
 Receipt `/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`, SHA-256
 `c5d50310e539ad02d1c825ac12d19865b4c488184d1d50a8c809aad44b7cbb1a`.
-[A129](android-audit-2026-09.md#a129) is **source-fixed** in `0818bbed` and `2d693263`; fresh full
-gates/publication and physical acceptance remain pending. Advertised `pty.attach.scrollV1` enables `pty.scrollV1` bounded
+[A129](android-audit-2026-09.md#a129) is **source-fixed and published** at signed `1add0408`,
+including `0818bbed` and `2d693263`. Fresh mandatory gates and exact-head CI pass; actual
+app/WebView and physical acceptance remain unverified. Advertised `pty.attach.scrollV1`
+enables `pty.scrollV1` bounded
 history pages scoped to the exact stream; existing tokens page immutable inert rows until
 Live/input/resize/new intent closes them. New intents check actual headless mode after queued
 output and follow the requested encoder, with exact backend generation/subscriber/socket
@@ -452,8 +472,30 @@ rejects late pages through actor/page/display epochs; Copy/links use displayed r
 The contract, resource limits and iOS @eneskirca adoption are
 [documented together](android.md#native-history-scrolling).
 The top checkpoint records passing leaf/backend/root and focused Android checks separately
-from pending full gates/CI/APK and physical acceptance. Existing tmux/direct-SSH scroll evidence,
-installed beta 17 and the original 10/22/32 ledger are unchanged.
+from fresh 1012/105 protocol, offline app, 568/52 Vitest with four existing Windows skips, full
+TypeScript and all-five/ten-step CI `37602046133`. Signed beta 18/code 19 is ready and not installed on the intended phone.
+Existing tmux/direct-SSH scroll evidence, installed beta 17 and the original 10/22/32 ledger
+are unchanged; regular Desktop deployment and a PR are not part of this checkpoint.
+
+### A130 held Live-button touch (2026-10-07, focused source fix)
+
+At `1add0408`, the shipped-source/stub/RAF probe shows a displayed Live-button touch held for
+512 ms leaving the previous fling active: 20 further requests / 23 notches, matching the
+no-touch control. Terminal-surface touch stops immediately; the Live click subsequently stops
+and closes history. This original failure remains historical. Receipt
+`a129-live-held-probe-h2m613ux/receipt.json`, SHA-256
+`b89954c2f959b63df727b986ebcf260e64dac716dd20ef65cb76e0d370d624ea`.
+
+[A130](android-audit-2026-09.md#a130) is source-fixed at the focused checkpoint: Live-button
+touch-down calls `cancelScroll` before stopping propagation, preserving history and its
+display epoch until click. Three new JVM behavior methods cover held/moved touch, normal
+click/obsolete page, and cancelled press/current page. Control/restored runs pass 48 methods/7
+suites with zero failures/errors/skips; three semantic mutants (old handler, premature history
+close, parent gesture) fail assertions. Receipt `a130-live-touch-proof-3thll7zv/receipt.json`,
+SHA-256 `7eae4fd3f280d945be7dae6544c6569cea9d931b7818dd91e78bceae01be9753`.
+These are compiled JVM and shipped-page DOM/xterm/bridge-stub/RAF checks, not actual
+WebView/transport/phone acceptance. Final integration gates/CI and a new APK remain pending
+at this focused checkpoint.
 
 ### A128 composed Send backend follow-up (2026-10-07)
 
@@ -1499,15 +1541,18 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**Immediate publication follow-up (`A129`, source-fixed):** Integrate the signed backend
-`0818bbed` and host/Android/producer/CI `2d693263` with these docs, then run mandatory fresh
-full source gates and all five exact-head Android CI jobs. Focused Android 99/11 and the
-separate mutation layers above pass; they do not replace final gates. The final integration
-revision, full gates, CI and any new APK are **pending**. Preserve the
-known-tmux/direct-SSH gesture/momentum route and inert immutable-view policy; the next new
-intent must check actual mode and exact ownership. Coordinate additive capability/page and
-invalidation adoption with iOS @eneskirca. No physical acceptance is claimed before a new
-verified APK and intended-phone checks; the installed beta 17 and original ledger are unchanged.
+**Immediate publication follow-up (`A130`, focused source fix):** Integrate the accepted
+three-file fix and its 48/7 control/restored checks plus three semantic assertion mutants,
+then run mandatory exact-head gates/CI and prepare the next APK. Those final publication
+checks and actual WebView/physical acceptance remain pending at this focused checkpoint.
+Preserve A129's immutable-view/new-intent mode and ownership contract and the known-tmux/
+direct-SSH gesture/momentum route.
+
+**A129 acceptance follow-up:** Signed `1add0408` is published with mandatory fresh gates and
+all-five/ten-step Android CI `37602046133`; signed beta 18/code 19 is ready and not installed on the intended phone.
+Actual app/WebView, physical ConPTY and intended-phone checks remain unverified. Coordinate
+additive capability/page and invalidation adoption with iOS @eneskirca. The installed beta 17,
+original 10/22/32 ledger, regular Desktop installation and no-PR status are unchanged.
 
 **Backend Send follow-up:** The current source adds negotiated session-host and direct native
 Windows Send; physical ConPTY and phone acceptance remain pending. See the

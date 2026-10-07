@@ -5,13 +5,15 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Native history source checkpoint (2026-10-07, A129 — source-fixed; publication pending).**
-Candidate commits `0818bbed` (backend) and `2d693263` (host/Android/producer/CI) implement
+**Native history published source checkpoint (2026-10-07, A129 — physical acceptance pending).**
+Signed backend `0818bbed` and host/Android/producer/CI `2d693263` are included in the signed,
+pushed integration `1add0408`. They implement
 `pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
 history. A valid viewer token continues paging its immutable snapshot despite live application
 mouse-mode changes; Live, actual user input, resize or an explicit new intent clears that view.
-A new intent checks the actual backend mode before any wheel input. These are local source
-proofs; full publication verification and physical acceptance are still pending.
+A new intent checks the actual backend mode before any wheel input. Source publication and
+mandatory verification pass; actual app/WebView, physical ConPTY and phone acceptance remain
+unverified.
 
 Keep the proof layers separate: **34 emulator tests / 3 files + 20 assertion-caught mutants**;
 **343 backend tests / 37 files + 21 assertion-caught mutants**, with four existing Windows-only
@@ -23,15 +25,31 @@ checks pass **11 methods** and catch **eight configuration-input deletions**; th
 additional production mutations. No aggregate combines these layers or earlier attempts.
 The root helper/RPC receipt is `a129-history-view-proof-v4-67xv3v57/mutation-result.json`, SHA-256
 `fe62c4f299afa9a7254ddb8aaf8e052386e71f7742917565c90363a8fb025583`.
-The final integration revision, fresh full publication gates, exact-head CI and any new APK are
-**pending**. These checks establish component/recorder and browser-harness boundaries, not
-physical ConPTY, full Desktop/WebView or phone acceptance.
+At exact `1add0408`, forced fresh offline protocol checks pass **1012 methods / 105 suites**
+with zero failures/errors/skips; offline app compilation, **568 affected Vitest tests / 52 files**
+with exactly four existing Windows process-tree skips, and full TypeScript pass.
+[Android run `37602046133`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37602046133),
+attempt 1, passes all five jobs and ten required steps. Private
+`a129-publication-biru7yjl/gates.json`, `ci-result.json` and `final-report.json` bind this source.
+The retained-signer **beta 18/code 19** APK is ready and **not installed on the intended phone**, SHA-256
+`19d55ee177335064b1edb4874b6d27216862d16a7d30ebe476875c566cd263e0`. Actual SDK 36 artifact
+checks pass; SDK 37 artifact verification is unavailable. These are source/component/recorder
+and browser-harness boundaries, not full Desktop/WebView or phone acceptance. The regular
+Desktop is not deployed and no PR is opened.
 The separate published A128 checkpoint `944223ef` has **984 protocol methods / 102 suites**,
 **360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
 [Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
 Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
 binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
 to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
+
+**Held Live-button source follow-up (2026-10-07, A130 — focused fix; publication pending).**
+Signed `9da36320` stops old momentum and the native pending-scroll queue on touch-down, preserving
+history and its display epoch until click. Three new LiveTouch JVM methods pass within
+**48 methods / 7 suites** in control and restored runs, with zero failures/errors/skips.
+**Three semantic mutants** (old handler, premature history close, parent gesture) fail assertions.
+Final integration gates/CI, a new APK and actual WebView/physical acceptance remain pending
+at this focused checkpoint; the `1add0408` held-touch failure remains historical.
 
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
@@ -479,7 +497,7 @@ describes as the future. The Android client implements what the host actually se
 | Open an existing terminal | `pty.attach` → `{streamId, fresh, scrollV1?}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`; a reserved phone UUID uses only validated `nodeterm-phone`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Input-bar Send (`A128`) | additive **`pty.submitComposed {streamId, input:{kind:"paste"\|"control", text, enter}}`** → `{status:"delivered"\|"refused"\|"uncertain", message?}`; current local-tmux, direct native Windows PTY and negotiated session-host backends bind Send to the attached stream and captured generation; older/unverifiable hosts and SSH-project relay routes explicitly refuse | explicit actor submission to the captured Unix SSH viewer/pane; cancel host copy mode, paste with tmux-owned bracketed framing, then wait 150 ms before a separately guarded Enter; a control action is one raw byte with `enter:false` |
-| Scroll (`A129`, source-fixed; publication pending) | advertised `scrollV1:true` → `pty.scrollV1 {streamId, dir:"up"\|"down", lines:1..20, viewId?}` → bounded `history` page, `input`, `refused` or `uncertain`; native mouse-off reads retained rows without PTY writes; a valid view remains inert until closed. Legacy `pty.scroll` retains the positively known tmux route and safely refuses native mouse-off history | the phone writes the existing SGR wheel events to its captured attached tmux client; direct-SSH gesture/momentum provenance is unchanged |
+| Scroll (`A129`, published source; acceptance pending) | advertised `scrollV1:true` → `pty.scrollV1 {streamId, dir:"up"\|"down", lines:1..20, viewId?}` → bounded `history` page, `input`, `refused` or `uncertain`; native mouse-off reads retained rows without PTY writes; a valid view remains inert until closed. Legacy `pty.scroll` retains the positively known tmux route and safely refuses native mouse-off history | the phone writes the existing SGR wheel events to its captured attached tmux client; direct-SSH gesture/momentum provenance is unchanged |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
 | Wake on open (`A103`, `A104`) | existing remote-viewer nudge wakes a mounted node or resolves one saved offscreen/closed-project node without switching views; exact owner/generation and Pause guards, no fresh shell or uncertain input replay | explicit Sleeping wake offer uses the agent's measured approval policy and host capabilities; the existing shell/WakeContext checks and user tap remain |
 | Wake, refresh, rename | `node.wake\|refresh\|rename` | current Desktop's selected-profile SSH service (`A108`); older hosts need an allowed relay; Server has no node nudges |
@@ -553,8 +571,9 @@ exercised, with a component host PTY adapter; this is not full Desktop, WebView 
 PTY, physical ConPTY or phone proof. Receipt: `/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`,
 SHA-256 `c5d50310e539ad02d1c825ac12d19865b4c488184d1d50a8c809aad44b7cbb1a`.
 The finding above remains historical. [A129 is source-fixed](android-audit-2026-09.md#a129) in
-`0818bbed` and `2d693263`; fresh full gates/publication and physical acceptance remain pending. `pty.attach` advertises `scrollV1:true` only when the
-host serves the safe route. `pty.scrollV1 {streamId, dir:"up"|"down", lines:1..20, viewId?}` returns
+`0818bbed` and `2d693263`, published with the passing mandatory gates and exact-head CI at
+`1add0408`. Actual app/WebView and physical acceptance remain unverified. `pty.attach`
+advertises `scrollV1:true` only when the host serves the safe route. `pty.scrollV1 {streamId, dir:"up"|"down", lines:1..20, viewId?}` returns
 `{status:"history", viewId, offset, totalRows, cols, rows, olderTruncated, hasOlder, hasNewer}`,
 `{status:"input"}`, or `{status:"refused"|"uncertain", message}`. Each row has printable `text`,
 `isWrapped` and `section:"normal"|"alternate"`; it is data, never bytes to feed to the terminal.
@@ -598,8 +617,12 @@ mutations. Focused Android control/restored runs pass 99 methods/11 suites; its 
 receipt `a129-fixture-cleanup-proof-4ev5ts54/final-result.json` has SHA-256
 `a45cf3c36858b038978425a6a70af0f865a546cc0847b258361238c2177f4deb` and passes one control/restored
 test plus one assertion-caught mutant. These separate scopes receive no combined mutation total.
-Final integration revision, full gates, exact-head CI and any new APK remain **pending**. Installed beta 17,
-existing tmux/direct-SSH receipts and the physical checklist remain unchanged.
+Published `1add0408` passes the fresh 1012/105 protocol, offline app, 568/52 affected Vitest
+(exactly four existing Windows process-tree skips), full TypeScript and all-five/ten-step
+Android CI `37602046133` checks. Signed beta 18/code 19 is ready and not installed on the intended phone. Installed
+beta 17, existing tmux/direct-SSH receipts and the physical checklist remain unchanged.
+[A130](android-audit-2026-09.md#a130) separately records the historical held Live-button
+failure and focused source fix; neither source-level proof is actual WebView acceptance.
 
 ### Composed Send backend follow-up (2026-10-07, A128)
 
@@ -2773,12 +2796,20 @@ later fix left to a device.
 
 ## Known gaps
 
-**Native history scrolling (`A129`, source-fixed; publication/acceptance pending).** The
-candidate host and Android implementation adds negotiated inert history and mouse routing
-through its captured backend. The [implementation checkpoint](#native-history-scrolling)
-keeps the original component failure separate from passing leaf/backend/root and focused Android
-checks. Fresh full publication gates, exact-head CI, a new APK and physical acceptance remain
-pending; the installed beta 17 has not acquired this change.
+**Native history scrolling (`A129`, published source; acceptance pending).** Published
+`1add0408` adds negotiated inert history and mouse routing through its captured backend. The
+[implementation checkpoint](#native-history-scrolling) keeps the original component failure
+separate from the passing source gates and CI. Beta 18/code 19 is ready and not installed on the intended phone; the
+installed beta 17 has not acquired this change. Actual app/WebView, physical ConPTY and phone
+acceptance remain unverified.
+
+**Held Live-button touch (`A130`, focused source fix; acceptance pending).** Touch-down now
+stops old momentum and native pending movement without closing history or advancing its
+display epoch. The [finding](android-audit-2026-09.md#a130) retains the `1add0408` failure
+(20 additional requests / 23 notches over 512 ms) separately from the passing 48/7
+control/restored checks and three semantic assertion mutants. Final integration gates/CI, a
+new APK and actual WebView/physical acceptance remain pending at this focused checkpoint.
+The original 64-item device checklist is unchanged.
 
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The eight controlled Linux Desktop reconnect cases, 294 affected tests, incremental TypeScript,
