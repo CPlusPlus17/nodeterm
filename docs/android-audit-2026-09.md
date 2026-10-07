@@ -16,6 +16,34 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Native history source checkpoint (2026-10-07, A129 — source-fixed; publication pending).**
+Candidate commits `0818bbed` (backend) and `2d693263` (host/Android/producer/CI) implement
+`pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
+history. A valid viewer token continues paging its immutable snapshot despite live application
+mouse-mode changes; Live, actual user input, resize or an explicit new intent clears that view.
+A new intent checks the actual backend mode before any wheel input. These are local source
+proofs; full publication verification and physical acceptance are still pending.
+
+Keep the proof layers separate: **34 emulator tests / 3 files + 20 assertion-caught mutants**;
+**343 backend tests / 37 files + 21 assertion-caught mutants**, with four existing Windows-only
+skips on Linux; **13 helper/RPC control/restored tests + 18 assertion-caught mutants**; and one
+fixture-cleanup test with one assertion-caught mutant. Focused Android control/restored runs pass
+**99 methods / 11 suites** and the offline app check. Its **14 assertion-caught variants** are
+**13 behavioral mutations + one posted-Runnable source pin**. Separate CI-reader control/restored
+checks pass **11 methods** and catch **eight configuration-input deletions**; these are not
+additional production mutations. No aggregate combines these layers or earlier attempts.
+The root helper/RPC receipt is `a129-history-view-proof-v4-67xv3v57/mutation-result.json`, SHA-256
+`fe62c4f299afa9a7254ddb8aaf8e052386e71f7742917565c90363a8fb025583`.
+The final integration revision, fresh full publication gates, exact-head CI and any new APK are
+**pending**. These checks establish component/recorder and browser-harness boundaries, not
+physical ConPTY, full Desktop/WebView or phone acceptance.
+The separate published A128 checkpoint `944223ef` has **984 protocol methods / 102 suites**,
+**360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
+[Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
+Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
+binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
+to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
+
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
 The host owns one-use tickets scoped to its live session generation and the original subscriber
@@ -240,7 +268,7 @@ lifecycle and FPS matrix remains open.
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
 | [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
 | [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; exact owned End/cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
-| [A129](#a129) | medium | | medium | input/bug | **OPEN**; actual Kotlin/E2EE host component reproduces wheel writes with mouse reporting off at `ce1121ba`; native writers are recorders, not physical ConPTY/phone proof · Native history swipes send wheel input to the foreground instead of browsing retained history |
+| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in candidate `0818bbed` / `2d693263`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; full gates/CI/APK/physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
 
 ## A01
 
@@ -4981,18 +5009,19 @@ The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged. See also
 **Native history swipes send wheel input to the foreground when application mouse reporting is off**
 
 - Severity: **medium**; effort: medium; area: input; kind: bug.
-- Status: **OPEN**, confirmed on source `ce1121ba56617defd7facdd44743d416e92b19e4`;
-  no scrolling fix or new capability has landed.
+- Status: **Source-fixed in candidate commits `0818bbed` and `2d693263`; full publication
+  verification and physical acceptance pending.** The confirmed failure belongs to
+  `ce1121ba56617defd7facdd44743d416e92b19e4`; its original receipt remains historical.
 
-Android's `terminal.js:435–446` drains every history gesture through `bridge.onScroll`.
-`TerminalController.onScroll` and `TerminalActions` order that action, then
-`RelayHostConnection.scroll` calls `pty.scroll`. In `src/main/remote/host-service.ts:638–660`,
-the handler assumes a tmux client and writes fixed SGR wheel bytes through `pty.write` without
-checking the backend or current application mouse mode. `PtyManager.write` forwards them to
-`session.proc.write`. For direct native Windows and session-host panes, that is foreground input,
-not a retained-history viewport. The native emulators already retain history; its existence does
-not make this wheel route browse it. A swipe can therefore feed unexpected terminal input to the
-application even when it has requested no mouse reports.
+On that confirmed source, Android's `terminal.js:435–446` drained every history gesture through
+`bridge.onScroll`. `TerminalController.onScroll` and `TerminalActions` ordered that action, then
+`RelayHostConnection.scroll` called `pty.scroll`. In `src/main/remote/host-service.ts:638–660`,
+the handler assumed a tmux client and wrote fixed SGR wheel bytes through `pty.write` without
+checking the backend or current application mouse mode. `PtyManager.write` forwarded them to
+`session.proc.write`. For direct native Windows and session-host panes, this was foreground
+input, not a retained-history viewport. The native emulators already retained history; its
+existence did not make that wheel route browse it. A swipe could therefore feed unexpected
+terminal input to an application that had requested no mouse reports.
 
 The isolated component receipt is
 `/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`, SHA-256
@@ -5010,10 +5039,44 @@ tmux clients with mouse handling enabled. Their custom-binding, gesture and mome
 not verify native-backend history scrolling. A128 composed Send is a separate action and does
 not resolve this bug; the installed beta 17 and original **10 / 22 / 32** checklist are unchanged.
 
-Future work should negotiate native history support and bind each scroll to the attached live
-generation/subscriber. Read the current application mouse mode after the actual output barrier:
-mouse-off history browsing must write no PTY input and expose bounded viewer-local retained
-history, including pre-attach output; mouse-on input must use the application's requested mouse
-protocol. Preserve tmux/direct-SSH gesture ordering and momentum. The host, Android client and
-actual producer interop must land together, with the iOS implication raised for @eneskirca.
-This is a proposed design, not an implemented wire contract or a fixed finding.
+**Source-fixed candidate implementation.** `pty.attach` advertises `scrollV1:true`;
+`pty.scrollV1 {streamId, dir:"up"|"down", lines:1..20, viewId?}` returns `history` with `viewId`,
+`offset`, `totalRows`, `cols`, physical `rows`, `olderTruncated`, `hasOlder`, `hasNewer`, or
+`input`/`refused`/`uncertain` (a message accompanies refusal/uncertainty). Each row carries
+printable text, wrap flag and normal/alternate section. The exact attached stream owns a
+**1 MiB/8192-row** snapshot, bounded **256 KiB/200-row** pages, a **60-second inactivity TTL**
+and a **32-action FIFO**; the process budget is **16 MiB**. Each notch moves **three physical
+rows**. Foreign/expired tokens refuse. A valid token pages stored rows without PTY operations,
+including when the live app changes its mouse mode, until Live/user input/resize/new intent
+clears it. A new intent without a token reads the actual headless xterm **6.0.0** tracking and
+encoding behind output/geometry, with zero native input when off and requested default/SGR/
+pixel encoding when on; unknown state names a refusal. Negotiated `scroll-view-v1` serves
+`scrollViewV1 {name, generation, up, lines, capture}` bound to the exact session-host generation
+and original subscribed socket. Direct native and known-tmux routes bind their captured viewer;
+no background/name-only fallback or uncertain replay exists.
+Legacy known-tmux/direct-SSH gestures, copy mode and momentum retain their separate evidence.
+
+Android keeps the actual shipped xterm **5.5** live parser and displays these rows in a separate
+inert layer. Actor/page/display epochs reject stale completions; visible-row Copy and links do
+not consult an unrelated live buffer. Host/client/producer interop change together; iOS
+@eneskirca must adopt capability, page fields and view invalidation together.
+
+Current evidence is **34 leaf tests/3 files + 20 assertion-caught mutations**, **343 backend
+tests/37 files + four existing Windows-only skips + 21 assertion-caught mutations**, and **13
+root helper/RPC control/restored cases + 18 assertion-caught mutations**. These are actual
+emulators and protocol/component/recorder boundaries, not physical ConPTY/kernel PTY/phone
+acceptance. A separate startup-cleanup control/restored test and one assertion mutant pass.
+Focused Android control/restored runs pass 99 methods/11 suites and offline app checking; its
+14 assertion variants comprise 13 behavioral mutations and one posted-Runnable source pin.
+Separate CI-reader control/restored checks pass 11 methods and catch eight configuration-input
+deletions, not eight more production mutants. The durable Android index
+`a129-android-proof-l9kmrcc0/index.json` has SHA-256
+`4ceeaacb141c1fc218644676d4287c15ed325f5d0b29a98fbea3fd36629242af`; the separate CI-reader index
+`a129-android-ci8-proof-p6uyz7nw/index.json` has SHA-256
+`f39a53b7b4f37135f923a5019660feade9701d82addbbfebb34fb3d5b82a11fd`. Each layer retains its
+own source binding and classifications; no aggregate mixes them or prior attempts.
+Final A129 integration revision, fresh full mandatory gates, exact-head CI and any new APK are
+**pending**; installed beta 17/code 18
+from `a79375c3` and the original 10/22/32 physical ledger remain unchanged. The separate published
+A128 `944223ef` 984/102 protocol, 360/26 Vitest and all-five/ten-step CI `37594743169` checkpoints
+are historical bindings, not A129 verification. Source-fixed does not promote the physical checklist.

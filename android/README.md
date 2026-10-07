@@ -6,6 +6,34 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Native history source checkpoint (2026-10-07, A129 — source-fixed; publication pending).**
+Candidate commits `0818bbed` (backend) and `2d693263` (host/Android/producer/CI) implement
+`pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
+history. A valid viewer token continues paging its immutable snapshot despite live application
+mouse-mode changes; Live, actual user input, resize or an explicit new intent clears that view.
+A new intent checks the actual backend mode before any wheel input. These are local source
+proofs; full publication verification and physical acceptance are still pending.
+
+Keep the proof layers separate: **34 emulator tests / 3 files + 20 assertion-caught mutants**;
+**343 backend tests / 37 files + 21 assertion-caught mutants**, with four existing Windows-only
+skips on Linux; **13 helper/RPC control/restored tests + 18 assertion-caught mutants**; and one
+fixture-cleanup test with one assertion-caught mutant. Focused Android control/restored runs pass
+**99 methods / 11 suites** and the offline app check. Its **14 assertion-caught variants** are
+**13 behavioral mutations + one posted-Runnable source pin**. Separate CI-reader control/restored
+checks pass **11 methods** and catch **eight configuration-input deletions**; these are not
+additional production mutations. No aggregate combines these layers or earlier attempts.
+The root helper/RPC receipt is `a129-history-view-proof-v4-67xv3v57/mutation-result.json`, SHA-256
+`fe62c4f299afa9a7254ddb8aaf8e052386e71f7742917565c90363a8fb025583`.
+The final integration revision, fresh full publication gates, exact-head CI and any new APK are
+**pending**. These checks establish component/recorder and browser-harness boundaries, not
+physical ConPTY, full Desktop/WebView or phone acceptance.
+The separate published A128 checkpoint `944223ef` has **984 protocol methods / 102 suites**,
+**360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
+[Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
+Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
+binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
+to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
+
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
 The host owns one-use tickets scoped to its live session generation and the original subscriber
@@ -526,13 +554,19 @@ tested where the layer allows, and the numbered
 
 ## Before using it away from your computer
 
-**Native history scrolling is currently broken ([A129](../docs/android-audit-2026-09.md#a129),
-open).** On native/session-host terminals reached through the relay, a history swipe can send
-wheel input to the foreground application when mouse reporting is off. The confirmed proof uses
-actual Kotlin/E2EE host components and explicit native byte recorders, not a phone or physical
-Windows ConPTY. Retained-history browsing on these backends is future work; existing tmux/direct
-SSH scrolling checks keep their original scope. This does not change the installed beta 17 or
-the physical checklist.
+**Native history scrolling is source-fixed in the candidate
+([A129](../docs/android-audit-2026-09.md#a129), publication/acceptance pending).** Current candidate host/Android
+source adds negotiated `scrollV1` history pages. Native mouse-off gestures browse a bounded,
+viewer-owned snapshot with zero foreground bytes; a valid view stays inert while the live app
+changes mouse mode. Live, user input, resize or an explicit new intent closes it, and the next
+new intent follows the application's actual requested mouse encoding. Copy and links use the
+visible history rows while xterm continues parsing live output underneath. Unsupported/stale
+hosts refuse, and uncertain input never replays. Existing known-tmux/direct-SSH wheel and
+momentum checks keep their original scope. Leaf/backend recorder tests do not establish
+physical Windows ConPTY or phone acceptance. Focused Android checks pass; fresh full gates,
+exact-head CI and any new APK remain pending; installed beta 17 and the physical
+checklist are unchanged. See [the contract and evidence](../docs/android.md#native-history-scrolling).
+iOS adoption of the additive host capability/pages is required for @eneskirca.
 
 The full device pass is still outstanding. The intended Pixel has the private beta and basic SSH
 listing/input works. Its corrected code-3 update (`A85`) fills a 52×45 viewport and shows pre-attach

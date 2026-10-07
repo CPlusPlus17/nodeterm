@@ -209,6 +209,25 @@ lane unaffected.
 
 ## House rules
 
+- **Native history is inert and owned by one viewer (A129).** Advertise `pty.attach.scrollV1`
+  only for the served `pty.scrollV1 {streamId, dir, lines, viewId?}` route. Its `history` result
+  carries physical text/wrap/normal-or-alternate rows and viewer token/offset/total/cols/truncation/
+  older/newer fields; `input`, `refused` and `uncertain` are separate outcomes. Bound capture to
+  1 MiB/8192 rows, pages to 256 KiB/200 rows, shared retention to 16 MiB with 60-second inactivity
+  expiry, and per-stream FIFO work to 32 actions. Move three physical rows per notch. A valid token
+  pages only its immutable snapshot: live app mouse-mode changes cannot steal history gestures
+  as foreground input. Live, actual user input, resize or an explicit new intent closes the view;
+  foreign/expired tokens refuse instead of adopting fresh history. On each new intent, cross the
+  actual output/geometry barrier and check the headless xterm 6 tracking/encoding before planning
+  zero-byte mouse-off history or requested default/SGR/pixel wheels. Require captured backend
+  lifetime and exact session-host generation, original subscriber and socket inside the deferred
+  send turn; negotiate `scroll-view-v1`, never restart an old host or replay uncertain input.
+  Keep known-tmux/direct-SSH wheel ordering and momentum. Android's separate inert layer must keep
+  the shipped renderer xterm 5.5 live parser; actor/page/display epochs fence late pages, and Copy/
+  links read visible rows. Preserve automatic terminal reports when clearing user-input history.
+  Update host, Android and actual producer interop together and flag iOS adoption for @eneskirca.
+  Recorder/component tests prove their named boundaries, not physical ConPTY or phone acceptance.
+
 - **Co-view terminal replies have one live owner (A126).** Within one renderer, scope automatic
   xterm responses to the exact `api.pty` object and actual session id, with live promotion on
   exit/closed/recycled subscription or final disposal. Preserve genuine keyboard/paste/SGR mouse

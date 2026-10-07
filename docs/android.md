@@ -5,6 +5,34 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Native history source checkpoint (2026-10-07, A129 — source-fixed; publication pending).**
+Candidate commits `0818bbed` (backend) and `2d693263` (host/Android/producer/CI) implement
+`pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
+history. A valid viewer token continues paging its immutable snapshot despite live application
+mouse-mode changes; Live, actual user input, resize or an explicit new intent clears that view.
+A new intent checks the actual backend mode before any wheel input. These are local source
+proofs; full publication verification and physical acceptance are still pending.
+
+Keep the proof layers separate: **34 emulator tests / 3 files + 20 assertion-caught mutants**;
+**343 backend tests / 37 files + 21 assertion-caught mutants**, with four existing Windows-only
+skips on Linux; **13 helper/RPC control/restored tests + 18 assertion-caught mutants**; and one
+fixture-cleanup test with one assertion-caught mutant. Focused Android control/restored runs pass
+**99 methods / 11 suites** and the offline app check. Its **14 assertion-caught variants** are
+**13 behavioral mutations + one posted-Runnable source pin**. Separate CI-reader control/restored
+checks pass **11 methods** and catch **eight configuration-input deletions**; these are not
+additional production mutations. No aggregate combines these layers or earlier attempts.
+The root helper/RPC receipt is `a129-history-view-proof-v4-67xv3v57/mutation-result.json`, SHA-256
+`fe62c4f299afa9a7254ddb8aaf8e052386e71f7742917565c90363a8fb025583`.
+The final integration revision, fresh full publication gates, exact-head CI and any new APK are
+**pending**. These checks establish component/recorder and browser-harness boundaries, not
+physical ConPTY, full Desktop/WebView or phone acceptance.
+The separate published A128 checkpoint `944223ef` has **984 protocol methods / 102 suites**,
+**360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
+[Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
+Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
+binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
+to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
+
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
 The host owns one-use tickets scoped to its live session generation and the original subscriber
@@ -448,10 +476,10 @@ describes as the future. The Android client implements what the host actually se
 |---|---|---|
 | Repair eligible legacy pairing identity (`A118`) | After approved listing: `pairing.relayKeyChallengeV1 {pairingId}` → `{status, challenge?}`, then one `pairing.relayKeyProofV1 {challengeId, signatureB64}` → `{status}`; `challenge`, `associated`, `unprovable`, `gone`, `conflict`, `expired`; sign with retained SSH identity only | No proof verb; the retained SSH seed stays on the phone. No first-approval bypass or new identity |
 | List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob, and beside it **`lan`** (new, `A74-refresh`): the computer's current LAN address and SSH host keys, which refresh the paired record | same blob (and never a `lan`), from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
-| Open an existing terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`; a reserved phone UUID uses only validated `nodeterm-phone`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
+| Open an existing terminal | `pty.attach` → `{streamId, fresh, scrollV1?}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`; a reserved phone UUID uses only validated `nodeterm-phone`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Input-bar Send (`A128`) | additive **`pty.submitComposed {streamId, input:{kind:"paste"\|"control", text, enter}}`** → `{status:"delivered"\|"refused"\|"uncertain", message?}`; current local-tmux, direct native Windows PTY and negotiated session-host backends bind Send to the attached stream and captured generation; older/unverifiable hosts and SSH-project relay routes explicitly refuse | explicit actor submission to the captured Unix SSH viewer/pane; cancel host copy mode, paste with tmux-owned bracketed framing, then wait 150 ms before a separately guarded Enter; a control action is one raw byte with `enter:false` |
-| Scroll | `pty.scroll` writes SGR wheel events for tmux; native/session-host history routing is broken when application mouse reporting is off ([A129](android-audit-2026-09.md#a129), open) | the phone writes the same SGR wheel events to its attached tmux client |
+| Scroll (`A129`, source-fixed; publication pending) | advertised `scrollV1:true` → `pty.scrollV1 {streamId, dir:"up"\|"down", lines:1..20, viewId?}` → bounded `history` page, `input`, `refused` or `uncertain`; native mouse-off reads retained rows without PTY writes; a valid view remains inert until closed. Legacy `pty.scroll` retains the positively known tmux route and safely refuses native mouse-off history | the phone writes the existing SGR wheel events to its captured attached tmux client; direct-SSH gesture/momentum provenance is unchanged |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
 | Wake on open (`A103`, `A104`) | existing remote-viewer nudge wakes a mounted node or resolves one saved offscreen/closed-project node without switching views; exact owner/generation and Pause guards, no fresh shell or uncertain input replay | explicit Sleeping wake offer uses the agent's measured approval policy and host capabilities; the existing shell/WakeContext checks and user tap remain |
 | Wake, refresh, rename | `node.wake\|refresh\|rename` | current Desktop's selected-profile SSH service (`A108`); older hosts need an allowed relay; Server has no node nudges |
@@ -513,7 +541,9 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
-### Native history scrolling finding (2026-10-07, A129 open)
+<a id="native-history-scrolling"></a>
+
+### Native history scrolling implementation (A129)
 
 At `ce1121ba`, actual Kotlin relay calls through the approved E2EE host handler reproduce
 foreground wheel writes on native/session-host backends with mouse reporting off. Up three and
@@ -522,8 +552,54 @@ retained history remains available. The real native emulators and session-host/c
 exercised, with a component host PTY adapter; this is not full Desktop, WebView gesture, kernel
 PTY, physical ConPTY or phone proof. Receipt: `/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`,
 SHA-256 `c5d50310e539ad02d1c825ac12d19865b4c488184d1d50a8c809aad44b7cbb1a`.
-[A129 remains open](android-audit-2026-09.md#a129); mode-aware native retained-history browsing
-is future work. Existing tmux/direct-SSH scrolling receipts and the physical checklist are unchanged.
+The finding above remains historical. [A129 is source-fixed](android-audit-2026-09.md#a129) in
+`0818bbed` and `2d693263`; fresh full gates/publication and physical acceptance remain pending. `pty.attach` advertises `scrollV1:true` only when the
+host serves the safe route. `pty.scrollV1 {streamId, dir:"up"|"down", lines:1..20, viewId?}` returns
+`{status:"history", viewId, offset, totalRows, cols, rows, olderTruncated, hasOlder, hasNewer}`,
+`{status:"input"}`, or `{status:"refused"|"uncertain", message}`. Each row has printable `text`,
+`isWrapped` and `section:"normal"|"alternate"`; it is data, never bytes to feed to the terminal.
+Three physical rows move per notch. The exact stream owns one immutable capture bounded to
+**1 MiB / 8192 rows**, including pre-attach normal history and the current alternate screen;
+pages are bounded to **256 KiB / 200 rows**. All viewers share a **16 MiB** budget, each view
+expires after **60 seconds** without activity, and the per-stream FIFO admits at most **32**
+pending scroll actions. Expired/foreign tokens refuse rather than adopting another capture.
+
+A valid `viewId` pages only those stored rows, even if the live application changes its mouse
+mode. Live, actual user input, resize and explicit new intent invalidate the client token;
+a new intent omits `viewId`. On that new intent, the actual headless xterm **6.0.0** tracking
+and encoding are read behind queued output/geometry. Mouse-off native history writes zero PTY
+bytes; requested default, SGR and pixel mouse encodings use the actual encoder, or a named
+refusal when state is unavailable. Session-host `scroll-view-v1` independently negotiates
+`scrollViewV1 {name, generation, up, lines, capture}` with the original subscribed socket and
+exact session generation. Direct native and tmux paths bind the captured live viewer.
+A mixed operation can write mouse input, so lost receipts stay uncertain with no replay or
+generic name-only fallback. Known tmux and direct-SSH
+wheel, copy-mode, gesture and momentum semantics keep their earlier provenance.
+
+Android keeps the shipped renderer xterm **5.5** parsing live output; history is a separate
+inert display. Actor, page and display epochs reject late pages after input, resize, Live or
+lifecycle changes. Automatic terminal reports remain ordered live input without discarding the
+history view. Copy and link actions read the rows currently displayed. Host, Android and
+actual producer interop are part of the same change; iOS adoption of the additive capability,
+pages and invalidation policy is owed to **@eneskirca**.
+
+The leaf/backend checks above do not prove
+physical ConPTY, kernel PTY acceptance, full Desktop/WebView interaction or phone acceptance.
+The revised-policy root proof above has 13 passing control/restored tests and 18 assertion-caught
+mutations. Focused Android control/restored runs pass 99 methods/11 suites; its 14 variants are
+13 behavioral mutations and one posted-Runnable source pin. Separate CI-reader checks pass
+11 methods and catch eight configuration-input deletions. Android proof index
+`a129-android-proof-l9kmrcc0/index.json` has SHA-256
+`4ceeaacb141c1fc218644676d4287c15ed325f5d0b29a98fbea3fd36629242af`, binding receipt SHA-256
+`40d857136369dc851bcd510dbc719fe01339324ed9600bea3652d31914040494`. The CI-reader index
+`a129-android-ci8-proof-p6uyz7nw/index.json` has SHA-256
+`f39a53b7b4f37135f923a5019660feade9701d82addbbfebb34fb3d5b82a11fd`, binding receipt SHA-256
+`749ea7fcb73f29b59120753b4c1c4a0f9efc071ce5c920ca9dbc933f5e799c2c`. The separate fixture-cleanup
+receipt `a129-fixture-cleanup-proof-4ev5ts54/final-result.json` has SHA-256
+`a45cf3c36858b038978425a6a70af0f865a546cc0847b258361238c2177f4deb` and passes one control/restored
+test plus one assertion-caught mutant. These separate scopes receive no combined mutation total.
+Final integration revision, full gates, exact-head CI and any new APK remain **pending**. Installed beta 17,
+existing tmux/direct-SSH receipts and the physical checklist remain unchanged.
 
 ### Composed Send backend follow-up (2026-10-07, A128)
 
@@ -2697,10 +2773,12 @@ later fix left to a device.
 
 ## Known gaps
 
-**Native history scrolling (`A129`, open).** A history swipe through the relay can write wheel
-bytes into a native/session-host foreground application even when mouse reporting is off.
-The [component finding](#native-history-scrolling-finding-2026-10-07-a129-open) confirms the
-route; safe retained-history browsing and dynamic mouse-mode routing are not implemented.
+**Native history scrolling (`A129`, source-fixed; publication/acceptance pending).** The
+candidate host and Android implementation adds negotiated inert history and mouse routing
+through its captured backend. The [implementation checkpoint](#native-history-scrolling)
+keeps the original component failure separate from passing leaf/backend/root and focused Android
+checks. Fresh full publication gates, exact-head CI, a new APK and physical acceptance remain
+pending; the installed beta 17 has not acquired this change.
 
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The eight controlled Linux Desktop reconnect cases, 294 affected tests, incremental TypeScript,
