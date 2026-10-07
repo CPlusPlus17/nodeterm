@@ -40,4 +40,21 @@ describe('node actions: one builder for every surface', () => {
     expect(body).toContain("...selectionItems([id], undefined, { omit: ['delete'] }),")
     expect(body).not.toContain("it.label === 'Delete'")
   })
+
+  it('both boards build their card menu with the shared card menu, fed by the builder', () => {
+    expect(read('components/kanban/KanbanView.tsx')).toContain('buildCardMenuItems({')
+    expect(read('components/kanban/GlobalKanbanView.tsx')).toContain('buildCardMenuItems({')
+    expect(read('components/kanban/cardMenu.tsx')).toContain('...(a.nodeActions?.(card.id) ?? []),')
+    expect(callback(canvas, 'boardNodeActionItems')).toContain('{ allow: BOARD_NODE_ACTION_IDS }')
+  })
+
+  it('no other renderer file defines the node rows again', () => {
+    const owned = join(RENDERER, 'lib/nodeActionItems.tsx')
+    const rows = ["label: 'Restart agent'", "label: 'Pause & end session'", "label: 'Switch Claude account'"]
+    const offenders = sources(RENDERER)
+      .filter((f) => f !== owned)
+      .filter((f) => rows.some((r) => readFileSync(f, 'utf8').includes(r)))
+      .map((f) => relative(RENDERER, f))
+    expect(offenders).toEqual([])
+  })
 })
