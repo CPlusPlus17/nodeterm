@@ -47,6 +47,7 @@ const GOLDEN_STRINGS = [
   'Moves this conversation to the account and resumes it there (same conversation).',
   'Not available for relay sessions.',
   'Nothing to resume yet — this session has not reported an id.',
+  'Open this project on the canvas to do that.',
   'Pause',
   'Pause & end session',
   'Pause session',

@@ -115,8 +115,11 @@ import { ContextMenu, type MenuItem } from '../components/ContextMenu'
 import { tidySeparators } from '../lib/tidySeparators'
 import { createNodeWriteRouter, type NodeWrites } from '../lib/nodeWriteRouter'
 import {
+  BOARD_NODE_ACTION_IDS,
   buildAccountSwitchRows,
   buildNodeActionItems,
+  offCanvasNodeActionCtx,
+  OFF_CANVAS_REFUSAL,
   restartAgentIdOf,
   type NodeActionCtx,
   type NodeActionFilter
@@ -10356,6 +10359,53 @@ export function Canvas() {
   const accountSwitchRows = useCallback(
     (nodeId: string): MenuItem[] => buildAccountSwitchRows(nodeId, liveNodeActionCtx()),
     [liveNodeActionCtx]
+  )
+
+  /** The node action context for a node of `projectId`: the live canvas when React Flow holds
+   *  that project, else its stored copy (lib/nodeActionItems `offCanvasNodeActionCtx`). Writes go
+   *  through the project's router either way, so a board write can never land on the wrong canvas. */
+  const nodeActionCtxFor = useCallback(
+    (projectId: string): NodeActionCtx => {
+      const writes = nodeWritesFor(projectId)
+      const liveLink = (nodeId: string): MenuItem[] => liveLinkMenuItems(nodeId, projectId)
+      if (liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId)) {
+        return {
+          ...liveNodeActionCtx(),
+          setNodesColor: writes.setColor,
+          pickNodeIcon: writes.pickIcon,
+          liveLinkMenuItems: liveLink
+        }
+      }
+      const project = useProjects.getState().getProject(projectId)
+      return offCanvasNodeActionCtx({
+        nodes: project ? nodeStatesToFlow(project.nodes) : [],
+        sessionSource: sessionForProject(projectId).source,
+        gatewayModels,
+        gatewayStatus,
+        gatewayError,
+        grokModels: () => grokModelList(),
+        writes,
+        liveLinkMenuItems: liveLink,
+        connectedProjectIdForHost,
+        refuse: () =>
+          window.dispatchEvent(
+            new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: OFF_CANVAS_REFUSAL } })
+          )
+      })
+    },
+    [nodeWritesFor, liveLinkMenuItems, liveNodeActionCtx, gatewayModels, gatewayStatus, gatewayError, connectedProjectIdForHost]
+  )
+
+  /** A kanban card's rows from the node builder (BOARD_NODE_ACTION_IDS), for a node of `projectId`. */
+  const boardNodeActionItems = useCallback(
+    (nodeId: string, projectId: string): MenuItem[] =>
+      buildNodeActionItems([nodeId], undefined, nodeActionCtxFor(projectId), { allow: BOARD_NODE_ACTION_IDS }),
+    [nodeActionCtxFor]
+  )
+  // Stable identity for the memoized per-project board, which only ever shows the active project.
+  const activeBoardNodeActionItems = useCallback(
+    (nodeId: string): MenuItem[] => boardNodeActionItems(nodeId, activeProjectId),
+    [boardNodeActionItems, activeProjectId]
   )
 
   /** "New <agent>" creation entries shared by the pane, sidebar and group context menus.

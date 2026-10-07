@@ -60,6 +60,7 @@ import { reopenVariants } from './reopenVariants'
 import { tidySeparators } from './tidySeparators'
 import { transferConversationItems, type TransferConversationHandler } from './transferItems'
 import { isHidden } from './ui-visibility'
+import type { NodeWrites } from './nodeWriteRouter'
 
 /** The agent a terminal node was CREATED as. Deliberately NOT `agentIdOf`, whose extra hook-status
  *  fallback also reports a plain terminal someone typed `claude` into by hand: TerminalNode's
@@ -819,4 +820,78 @@ export function buildAccountSwitchRows(nodeId: string, ctx: NodeActionCtx): Menu
         })()
       : [])
   ]
+}
+
+/** What a row that needs the live canvas says when its project is not on the canvas. */
+export const OFF_CANVAS_REFUSAL = 'Open this project on the canvas to do that.'
+
+export interface OffCanvasCtxInput {
+  /** The project's stored nodes, hydrated with `nodeStatesToFlow`. */
+  nodes: readonly CanvasNode[]
+  /** `sessionForProject(projectId).source` — a relay lane is gated like a relay tab. */
+  sessionSource: SessionSource
+  gatewayModels: GatewayModel[]
+  gatewayStatus: ModelDiscoveryStatus
+  gatewayError: string
+  grokModels: () => GatewayModel[]
+  /** The project's write router (Canvas `nodeWritesFor(projectId)`). */
+  writes: Pick<NodeWrites, 'setColor' | 'pickIcon'>
+  liveLinkMenuItems: (nodeId: string) => MenuItem[]
+  connectedProjectIdForHost: (host?: string) => string | undefined
+  /** Raised by every row that needs the live canvas. None of them is on a board today
+   *  (`BOARD_NODE_ACTION_IDS`); this keeps the day one is added from failing in silence. */
+  refuse: () => void
+}
+
+/**
+ * The context for a node of a project the canvas does NOT hold (an Omni lane of a background
+ * project). Writes go through the project's write router; no terminal is attached (its rows show
+ * disabled with "This terminal is not attached right now." — account switching, restart and pause
+ * all read the live canvas); everything that needs the live canvas refuses with a toast.
+ */
+export function offCanvasNodeActionCtx(o: OffCanvasCtxInput): NodeActionCtx {
+  const refuse = (): void => o.refuse()
+  const refuseLater = async (): Promise<void> => o.refuse()
+  return {
+    nodes: o.nodes,
+    sessionSource: o.sessionSource,
+    attached: () => false,
+    // Canvas `agentIdOf`, over the stored copy.
+    agentIdOf: (nodeId) => {
+      const n = o.nodes.find((x) => x.id === nodeId)
+      if (!n || n.type !== 'terminal') return undefined
+      return (
+        (n.data.agentId as AgentId | undefined) ??
+        (((n.data.tags as string[] | undefined) ?? []).includes('claude') ? 'claude' : undefined) ??
+        useAgentStatus.getState().byId[nodeId]?.agentId
+      )
+    },
+    gatewayModels: o.gatewayModels,
+    gatewayStatus: o.gatewayStatus,
+    gatewayError: o.gatewayError,
+    grokModels: o.grokModels,
+    addToExistingGroup: refuse,
+    groupSelection: refuse,
+    removeFromGroup: refuse,
+    setNodesColor: o.writes.setColor,
+    pickNodeIcon: o.writes.pickIcon,
+    duplicateNodes: refuse,
+    snapNodeToZone: () => {
+      o.refuse()
+      return false
+    },
+    toggleCollapseNodes: refuse,
+    toggleMarkdown: refuse,
+    reloadTerminals: refuse,
+    liveLinkMenuItems: o.liveLinkMenuItems,
+    branchClaude: refuseLater,
+    transferConversation: refuse,
+    restartAgentNode: refuseLater,
+    pauseAgentNode: refuseLater,
+    resumeAgentNode: refuse,
+    switchClaudeAccountNode: refuseLater,
+    switchCodexAccountNode: refuseLater,
+    connectedProjectIdForHost: o.connectedProjectIdForHost,
+    deleteNodes: refuse
+  }
 }
