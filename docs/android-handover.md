@@ -18,16 +18,17 @@ The 6.18-second beta-17→19 update preserves first-install time and the notific
 actual SDK 36 artifact checks pass and SDK 37 tools are unavailable. Public SSH identity continuity
 and a fresh explicit-profile first pin pass through an owned ADB reverse tunnel. Emacs/vi copy-mode
 Send, brief background/resume draft retention, neutral viewer-close/manual Reattach and controlled
-SSH-handler recovery pass on the disposable Linux host; exact owned cleanup passes. Saved-profile/pin
-reuse, changed-key refusal, A129 native/session-host history, A130 held Live touch and the wider
-lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
-is unchanged.
+SSH-handler recovery pass on the disposable Linux host; that earlier owned cleanup passes.
+Saved-profile/pin reuse and manual changed-key refusal now pass too; A129 native/session-host
+history, A130 held Live touch and the wider lifecycle/provider matrix remain pending. The original
+**10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
-**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
-genuine captured node environment and unchanged managed hook in a sibling process. The shipped
-Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
-two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
-production-pane-child launch, A106 and wider persistence remain unverified.
+**A105/A106 Pixel 7a checkpoint (2026-10-07, Desktop `e06b5547` / beta 19).** Normal Always
+allow applies one original `localSettings` rule; real sibling Claude makes two Bash calls without
+another hold. One original two-question request submits Cobalt (single) and Lint/Docs (multi),
+with real CLI tool/Stop/final-output confirmation. Saved-profile/pin reuse and changed-key refusal
+pass, and both owned fixtures and the QA profile/key/reverse retire cleanly. Rule restart-persistence,
+production-pane-child launch and the wider matrix remain pending.
 
 The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
@@ -477,14 +478,22 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### Pixel 7a A105/A106 and changed SSH key (2026-10-07)
+
+At Desktop `e06b5547` / beta 19, original remembered-rule and two-question Send answers choices
+pass real sibling CLI application. Saved-pin reuse and manual changed-key refusal pass too.
+Both fixtures and the QA profile/key/reverse retire cleanly, with the original timeout restored.
+[Receipts and limits](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
+retain the unchanged original 10/22/32 ledger; publication requires fresh exact-revision gates/CI.
+
 ### A105 real Desktop remembered-rule application (2026-10-07)
 
 At `41406fef`, real Claude 2.1.292 in the sibling namespace uses the original captured node
 environment and unchanged production hook. The shipped Desktop consumer chooses one original
 `localSettings` rule: nine hooks, one consumed/removed hold, two Bash executions without a second
 hold, and the exact CLI-saved allow rule; 8.648 seconds/$0.0166058. CLI and owned-host cleanup pass.
-No phone input or production-pane-child launch is claimed; Android A105, A106 and wider persistence
-remain pending. [Canonical receipts](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
+At that earlier checkpoint, no phone input or production-pane-child launch was claimed; Android A105, A106 and wider persistence
+remained pending. [Canonical receipts](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
 retain the result and independent review. The original 10/22/32 ledger is unchanged.
 
 ### Beta 19 publication, provider inference and failed emulator calibration (2026-10-07)
@@ -497,7 +506,7 @@ identity, and one fresh explicit-profile direct-SSH authentication pins the expe
 host key through an owned ADB reverse tunnel. Emacs/vi Send, brief background/resume draft
 continuity, viewer-close/manual Reattach and controlled SSH-handler recovery pass with original
 producer/guard/history retained; exact owned profile/key/route/timeout/host cleanup passes.
-Saved-profile/pin reuse, changed-key refusal and actual A129/A130 native behavior remain pending.
+At that earlier checkpoint, saved-profile/pin reuse, changed-key refusal and actual A129/A130 native behavior remained pending.
 At that earlier checkpoint, one normal authorized tool-free Claude inference passes in
 3.865 seconds/$0.002988, while A105/A106 live application remains unverified. The owned API-30
 emulator initially boots but remains offline after one provisioning reboot and one scoped
@@ -1603,15 +1612,15 @@ verification; SDK 37 is absent. The 6.18-second in-place update preserves first-
 notification grant/flags. Public SSH identity continuity and one fresh explicit-profile
 authentication/first pin pass through an owned ADB reverse tunnel. Bounded known-tmux Send,
 brief background draft retention, viewer/SSH-handler recovery and exact owned cleanup pass;
-saved-profile/pin reuse, changed-key enforcement, A129 native/session-host history, A130 held Live
-touch, physical ConPTY and wider lifecycle/notification acceptance remain pending. Preserve the immutable-view/new-intent
+saved-profile/pin reuse and manual changed-key refusal now pass. A129 native/session-host history,
+A130 held Live touch, physical ConPTY and wider lifecycle/notification acceptance remain pending. Preserve the immutable-view/new-intent
 mode/ownership contract and known-tmux/direct-SSH gesture route. Coordinate additive page and
 invalidation adoption with iOS @eneskirca. See the [current bounded receipts](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
 Normal existing Claude authorization passes both direct and sibling tool-free inference. At
-`41406fef`, one original `localSettings` rule also passes real Claude/Desktop application (nine
-hooks, one consumed hold, two Bash executions); Android A105, A106 and wider persistence remain
-pending. See the [application receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07). The disposable
+`41406fef`, one original rule passes real Claude/Desktop application; the later `e06b5547` case
+also verifies beta 19's original remembered-rule and single/multi question choices against real
+CLI application. Rule persistence after CLI restart and production-pane-child launch remain pending. See the [application receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07). The disposable
 API-30 emulator's one provisioning reboot and one scoped reconnect fail to restore live ADB;
 console/framebuffer/debugger diagnostics add no app/CA/APK proof. Its exact owned cleanup passes.
 Do not restart the stopped fixture or treat those observations as A129 acceptance. The original
@@ -1784,8 +1793,8 @@ section before starting, since the verifier corrections take precedence):
 **Known gaps and caveats:**
 
 - **A13 coattachment is source-fixed in `ed2965be`.** Current hosts preserve external SSH/relay clients and selectively retire only verified same-profile app painters. Real tmux control-client checks and eight Linux native checks pass; physical SSH/phone and macOS/Windows runtime checks remain pending. Android retains exit-zero reattach for older hosts.
-- **A56/A57 are source-fixed through v2 request-owned hook replies (A105/A106).** Physical
-  rule persistence and full-question CLI application remain unverified. Legacy unheld multi-select
+- **A56/A57 are source-fixed through v2 request-owned hook replies (A105/A106).** Bounded
+  phone/real-CLI rule and question cases pass; restart persistence/wider scope remain open. Legacy unheld multi-select
   still opens the session. iOS adoption is owed to @eneskirca; see `hook-reply-approvals.md`.
 - **A49 / A74 residuals.** Phones paired before batch E have no anchors and stay on
   trust-on-first-use until they pair again or get a relay listing. Recursive Includes are source-fixed in A99. A relative `HostKey` path remains unread, so SSH is refused for
@@ -2184,27 +2193,34 @@ source before editing. A100–A120 close retained history, typed read recovery, 
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
 host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
-Retained-signer beta 17/code18 from `a79375c3` is installed on the separately authorized Pixel
-7a after its beta 16/code17 update; the bounded Android 17/API 37 follow-up is recorded above. The original Pixel 10 Pro remains on beta 10/code 11
-with testing paused and its ledger unchanged at 10 Pass /22 Partial /32 Pending. Fresh-phone
-results do not establish update/migration survival on the original phone.
+Retained-signer beta 19/code20 from `5bda2c32` is installed on the separately authorized Pixel 7a.
+At Desktop `e06b5547`, its original A105 remembered-rule and A106 single/nonadjacent-multi choices
+pass real sibling Claude application. Saved manual SSH profile/pin reuse after app process restart
+and changed-host-key refusal pass. Both fresh fixtures, the QA profile/public-key admission and
+owned reverse are retired with exact cleanup; the original phone timeout is restored. The original
+Pixel 10 Pro ledger remains **10 Pass / 22 Partial / 32 Pending**, with testing paused. These
+fresh-phone cases do not establish migration survival or wider acceptance on that original phone.
 
-Merged full 982/102 protocol and app and affected Desktop gates plus exact-head all-five CI pass at
-`a79375c3`. Beta 17's bounded emacs/vi Send, vi transport recovery, raw Ctrl and A127 viewer-close/
-manual-Reattach cases plus actual managed creation/exact owned End/cleanup pass. The frozen
-nine-case report binds 303 raw hashes; broader control/refusal/uncertainty, provider and lifecycle
-cases still need their own controlled physical acceptance. A128's thirty
-source/configuration mutations remain separate from those device results.
-Use only the phone the user authorized, verify its identity and app focus before input, and use
-fresh disposable owned terminals with the current host source. Obtain a current main Wireless
-debugging endpoint only if the trusted connection is unavailable. The fresh beta 17 owned profile,
-public-key admission and QA host are retired with exact cleanup proof; keep beta 17 installed
-and preserve all historical receipts. Any further physical case needs a fresh owned fixture. Resume the
-expanded 64-item checklist without inheriting older passes for new flows. Real Claude rule
-persistence/full-question application needs usable provider authentication and remains separate
-from synthetic hook/producer tests. Preserve the older paired fixture and its original terminal.
+At the earlier beta 17 checkpoint, `a79375c3` passed 982/102 protocol/app and affected Desktop
+gates plus all-five CI. Its nine-case physical report binds 303 raw hashes for emacs/vi Send,
+transport recovery, raw Ctrl, viewer-close/manual Reattach, managed creation and exact owned
+End/cleanup. Those dated results and A128's source/configuration mutations remain historical.
+The installed beta 19 APK/runtime provenance is separate from later docs-only publication heads;
+publish only after fresh exact-revision offline gates and all-five/ten-critical-step CI, keeping
+those receipts private. The existing beta 19 APK stays installed.
 
-Immediate FCM and fresh-different-desktop relay refusal A93 need the hosted backend maintainers;
+Use only the authorized Pixel 7a, verifying its serial and app focus before input. The user's
+current availability/wake authorization persists; do not repeatedly request unlock while the
+trusted endpoint and usable foreground are valid. Obtain a current main Wireless debugging
+endpoint only if that trusted connection is unavailable. Every new physical case requires a fresh
+owned fixture and untouched sibling guard; never restart a retired fixture. Resume the expanded
+64-item checklist without inheriting older passes for new flows. Next are A129/A130 native app
+history/held Live-touch acceptance, remaining lifecycle/background/notification and held composed
+Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
+and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those
+paths. Keep beta 19 installed and preserve historical proofs and all unrelated profiles/panes.
+
+Immediate FCM (A25) and fresh-different-desktop relay refusal (A93) need the hosted backend maintainers;
 the user has no backend repository to supply. A111 implements a host-owned launch API on current
 enabled local Linux/macOS tmux hosts; ordinary missing-session SSH attach remains attach-only.
 Windows/non-tmux and third-machine creation are unsupported. Source is intended for an upstream

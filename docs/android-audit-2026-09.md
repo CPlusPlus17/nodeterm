@@ -26,16 +26,17 @@ The 6.18-second beta-17→19 update preserves first-install time and the notific
 actual SDK 36 artifact checks pass and SDK 37 tools are unavailable. Public SSH identity continuity
 and a fresh explicit-profile first pin pass through an owned ADB reverse tunnel. Emacs/vi copy-mode
 Send, brief background/resume draft retention, neutral viewer-close/manual Reattach and controlled
-SSH-handler recovery pass on the disposable Linux host; exact owned cleanup passes. Saved-profile/pin
-reuse, changed-key refusal, A129 native/session-host history, A130 held Live touch and the wider
-lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
-is unchanged.
+SSH-handler recovery pass on the disposable Linux host; that earlier owned cleanup passes.
+Saved-profile/pin reuse and manual changed-key refusal now pass too; A129 native/session-host
+history, A130 held Live touch and the wider lifecycle/provider matrix remain pending. The original
+**10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
-**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
-genuine captured node environment and unchanged managed hook in a sibling process. The shipped
-Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
-two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
-production-pane-child launch, A106 and wider persistence remain unverified.
+**A105/A106 Pixel 7a checkpoint (2026-10-07, Desktop `e06b5547` / beta 19).** Normal Always
+allow applies one original `localSettings` rule; real sibling Claude makes two Bash calls without
+another hold. One original two-question request submits Cobalt (single) and Lint/Docs (multi),
+with real CLI tool/Stop/final-output confirmation. Saved-profile/pin reuse and changed-key refusal
+pass, and both owned fixtures and the QA profile/key/reverse retire cleanly. Rule restart-persistence,
+production-pane-child launch and the wider matrix remain pending.
 
 The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
@@ -231,7 +232,7 @@ lifecycle and FPS matrix remains open.
 | [A46](#a46) | low |  | small | runtime/bug | ✅ fixed in `17ee526` · The ⌨ key-row chip only focuses the DOM textarea, which cannot raise the soft keyboard |
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76`; follow-up `6afd8f5`, `a65e12f` (the seen log is keyed by computer) · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
-| [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer) · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
+| [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b`; follow-up `513c166`, `402f139` (the pin is anchored in the sealed pairing answer); manual beta-19 saved-pin reuse/changed-key refusal verified at `e06b5547`, QR/relay matrix pending · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
 | [A50](#a50) | low |  | medium | security/risk | 🟡 private beta10/code11 installed from clean e3ce041c with verified signer/APK/non-debuggable metadata; desktop-issued pairing/relay survives same-signer update and real saved relay reconnect/input pass; A91/A94 full physical empty-host flow passes, 10 Pass / 22 Partial / 32 Pending ledger and broader minified/device validation pending · Debuggable builds expose Keystore-protected credentials over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
@@ -256,7 +257,7 @@ lifecycle and FPS matrix remains open.
 | [A71](#a71) | low |  | small | ci-docs/gap | ✅ fixed in `39e7995` · android/README says 'JDK 17+', but the pinned Gradle 8.14.3 cannot run on JDK 25 |
 | [A72](#a72) | low |  | medium | critic/gap | ✅ fixed in `71290de` · Phone-started sessions are created without the agent-specific env, so for their whole life they get no hook-reply approvals, no canvas control and no pane ownership |
 | [A73](#a73) | low |  | small | critic/bug | ✅ fixed in `e055f37` · Notifications are documented as 'live every 8 seconds while a computer is open', but the in-app poll never posts a notification |
-| [A74](#a74) | low |  | small | critic/bug | ✅ fixed in `a40d11b`; follow-up `cb12f3b`, `898d937` (the relay refreshes the LAN address and host keys) · The LAN leg dials a DHCP IPv4 frozen at pairing time; when another SSH host answers at that address, the host-key 'hard stop' also blocks the relay fallback |
+| [A74](#a74) | low |  | small | critic/bug | ✅ fixed in `a40d11b`; follow-up `cb12f3b`, `898d937` (the relay refreshes the LAN address and host keys); manual beta-19 mismatch refuses SSH at `e06b5547`, physical relay refresh/fallback pending · The LAN leg dials a DHCP IPv4 frozen at pairing time; when another SSH host answers at that address, the host-key 'hard stop' also blocks the relay fallback |
 | [A75](#a75) | low |  | small | critic/gap | ✅ fixed in `437e359` · The New session account picker lists managed Claude accounts by raw UUID |
 | [A76](#a76) | low |  | small | critic/gap | ✅ fixed in `6966f25` · Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
 | [A77](#a77) | low |  | small | critic/bug | ✅ fixed in `0a2a1aa` · IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
@@ -287,8 +288,8 @@ lifecycle and FPS matrix remains open.
 | [A102](#a102) | medium | | medium | protocol/gap | ✅ source fixed in `e584586f` · Cold relay attach retains trusted project launch settings; new physical checks pending |
 | [A103](#a103) | medium | | medium | protocol/gap | ✅ source fixed in `91e6a3f5` · Agent approval policy survives launch, resume and wake; new physical checks pending |
 | [A104](#a104) | medium | | medium | runtime/gap | ✅ source fixed in `2d6cb2cd` · Offscreen Sleeping nodes can wake without switching projects; new physical checks pending |
-| [A105](#a105) | low | | medium | parity/gap | ✅ source fixed in `db4abccf, 7c206ec5` · Original localSettings rule application verified with real Claude/Desktop at `41406fef`; Android and wider persistence pending |
-| [A106](#a106) | low | | medium | parity/gap | ✅ source fixed in `db4abccf` · Complete held Claude questions have deterministic answers; new physical checks pending |
+| [A105](#a105) | low | | medium | parity/gap | ✅ source fixed in `db4abccf, 7c206ec5` · Original localSettings rule verified with beta-19 Android choice and real Claude at `e06b5547`; restart persistence/wider matrix pending |
+| [A106](#a106) | low | | medium | parity/gap | ✅ source fixed in `db4abccf` · Original single/nonadjacent-multi choices verified with beta-19 Android and real interactive Claude at `e06b5547`; wider matrix pending |
 | [A107](#a107) | medium | | medium | parity/gap | ✅ source fixed in `489c30a8` · Typed source control works on direct SSH; new physical checks pending |
 | [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
 | [A109](#a109) | low | | small | tests/bug | ✅ source fixed in `4e2f877d` · Three-digit findings retain device coverage; source regression verified |
@@ -3781,33 +3782,41 @@ The renderer-only mounted-node nudge left offscreen/closed-project sessions Slee
 
 ## A105
 
-**Desktop application verified (2026-10-07, source `41406fef`):** Real Claude 2.1.292 uses genuine
+**Earlier Desktop application verified (2026-10-07, source `41406fef`):** Real Claude 2.1.292 uses genuine
 captured node routing in a sibling namespace and the unchanged managed hook. The shipped Desktop
 consumer applies one original `localSettings` rule: nine hooks, one consumed/removed hold, two
 Bash executions without a second hold, and the exact CLI-saved rule; **8.648 seconds / $0.0166058**.
 Result `nodeterm-new-phone-fixture-h7nho19u/home/qa-project/real-cli-a105-44b6a670/proof/result.json`
 hashes to `741b0f5a73522ec76bf29ebeab7a0cf43b9c2b19a47da0f022ecc0369356c228`; independent review
 `nodeterm-new-phone-fixture-h7nho19u/proof/root-a105-application-review.json` hashes to
-`ee9e1fd9dc3fc191b1d6ede108347252d29265dc4222143bb7d4a60f97c6d434`. Android input, production-pane-child
-launch, A106 and wider persistence remain unverified; the original 10/22/32 ledger is unchanged.
+`ee9e1fd9dc3fc191b1d6ede108347252d29265dc4222143bb7d4a60f97c6d434`. At that earlier checkpoint, Android input was unverified.
+
+**Physical Android application verified (`e06b5547` / beta 19):** The normal Always allow dialog
+selects one original `localSettings` rule. Real sibling Claude consumes one 36.814-second hold and
+executes two Bash calls without a second hold (nine hooks, 45.982 seconds total), saving the exact
+rule itself. [Actual result and independent review](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
+retain the original-node/request correlation. Rule persistence after CLI restart, production-pane-child
+launch and wider scope remain pending; A106's scoped pass is below. The original 10/22/32 ledger is unchanged.
 
 **Always allow uses original concrete hook rule scopes**
 
 Source change: `db4abccf, 7c206ec5`.
 
-A56 is now implemented without its unsafe proposed blind digit. Eligible original addRules suggestions carry exact tool/content/destination and UI confirmation; the guarded v2 reply uses updatedPermissions. Android and Desktop/Server offer the same original scopes. Gone/replaced/unsupported requests never type keys. Actual shipped managed-shell consumer and Kotlin/TypeScript fixtures pass; the bounded live Desktop rule case above is verified, while Android and wider persistence remain open. iOS adoption is owed to @eneskirca.
+A56 is now implemented without its unsafe proposed blind digit. Eligible original addRules suggestions carry exact tool/content/destination and UI confirmation; the guarded v2 reply uses updatedPermissions. Android and Desktop/Server offer the same original scopes. Gone/replaced/unsupported requests never type keys. Actual shipped managed-shell consumer and Kotlin/TypeScript fixtures pass; the bounded Desktop and Android rule cases above are verified, while restart/wider persistence remain open. iOS adoption is owed to @eneskirca.
 
 ## A106
 
-**Current provider prerequisite (2026-10-07):** One normally authorized tool-free inference
-passes; live full-question application and physical choice flows remain unverified. See
-[the separate inference receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
+**Physical application verified (`e06b5547` / beta 19):** One original held AskUserQuestion
+preserves both questions; normal phone Send answers chooses Cobalt (single) and nonadjacent
+Lint/Docs (multi). The unchanged hook's `updatedInput`, actual PostToolUse/Stop and final PTY
+output match. [Result and independent review](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
+record explicit owned provider stop/reap after completion; wider question/lifecycle scope remains pending.
 
 **Complete held Claude questions have deterministic answers**
 
 Source change: `db4abccf`.
 
-A57 display-only work is extended to all supported held questions. Parent PreToolUse AskUserQuestion requests publish full question schemas, submit every selected index, preserve original input and derive exact answer labels through hook JSON. Held v2 cards omit legacy digits for old phones; unheld multi-select remains Open session. Request/card/file fences and consumed-hook POST govern settlement. The 52 shared hook/Android mutants cover A105/A106 together; live CLI and physical question flows remain open.
+A57 display-only work is extended to all supported held questions. Parent PreToolUse AskUserQuestion requests publish full question schemas, submit every selected index, preserve original input and derive exact answer labels through hook JSON. Held v2 cards omit legacy digits for old phones; unheld multi-select remains Open session. Request/card/file fences and consumed-hook POST govern settlement. The 52 shared hook/Android mutants cover A105/A106 together; the original two-question phone/CLI case above passes, while wider scope remains open.
 
 ## A107
 
@@ -5194,8 +5203,9 @@ retain full hashes and scoped negative diagnostics, plus the measured 6.18-secon
 update's unchanged first-install time/notification grant/flags, public SSH identity continuity
 and one fresh explicit-profile authentication/first pin through an owned ADB reverse tunnel.
 Bounded beta-19 known-tmux emacs/vi Send, brief background draft retention, viewer-close/manual
-Reattach and controlled SSH-handler recovery pass with exact owned cleanup. Saved-profile/pin reuse,
-changed-key refusal, A129 native/session-host history and A130 held Live-touch acceptance remain pending. One successful tool-free Claude inference does not
-verify A105/A106 live rule/question application; the failed emulator provisioning and exact
-owned cleanup add no app/CA/APK proof. A129's earlier `1add0408` evidence and the original
+Reattach and controlled SSH-handler recovery pass with exact owned cleanup. At that earlier
+`5bda2c32` checkpoint, saved-profile/pin reuse, changed-key refusal and A105/A106 application
+remained unverified; the later `e06b5547` phone cases above verify those bounded paths.
+A129 native/session-host history and A130 held Live-touch acceptance remain pending. The failed
+emulator provisioning and exact owned cleanup add no app/CA/APK proof. A129's earlier `1add0408` evidence and the original
 64-item **10 / 22 / 32** ledger remain unchanged.

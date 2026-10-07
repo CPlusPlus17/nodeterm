@@ -15,16 +15,17 @@ The 6.18-second beta-17→19 update preserves first-install time and the notific
 actual SDK 36 artifact checks pass and SDK 37 tools are unavailable. Public SSH identity continuity
 and a fresh explicit-profile first pin pass through an owned ADB reverse tunnel. Emacs/vi copy-mode
 Send, brief background/resume draft retention, neutral viewer-close/manual Reattach and controlled
-SSH-handler recovery pass on the disposable Linux host; exact owned cleanup passes. Saved-profile/pin
-reuse, changed-key refusal, A129 native/session-host history, A130 held Live touch and the wider
-lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
-is unchanged.
+SSH-handler recovery pass on the disposable Linux host; that earlier owned cleanup passes.
+Saved-profile/pin reuse and manual changed-key refusal now pass too; A129 native/session-host
+history, A130 held Live touch and the wider lifecycle/provider matrix remain pending. The original
+**10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
-**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
-genuine captured node environment and unchanged managed hook in a sibling process. The shipped
-Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
-two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
-production-pane-child launch, A106 and wider persistence remain unverified.
+**A105/A106 Pixel 7a checkpoint (2026-10-07, Desktop `e06b5547` / beta 19).** Normal Always
+allow applies one original `localSettings` rule; real sibling Claude makes two Bash calls without
+another hold. One original two-question request submits Cobalt (single) and Lint/Docs (multi),
+with real CLI tool/Stop/final-output confirmation. Saved-profile/pin reuse and changed-key refusal
+pass, and both owned fixtures and the QA profile/key/reverse retire cleanly. Rule restart-persistence,
+production-pane-child launch and the wider matrix remain pending.
 
 The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
@@ -603,12 +604,56 @@ is claimed by this checkpoint. One 6.18-second same-signer `adb install -r` upda
 Pixel 7a from beta 17/code 18 to beta 19/code 20; the installed public APK hashes exactly to the
 reviewed artifact. First-install time and `POST_NOTIFICATIONS`'s `granted=true` plus full flags
 are identical before/after. The installer launches no app and makes no UI input; the later
-connection check below is separate. Saved-profile/pin reuse and notification behavior remain unverified.
+connection check below is separate. Saved-profile/pin reuse is verified in the later follow-up; notification behavior remains unverified.
 Update request `beta19-pixel7a-ui-v2-pzsxl_p5/receipts/update-request.json` hashes to
 `6ffca2c1f454c82cd7605feb2d586af2148340272feef15414b562ed6d22d11e`; actual
 `update-result.json` hashes to `a5478736d7cdedb48e12febdd5493e9cd522c5b1107c01ab66bad92defcad29e`.
 
-**Fresh direct-SSH admission.** Beta 19's normal Add SSH server screen displays the same public
+**Pixel 7a approval and pin follow-up (2026-10-07, Desktop `e06b5547` / installed beta 19).**
+The phone's normal Always allow dialog selects the original `localSettings` suggestion for
+`term-muy5k94n-e14b1265`. Real Claude 2.1.292 in the admitted sibling uses the genuine registered
+node routing and unchanged production hook: **nine hooks**, one **36.814-second** hold consumed,
+two actual Bash calls with no second hold, and the exact CLI-saved rule. The 45.982-second case
+exits successfully. Private `nodeterm-new-phone-fixture-ik57x6_y/home/qa-project/real-cli-a105-f862d70c/proof/result.json`
+hashes to `615b64dfac6818f578f138dd479eb296b434c81370a852f3ac5ae99400772a38`; independent
+`a105-physical-independent-review-v2-_idtfg29/review.json` hashes to
+`99190d6e439fe957dceae70a22c2eadd7c17e54b9a8e992d71b2c08a44c12b79`. This verifies the Android
+choice plus real application; it does not prove rule persistence after CLI restart or a
+production-pane-child launch. Earlier tool-less print calibration supplied no
+held question or Android acceptance. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+
+**A106 original question application.** Beta 19's real Send answers submits Cobalt for the
+single question and nonadjacent Lint/Docs for the multi question in one original AskUserQuestion.
+The unchanged production hook preserves the questions and returns `updatedInput`; actual
+PostToolUse, Stop and final PTY output match. Private
+`nodeterm-new-phone-fixture-0_hyrpew/home/qa-project/real-cli-a106-c6340613/proof-interactive-v2/result.json`
+hashes to `f2af01489636c723713e269917acd77ee6954690b8ee84998d2c628762af1dff`.
+The owned interactive provider is explicitly stopped/reaped after completion, not a natural exit.
+Independent `a106-physical-independent-review-zudb36tm/review.json`, SHA-256
+`c29c103b952fafa285a92a8519682c53f9ab213a9fe40560fa1990c2d2640d01`, checks 79 source/evidence
+bindings and the byte-exact original ticket, hook reply and final summary. This two-question case
+uses no question scrolling; the wider question/layout matrix remains open.
+
+After force-stop/reopen, the saved profile connects and lists both original projects without
+repinning (`beta19-live-inbox-ui-wake-0h__gp4s/receipts/after-app-restart.xml` and
+`saved-profile-reconnected.xml`). A fresh second host on the same owned reverse/high port presents
+another key; the phone shows both original and new fingerprints and refuses before authentication,
+although its public key is authorized. `nodeterm-new-phone-fixture-0_hyrpew/proof/root-changed-key-result.json`
+hashes to `8155b352d125c8df32e416f80fe7d3812743370e8df9cc2f4fc5aad4050b25ec`; the paired
+`changed-key-refused.xml` and bounded sshd log show zero accepted phone authentication. This is
+manual direct-SSH pin enforcement, not QR/relay fallback or DHCP refresh. Both owned fixtures
+retire cleanly; the final stop proves the nonce, seven owned process births/namespace gone, closed
+listeners, removed private auth, and unchanged 22 runtime pins/136 outputs. Private
+`nodeterm-new-phone-fixture-0_hyrpew/proof/root-final-cleanup-review.json` hashes to
+`a98cdddaf3c432021929cc9f1b34d53cc60e23d322137a49988f07d03d1f7732`. Normal Forget removes
+only the QA profile; the exact phone public line and owned reverse are removed while preserving
+unrelated authorization/routes, and the original 15000-ms timeout is restored. Private
+`beta19-live-inbox-ui-wake-0h__gp4s/receipts/root-final-phone-cleanup.json` hashes to
+`3ec41e0ef942075bc0b5c08eb4a678c6dc9628ca0f382c3a4444539ac49c4d13`. Publication requires fresh
+exact-revision offline gates and all five jobs/ten critical CI steps, retained in private publication
+receipts; the existing beta 19 APK stays installed.
+
+**Earlier fresh direct-SSH admission.** Beta 19's normal Add SSH server screen displays the same public
 key as the pre-beta-17 admission: SHA-256
 `24fa408ccdbd50a77ae9328cdf2f8a247c4661370b50517c1993ed756c3dbcad` of the displayed line.
 A new temporary profile uses `qa@127.0.0.1:29453` and the explicit
@@ -680,8 +725,8 @@ It includes the separate UI, native counter/history, signal and cleanup records.
 `fe046dda3d77702886305694123494bbf2fbb816e4a17932c0f9da9cb4cc2db4` and binds this host's stop request,
 nonce, process generations and unchanged outputs. The deterministic successful runner result also
 matches the prior fixture's content hash; the current path/generation is separately verified.
-These Linux/direct-SSH observations leave A105/A106 live application, A129/A130 native app behavior,
-changed-key refusal, held/uncertain Send races, cellular/QR/relay and the original full device matrix open.
+At that earlier checkpoint, these Linux/direct-SSH observations left live A105/A106 and changed-key
+acceptance open alongside A129/A130 native app behavior, held Send races and the full device matrix.
 
 Normal existing Claude authorization succeeds for **one bounded tool-free inference** in
 **3.865 seconds**, costing **$0.002988**. It copies no credentials, invokes no tool and verifies
@@ -704,9 +749,9 @@ and the exact allow rule saved by the CLI. The **8.648-second / $0.0166058** cas
 and reaps its CLI. Private `nodeterm-new-phone-fixture-h7nho19u/home/qa-project/real-cli-a105-44b6a670/proof/result.json`
 hashes to `741b0f5a73522ec76bf29ebeab7a0cf43b9c2b19a47da0f022ecc0369356c228`; independent
 `nodeterm-new-phone-fixture-h7nho19u/proof/root-a105-application-review.json` hashes to
-`ee9e1fd9dc3fc191b1d6ede108347252d29265dc4222143bb7d4a60f97c6d434`. No phone input or production-pane-child
-launch is claimed. Android remembered-rule acceptance, A106, cross-process persistence and the
-wider matrix remain pending; the original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+`ee9e1fd9dc3fc191b1d6ede108347252d29265dc4222143bb7d4a60f97c6d434`. At that earlier checkpoint, no phone input or production-pane-child
+launch was claimed; Android remembered-rule acceptance, A106, cross-process persistence and the
+wider matrix remained pending; the original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
 The newly created API-30 emulator initially boots with measured root capability in **34.28 seconds**.
 Its separate provisioning fails: the first public CA write meets a read-only system, then the
@@ -741,8 +786,8 @@ Private raw proofs (under `/home/mgysin/.cache/nodeterm-android-work/`) are:
 The exact owned supervisor is retired, both child processes are reaped and all owned ports close;
 pristine cached images and existing AVD metadata remain unchanged. No stopped fixture is reused.
 This failed disposable calibration leaves the original 64-item **10 Pass / 22 Partial /
-32 Pending** ledger unchanged. Next work is fresh owned-fixture app/phone acceptance, A105/A106
-live application and the remaining lifecycle/notification/hosted-backend obligations; it is
+32 Pending** ledger unchanged. Next work is fresh A129/A130 native app/phone acceptance and the
+remaining lifecycle/notification/hosted-backend obligations; it is
 not another blind emulator reboot or reconnect. Regular Desktop deployment and a PR remain separate.
 
 <a id="native-history-scrolling"></a>
@@ -3163,7 +3208,8 @@ the wider relay action matrix remain device checks.
   question and submit all selected labels through the documented hook contract, preserving full
   input. Older phones see Open on held v2 cards; older hosts, unsupported/free-text cases and
   expired/replaced tickets never fall back to digits. Unheld legacy multi-select remains read-only
-  with Open session. Real CLI application and physical phone question/rule flows remain open.
+  with Open session. Bounded beta-19 phone rule and single/multi question cases pass real CLI
+  application at `e06b5547`; rule persistence after CLI restart and the wider matrix remain open.
   @eneskirca must adopt the additive mirror/verb/v2 SSH contract in iOS together.
 - **Legacy unheld multi-select questions remain Open session.** Complete held questions use
   the v2 hook contract described above; unsupported/free-text schemas open the session.

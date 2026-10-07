@@ -16,16 +16,17 @@ The 6.18-second beta-17→19 update preserves first-install time and the notific
 actual SDK 36 artifact checks pass and SDK 37 tools are unavailable. Public SSH identity continuity
 and a fresh explicit-profile first pin pass through an owned ADB reverse tunnel. Emacs/vi copy-mode
 Send, brief background/resume draft retention, neutral viewer-close/manual Reattach and controlled
-SSH-handler recovery pass on the disposable Linux host; exact owned cleanup passes. Saved-profile/pin
-reuse, changed-key refusal, A129 native/session-host history, A130 held Live touch and the wider
-lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
-is unchanged.
+SSH-handler recovery pass on the disposable Linux host; that earlier owned cleanup passes.
+Saved-profile/pin reuse and manual changed-key refusal now pass too; A129 native/session-host
+history, A130 held Live touch and the wider lifecycle/provider matrix remain pending. The original
+**10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
-**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
-genuine captured node environment and unchanged managed hook in a sibling process. The shipped
-Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
-two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
-production-pane-child launch, A106 and wider persistence remain unverified.
+**A105/A106 Pixel 7a checkpoint (2026-10-07, Desktop `e06b5547` / beta 19).** Normal Always
+allow applies one original `localSettings` rule; real sibling Claude makes two Bash calls without
+another hold. One original two-question request submits Cobalt (single) and Lint/Docs (multi),
+with real CLI tool/Stop/final-output confirmation. Saved-profile/pin reuse and changed-key refusal
+pass, and both owned fixtures and the QA profile/key/reverse retire cleanly. Rule restart-persistence,
+production-pane-child launch and the wider matrix remain pending.
 
 The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
