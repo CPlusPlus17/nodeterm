@@ -64,7 +64,7 @@ vi.mock('node-pty', () => ({
 const liveTmuxSessions = new Set<string>()
 
 vi.mock('child_process', () => {
-  type Cb = (err: Error | null, res?: { stdout: string; stderr: string }) => void
+  type Cb = (err: Error | null, res?: string | { stdout: string; stderr: string }, stderr?: string) => void
   const execFile = (_file: string, args: string[], a?: unknown, b?: unknown): unknown => {
     const cb = (typeof a === 'function' ? a : b) as Cb | undefined
     const ok = (stdout: string): void => cb?.(null, { stdout, stderr: '' })
@@ -73,7 +73,7 @@ vi.mock('child_process', () => {
       if (liveTmuxSessions.has(target)) ok('')
       else cb?.(Object.assign(new Error('no such session'), { code: 1 }))
     } else if (args[0] === '-ilc') {
-      ok('__NT_PATH_START__/usr/bin:/bin__NT_PATH_END__')
+      cb?.(null, '__NT_PATH_START__/usr/bin:/bin__NT_PATH_END__', '')
     } else {
       ok('')
     }
