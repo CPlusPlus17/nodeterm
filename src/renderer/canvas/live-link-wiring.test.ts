@@ -103,15 +103,18 @@ describe('Canvas live-link wiring', () => {
     expect(items).toContain('projectId,')
   })
 
-  it('one row builder, declared before selectionItems and listed in its deps (H15)', () => {
+  it('one row builder, declared before the node action context and listed in its deps (H15)', () => {
     const builder = src.indexOf('const liveLinkMenuItems = useCallback(')
-    const selection = src.indexOf('const selectionItems = useCallback(')
+    const ctx = src.indexOf('const liveNodeActionCtx = useCallback(')
     expect(builder).toBeGreaterThan(-1)
-    expect(builder).toBeLessThan(selection)
-    const sel = src.slice(selection, src.indexOf('/** "New <agent>" creation entries', selection))
-    // After "Refresh terminal", single selection only.
-    expect(sel.indexOf("...(ids.length === 1 ? liveLinkMenuItems(ids[0]) : [])")).toBeGreaterThan(sel.indexOf("label: 'Refresh terminal'"))
-    expect(sel).toMatch(/session\.source,\s*liveLinkMenuItems\s*\]\)/)
+    expect(builder).toBeLessThan(ctx)
+    const body = src.slice(ctx, src.indexOf('const selectionItems = useCallback(', ctx))
+    expect(body).toContain('liveLinkMenuItems: (nodeId) => liveLinkMenuItems(nodeId),')
+    expect(body).toMatch(/\n {6}liveLinkMenuItems,\n/)
+    // After "Refresh terminal", single terminal only — in the shared builder now.
+    const rows = readFileSync(join(__dirname, '../lib/nodeActionItems.tsx'), 'utf8').replace(/\r\n/g, '\n')
+    const row = "{ id: 'live-link', items: anyTerminal && ids.length === 1 ? ctx.liveLinkMenuItems(ids[0]) : [] }"
+    expect(rows.indexOf(row)).toBeGreaterThan(rows.indexOf("label: 'Refresh terminal'"))
   })
 
   it('R49: every surface gets the row — non-active sidebar projects, both boards', () => {

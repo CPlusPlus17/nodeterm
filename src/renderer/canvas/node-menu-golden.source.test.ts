@@ -13,19 +13,18 @@ const code = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').repla
 /** Every single-quoted literal that starts with a capital letter — labels and hints. */
 const strings = (src: string): string[] =>
   [...new Set([...code(src).matchAll(/'([A-Z][^'\n]*)'/g)].map((m) => m[1]))].sort()
+/** Every template literal that starts with a capital letter — the labels and hints built from a value. */
+const templates = (src: string): string[] =>
+  [...new Set([...code(src).matchAll(/`([A-Z][^`\n]*)`/g)].map((m) => m[1]))].sort()
 const hideIds = (src: string): string[] => [...code(src).matchAll(/isHidden\('([a-z-]+)'/g)].map((m) => m[1])
 
-/** The menu's code, wherever it lives. */
+/** The menu's code, wherever it lives. Asserts the builder's two entry points are in the file, so a
+ *  rename or a further move fails here by name instead of passing on a file that lost the rows. */
 function menuSource(): string {
-  const src = read('Canvas.tsx')
-  const grab = (a: string, b: string): string => {
-    const at = src.indexOf(a)
-    return src.slice(at, src.indexOf(b, at))
-  }
-  return (
-    grab('const selectionItems = useCallback(', '/** "New <agent>" creation entries') +
-    grab('const accountSwitchRows = useCallback(', '// Who the bulk restart would act on')
-  )
+  const src = read('../lib/nodeActionItems.tsx')
+  for (const marker of ['export function buildNodeActionSections(', 'export function buildAccountSwitchRows('])
+    if (!src.includes(marker)) throw new Error(`node menu source: marker not found: ${marker}`)
+  return src
 }
 
 const GOLDEN_STRINGS = [
@@ -84,6 +83,14 @@ const GOLDEN_STRINGS = [
   'This terminal is not attached right now.'
 ]
 
+const GOLDEN_TEMPLATES = [
+  "Add selection to ${targetGroup.data.title || 'group'}",
+  'Quits this CLI and resumes the same session as ${variant.label}.',
+  'Restarts the terminal session and resumes this conversation with ${model.id}.',
+  'Switch model (${currentModel})',
+  'System account (${hostKey})'
+]
+
 const GOLDEN_HIDE_IDS = [
   'group',
   'group',
@@ -102,6 +109,10 @@ const GOLDEN_HIDE_IDS = [
 describe('node action menu — golden strings and hide ids', () => {
   it('offers exactly the labels and hints it did before the extraction', () => {
     expect(strings(menuSource())).toEqual(GOLDEN_STRINGS)
+  })
+
+  it('builds the same templated labels and hints', () => {
+    expect(templates(menuSource())).toEqual(GOLDEN_TEMPLATES)
   })
 
   it('consults the hide list for exactly the same rows, in the same order', () => {

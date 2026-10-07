@@ -113,6 +113,13 @@ import { Dock } from '../components/Dock'
 import { TabBar } from '../components/TabBar'
 import { ContextMenu, type MenuItem } from '../components/ContextMenu'
 import { tidySeparators } from '../lib/tidySeparators'
+import {
+  buildAccountSwitchRows,
+  buildNodeActionItems,
+  restartAgentIdOf,
+  type NodeActionCtx,
+  type NodeActionFilter
+} from '../lib/nodeActionItems'
 import { CommandPalette, type Command } from '../components/CommandPalette'
 import { Tooltip } from '../components/Tooltip'
 import {
@@ -134,7 +141,6 @@ import {
   IconJump,
   IconKanban,
   IconLock,
-  IconMarkdown,
   IconMinus,
   IconNote,
   IconPhone,
@@ -142,13 +148,11 @@ import {
   IconPlus,
   IconPower,
   IconProject,
-  IconReload,
   IconRemote,
   IconSave,
   IconSearch,
   IconSelectAll,
   IconSessions,
-  IconSmiley,
   IconSwitch,
   IconTerminal,
   IconTrash,
@@ -212,7 +216,6 @@ import {
 } from '../lib/addMenuSpec'
 import { planSetProjectFolder } from '../lib/setProjectFolder'
 import { effectiveAccountId, observationIsRemote, type ObservationOrigin } from '../lib/accountChip'
-import { transferConversationItems } from '../lib/transferItems'
 import { reopenVariants } from '../lib/reopenVariants'
 import { modelsForAgent, type GatewayModel } from '@shared/agents/model-gateway'
 import { useModelGateway } from '../state/modelGateway'
@@ -388,7 +391,7 @@ import {
 import { NODE_MAXIMIZE_MARGIN_PX, maximizeTargetRect } from '../lib/nodeMaximize'
 import { measurePinnedInsets, type ScreenInsets } from '../lib/pinnedInsets'
 import { measureMaximizeInsets, MAXIMIZE_CHROME_SELECTOR } from '../lib/maximizeInsets'
-import { ZONE_GUTTER_PX, ZONES, zoneTargetRect, type ZoneId } from '../lib/nodeZones'
+import { ZONE_GUTTER_PX, zoneTargetRect, type ZoneId } from '../lib/nodeZones'
 import {
   recordBreadcrumb,
   stepBreadcrumb,
@@ -414,7 +417,6 @@ import {
   exitTimeoutNotice,
   guardConcurrentRestart,
   planBulkRestart,
-  clearEnvEligibility,
   restartEligibility,
   restartSessionId,
   runBoundedBulkRestart,
@@ -526,7 +528,6 @@ import {
   createdAgentId,
   resumeCommand,
   canResumeWith,
-  vanillaEnvStripPattern,
   AGENT_CONFIG,
   BUILTIN_AGENT_IDS,
   resolvePermissionMode,
@@ -893,7 +894,6 @@ import { resolveNewCodexNodeAccount, planCodexAccountSwitch } from './codex-acco
 import {
   bulkSwitchCandidates,
   claudeSwitchHostKey,
-  claudeSwitchTargets,
   planClaudeAccountSwitch,
   startBulkSwitch,
   summarizeBulkSwitch,
@@ -1212,15 +1212,6 @@ const toBridgeLink = (e: Edge): BridgeLink => ({ id: e.id, source: e.source, tar
 
 const minimapNodeColor = (n: Node): string =>
   (n.data as { color?: string })?.color ?? '#0a84ff'
-
-/** The agent a terminal node was CREATED as. Deliberately NOT `agentIdOf`, whose extra hook-status
- *  fallback also reports a plain terminal someone typed `claude` into by hand: TerminalNode's
- *  restart closure captures `createdAgentId` too — the ONE shared derivation — so a node offered a
- *  restart on the strength of the wider one would get a row whose closure refuses every click.
- *  Anything that is not a terminal (a sticky, an editor) is undefined, which `restartEligibility`
- *  reads as `not-resumable`. */
-const restartAgentIdOf = (n: Node | undefined): AgentId | undefined =>
-  !n || n.type !== 'terminal' ? undefined : createdAgentId(n.data)
 
 /** Stable empty card list, so the closed board's memo never churns array identity. */
 const NO_KANBAN_SESSIONS: KanbanSession[] = []
@@ -8569,142 +8560,6 @@ export function Canvas() {
     return ready.length + busy.length
   }, [])
 
-  /**
-   * The running-node "Switch Claude account ▸" / "Switch Codex account ▸" rows for one node. ONE
-   * builder for the canvas node menu and the kanban card menu — the board is a second view of the
-   * same node, and two copies of these rows would drift. Carries the same gate the Restart row does
-   * (`restartEligibility` + a wired restart closure): a busy, id-less or detached node shows the
-   * rows disabled with the reason.
-   */
-  const accountSwitchRows = useCallback(
-    (nodeId: string): MenuItem[] => {
-      const n = nodesRef.current.find((x) => x.id === nodeId)
-      const st = useAgentStatus.getState().byId[nodeId]
-      const sourceAgentId = restartAgentIdOf(n)
-      const sessionId = restartSessionId(st?.sessionId, n?.data.agentSessionId)
-      const gate = restartEligibility(sourceAgentId, st?.state, sessionId)
-      if (!gate.ok && gate.reason === 'not-resumable') return []
-      const why = !gate.ok
-        ? gate.reason === 'working'
-          ? 'This session is busy — switch it once its turn (or permission prompt) is done.'
-          : 'Nothing to resume yet — this session has not reported an id.'
-        : !agentRestartFn(nodeId)
-          ? 'This terminal is not attached right now.'
-          : undefined
-      return [
-    // Switch this running Claude node onto another account already logged in on its
-    // machine — this one, or the SSH host its pane runs on — with no /login in the pane
-    // (`switchClaudeAccountNode`). Shown only when there is somewhere to switch to.
-    ...(sourceAgentId === 'claude'
-      ? (() => {
-          const settingsNow = useSettings.getState().settings
-          const hostKey = claudeSwitchHostKey(n)
-          const unswitchable =
-            session.source === 'relay' || (!!n && isRemoteSessionNode(n.data) && !hostKey)
-          const targets = claudeSwitchTargets(settingsNow.claudeAccounts, hostKey)
-          if (targets.length === 0) return []
-          const currentAccountId = (n?.data.accountId as string | undefined) || undefined
-          // The system row names the machine it is on: an SSH node's is the HOST's
-          // `~/.claude`, whose identity this machine's system email says nothing about.
-          const systemLabel = hostKey
-            ? `System account (${hostKey})`
-            : systemAccountDisplay(
-                settingsNow.systemAccountLabel,
-                useSystemAccount.getState().email
-              )
-          const row = (id: string | undefined, label: string): MenuItem => {
-            const isCurrent = (id || undefined) === currentAccountId
-            return {
-              label: `${isCurrent ? '✓ ' : ''}${label}`,
-              icon: <AgentIcon agentId="claude" />,
-              disabled: !!why || isCurrent,
-              hint: isCurrent
-                ? 'This node already runs on this account.'
-                : (why ??
-                  'Quits Claude, moves this conversation to the account and resumes it there — no login needed.'),
-              onClick: () => void switchClaudeAccountNode(nodeId, id, label)
-            }
-          }
-          if (unswitchable)
-            return [
-              {
-                label: 'Switch Claude account',
-                icon: <IconSwitch />,
-                disabled: true,
-                hint: 'Not available for relay sessions.',
-                onClick: () => {}
-              }
-            ] as MenuItem[]
-          return [
-            {
-              type: 'submenu',
-              label: 'Switch Claude account',
-              icon: <IconSwitch />,
-              children: [
-                row(undefined, systemLabel),
-                ...targets.map((a) => row(a.id, a.label || a.email || 'Account'))
-              ]
-            }
-          ] as MenuItem[]
-        })()
-      : []),
-    // Switch this running Codex node onto another machine-scoped account (S6 §3.5). Shown
-    // only for a Codex node with managed accounts on its machine. Each row is gated through
-    // `codexAccountSelectable`; the actual switch is owner-authorized MAIN-SIDE and resumes
-    // the SAME conversation id (`switchCodexAccountNode`) — the UI is not the boundary.
-    ...(sourceAgentId === 'codex'
-      ? (() => {
-          const codexAll = useSettings.getState().settings.codexAccounts
-          const hostKey = n?.data.ssh ? sshHostKey(n.data.ssh as SshServer) : undefined
-          const onMachine = codexAll.filter(
-            (a) => !a.pending && (hostKey ? a.host === hostKey : !a.host)
-          )
-          if (onMachine.length === 0) return []
-          const currentAccountId = (n?.data.accountId as string | undefined) || undefined
-          // The system row names ITS machine: an SSH node's is the host's own `~/.codex`, whose
-          // login this machine's system email says nothing about.
-          const systemCodexLabel = hostKey
-            ? (useSystemCodexAccount.getState().remoteEmails[hostKey] ?? `System account (${hostKey})`)
-            : systemAccountDisplay(undefined, useSystemCodexAccount.getState().email)
-          const row = (
-            id: string | undefined,
-            label: string
-          ): MenuItem => {
-            const isCurrent = (id || undefined) === currentAccountId
-            const sel = codexAccountSelectable(id, onMachine, connectedProjectIdForHost)
-            return {
-              label: `${isCurrent ? '✓ ' : ''}${label}`,
-              icon: <AgentIcon agentId="codex" />,
-              disabled: !!why || isCurrent || !sel.ok,
-              hint: isCurrent
-                ? 'This node already runs on this account.'
-                : !sel.ok
-                  ? sel.reason === 'no-connection'
-                    ? 'This account lives on a host that is not connected.'
-                    : 'This account is no longer available.'
-                  : (why ??
-                    'Moves this conversation to the account and resumes it there (same conversation).'),
-              onClick: () => void switchCodexAccountNode(nodeId, id)
-            }
-          }
-          return [
-            {
-              type: 'submenu',
-              label: 'Switch Codex account',
-              icon: <IconSwitch />,
-              children: [
-                row(undefined, systemCodexLabel),
-                ...onMachine.map((a) => row(a.id, a.label))
-              ]
-            }
-          ] as MenuItem[]
-        })()
-      : []),
-      ]
-    },
-    [switchClaudeAccountNode, switchCodexAccountNode, connectedProjectIdForHost, session.source]
-  )
-
   // Who the bulk restart would act on, right now: the ACTIVE project's canvas (nodesRef holds
   // exactly that). Read fresh at every call — agent state and session ids arrive asynchronously.
   const bulkRestartPlan = useCallback((): BulkRestartPlan => {
@@ -10395,476 +10250,84 @@ export function Canvas() {
     return node.selected && selected.length > 0 ? selected : [node.id]
   }, [])
 
-  /** `at` is where the menu was opened, in flow coordinates: every entry that SPAWNS a node
+  /** Everything the node action rows (lib/nodeActionItems) read from, or do through, the LIVE
+   *  canvas. Built fresh on every menu open, like the rows themselves. */
+  const liveNodeActionCtx = useCallback(
+    (): NodeActionCtx => ({
+      nodes: nodesRef.current as CanvasNode[],
+      sessionSource: session.source,
+      attached: (nodeId) => !!agentRestartFn(nodeId),
+      agentIdOf,
+      gatewayModels,
+      gatewayStatus,
+      gatewayError,
+      grokModels: () => grokModelList(),
+      addToExistingGroup,
+      groupSelection,
+      removeFromGroup,
+      setNodesColor,
+      pickNodeIcon,
+      duplicateNodes,
+      snapNodeToZone,
+      toggleCollapseNodes,
+      toggleMarkdown,
+      reloadTerminals,
+      liveLinkMenuItems: (nodeId) => liveLinkMenuItems(nodeId),
+      branchClaude,
+      transferConversation,
+      restartAgentNode,
+      pauseAgentNode,
+      resumeAgentNode,
+      switchClaudeAccountNode,
+      switchCodexAccountNode,
+      connectedProjectIdForHost,
+      deleteNodes: (ids) => deleteNodes(ids)
+    }),
+    [
+      agentIdOf,
+      gatewayModels,
+      gatewayStatus,
+      gatewayError,
+      addToExistingGroup,
+      groupSelection,
+      removeFromGroup,
+      setNodesColor,
+      pickNodeIcon,
+      duplicateNodes,
+      snapNodeToZone,
+      toggleCollapseNodes,
+      toggleMarkdown,
+      reloadTerminals,
+      liveLinkMenuItems,
+      branchClaude,
+      transferConversation,
+      restartAgentNode,
+      pauseAgentNode,
+      resumeAgentNode,
+      switchClaudeAccountNode,
+      switchCodexAccountNode,
+      connectedProjectIdForHost,
+      deleteNodes,
+      session.source
+    ]
+  )
+
+  /** The canvas node menu (and, with `omit: ['delete']`, the sessions-sidebar row menu). The rows
+   *  live in lib/nodeActionItems — one builder for the canvas, the sidebar and the kanban cards.
+   *  `at` is where the menu was opened, in flow coordinates: every entry that SPAWNS a node
    *  (Duplicate / Branch / Transfer) puts it there, instead of somewhere the user never pointed. */
-  const selectionItems = useCallback((ids: string[], at?: { x: number; y: number }): MenuItem[] => {
-    // Rows the user chose to hide (Settings). Read here rather than through a selector because the
-    // menu is rebuilt on every open — a toggle applies to the next right-click with no reload.
-    // Destructive/recovery rows (Delete, Restart agent, Branch/Transfer) are not hideable at all:
-    // `isHidden` only answers for ids in its own inventory.
-    const hidden = useSettings.getState().settings.hiddenNodeMenuItems
-    // Stop agent control — the node context-menu surface for Stop (Task 6.4). Shown only for a
-    // single browser node that is actually being driven; it revokes for real (main detaches the
-    // debugger + drops the ledger entry), not just hides the chip. Read fresh, like every other row.
-    const drivenHere =
-      ids.length === 1 && drivingNodeIds(useBrowserLease.getState().entries, Date.now()).has(ids[0])
-    return tidySeparators([
-      { type: 'label', label: ids.length > 1 ? `${ids.length} nodes` : '1 node' },
-      ...(drivenHere
-        ? ([
-            {
-              label: 'Stop agent control',
-              onClick: () => window.nodeTerminal.browser.stop(ids[0])
-            },
-            { type: 'separator' }
-          ] as MenuItem[])
-        : []),
-      ...((): MenuItem[] => {
-        // "Group …" wraps objects that share ONE container — existing frames are valid members
-        // now that frames nest. A box-selection that caught a frame AND its children is
-        // normalized to its subtree roots first (selectedRootIds), so the children are not torn
-        // out of the frame being wrapped; a set spanning two containers is refused, because
-        // their positions are not comparable. "Remove from group" only when a target is inside
-        // a frame (the frame stays).
-        const selectedNodes = ids
-          .map((nid) => nodesRef.current.find((node) => node.id === nid))
-          .filter((node): node is CanvasNode => !!node)
-        const rootIds = selectedRootIds(nodesRef.current as CanvasNode[], ids)
-        const rootSet = new Set(rootIds)
-        const rootNodes = selectedNodes.filter((node) => rootSet.has(node.id))
-        const groupable =
-          rootNodes.length > 0 &&
-          (ids.length === 1 || rootNodes.length > 1) &&
-          new Set(rootNodes.map((node) => node.parentId ?? null)).size === 1
-        // Frames in the selection that this selection could actually be ADDED to (the pure
-        // transform is asked, so the item can never be a no-op).
-        const targetGroups = selectedNodes.filter(
-          (node) =>
-            node.type === 'group' &&
-            addSelectionToGroup(nodesRef.current as CanvasNode[], ids, node.id) !==
-              nodesRef.current
-        )
-        const parented = ids.some(
-          (nid) => !!nodesRef.current.find((nd) => nd.id === nid)?.parentId
-        )
-        const items: MenuItem[] = []
-        if (targetGroups.length === 1 && !isHidden('group', hidden)) {
-          const targetGroup = targetGroups[0]
-          items.push({
-            label: `Add selection to ${targetGroup.data.title || 'group'}`,
-            icon: <IconGroup />,
-            onClick: () => addToExistingGroup(ids, targetGroup.id)
-          })
-        } else if (targetGroups.length > 1 && !isHidden('group', hidden)) {
-          items.push({
-            type: 'submenu',
-            label: 'Add selection to group',
-            icon: <IconGroup />,
-            children: targetGroups.map((targetGroup) => ({
-              label: targetGroup.data.title || 'Group',
-              icon: <IconGroup />,
-              onClick: () => addToExistingGroup(ids, targetGroup.id)
-            }))
-          })
-        }
-        if (groupable && !isHidden('group', hidden))
-          items.push({
-            label: rootIds.length > 1 ? 'Group selection' : 'Group node',
-            icon: <IconGroup />,
-            onClick: () => groupSelection(rootIds)
-          })
-        if (parented && !isHidden('remove-from-group', hidden))
-          items.push({
-            label: 'Remove from group',
-            icon: <IconUngroup />,
-            onClick: () => removeFromGroup(ids)
-          })
-        if (items.length) items.push({ type: 'separator' })
-        return items
-      })(),
-      ...(isHidden('colors', hidden)
-        ? []
-        : ([{ type: 'colors', onPick: (c) => setNodesColor(ids, c) }] as MenuItem[])),
-      // Single target, and only a SESSION node: an icon is how you tell two sessions apart, so
-      // setting one across a multi-selection is the opposite of the point — and offering it on a
-      // kind that draws no icon (an editor, a diff, a group frame) would be a row that persists a
-      // value nothing ever shows, which is worse than no row at all.
-      ...(ids.length === 1 &&
-      !isHidden('icon', hidden) &&
-      nodesRef.current.find((n) => n.id === ids[0])?.type === 'terminal'
-        ? ([
-            {
-              label: nodesRef.current.find((n) => n.id === ids[0])?.data.icon
-                ? 'Change icon…'
-                : 'Set icon…',
-              icon: <IconSmiley />,
-              onClick: () => pickNodeIcon(ids[0])
-            }
-          ] as MenuItem[])
-        : []),
-      { type: 'separator' },
-      ...(isHidden('duplicate', hidden)
-        ? []
-        : ([
-            { label: 'Duplicate', icon: <IconDuplicate />, onClick: () => duplicateNodes(ids, at) }
-          ] as MenuItem[])),
-      // Zone snap (issue #394 v1): place THIS node into a region of the visible canvas at that
-      // region's size — halves/quarters/thirds. Single non-group, non-collapsed target only (the
-      // same declines as the ⌃⌥arrow chords; a multi-selection stacking into one zone is noise).
-      ...(ids.length === 1 &&
-      !isHidden('snap-zone', hidden) &&
-      (() => {
-        const n = nodesRef.current.find((nd) => nd.id === ids[0])
-        return !!n && n.type !== 'group' && !n.data.collapsed
-      })()
-        ? ([
-            {
-              type: 'submenu',
-              label: 'Snap to zone',
-              icon: <IconGrid />,
-              children: ZONES.map((z) => ({
-                label: z.label,
-                onClick: () => snapNodeToZone(z.id, ids[0])
-              }))
-            }
-          ] as MenuItem[])
-        : []),
-      ...(isHidden('collapse', hidden)
-        ? []
-        : ([
-            {
-              label: 'Collapse / Expand',
-              icon: <IconCollapse />,
-              onClick: () => toggleCollapseNodes(ids)
-            }
-          ] as MenuItem[])),
-      ...(ids.some((nid) => nodesRef.current.find((n) => n.id === nid)?.type === 'terminal')
-        ? ([
-            ...(isHidden('markdown-view', hidden)
-              ? []
-              : [
-                  {
-                    label: 'Markdown view',
-                    icon: <IconMarkdown />,
-                    onClick: () => toggleMarkdown(ids)
-                  }
-                ]),
-            ...(isHidden('refresh-terminal', hidden)
-              ? []
-              : [
-                  {
-                    label: 'Refresh terminal',
-                    icon: <IconReload />,
-                    hint: 'Rebuilds the view and re-attaches to the same session. Nothing running is interrupted.',
-                    onClick: () => reloadTerminals(ids)
-                  }
-                ]),
-            // Share live link… — single terminal only; disabled with its reason where it cannot
-            // work, hideable as `live-link` (the shared builder applies both).
-            ...(ids.length === 1 ? liveLinkMenuItems(ids[0]) : [])
-          ] as MenuItem[])
-        : []),
-      // Conversation actions — Branch, Transfer ▸ (targets, then models), Restart ▸, Pause — sit
-      // together below the view actions, each ONE row: the per-target Transfer list and the six-odd
-      // restart variants used to be spliced in flat, which made an agent node's menu run off screen.
-      { type: 'separator' },
-      ...(ids.length === 1 && (() => {
-        const a = agentIdOf(ids[0])
-        return !!a && canBranch(a)
-      })()
-        ? ([
-            {
-              label: 'Branch conversation',
-              icon: <IconBranch />,
-              onClick: () => void branchClaude(ids[0], { at })
-            }
-          ] as MenuItem[])
-        : []),
-      ...(ids.length === 1
-        ? transferConversationItems(ids[0], at, {
-            sourceAgentId: agentIdOf(ids[0]),
-            sessionId: useAgentStatus.getState().byId[ids[0]]?.sessionId,
-            disabledAgents: useSettings.getState().settings.disabledAgents,
-            customAgents: useSettings.getState().settings.customAgents,
-            gatewayModels,
-            relaySession: session.source === 'relay'
-          }, transferConversation)
-        : []),
-      // Restart the agent CLI itself (single selection): quit it and relaunch with `--resume`, so a
-      // newly released model appears in its model list with the conversation intact. Unlike "Reload
-      // terminal" above (which re-attaches the pane and leaves the CLI running) this one types into
-      // the session, so the row is shown only for a CLI we know how to quit AND resume.
-      ...(ids.length === 1
-        ? (() => {
-            const n = nodesRef.current.find((x) => x.id === ids[0])
-            const st = useAgentStatus.getState().byId[ids[0]]
-            const sourceAgentId = restartAgentIdOf(n)
-            const sessionId = restartSessionId(st?.sessionId, n?.data.agentSessionId)
-            const gate = restartEligibility(sourceAgentId, st?.state, sessionId)
-            const settings = useSettings.getState().settings
-            const variants = sourceAgentId
-              ? reopenVariants(sourceAgentId, settings.customAgents, settings.disabledAgents)
-              : []
-            const switchCapable = !!sourceAgentId && canSwitchModel(sourceAgentId)
-            const compatibleModels = sourceAgentId && session.source !== 'relay'
-              ? modelsForAgent(gatewayModels, sourceAgentId, grokModelList())
-              : []
-            const currentModel =
-              typeof n?.data.agentModel === 'string' ? n.data.agentModel : undefined
-            // 'not-resumable' is permanent (a plain shell, opencode, a custom CLI with no exit
-            // command) — no row at all. The other two are temporary, so the row stays and says
-            // what to wait for instead of disappearing and teaching nothing.
-            if (!gate.ok && gate.reason === 'not-resumable') return []
-            // The registry answers "is this node mounted and wired" only: every terminal node
-            // registers, agent or not.
-            const why = !gate.ok
-              ? gate.reason === 'working'
-                ? 'This session is busy — restart it once its turn (or permission prompt) is done.'
-                : 'Nothing to resume yet — this session has not reported an id.'
-              : !agentRestartFn(ids[0])
-                ? 'This terminal is not attached right now.'
-                : // Not every dead end is visible from here: the closure ALSO refuses a tmux
-                  // session that is closed / ended / gone, and a pane it cannot observe at all
-                  // (tmux off / absent — it pre-flights one `pane_current_command` before writing
-                  // anything). Only the node knows the first, and the second costs an IPC that must
-                  // not run per menu RENDER. Both reach the user through `restartAgentNode`'s skip
-                  // notice, which names them, rather than through a hint this row cannot compute.
-                  undefined
-            // Pause/Resume have their OWN eligibility, computed on `st?.sessionId` alone — NOT
-            // `sessionId` above, which also falls back to `n?.data.agentSessionId` (the id
-            // nodeterm minted at node creation, for a node whose hooks never landed). The `pause`/
-            // `resume` closures registered on the node gate on the live `st?.sessionId` only (see
-            // `registerAgentPause` / the hibernate `resume` closure), so a menu row lit by the
-            // fallback would enable here and then refuse in the closure with a generic "busy /
-            // not attached" notice about a node that is actually just idle with no reported id
-            // yet. Using the same narrower fact keeps what the row PROMISES in sync with what the
-            // closure can actually do.
-            const pauseGate = restartEligibility(sourceAgentId, st?.state, st?.sessionId)
-            const pauseWhy = !pauseGate.ok
-              ? pauseGate.reason === 'working'
-                ? 'This session is busy — try again once its turn (or permission prompt) is done.'
-                : 'Nothing to resume yet — this session has not reported an id.'
-              : undefined
-            const restartRows: MenuItem[] = [
-              {
-                label: 'Restart agent',
-                icon: <IconPower />,
-                disabled: !!why,
-                hint: why ?? 'Quits the CLI and relaunches it with --resume (same conversation).',
-                onClick: () => void restartAgentNode(ids[0])
-              },
-              // Restart agent AND shell: same quit + relaunch, but RECYCLES the tmux session so a
-              // FRESH shell spawns — re-sourcing the user's profile/env (a change to .zshrc, or an
-              // env var set after this node was created), which typing the resume line into the
-              // existing shell never picks up. Same eligibility gate as Restart; the cold-restore
-              // auto-resume on the fresh spawn relaunches the agent with --resume <sid>.
-              {
-                label: 'Restart agent and shell',
-                icon: <IconPower />,
-                // A relay session's shell lives on the HOST's core, so recycling it here can't
-                // re-source that machine's profile/env — the closure refuses it. Surface that as a
-                // DISABLED row with the real reason instead of an enabled row that fails with the
-                // generic "not attached" notice. (Plain Restart above still works over relay: it
-                // only types --resume, no recycle.)
-                disabled: !!why || session.source === 'relay',
-                hint:
-                  why ??
-                  (session.source === 'relay'
-                    ? 'Restart the shell on the machine hosting this relay session.'
-                    : 'Quits the CLI, respawns a fresh shell (picks up env/profile changes), then resumes.'),
-                onClick: () => void restartAgentNode(ids[0], undefined, undefined, true)
-              },
-              // "Restart on subscription": recycle the session VANILLA — strip the gateway + inherited
-              // provider env so the agent falls back to its OWN default provider (Claude's
-              // subscription, Copilot's GitHub routing). No model/agent change; the cold-restore
-              // auto-resume keeps the same conversation. Shown only for an agent with a strip set
-              // (claude/codex/copilot builtins). Gated on `clearEnvEligibility`, NOT the shared `why`:
-              // clearEnv uses `terminateForeground` (SIGTERM by PID, no `/exit` into a dialog), so it
-              // is safe to interrupt a `working`/`blocked` session — which is its primary scenario
-              // (gateway overload shows up mid-turn, and "wait for the turn" is impossible when the
-              // gateway is down). Refused over relay for the same reason "Restart agent and shell" is
-              // — the stripped env belongs to this machine's settings store, not the host's core.
-              // Hideable (unlike the recovery restart rows above), because it is a convenience, not a
-              // recovery lever.
-              ...(vanillaEnvStripPattern(sourceAgentId ?? ('claude' as AgentId)) &&
-              !isHidden('vanilla-restart', hidden)
-                ? [
-                    {
-                      label:
-                        capabilityAgentId(sourceAgentId ?? ('claude' as AgentId)) === 'copilot'
-                          ? 'Restart on Copilot defaults'
-                          : 'Restart on subscription',
-                      icon: <IconPower />,
-                      disabled:
-                        !clearEnvEligibility(sourceAgentId, sessionId).ok ||
-                        session.source === 'relay' ||
-                        !agentRestartFn(ids[0]),
-                      hint:
-                        !clearEnvEligibility(sourceAgentId, sessionId).ok
-                          ? 'Nothing to resume yet — this session has not reported an id.'
-                          : session.source === 'relay'
-                            ? 'Restart the shell on the machine hosting this relay session.'
-                            : !agentRestartFn(ids[0])
-                              ? 'This terminal is not attached right now.'
-                              : 'Restarts the session with gateway/provider env stripped — uses your own subscription/credentials.',
-                      onClick: () =>
-                        void restartAgentNode(ids[0], undefined, undefined, undefined, true)
-                    }
-                  ]
-                : []),
-              // Below the plain restarts: the variants that restart INTO something else.
-              { type: 'separator' },
-              ...(variants.length
-                ? ([
-                    {
-                      type: 'submenu',
-                      label: 'Reopen session as',
-                      icon: <IconSwitch />,
-                      children: variants.map(
-                        (variant): MenuItem => ({
-                          label: variant.label,
-                          icon: <AgentIcon agentId={variant.id} />,
-                          disabled: !!why,
-                          hint:
-                            why ??
-                            `Quits this CLI and resumes the same session as ${variant.label}.`,
-                          onClick: () => void restartAgentNode(ids[0], variant.id)
-                        })
-                      )
-                    }
-                  ] as MenuItem[])
-                : []),
-            ]
-            // Switch model / account stay FIRST-level rows: they are everyday choices, not recovery
-            // restarts, and burying them under Restart ▸ cost an extra hover each time.
-            const switchRows: MenuItem[] = [
-              ...(switchCapable
-                ? compatibleModels.length
-                  ? ([
-                      {
-                        type: 'submenu',
-                        label: currentModel ? `Switch model (${currentModel})` : 'Switch model',
-                        icon: <IconSwitch />,
-                        children: compatibleModels.map(
-                          (model): MenuItem => ({
-                            label: `${model.id === currentModel ? '✓ ' : ''}${model.id}`,
-                            disabled: !!why || model.id === currentModel,
-                            hint:
-                              model.id === currentModel
-                                ? 'This node is already using this model.'
-                                : why ??
-                                  `Restarts the terminal session and resumes this conversation with ${model.id}.`,
-                            onClick: () =>
-                              void restartAgentNode(ids[0], undefined, model.id)
-                          })
-                        )
-                      }
-                    ] as MenuItem[])
-                  : ([
-                      {
-                        label: 'Switch model',
-                        icon: <IconSwitch />,
-                        disabled: true,
-                        hint:
-                          session.source === 'relay'
-                            ? 'Configure the model gateway on the machine hosting this relay session.'
-                            : gatewayStatus === 'loading'
-                              ? 'Discovering models…'
-                              : gatewayError ||
-                                'Configure a URL and API key in Settings → Model gateway.'
-                      }
-                    ] as MenuItem[])
-                : []),
-              // Switch Claude / Codex account — one builder shared with the kanban card menu.
-              ...accountSwitchRows(ids[0]),
-            ]
-            return [
-              // The restart variants — plain restart, fresh shell, subscription, reopen as another
-              // agent — behind ONE row.
-              {
-                type: 'submenu',
-                label: 'Restart',
-                icon: <IconPower />,
-                children: tidySeparators(restartRows)
-              },
-              ...switchRows,
-              // Pause session: quit the CLI (and, for the deeper choice, also end the tmux
-              // session) so it does NOT auto-resume on the next reveal or reopen — only an
-              // explicit Resume brings it back. Same eligibility as Restart above (`why`): a node
-              // this app cannot quit-and-resume has nothing for pause to do either. Already-paused
-              // shows Resume instead — the two never appear together.
-              ...(st?.paused
-                ? ([
-                    {
-                      label: 'Resume session',
-                      icon: <IconPower />,
-                      hint: 'Brings the conversation back.',
-                      onClick: () => void resumeAgentNode(ids[0])
-                    }
-                  ] as MenuItem[])
-                : ([
-                    {
-                      type: 'submenu',
-                      label: 'Pause session',
-                      icon: <IconPower />,
-                      children: [
-                        {
-                          label: 'Pause',
-                          disabled: !!pauseWhy,
-                          hint:
-                            pauseWhy ??
-                            'Quits the CLI; the tmux session stays so Resume is fast. Frees most of the memory.',
-                          onClick: () => void pauseAgentNode(ids[0], false)
-                        },
-                        {
-                          label: 'Pause & end session',
-                          // The deep depth recycles the tmux session, which — like the "Restart
-                          // agent and shell" recycle it shares the mechanism with — the closure
-                          // refuses on a relay session's core (the shell env belongs to the HOST).
-                          // Named here rather than left to the closure's generic "busy / not
-                          // attached" notice, which would be a wrong reason for a right refusal.
-                          disabled: !!pauseWhy || session.source === 'relay',
-                          hint:
-                            pauseWhy ??
-                            (session.source === 'relay'
-                              ? 'Ends the tmux session on the machine hosting this relay session, not here.'
-                              : 'Quits the CLI and ends its tmux session too, for a fuller memory reclaim. Resume starts a fresh session with the same conversation.'),
-                          onClick: () => void pauseAgentNode(ids[0], true)
-                        }
-                      ]
-                    }
-                  ] as MenuItem[]))
-            ] as MenuItem[]
-          })()
-        : []),
-      { type: 'separator' },
-      { label: 'Delete', icon: <IconTrash />, danger: true, onClick: () => deleteNodes(ids) }
-    ])
-  }, [
-    groupSelection,
-    addToExistingGroup,
-    removeFromGroup,
-    setNodesColor,
-    duplicateNodes,
-    branchClaude,
-    transferConversation,
-    agentIdOf,
-    toggleCollapseNodes,
-    toggleMarkdown,
-    reloadTerminals,
-    restartAgentNode,
-    pauseAgentNode,
-    resumeAgentNode,
-    switchCodexAccountNode,
-    switchClaudeAccountNode,
-    connectedProjectIdForHost,
-    deleteNodes,
-    gatewayModels,
-    gatewayStatus,
-    gatewayError,
-    session.source,
-    liveLinkMenuItems
-  ])
+  const selectionItems = useCallback(
+    (ids: string[], at?: { x: number; y: number }, filter?: NodeActionFilter): MenuItem[] =>
+      buildNodeActionItems(ids, at, liveNodeActionCtx(), filter),
+    [liveNodeActionCtx]
+  )
+
+  /** The node's "Switch Claude/Codex account ▸" rows for the kanban card menu — the same builder
+   *  the canvas node menu uses. */
+  const accountSwitchRows = useCallback(
+    (nodeId: string): MenuItem[] => buildAccountSwitchRows(nodeId, liveNodeActionCtx()),
+    [liveNodeActionCtx]
+  )
 
   /** "New <agent>" creation entries shared by the pane, sidebar and group context menus.
    *  `at` is the flow position to create at; with `groupId` the node is parented into that group.
