@@ -116,7 +116,6 @@ import { tidySeparators } from '../lib/tidySeparators'
 import { createNodeWriteRouter, type NodeWrites } from '../lib/nodeWriteRouter'
 import {
   BOARD_NODE_ACTION_IDS,
-  buildAccountSwitchRows,
   buildNodeActionItems,
   offCanvasNodeActionCtx,
   OFF_CANVAS_REFUSAL,
@@ -10354,13 +10353,6 @@ export function Canvas() {
     [liveNodeActionCtx]
   )
 
-  /** The node's "Switch Claude/Codex account ▸" rows for the kanban card menu — the same builder
-   *  the canvas node menu uses. */
-  const accountSwitchRows = useCallback(
-    (nodeId: string): MenuItem[] => buildAccountSwitchRows(nodeId, liveNodeActionCtx()),
-    [liveNodeActionCtx]
-  )
-
   /** The node action context for a node of `projectId`: the live canvas when React Flow holds
    *  that project, else its stored copy (lib/nodeActionItems `offCanvasNodeActionCtx`). Writes go
    *  through the project's router either way, so a board write can never land on the wrong canvas. */
@@ -15934,6 +15926,25 @@ export function Canvas() {
     [renameSession]
   )
 
+  // A kanban card's "Name with AI": the sidebar's funnel (`aiNameSession`), with the node's cwd
+  // read from wherever the node lives — the live canvas when it holds the project, else the store.
+  const aiNameFromKanban = useCallback(
+    (projectId: string, nodeId: string) => {
+      const live = liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId)
+        ? nodesRef.current.find((n) => n.id === nodeId)
+        : undefined
+      const cwd =
+        (live?.data.cwd as string | undefined) ??
+        useProjects.getState().getProject(projectId)?.nodes.find((n) => n.id === nodeId)?.cwd
+      void aiNameSession(projectId, nodeId, cwd)
+    },
+    [aiNameSession]
+  )
+  const aiNameFromActiveKanban = useCallback(
+    (nodeId: string) => aiNameFromKanban(activeProjectId, nodeId),
+    [aiNameFromKanban, activeProjectId]
+  )
+
   // Sidebar "Name with AI" for a canvas group: generate a title from its member terminals'
   // captured output, then apply it to the group node (renameSession renames any node by id).
   const aiNameGroup = useCallback(
@@ -18470,8 +18481,8 @@ export function Canvas() {
           onModalNodeChange={setKanbanModalNode}
           onBrowserNav={browserNavFromKanban}
           onSetIcon={setNodeIcon}
-          accountMenuItems={accountSwitchRows}
-          liveLinkMenuItems={liveLinkMenuItems}
+          nodeActionItems={activeBoardNodeActionItems}
+          onAiName={aiNameFromActiveKanban}
           onAutoMoveFromPulls={autoMoveCardFromPulls}
           issueAgentMenu={issueAgentMenu}
           issueWorktreeMenu={issueWorktreeMenu}

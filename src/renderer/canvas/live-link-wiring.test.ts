@@ -120,7 +120,12 @@ describe('Canvas live-link wiring', () => {
   it('R49: every surface gets the row — non-active sidebar projects, both boards', () => {
     const row = src.slice(src.indexOf('const onRowContextMenu = useCallback('))
     expect(row.slice(0, row.indexOf('\n  // Stream live subagent'))).toContain('...liveLinkMenuItems(id, projectId),')
-    expect(src).toContain('liveLinkMenuItems={liveLinkMenuItems}\n          onAutoMoveFromPulls')
+    // Both boards take the node rows from the builder, built for the CARD's project.
+    const ctx = src.slice(src.indexOf('const nodeActionCtxFor = useCallback('))
+    expect(ctx.slice(0, ctx.indexOf('\n  const boardNodeActionItems'))).toContain(
+      'const liveLink = (nodeId: string): MenuItem[] => liveLinkMenuItems(nodeId, projectId)'
+    )
+    expect(src).toContain('nodeActionItems={activeBoardNodeActionItems}')
     expect(src).toMatch(/<GlobalKanbanView[\s\S]{0,200}liveLinkMenuItems=\{liveLinkMenuItems\}/)
   })
 

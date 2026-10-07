@@ -116,6 +116,9 @@ interface CardModalProps {
   mentionables?: readonly MentionCandidate[]
   /** The stations this session opened (lib/teamProgress) — the same ring the card shows. */
   team?: readonly TeamStation[]
+  /** Open on the ⌘M view (the card menu's "Open card in chat / markdown view"). Terminal cards
+   *  only; read per card, like the view itself. */
+  initialView?: 'md'
   /** A station was picked from the ring's list: close the modal and go to that node. */
   onTravel?: (nodeId: string) => void
 }
@@ -124,7 +127,7 @@ interface CardModalProps {
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, projectId, projectName, projectColor, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
+export function CardModal({ session, projectId, projectName, projectColor, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel, initialView }: CardModalProps) {
   const { api } = useSession()
   // The header slot decides "icon or smiley" on the NORMALIZED value, the answer NodeIconView
   // itself gives — on the raw one, an invalid stored icon drew an empty, un-muted slot.
@@ -182,9 +185,10 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   // Per OPENING, not sticky per card: showing another card resets it, so A → B → A comes back to
   // A's live terminal. (The id key above is what keeps the render between the switch and this
   // reset from flashing the view onto the new card.)
+  // `initialView` opens this card on the ⌘M view instead (the card menu's row asked for it).
   useEffect(() => {
-    setMdFor(null)
-  }, [session.id])
+    setMdFor(initialView === 'md' ? session.id : null)
+  }, [session.id, initialView])
   const toggleMd = useCallback(() => {
     setMdFor((cur) => (cur === session.id ? null : session.id))
     setSearchOpen(false) // the FindBar searches the xterm the view now covers
