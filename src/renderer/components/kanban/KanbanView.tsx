@@ -140,6 +140,8 @@ export interface KanbanViewProps {
   nodeActionItems?: (nodeId: string) => MenuItem[]
   /** "Name with AI" on a card (Canvas `aiNameSession`, the sessions sidebar's funnel). Optional. */
   onAiName?: (nodeId: string) => void
+  /** Set a card's node color — the card modal's Color button. Optional: no button without it. */
+  onSetColor?: (nodeId: string, color: string) => void
   /** The board moving a session card itself because its linked pull requests merged (Canvas owns
    *  the compare-and-set + board-log line). Optional: without it nothing ever auto-moves. */
   onAutoMoveFromPulls?: (
@@ -239,7 +241,7 @@ function useCanvasCovered(): void {
 
 export const KanbanView = memo(function KanbanView({
   board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
-  onModalNodeChange, onBrowserNav, onSetIcon, nodeActionItems, onAiName, onAutoMoveFromPulls, issueAgentMenu,
+  onModalNodeChange, onBrowserNav, onSetIcon, nodeActionItems, onAiName, onSetColor, onAutoMoveFromPulls, issueAgentMenu,
   issueWorktreeMenu, teams, onIssueMoved
 }: KanbanViewProps) {
   useCanvasCovered()
@@ -1269,6 +1271,8 @@ export const KanbanView = memo(function KanbanView({
           onEditSticky={(t) => onEditSticky(modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(modalNodeId, icon)}
+          onSetColor={onSetColor ? (color) => onSetColor(modalNodeId, color) : undefined}
+          onDelete={() => onDeleteNode(modalNodeId)}
           onOpenIssue={(ref) => {
             // The issue summary is its own modal: close the card, then ask for the issue (the same
             // request the session card's `#N` makes — summary if the lane has it, else GitHub).

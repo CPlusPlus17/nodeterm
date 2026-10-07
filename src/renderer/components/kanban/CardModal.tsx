@@ -5,14 +5,17 @@ import {
   IconBroadcast,
   IconChat,
   IconClose,
+  IconColor,
   IconExternal,
   IconMarkdown,
   IconMaximize,
   IconMic,
   IconRestoreSize,
   IconSearch,
-  IconSmiley
+  IconSmiley,
+  IconTrash
 } from '../icons'
+import { ContextMenu } from '../ContextMenu'
 import { NodeIconView } from '../NodeIcon'
 import { nodeIconDialog } from '../NodeIconPicker'
 import { applyIconChoice } from '../../lib/nodeIconChoice'
@@ -121,13 +124,18 @@ interface CardModalProps {
   initialView?: 'md'
   /** A station was picked from the ring's list: close the modal and go to that node. */
   onTravel?: (nodeId: string) => void
+  /** The node's color — the canvas node menu's Colors, as a header action. Absent = no button. */
+  onSetColor?: (color: string) => void
+  /** Delete the node through the board's own confirm-first Delete. The modal closes FIRST, so the
+   *  confirm is never drawn over a live view of the session it is about to end. Absent = no button. */
+  onDelete?: () => void
 }
 
 /** Trello-style card popup over the board. Scrim click / Esc close it; the board (and the
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, projectId, projectName, projectColor, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel, initialView }: CardModalProps) {
+export function CardModal({ session, projectId, projectName, projectColor, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel, initialView, onSetColor, onDelete }: CardModalProps) {
   const { api } = useSession()
   // The header slot decides "icon or smiley" on the NORMALIZED value, the answer NodeIconView
   // itself gives — on the raw one, an invalid stored icon drew an empty, un-muted slot.
@@ -169,6 +177,8 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
   const portsRemote = useProjects((s) => !!(portsProjectId && s.getProject(portsProjectId)?.ssh))
   const accountChip = useAccountChip(session.spawn.accountId, observedAccount)
   const [naming, setNaming] = useState(false)
+  // The header Color button's swatch menu, anchored under the button.
+  const [colorMenu, setColorMenu] = useState<{ x: number; y: number } | null>(null)
   // Comments & activity panel: OPEN by default in the modal; the header 💬 collapses it. The
   // choice is remembered (localStorage) — once collapsed, later cards open collapsed too.
   const panelOpen = useCardPanel((s) => s.open)
@@ -575,6 +585,19 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
               </button>
             </>
           )}
+          {onSetColor && (
+            <button
+              className="kanban-modal__action"
+              title="Color"
+              aria-label="Color"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect()
+                setColorMenu({ x: r.left, y: r.bottom })
+              }}
+            >
+              <IconColor />
+            </button>
+          )}
           <button
             className="kanban-modal__action"
             title={panelOpen ? 'Hide comments & activity' : 'Show comments & activity'}
@@ -594,10 +617,32 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
           <button className="kanban-modal__action" title="Open on canvas" onClick={onOpenCanvas}>
             <IconExternal />
           </button>
+          {onDelete && (
+            <button
+              className="kanban-modal__action"
+              title="Delete this session"
+              aria-label="Delete"
+              onClick={() => {
+                onClose()
+                onDelete()
+              }}
+            >
+              <IconTrash />
+            </button>
+          )}
           <button className="kanban-modal__action" title="Close" onClick={onClose}>
             <IconClose />
           </button>
         </div>
+        {colorMenu && onSetColor && (
+          <ContextMenu
+            x={colorMenu.x}
+            y={colorMenu.y}
+            zIndex={65}
+            items={[{ type: 'colors', onPick: onSetColor }]}
+            onClose={() => setColorMenu(null)}
+          />
+        )}
         <CardMetaBar nodeId={session.id} board={board} onChange={onChangeBoard} />
         <CardPullRequests session={session} board={board} onChangeBoard={onChangeBoard} />
         <div className="kanban-modal__body">

@@ -90,10 +90,12 @@ interface SwimlaneProps {
   nodeActionItems?: (nodeId: string, projectId: string) => MenuItem[]
   /** "Name with AI" on a card of this lane. */
   onAiName?: (projectId: string, nodeId: string) => void
+  /** Set a card's node color (the card modal's Color button), routed by the lane's project. */
+  onSetColor?: (projectId: string, nodeId: string, color: string) => void
 }
 
 const Swimlane = memo(function Swimlane({
-  projectId, projectName, projectIndex, projectColor, board, sessions, ropes, nodes, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, modalNodeId, modalView, onModalChange, liveTeams, highlight, nodeActionItems, onAiName
+  projectId, projectName, projectIndex, projectColor, board, sessions, ropes, nodes, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, modalNodeId, modalView, onModalChange, liveTeams, highlight, nodeActionItems, onAiName, onSetColor
 }: SwimlaneProps) {
   const dragRef = useRef<{ kind: 'column'; id: string } | { kind: 'card'; id: string } | null>(null)
   const setModalNodeId = useCallback(
@@ -336,6 +338,8 @@ const Swimlane = memo(function Swimlane({
           onEditSticky={(t) => onEditSticky(projectId, modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(projectId, modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(projectId, modalNodeId, icon)}
+          onSetColor={onSetColor ? (color) => onSetColor(projectId, modalNodeId, color) : undefined}
+          onDelete={() => onDeleteNode(projectId, modalNodeId)}
           team={teams.get(modalNodeId) ?? NO_STATIONS}
           onTravel={(nodeId) => { setModalNodeId(null); travel(nodeId) }}
         />
@@ -364,13 +368,15 @@ export interface GlobalKanbanViewProps {
   nodeActionItems?: (nodeId: string, projectId: string) => MenuItem[]
   /** Canvas's "Name with AI" for a card of any lane (`aiNameFromKanban`). Optional. */
   onAiName?: (projectId: string, nodeId: string) => void
+  /** Canvas's color write for a card of any lane (`setCardColor`, routed per project). Optional. */
+  onSetColor?: (projectId: string, nodeId: string, color: string) => void
   /** Canvas's `setKanbanModalNode` — the same hook the per-project board reports to. It is what
    *  makes an open card "watched" (Eco must not hibernate it), wakes a hibernated agent on open,
    *  and points the dictation shortcut at the card instead of the selected canvas node. */
   onModalNodeChange?: (nodeId: string | null) => void
 }
 
-export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, onModalNodeChange, nodeActionItems, onAiName }: GlobalKanbanViewProps) {
+export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, onModalNodeChange, nodeActionItems, onAiName, onSetColor }: GlobalKanbanViewProps) {
   // Same rule as the per-project board: the canvas is covered but mounted underneath.
   useEffect(() => markCanvasCovered(document.documentElement), [])
   const boardStyle = useBoardWallpaperStyle()
@@ -525,6 +531,7 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
               highlight={highlightId === p.id}
               nodeActionItems={nodeActionItems}
               onAiName={onAiName}
+              onSetColor={onSetColor}
             />
           )
         })}

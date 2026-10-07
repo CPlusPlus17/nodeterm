@@ -10394,6 +10394,15 @@ export function Canvas() {
       buildNodeActionItems([nodeId], undefined, nodeActionCtxFor(projectId), { allow: BOARD_NODE_ACTION_IDS }),
     [nodeActionCtxFor]
   )
+  // A card's color (the card modal's Color button), through the card's project's write router.
+  const setCardColor = useCallback(
+    (projectId: string, nodeId: string, color: string) => nodeWritesFor(projectId).setColor([nodeId], color),
+    [nodeWritesFor]
+  )
+  const setActiveCardColor = useCallback(
+    (nodeId: string, color: string) => setCardColor(activeProjectId, nodeId, color),
+    [setCardColor, activeProjectId]
+  )
   // Stable identity for the memoized per-project board, which only ever shows the active project.
   const activeBoardNodeActionItems = useCallback(
     (nodeId: string): MenuItem[] => boardNodeActionItems(nodeId, activeProjectId),
@@ -18478,6 +18487,7 @@ export function Canvas() {
           onModalNodeChange={setKanbanModalNode}
           nodeActionItems={boardNodeActionItems}
           onAiName={aiNameFromKanban}
+          onSetColor={setCardColor}
         />
       ) : perProjectKanbanOpen && (
         <KanbanView
@@ -18494,6 +18504,7 @@ export function Canvas() {
           onSetIcon={setNodeIcon}
           nodeActionItems={activeBoardNodeActionItems}
           onAiName={aiNameFromActiveKanban}
+          onSetColor={setActiveCardColor}
           onAutoMoveFromPulls={autoMoveCardFromPulls}
           issueAgentMenu={issueAgentMenu}
           issueWorktreeMenu={issueWorktreeMenu}

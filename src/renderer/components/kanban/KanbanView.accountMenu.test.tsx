@@ -15,8 +15,11 @@ vi.mock('../../session/session', () => ({
   useSession: () => ({ source: 'local', api: window.nodeTerminal })
 }))
 vi.mock('./CardModal', () => ({
-  CardModal: (p: { session: { id: string }; initialView?: string }) => (
-    <div className="card-modal-mock" data-node={p.session.id} data-view={p.initialView ?? ''} />
+  CardModal: (p: { session: { id: string }; initialView?: string; onDelete?: () => void; onSetColor?: (c: string) => void }) => (
+    <div className="card-modal-mock" data-node={p.session.id} data-view={p.initialView ?? ''}>
+      <button className="modal-delete" onClick={p.onDelete} />
+      <button className="modal-color" onClick={() => p.onSetColor?.('#0a84ff')} />
+    </div>
   )
 }))
 
@@ -54,7 +57,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function render(nodeActionItems?: (id: string) => MenuItem[], onAiName?: (id: string) => void): void {
+function render(
+  nodeActionItems?: (id: string) => MenuItem[],
+  onAiName?: (id: string) => void,
+  more: { onDeleteNode?: (id: string) => void; onSetColor?: (id: string, c: string) => void } = {}
+): void {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -69,7 +76,8 @@ function render(nodeActionItems?: (id: string) => MenuItem[], onAiName?: (id: st
         onCreateNode={noop}
         onRenameNode={noop}
         onEditSticky={noop}
-        onDeleteNode={noop}
+        onDeleteNode={more.onDeleteNode ?? noop}
+        onSetColor={more.onSetColor}
         onModalNodeChange={noop}
         onBrowserNav={noop}
         onSetIcon={noop}
@@ -135,5 +143,17 @@ describe('KanbanView — card menu node rows', () => {
     openCardMenu()
     clickRow('Name with AI')
     expect(ai).toHaveBeenCalledWith('n1')
+  })
+
+  it("the card modal's Delete and Color reach the board handlers for THAT card", () => {
+    const del = vi.fn()
+    const color = vi.fn()
+    render(undefined, undefined, { onDeleteNode: del, onSetColor: color })
+    openCardMenu()
+    clickRow('Open card')
+    act(() => document.querySelector<HTMLButtonElement>('.modal-color')!.click())
+    act(() => document.querySelector<HTMLButtonElement>('.modal-delete')!.click())
+    expect(color).toHaveBeenCalledWith('n1', '#0a84ff')
+    expect(del).toHaveBeenCalledWith('n1')
   })
 })
