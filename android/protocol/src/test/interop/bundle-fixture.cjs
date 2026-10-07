@@ -74,18 +74,32 @@ esbuild
     bundle: true,
     platform: 'node',
     format: 'cjs',
+    // A worktree may share cached dependencies through a node_modules symlink. Keep those
+    // dependency inputs under the logical node_modules path for the repository-file scanner.
+    preserveSymlinks: true,
     outfile: path.resolve(root, outfile),
     alias: {
       electron: './' + electronStub,
       '@shared': './src/shared',
       '@renderer': './src/renderer'
     },
-    external: ['ws'],
+    external: ['ws', 'esbuild'],
     plugins: projectLaunch || managedSession ? [launchPlugin] : serverProfile ? [serverProfilePlugin] : [],
     metafile: true,
     logLevel: 'warning'
   })
-  .then((result) => {
+  .then(async (result) => {
+    if (entry === 'android/protocol/src/test/interop/host-fixture.ts') {
+      // Actual standalone host producer, with only node-pty's native leaf recorded explicitly.
+      const nativeHost = await esbuild.build({ absWorkingDir: root,
+        entryPoints: ['src/session-host/host.ts'], bundle: true, platform: 'node', format: 'cjs',
+        outfile: path.resolve(root, outfile) + '-composed-host.cjs', preserveSymlinks: true, metafile: true, logLevel: 'warning',
+        plugins: [{ name: 'explicit-composed-native-recorder', setup(build) {
+          build.onResolve({ filter: /^node-pty$/ }, () => ({
+            path: path.join(root, 'src/session-host/__fixtures__/composed-native-recorder.ts') }))
+        } }] })
+      Object.assign(result.metafile.inputs, nativeHost.metafile.inputs)
+    }
     fs.writeFileSync(path.resolve(root, outfile) + '.meta.json', JSON.stringify(result.metafile))
   })
   .catch((err) => {

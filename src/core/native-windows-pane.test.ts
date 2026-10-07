@@ -81,6 +81,41 @@ describe('native Windows envelope delivery', () => {
   })
 })
 
+describe('native direct PTY explicit composed Send', () => {
+  it('uses the actual split mode output and keeps full paste separate from Enter', async () => {
+    const { pane, write, probe } = fixture()
+    pane.recordOutput('\x1b[?20'); pane.recordOutput('04h')
+    const times: number[] = []
+    write.mockImplementation(() => { times.push(performance.now()) })
+    expect(await pane.submitComposed({ kind: 'paste', text: 'one\ntwo Ω\x1b', enter: true }, () => true)).toEqual({ status: 'delivered' })
+    expect(write.mock.calls).toEqual([['\x1b[200~one\rtwo Ω\x1b[201~'], ['\r']])
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(150)
+    expect(probe).not.toHaveBeenCalled()
+  })
+  it('uses one raw Ctrl and never adds framing or Enter even in paste mode', async () => {
+    const { pane, write } = fixture(); pane.recordOutput('\x1b[?2004h')
+    expect(await pane.submitComposed({ kind: 'control', text: '\x03', enter: false }, () => true)).toEqual({ status: 'delivered' })
+    expect(write.mock.calls).toEqual([['\x03']])
+  })
+  it('retains uncertainty and sends no Enter after the owning viewer retires or pane is disposed', async () => {
+    for (const disposed of [false, true]) {
+      const { pane, write } = fixture(); let current = true
+      write.mockImplementationOnce(() => { if (disposed) pane.dispose(); else current = false })
+      expect((await pane.submitComposed({ kind: 'paste', text: 'one draft', enter: true }, () => current)).status).toBe('uncertain')
+      expect(write.mock.calls).toEqual([['one draft']])
+    }
+  })
+  it('refuses a stale viewer before input and rejects overlapping actions before the first Enter', async () => {
+    const { pane, write } = fixture()
+    const input = { kind: 'paste', text: 'first', enter: true } as const
+    expect((await pane.submitComposed(input, () => false)).status).toBe('refused')
+    const first = pane.submitComposed(input, () => true)
+    expect((await pane.submitComposed({ ...input, text: 'second' }, () => true)).status).toBe('refused')
+    expect((await first).status).toBe('delivered')
+    expect(write.mock.calls).toEqual([['first'], ['\r']])
+  })
+})
+
 describe('native Windows sendText (the write verb and the app’s own writers)', () => {
   it('reports folded pasted text without submitting or retrying', async () => {
     const write = vi.fn()

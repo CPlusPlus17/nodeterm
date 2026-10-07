@@ -4347,15 +4347,21 @@ export class PtyManager {
     const session = this.sessions.get(sessionId)
     if (!input) return { status: 'refused', message: 'Invalid composed terminal input.' }
     if (!session || !current()) return { status: 'refused', message: 'This terminal is no longer attached.' }
-    if (!session.composedViewer || session.sshRemote || session.sessionHost || session.nativeWindowsPane || !this.tmuxPath)
+    if (session.sshRemote || (!session.sessionHost && !session.nativeWindowsPane && (!session.composedViewer || !this.tmuxPath)))
       return { status: 'refused', message: COMPOSED_INPUT_UNSUPPORTED }
-    const tmux = this.tmuxPath
-    const receipt = session.composedViewer
     const valid = (): boolean => current() && this.sessions.get(sessionId) === session
     const previous = this.composedSubmissions.get(sessionId) ?? Promise.resolve()
     const writing = previous.then(async (): Promise<ComposedInputResult> => {
-      const viewer = await receipt
+      if (!valid()) return { status: 'refused', message: 'This terminal viewer changed. Reattach before sending.' }
+      if (session.nativeWindowsPane) return session.nativeWindowsPane.submitComposed(input, valid)
+      if (session.sessionHost) {
+        const proc = session.proc as unknown as SessionHostPty
+        return typeof proc.submitComposed === 'function' ? proc.submitComposed(input, valid)
+          : { status: 'refused', message: COMPOSED_INPUT_UNSUPPORTED }
+      }
+      const viewer = await session.composedViewer
       if (!viewer || !valid()) return { status: 'refused', message: 'This terminal viewer changed. Reattach before sending.' }
+      const tmux = this.tmuxPath!
       return submitComposedTmux(viewer, input, {
         current: valid,
         run: async (args, body) => {

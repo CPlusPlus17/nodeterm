@@ -94,6 +94,9 @@ export type SessionHostRequest =
   | { id: number; cmd: 'pause'; name: string }
   | { id: number; cmd: 'resume'; name: string }
   | { id: number; cmd: 'sendKeys' | 'sendKeysV2'; name: string; text: string; enter: boolean }
+  | { id: number; cmd: 'prepareComposedV1'; name: string; generation: string; input: import('../shared/composed-input').ComposedInput }
+  | { id: number; cmd: 'writeComposedV1'; name: string; generation: string; ticket: string; phase: 'paste' | 'enter' }
+  | { id: number; cmd: 'cancelComposedV1'; name: string; generation: string; ticket: string }
   | { id: number; cmd: 'paneCommand'; name: string }
   | { id: number; cmd: 'messageOwnerV1'; name: string }
   | { id: number; cmd: 'messagePasteReadyV1'; name: string }
@@ -201,8 +204,8 @@ export interface AttachResult {
   geometry?: { cols: number; rows: number }
 }
 /** Additive, independently negotiated capabilities (see the `hello` request). */
-export type SessionHostFeature = 'geometry'
-export const SESSION_HOST_FEATURES: readonly SessionHostFeature[] = ['geometry']
+export type SessionHostFeature = 'geometry' | 'composed-input-v1'
+export const SESSION_HOST_FEATURES: readonly SessionHostFeature[] = ['geometry', 'composed-input-v1']
 
 /** `result` of a v2 `hello`. `features` is absent from a host that predates feature negotiation. */
 export interface HelloResult {

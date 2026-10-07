@@ -40,6 +40,7 @@
 import { execFileSync } from 'child_process'
 import { createInterface } from 'readline'
 import { runAckSweep } from './ack-fixture'
+import { composedBackendFixture } from './composed-backend-fixture'
 import fs from 'fs'
 import http from 'http'
 import os from 'os'
@@ -265,6 +266,9 @@ async function runRelay(): Promise<void> {
   // Relay mode writes a workspace and the agent-status mirror under userData: never into the
   // checkout the fixture runs from.
   if (!process.env.FIXTURE_USERDATA) throw new Error('relay mode needs FIXTURE_USERDATA (a scratch dir)')
+  const alternative = process.env.FIXTURE_COMPOSED_BACKEND
+    ? await composedBackendFixture(path.join(process.env.FIXTURE_USERDATA, 'composed-backend'), process.env.FIXTURE_COMPOSED_BACKEND, emit)
+    : null
   const port = await startBroker()
   const keys = genKeyPair()
   const approveAfter = Number(process.env.FIXTURE_APPROVE_AFTER_MS ?? '0')
@@ -288,6 +292,7 @@ async function runRelay(): Promise<void> {
     async submitComposed(sessionId, input, current) {
       emit({ event: 'submitComposed', sessionId, input })
       if (!current()) return { status: 'refused', message: 'This terminal is no longer attached.' }
+      if (alternative) return alternative.submit(input, current)
       if (process.env.FIXTURE_COMPOSED_INPUT === 'refused') return { status: 'refused', message: 'The fixture pane changed.' }
       if (process.env.FIXTURE_COMPOSED_INPUT === 'uncertain') return { status: 'uncertain', message: 'The fixture acknowledgment was lost.' }
       return { status: 'delivered' }
@@ -330,6 +335,7 @@ async function runRelay(): Promise<void> {
     setFlow() {},
     kill(clientId, sessionId) {
       emit({ event: 'kill', sessionId })
+      alternative?.close()
     },
     // A12 for nodes of the desktop's SSH projects (`remoteNodes` below): the keys typed on THAT host
     // over its master (PtyManager.backgroundWriteOver). A node id containing `gone` stands for a

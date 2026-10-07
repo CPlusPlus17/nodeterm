@@ -292,6 +292,10 @@ jobs:
           src/core/composed-tmux.test.ts
           src/core/composed-tmux.realtmux.test.ts
           src/core/pty-composed-input.test.ts
+          src/core/composed-pty.test.ts
+          src/core/session-host-composed.test.ts
+          src/core/native-windows-pane.test.ts
+          src/session-host/composed-input-host.test.ts
           src/main/remote/host-composed-input.test.ts
           src/core/pty-background-write.test.ts
           src/core/pty-background-write-over.test.ts

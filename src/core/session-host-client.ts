@@ -41,6 +41,9 @@ import { isTerminalReport } from './terminal-reports'
 import type { PreparedAgentLaunch } from './agent-launch'
 import type { HistorySearch } from './terminal-history'
 import { retryInterruptedSessionRead } from './session-host-read-retry'
+import { waitForComposedEnter, type ComposedPrepareResult, type ComposedWriteResult } from './composed-pty'
+import { COMPOSED_INPUT_UNCERTAIN, COMPOSED_INPUT_UNSUPPORTED, parseComposedInput,
+  type ComposedInput, type ComposedInputResult } from '../shared/composed-input'
 
 export interface SessionSubscriber {
   onData(data: string): void
@@ -247,6 +250,7 @@ export class SessionHostClient {
    *  size. On a host that predates it, the size this client last requested IS the pty's size as
    *  long as this is the host's only connection — the common case, and the one issue #914 is. */
   private hostGeometryEvents = false
+  private hostComposedInput = false
   /** Monotonic activity clock for `SizeClaim.recency`. */
   private claimClock = 0
   private nextId = 1
@@ -512,6 +516,7 @@ export class SessionHostClient {
       const helloId = this.nextId++
       let protocolVersion: 1 | 2 | null = null
       let geometryEvents = false
+      let composedInput = false
       const finish = (ok: boolean, trailing: SessionHostFrame[] = []): void => {
         if (settled) return
         settled = true
@@ -525,7 +530,7 @@ export class SessionHostClient {
             failHandshake(new Error('session-host hello did not negotiate a protocol version'))
             return
           }
-          this.attachSocket(socket, protocolVersion, geometryEvents)
+          this.attachSocket(socket, protocolVersion, geometryEvents, composedInput)
           for (const frame of trailing) this.handleFrame(socket, frame)
         } else {
           try {
@@ -621,6 +626,7 @@ export class SessionHostClient {
             protocolVersion = negotiated
             const features = (frame.result as HelloResult | undefined)?.features
             geometryEvents = Array.isArray(features) && features.includes('geometry')
+            composedInput = negotiated === 2 && Array.isArray(features) && features.includes('composed-input-v1')
             finish(true, frames.slice(index + 1))
           } else {
             failHandshake(new Error(`session-host hello rejected: ${frame.error}`))
@@ -640,10 +646,11 @@ export class SessionHostClient {
     })
   }
 
-  private attachSocket(socket: net.Socket, protocolVersion: 1 | 2, geometryEvents: boolean): void {
+  private attachSocket(socket: net.Socket, protocolVersion: 1 | 2, geometryEvents: boolean, composedInput = false): void {
     this.socket = socket
     this.negotiatedProtocolVersion = protocolVersion
     this.hostGeometryEvents = geometryEvents
+    this.hostComposedInput = composedInput
     this.everConnected = true
     const framer = new LineFramer()
     socket.on('data', (chunk: Buffer) => {
@@ -672,6 +679,7 @@ export class SessionHostClient {
       this.socket = null
       this.negotiatedProtocolVersion = null
       this.hostGeometryEvents = false
+      this.hostComposedInput = false
       for (const state of this.sessions.values()) {
         // The next connection re-learns the size from its own attach replies.
         state.hostGeometry = null
@@ -844,7 +852,8 @@ export class SessionHostClient {
   private async request<T>(
     request: SessionHostRequestBody,
     onSuccess?: (result: T, socket: net.Socket) => void,
-    onSent?: () => void
+    onSent?: () => void,
+    beforeSend?: () => boolean
   ): Promise<T> {
     // A peer-initiated close races the client's own 'close' event: a cached socket can look live
     // here while the peer already hung up, and a frame written into that gap fails (EPIPE) for
@@ -865,7 +874,7 @@ export class SessionHostClient {
       const socket = this.socket
       if (!socket) throw new Error('session-host: not connected')
       try {
-        return await this.requestOnSocket(socket, request, onSuccess, onSent)
+        return await this.requestOnSocket(socket, request, onSuccess, onSent, beforeSend)
       } catch (error) {
         const undelivered = error instanceof SessionHostRequestNotDeliveredError
         if (!undelivered && !retryInterruptedSessionRead(request, error)) throw error
@@ -882,7 +891,8 @@ export class SessionHostClient {
     socket: net.Socket,
     request: SessionHostRequestBody,
     onSuccess?: (result: T, socket: net.Socket) => void,
-    onSent?: () => void
+    onSent?: () => void,
+    beforeSend?: () => boolean
   ): Promise<T> {
     if (this.socket !== socket || socket.destroyed) {
       return Promise.reject(
@@ -925,6 +935,16 @@ export class SessionHostClient {
       // because immediates run in scheduling order.
       realSetImmediate(() => {
         if (this.pending.get(id) !== pending) return
+        // Reconnect and the deferred send turn can both cross a viewer retirement. Reject this
+        // exact unwritten frame without dropping other subscribers or retrying a stale action.
+        try {
+          if (beforeSend && !beforeSend()) throw new SessionHostRequestRejectedError('terminal viewer changed or action unsupported')
+        } catch (error) {
+          this.pending.delete(id)
+          if (pending.timer) clearTimeout(pending.timer)
+          pending.reject(asError(error))
+          return
+        }
         if (this.socket !== socket || socket.destroyed) {
           this.dropSocket(socket, new Error('session-host connection lost'), true)
           return
@@ -1515,6 +1535,59 @@ export class SessionHostClient {
       // A frame handed to the socket may already have pasted. A lost reply is not a
       // pre-input refusal: surface uncertainty and never invite an automatic resend.
       return sent && !(error instanceof SessionHostRequestRejectedError) ? 'pasted-not-submitted' : false
+    }
+  }
+
+  /** The explicit composer is bound to this subscriber registration and the generation it
+   * attached to. It never falls back to the name-only background sendKeys/write APIs. */
+  async submitComposed(name: string, sub: SessionSubscriber, value: ComposedInput, current: () => boolean): Promise<ComposedInputResult> {
+    const input = parseComposedInput(value)
+    const state = this.sessions.get(name)
+    const entry = state?.entries.get(sub)
+    const generation = state?.generation
+    const refused = (): ComposedInputResult => ({ status: 'refused', message:
+      'This terminal or Send action is no longer current, or another Send is pending. Reattach and check the terminal before sending again.' })
+    const unsupported = (): ComposedInputResult => ({ status: 'refused', message: COMPOSED_INPUT_UNSUPPORTED })
+    const uncertain = (): ComposedInputResult => ({ status: 'uncertain', message: COMPOSED_INPUT_UNCERTAIN })
+    if (!input || !state || !entry || !generation) return refused()
+    let ownerSocket: net.Socket | undefined
+    const valid = (): boolean => current() && this.sessions.get(name) === state &&
+      state.entries.get(sub) === entry && entry.phase === 'attached' && state.generation === generation &&
+      !this.killReplayBarriers.has(name) && this.hostComposedInput && !!this.socket &&
+      state.appliedSocket === this.socket && state.appliedAttached && (!ownerSocket || ownerSocket === this.socket)
+    let ticket: string | undefined
+    let pasteSent = false
+    let pasted = false
+    try {
+      const prepared = await this.request<ComposedPrepareResult>(
+        { cmd: 'prepareComposedV1', name, generation, input },
+        (_result, socket) => { ownerSocket = socket }, undefined, valid)
+      if (prepared?.status !== 'prepared' || typeof prepared.ticket !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(prepared.ticket)) return refused()
+      ticket = prepared.ticket
+      const result = await this.request<ComposedWriteResult>(
+        { cmd: 'writeComposedV1', name, generation, ticket, phase: 'paste' },
+        undefined, () => { pasteSent = true }, valid)
+      if (result?.status === 'refused') return refused()
+      if (result?.status === 'delivered') return valid() ? { status: 'delivered' } : uncertain()
+      if (result?.status !== 'awaiting-enter') return uncertain()
+      pasted = true
+      await waitForComposedEnter()
+      if (!valid()) return uncertain()
+      const entered = await this.request<ComposedWriteResult>(
+        { cmd: 'writeComposedV1', name, generation, ticket, phase: 'enter' }, undefined, undefined, valid)
+      return entered?.status === 'delivered' && valid() ? { status: 'delivered' } : uncertain()
+    } catch (error) {
+      // Only the structured phase result above proves a before-write refusal. Even an RPC error
+      // response can follow accepted input; every exception after a sent paste stays uncertain.
+      // Enter is never replayed after a possible paste.
+      return pasted || pasteSent ? uncertain() : this.socket && !this.socket.destroyed && !this.hostComposedInput ? unsupported() : refused()
+    } finally {
+      // Cancellation consumes only this one-use ticket on its original socket. It never opens a
+      // replacement transport, waits for cleanup, or writes terminal input.
+      if (ticket && ownerSocket && this.socket === ownerSocket && !ownerSocket.destroyed) {
+        void this.requestOnSocket(ownerSocket, { cmd: 'cancelComposedV1', name, generation, ticket }).catch(() => {})
+      }
     }
   }
 

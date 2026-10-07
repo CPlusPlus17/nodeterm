@@ -522,6 +522,10 @@ class GradleCiCoverageTest {
                 "src/core/composed-tmux.test.ts",
                 "src/core/composed-tmux.realtmux.test.ts",
                 "src/core/pty-composed-input.test.ts",
+                "src/core/composed-pty.test.ts",
+                "src/core/session-host-composed.test.ts",
+                "src/core/native-windows-pane.test.ts",
+                "src/session-host/composed-input-host.test.ts",
                 "src/main/remote/host-composed-input.test.ts",
             )) {
                 assertEquals(1, arguments.drop(3).count { it == path }, "private beta phone delivery checks must execute $path exactly once")

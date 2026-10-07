@@ -7,6 +7,8 @@ import type { PaneOwner } from '../shared/agents/pane-owner-predicate'
 import { sanitizePasteText } from './paste-injection'
 import { pasteThenSubmitWhenSettled, type SettleOptions } from './settled-submit'
 import { validSleepingWakeInput } from '../session-host/sleeping-wake'
+import { ComposedPty, waitForComposedEnter } from './composed-pty'
+import { COMPOSED_INPUT_UNCERTAIN, type ComposedInput, type ComposedInputResult } from '../shared/composed-input'
 
 export { sameNativeProcess } from '../session-host/windows-pane-owner'
 
@@ -18,6 +20,10 @@ export class NativeWindowsPane {
   private readonly screen: TerminalEmulator
   private tail: Promise<void> = Promise.resolve()
   private alive = true
+  private readonly composed = new ComposedPty({
+    bracketed: () => this.pasteAware(),
+    write: (data) => this.proc.write(data)
+  })
 
   constructor(
     private readonly proc: { pid: number; write(data: string): void },
@@ -112,8 +118,24 @@ export class NativeWindowsPane {
     }, this.settle)
   }
 
+  /** Explicit phone Send, distinct from the observed-screen agent-message delivery above. */
+  async submitComposed(input: ComposedInput, current: () => boolean): Promise<ComposedInputResult> {
+    const valid = (): boolean => this.alive && current()
+    const prepared = this.composed.prepare(this, input, valid)
+    if (prepared.status !== 'prepared') return prepared
+    try {
+      const result = await this.composed.write(this, prepared.ticket, 'paste', valid)
+      if (result.status !== 'awaiting-enter') return result.status === 'delivered' && !valid()
+        ? { status: 'uncertain', message: COMPOSED_INPUT_UNCERTAIN } : result
+      await waitForComposedEnter()
+      const entered = await this.composed.write(this, prepared.ticket, 'enter', valid)
+      return entered.status === 'delivered' && valid() ? entered : { status: 'uncertain', message: COMPOSED_INPUT_UNCERTAIN }
+    } finally { this.composed.cancel(this, prepared.ticket) }
+  }
+
   dispose(): void {
     this.alive = false
+    this.composed.dispose()
     void this.tail.finally(() => this.screen.dispose())
   }
 }

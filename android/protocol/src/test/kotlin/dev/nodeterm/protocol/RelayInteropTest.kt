@@ -45,6 +45,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -443,6 +444,42 @@ class RelayInteropTest {
                 assertTrue(result.message.orEmpty().isNotBlank(), mode)
                 if (mode != "unsupported") assertEquals("sess-1", h.awaitEvent("submitComposed").str("sessionId"))
                 stream.detach()
+            }
+        }
+    }
+
+    // Actual backend/client/emulator producer through the encrypted relay and Kotlin API.
+    // Its native process leaf records bytes; this is not physical Windows ConPTY coverage.
+    @Test fun `session host composed Send producer interops with Android full paste delay and raw Ctrl`() = runBlocking<Unit> {
+        alternativeComposedProducer("session-host")
+    }
+
+    @Test fun `direct Windows composed Send producer interops with Android full paste delay and raw Ctrl`() = runBlocking<Unit> {
+        alternativeComposedProducer("native-windows")
+    }
+
+    private suspend fun alternativeComposedProducer(backend: String) {
+        for (mode in listOf("on", "off")) {
+            val h = start(extra = mapOf("FIXTURE_COMPOSED_BACKEND" to backend, "FIXTURE_COMPOSED_MODE" to mode))
+            connect(h).connection.use { conn ->
+                val ready = h.awaitEvent("composed-backend-ready")
+                assertEquals(backend, ready.str("backend"))
+                assertEquals("byte-recorder", ready.str("nativeBoundary"))
+                assertTrue(ready.getValue("actualBackend").jsonPrimitive.boolean)
+                val stream = conn.attach("term-abc-1", 80, 24, RecordingSink())
+                val text = "one complete Android draft\nΩ 😀\u001b"
+                assertEquals(ComposedInputResult.DELIVERED, stream.submitComposed(ComposedInput.Paste(text, true)))
+                val paste = h.awaitEvent("composed-native-write")
+                val enter = h.awaitEvent("composed-native-write")
+                val normalized = "one complete Android draft\rΩ 😀"
+                assertEquals(if (mode == "on") "\u001b[200~${normalized}\u001b[201~" else normalized, paste.str("data"))
+                assertEquals("\r", enter.str("data"))
+                assertTrue(enter.getValue("at").jsonPrimitive.double - paste.getValue("at").jsonPrimitive.double >= 150,
+                    "Enter must be a later native write, separated by at least 150ms")
+                assertEquals(ComposedInputResult.DELIVERED, stream.submitComposed(ComposedInput.Control("\u0003")))
+                assertEquals("\u0003", h.awaitEvent("composed-native-write").str("data"))
+                stream.detach()
+                assertEquals(ComposedInputResult.Status.REFUSED, stream.submitComposed(ComposedInput.Paste("stale", true)).status)
             }
         }
     }

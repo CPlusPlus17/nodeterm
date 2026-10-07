@@ -7,6 +7,7 @@ import { fakePlatform } from './platform-fake'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import type { ComposedInputResult } from '../shared/composed-input'
 import type { ComposedViewerReceipt } from './composed-tmux'
+import { NativeWindowsPane } from './native-windows-pane'
 
 const seam = vi.hoisted(() => ({ capture: vi.fn(), submit: vi.fn(), writes: vi.fn(), exit: undefined as undefined | ((e: { exitCode: number }) => void) }))
 vi.mock('./composed-tmux', async (original) => ({ ...(await original<typeof import('./composed-tmux')>()),
@@ -84,7 +85,7 @@ describe('PtyManager composed action on the captured relay viewer', () => {
     expect(seam.submit).toHaveBeenCalledTimes(1)
     m.kill(null, id)
   })
-  it('refuses unverifiable/direct backends and unknown viewers while preserving raw reports', async () => {
+  it('refuses an older unverified backend shim and unknown viewers while preserving raw reports', async () => {
     const m = await manager(), id = m.attachDetached('owned', sinks())
     expect((await m.submitComposed('foreign', input, () => true)).status).toBe('refused')
     const internals = m as unknown as { sessions: Map<string, { composedViewer?: Promise<ComposedViewerReceipt>; sessionHost?: boolean; proc: { write(text: string): void } }> }
@@ -94,6 +95,22 @@ describe('PtyManager composed action on the captured relay viewer', () => {
     expect(seam.writes).toHaveBeenCalledWith('\x1b[12;34R')
     expect(seam.submit).not.toHaveBeenCalled()
     internals.sessions.get(id)!.sessionHost = false
+    m.kill(null, id)
+  })
+  it('routes an owned direct Windows pane through its actual emulator and split writer', async () => {
+    vi.useRealTimers()
+    const m = await manager(), id = m.attachDetached('owned', sinks())
+    const proc = { pid: 123, write: seam.writes }
+    const pane = new NativeWindowsPane(proc, { cols: 80, rows: 24, scrollback: 100 })
+    pane.recordOutput('\x1b[?2004h')
+    const internals = m as unknown as { sessions: Map<string, { nativeWindowsPane?: NativeWindowsPane }> }
+    internals.sessions.get(id)!.nativeWindowsPane = pane
+    expect(await m.submitComposed(id, input, () => true)).toEqual({ status: 'delivered' })
+    expect(seam.writes.mock.calls.map(([data]) => data)).toEqual(['\x1b[200~composed draft\x1b[201~', '\r'])
+    expect(seam.submit).not.toHaveBeenCalled()
+    let current = false
+    expect((await m.submitComposed(id, input, () => current)).status).toBe('refused')
+    expect(seam.writes).toHaveBeenCalledTimes(2)
     m.kill(null, id)
   })
 })
