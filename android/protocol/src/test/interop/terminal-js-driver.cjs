@@ -40,7 +40,8 @@
 // default to timestamp0 and never synthesize momentum. `rafInterval` sets following frame intervals.
 //
 // Actions are {"nt": fn, "args": [...]}, {"event": "touchstart"|"touchmove"|"blur"|"pagehide"|"hidden"|
-// "touchcancel"|"multitouch", "move": [dx,dy]}, {"frame": true}, {"frames": n}, {"timers": true}, {"data": text}, {"report": text},
+// "touchcancel"|"multitouch", "move": [dx,dy]}, {"liveTouch": {"type": "touchstart"|"touchmove"|"touchend"|"touchcancel", "x": px, "y": px}},
+// {"checkpoint": label}, {"frame": true}, {"frames": n}, {"timers": true}, {"data": text}, {"report": text},
 // {"mouse": text} or {"binary": text}. Data/paste fire xterm's user-origin event; SGR mouse fires
 // it too, while generated reports and legacy mouse do not.
 // They run before touchstart or after touchend, before the queued
@@ -248,11 +249,29 @@ function listen(listeners, type, fn) {
 const domElements = []
 function domElement() {
   const listeners = {}
-  const item = { style: {}, hidden: false, textContent: '', children: [],
-    appendChild(child) { this.children.push(child) },
-    replaceChildren(...children) { this.children = children },
+  const item = { style: {}, hidden: false, textContent: '', children: [], parentElement: null, _listeners: listeners,
+    appendChild(child) { child.parentElement = this; this.children.push(child) },
+    replaceChildren(...children) {
+      for (const child of this.children) child.parentElement = null
+      this.children = children
+      for (const child of children) child.parentElement = this
+    },
     addEventListener(type, fn) { listen(listeners, type, fn) },
-    dispatch(type) { for (const fn of listeners[type] || []) fn({ stopPropagation() {}, preventDefault() {} }) }
+    // A child event reaches the terminal host only if its actual handler permits bubbling.
+    dispatch(type, fields = {}) {
+      let propagationStopped = false
+      const event = { ...fields, type, target: this, defaultPrevented: false,
+        stopPropagation() { propagationStopped = true },
+        preventDefault() { this.defaultPrevented = true }
+      }
+      for (let node = this; node; node = node.parentElement) {
+        event.currentTarget = node
+        const registered = node === element ? hostListeners : node._listeners
+        for (const fn of registered[type] || []) fn(event)
+        if (propagationStopped) break
+      }
+      return { propagationStopped, defaultPrevented: event.defaultPrevented }
+    }
   }
   domElements.push(item)
   return item
@@ -342,11 +361,27 @@ function dispatch(type, event) {
   for (const fn of hostListeners[type] || []) fn(event)
 }
 const tapped = []
+let checkpoints = []
+let domEvents = []
 function actions(items) {
   for (const action of items || []) {
     if (action.nt) {
       if (typeof nt[action.nt] !== 'function') fail('unknown nt action ' + action.nt)
       nt[action.nt](...(action.args || []))
+    } else if (action.checkpoint) {
+      checkpoints.push({ label: action.checkpoint, frame: frameNumber, time: frameTime,
+        requests: scrolls.length, notches: scrolls.reduce((sum, request) => sum + request[1], 0),
+        stops: scrollStops.length, framesQueued: animationFrames.size, historyCloses,
+        historyVisible: !domElements.find(e => e.id === 'history-view').hidden })
+    } else if (action.liveTouch) {
+      const button = domElements.find(e => e.textContent === 'Live')
+      if (!button || domElements.find(e => e.id === 'history-view').hidden) fail('Live button is not displayed')
+      const { type, x = 40, y = 20 } = action.liveTouch
+      if (!['touchstart', 'touchmove', 'touchend', 'touchcancel'].includes(type)) fail('unknown Live touch ' + type)
+      const touch = touchAt(x, y)
+      const ended = type === 'touchend' || type === 'touchcancel'
+      const result = button.dispatch(type, { touches: ended ? [] : [touch], changedTouches: [touch], timeStamp: frameTime })
+      domEvents.push({ target: 'Live', type, frame: frameNumber, ...result })
     } else if (action.event) {
       if (action.event === 'touchstart') dispatch('touchstart', { touches: [touchAt(10, 10)], timeStamp: frameTime })
       else if (action.event === 'touchmove') dispatch('touchmove', {
@@ -399,6 +434,8 @@ for (const tap of input.taps || []) {
   inputs = []
   reports = []
   scrollStops = []
+  checkpoints = []
+  domEvents = []
   frameNumber = 0
   let prevented = false
   let movePrevented = false
@@ -434,7 +471,7 @@ for (const tap of input.taps || []) {
   actions(tap.after)
   const scrollsBeforeFrame = scrolls.slice()
   drainFrames(tap.frameDelay, tap.rafInterval)
-  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs, reports, scrollStops, endedAt: frameTime })
+  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs, reports, scrollStops, endedAt: frameTime, checkpoints, domEvents })
 }
 
 let copySheet = null

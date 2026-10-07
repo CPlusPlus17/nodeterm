@@ -53,7 +53,7 @@
     historyRows.replaceChildren()
   }
   function cancelInputScroll() { cancelScroll(); closeScrollView() }
-  liveButton.addEventListener('touchstart', function (e) { e.stopPropagation() })
+  liveButton.addEventListener('touchstart', function (e) { cancelScroll(); e.stopPropagation() })
   liveButton.addEventListener('click', function (e) {
     e.stopPropagation()
     cancelInputScroll()
