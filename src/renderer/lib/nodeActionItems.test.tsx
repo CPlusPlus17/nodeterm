@@ -220,6 +220,24 @@ describe('buildNodeActionItems — filters', () => {
     ).toEqual(['[colors]', 'Set icon…', '—', 'Share live link…'])
   })
 
+  it('on the board list the live-link row comes before the account switch', () => {
+    useSettings.setState({
+      settings: { ...DEFAULT_SETTINGS, claudeAccounts: [{ id: 'acc1', label: 'Work', createdAt: 0 }] as never }
+    })
+    useAgentStatus.setState({ byId: { a1: { state: 'done', sessionId: 's1' } } } as never)
+    const live = (): MenuItem[] => [{ label: 'Share live link…', onClick: () => {} }]
+    const rows = top(
+      buildNodeActionItems(['a1'], undefined, fakeCtx([term('a1', { agentId: 'claude' })], { liveLinkMenuItems: live }), {
+        allow: BOARD_NODE_ACTION_IDS
+      })
+    )
+    const liveAt = rows.indexOf('Share live link…')
+    const switchAt = rows.findIndex((r) => r.startsWith('Switch Claude account'))
+    expect(liveAt).toBeGreaterThan(-1)
+    expect(switchAt).toBeGreaterThan(-1)
+    expect(liveAt).toBeLessThan(switchAt)
+  })
+
   it('no spatial row is ever on the board list, nor a row the board owns itself', () => {
     for (const id of BOARD_SPATIAL_ROW_IDS) expect(BOARD_NODE_ACTION_IDS).not.toContain(id)
     for (const id of ['label', 'markdown-view', 'delete'] as const) expect(BOARD_NODE_ACTION_IDS).not.toContain(id)

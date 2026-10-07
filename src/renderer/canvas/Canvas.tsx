@@ -15905,6 +15905,13 @@ export function Canvas() {
   // (same BYO-agent path as the terminal node's ✦), then apply it via renameSession.
   const aiNameSession = useCallback(
     async (projectId: string, id: string, cwd?: string) => {
+      // Every failure is reported: this funnel serves the sidebar and both boards, and a "Name with
+      // AI" that silently does nothing reads as a dead row.
+      const failed = (reason: string): void => {
+        const why = reason.trim()
+        const message = why ? `Couldn't name this session with AI: ${why}` : "Couldn't name this session with AI"
+        window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
+      }
       // Track progress in a store keyed by node id so the spinner survives the row/sidebar
       // unmounting mid-request; this Canvas-level call completes and applies the name anyway.
       useSessionNaming.getState().set(id, true)
@@ -15919,6 +15926,9 @@ export function Canvas() {
             ?.nodes.find((n) => n.id === id)?.accountId
         const r = await api.pty.generateName(id, cwd ?? '', accountId)
         if (r.ok) renameSession(projectId, id, r.message)
+        else failed(r.message)
+      } catch (e) {
+        failed(e instanceof Error ? e.message : String(e))
       } finally {
         useSessionNaming.getState().set(id, false)
       }
