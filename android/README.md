@@ -21,8 +21,13 @@ reuse, changed-key refusal, A129 native/session-host history, A130 held Live tou
 lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
 is unchanged.
 
-One normally authorized, tool-free Claude inference succeeds; it does not verify A105/A106
-live rule/question application. The fresh API-30 emulator boots initially but remains offline
+**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
+genuine captured node environment and unchanged managed hook in a sibling process. The shipped
+Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
+two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
+production-pane-child launch, A106 and wider persistence remain unverified.
+
+The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
 owned cleanup add no app/CA/APK acceptance. See [the scoped evidence](../docs/android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 

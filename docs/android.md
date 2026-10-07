@@ -20,8 +20,13 @@ reuse, changed-key refusal, A129 native/session-host history, A130 held Live tou
 lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
 is unchanged.
 
-One normally authorized, tool-free Claude inference succeeds; it does not verify A105/A106
-live rule/question application. The fresh API-30 emulator boots initially but remains offline
+**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
+genuine captured node environment and unchanged managed hook in a sibling process. The shipped
+Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
+two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
+production-pane-child launch, A106 and wider persistence remain unverified.
+
+The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
 owned cleanup add no app/CA/APK acceptance. See [the scoped evidence](#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
@@ -686,7 +691,22 @@ for the measured normal route only. Receipt
 `claude-provider-probe-proposal-6tr5n7o6/normal-auth-plan-v2/execution-record.json`, SHA-256
 `ec5c129e4d69446fb828099a8b4bf82160ba4105e7168d31e98c4ada6363fe5d`;
 its execution manifest hashes to `c41b2bbe5b75fbf8d23c592a043abbb1280058ecbb8cb19b30e13953d12bfb86`.
-Live managed-agent/app answers and physical rule persistence still require their own acceptance.
+The same reviewed sibling namespace/auth route separately passes a tool-free inference in
+**3.392 seconds / $0.00285**; `claude-sibling-auth-probe-v2-hxhkl2h_/proof/result.json` hashes to
+`5574a5f9e17b5b55602c18a583a483afd43ffeb8495052737ea7fb3c0006234f`. Safe-mode disables hooks,
+so that result supplies no application acceptance.
+
+**A105 Desktop application (2026-10-07, source `41406fef`).** Real Claude 2.1.292 runs in the
+sibling namespace with genuine captured production-node routing and the unchanged managed hook.
+The shipped Desktop preload consumer selects an original `localSettings` rule: nine actual hook
+events, one consumed/removed PermissionRequest hold, two Bash executions without a second hold,
+and the exact allow rule saved by the CLI. The **8.648-second / $0.0166058** case exits successfully
+and reaps its CLI. Private `nodeterm-new-phone-fixture-h7nho19u/home/qa-project/real-cli-a105-44b6a670/proof/result.json`
+hashes to `741b0f5a73522ec76bf29ebeab7a0cf43b9c2b19a47da0f022ecc0369356c228`; independent
+`nodeterm-new-phone-fixture-h7nho19u/proof/root-a105-application-review.json` hashes to
+`ee9e1fd9dc3fc191b1d6ede108347252d29265dc4222143bb7d4a60f97c6d434`. No phone input or production-pane-child
+launch is claimed. Android remembered-rule acceptance, A106, cross-process persistence and the
+wider matrix remain pending; the original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
 
 The newly created API-30 emulator initially boots with measured root capability in **34.28 seconds**.
 Its separate provisioning fails: the first public CA write meets a read-only system, then the

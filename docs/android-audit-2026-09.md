@@ -31,8 +31,13 @@ reuse, changed-key refusal, A129 native/session-host history, A130 held Live tou
 lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
 is unchanged.
 
-One normally authorized, tool-free Claude inference succeeds; it does not verify A105/A106
-live rule/question application. The fresh API-30 emulator boots initially but remains offline
+**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
+genuine captured node environment and unchanged managed hook in a sibling process. The shipped
+Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
+two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
+production-pane-child launch, A106 and wider persistence remain unverified.
+
+The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
 owned cleanup add no app/CA/APK acceptance. See [the scoped evidence](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
@@ -282,7 +287,7 @@ lifecycle and FPS matrix remains open.
 | [A102](#a102) | medium | | medium | protocol/gap | ✅ source fixed in `e584586f` · Cold relay attach retains trusted project launch settings; new physical checks pending |
 | [A103](#a103) | medium | | medium | protocol/gap | ✅ source fixed in `91e6a3f5` · Agent approval policy survives launch, resume and wake; new physical checks pending |
 | [A104](#a104) | medium | | medium | runtime/gap | ✅ source fixed in `2d6cb2cd` · Offscreen Sleeping nodes can wake without switching projects; new physical checks pending |
-| [A105](#a105) | low | | medium | parity/gap | ✅ source fixed in `db4abccf, 7c206ec5` · Always allow uses original concrete hook rule scopes; new physical checks pending |
+| [A105](#a105) | low | | medium | parity/gap | ✅ source fixed in `db4abccf, 7c206ec5` · Original localSettings rule application verified with real Claude/Desktop at `41406fef`; Android and wider persistence pending |
 | [A106](#a106) | low | | medium | parity/gap | ✅ source fixed in `db4abccf` · Complete held Claude questions have deterministic answers; new physical checks pending |
 | [A107](#a107) | medium | | medium | parity/gap | ✅ source fixed in `489c30a8` · Typed source control works on direct SSH; new physical checks pending |
 | [A108](#a108) | medium | | medium | parity/gap | ✅ source fixed in `d716138c`, `585e726f` · Owned SSH Board and Desktop session actions; new physical checks pending |
@@ -3776,20 +3781,26 @@ The renderer-only mounted-node nudge left offscreen/closed-project sessions Slee
 
 ## A105
 
-**Current provider prerequisite (2026-10-07):** One normally authorized tool-free inference
-passes; live held-rule/question application and physical persistence remain unverified. See
-[the separate inference receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
+**Desktop application verified (2026-10-07, source `41406fef`):** Real Claude 2.1.292 uses genuine
+captured node routing in a sibling namespace and the unchanged managed hook. The shipped Desktop
+consumer applies one original `localSettings` rule: nine hooks, one consumed/removed hold, two
+Bash executions without a second hold, and the exact CLI-saved rule; **8.648 seconds / $0.0166058**.
+Result `nodeterm-new-phone-fixture-h7nho19u/home/qa-project/real-cli-a105-44b6a670/proof/result.json`
+hashes to `741b0f5a73522ec76bf29ebeab7a0cf43b9c2b19a47da0f022ecc0369356c228`; independent review
+`nodeterm-new-phone-fixture-h7nho19u/proof/root-a105-application-review.json` hashes to
+`ee9e1fd9dc3fc191b1d6ede108347252d29265dc4222143bb7d4a60f97c6d434`. Android input, production-pane-child
+launch, A106 and wider persistence remain unverified; the original 10/22/32 ledger is unchanged.
 
 **Always allow uses original concrete hook rule scopes**
 
 Source change: `db4abccf, 7c206ec5`.
 
-A56 is now implemented without its unsafe proposed blind digit. Eligible original addRules suggestions carry exact tool/content/destination and UI confirmation; the guarded v2 reply uses updatedPermissions. Android and Desktop/Server offer the same original scopes. Gone/replaced/unsupported requests never type keys. Actual shipped managed-shell consumer and Kotlin/TypeScript fixtures pass; live CLI rule application and physical persistence remain open. iOS adoption is owed to @eneskirca.
+A56 is now implemented without its unsafe proposed blind digit. Eligible original addRules suggestions carry exact tool/content/destination and UI confirmation; the guarded v2 reply uses updatedPermissions. Android and Desktop/Server offer the same original scopes. Gone/replaced/unsupported requests never type keys. Actual shipped managed-shell consumer and Kotlin/TypeScript fixtures pass; the bounded live Desktop rule case above is verified, while Android and wider persistence remain open. iOS adoption is owed to @eneskirca.
 
 ## A106
 
 **Current provider prerequisite (2026-10-07):** One normally authorized tool-free inference
-passes; live held-rule/question application and physical persistence remain unverified. See
+passes; live full-question application and physical choice flows remain unverified. See
 [the separate inference receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
 **Complete held Claude questions have deterministic answers**

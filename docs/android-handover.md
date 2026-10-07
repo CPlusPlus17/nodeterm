@@ -23,8 +23,13 @@ reuse, changed-key refusal, A129 native/session-host history, A130 held Live tou
 lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
 is unchanged.
 
-One normally authorized, tool-free Claude inference succeeds; it does not verify A105/A106
-live rule/question application. The fresh API-30 emulator boots initially but remains offline
+**A105 Desktop application checkpoint (2026-10-07, `41406fef`).** Real Claude 2.1.292 uses the
+genuine captured node environment and unchanged managed hook in a sibling process. The shipped
+Desktop consumer applies one original `localSettings` rule: one consumed permission hold,
+two Bash executions without a second hold, and the exact rule saved by the CLI. Android input,
+production-pane-child launch, A106 and wider persistence remain unverified.
+
+The fresh API-30 emulator boots initially but remains offline
 after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
 owned cleanup add no app/CA/APK acceptance. See [the scoped evidence](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
@@ -472,6 +477,16 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### A105 real Desktop remembered-rule application (2026-10-07)
+
+At `41406fef`, real Claude 2.1.292 in the sibling namespace uses the original captured node
+environment and unchanged production hook. The shipped Desktop consumer chooses one original
+`localSettings` rule: nine hooks, one consumed/removed hold, two Bash executions without a second
+hold, and the exact CLI-saved allow rule; 8.648 seconds/$0.0166058. CLI and owned-host cleanup pass.
+No phone input or production-pane-child launch is claimed; Android A105, A106 and wider persistence
+remain pending. [Canonical receipts](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
+retain the result and independent review. The original 10/22/32 ledger is unchanged.
+
 ### Beta 19 publication, provider inference and failed emulator calibration (2026-10-07)
 
 Signed `5bda2c32` publishes A130 with fresh forced 1015/106 protocol, offline app/full TypeScript
@@ -483,7 +498,7 @@ host key through an owned ADB reverse tunnel. Emacs/vi Send, brief background/re
 continuity, viewer-close/manual Reattach and controlled SSH-handler recovery pass with original
 producer/guard/history retained; exact owned profile/key/route/timeout/host cleanup passes.
 Saved-profile/pin reuse, changed-key refusal and actual A129/A130 native behavior remain pending.
-One normal authorized tool-free Claude inference passes in
+At that earlier checkpoint, one normal authorized tool-free Claude inference passes in
 3.865 seconds/$0.002988, while A105/A106 live application remains unverified. The owned API-30
 emulator initially boots but remains offline after one provisioning reboot and one scoped
 reconnect. The console responds, the framebuffer request times out and one debugger capture
@@ -1593,8 +1608,10 @@ touch, physical ConPTY and wider lifecycle/notification acceptance remain pendin
 mode/ownership contract and known-tmux/direct-SSH gesture route. Coordinate additive page and
 invalidation adoption with iOS @eneskirca. See the [current bounded receipts](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
-Normal existing Claude authorization now passes one bounded tool-free inference; `A105`/`A106`
-live rule/question application and physical persistence remain unverified. The disposable
+Normal existing Claude authorization passes both direct and sibling tool-free inference. At
+`41406fef`, one original `localSettings` rule also passes real Claude/Desktop application (nine
+hooks, one consumed hold, two Bash executions); Android A105, A106 and wider persistence remain
+pending. See the [application receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07). The disposable
 API-30 emulator's one provisioning reboot and one scoped reconnect fail to restore live ADB;
 console/framebuffer/debugger diagnostics add no app/CA/APK proof. Its exact owned cleanup passes.
 Do not restart the stopped fixture or treat those observations as A129 acceptance. The original
