@@ -16,7 +16,30 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Beta 20 published and installed (2026-10-07, A131 — physical checks partial).**
+**Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
+Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
+offline app compilation and full TypeScript. [Android run `37678829862`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37678829862),
+attempt 1, passes all five jobs and ten required steps. Retained-signer **beta 21/code 22** is
+installed on Pixel 7a, APK SHA-256 `91638d05e6192794675dee6a045f53f19cdea707187ebb3482b8ae3f10320120`.
+All **46 SDK 36 artifact checks** pass; actual SDK 37 tools are unavailable. The 5.083-second
+beta-20→21 update preserves first-install time and the complete notification grant/flags;
+the same owned SSH profile and session rows remain visible after the update.
+A fresh owned direct-SSH producer completes all 1200 numbered rows and its confirmed 24-byte
+completion write in **48.23 seconds**. Actual producer progress crosses Home/resume; later phone
+screens show numbered/Unicode rows, the completion marker and older tmux history after a swipe.
+The crossing uses receipt/filesystem order, not exact phone-monotonic latency. The original A132
+negative remains separate, with attribution open. A133's same-page exit-0 display retains eight
+Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
+and smaller-font redraw pass. Clipboard contents, final-marker Copy and post-font link hits are
+unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The APK is bound to `ef4caec2`; a later documentation-only commit has separate provenance.
+The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
+with no PIN input or lock/security changes. The owned QA profile/public-key line/reverse are
+removed, timeout restored to 15000 ms, and the exact disposable host retires with listeners closed
+and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
+and no PR is opened.
+
+**Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
 Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
 offline app compilation and full TypeScript; [Android run `37659190980`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37659190980)
 passes all five jobs and ten required steps. Retained-signer **beta 20/code 21** is installed on
@@ -32,7 +55,7 @@ not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 
 wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
 remain outside these observations. See [the bounded receipts](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
-**Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
+**Closed SSH/tmux display follow-up (A133 — published source repair; bounded physical checks pass).**
 Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
 This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
 Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **27 shipped-xterm
@@ -40,9 +63,12 @@ component cases pass in the permanent behavioral JUnit regression**, alongside *
 app source-pin methods** and the existing swipe suite. The first full run caught a same-view delayed
 Enter regression; layout changes now preserve it while viewer retirement still cancels it. Its
 27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
-mutant and three separate app source-pin mutants remain separately recorded below. Full gates/CI,
-a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
-`656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
+mutant and three separate app source-pin mutants remain separately recorded below. Final
+1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
+installed. Bounded same-page closed-screen, Copy-sheet, link-offer and font-redraw checks pass;
+clipboard, post-font link hits and wider lifecycle/TUI checks remain unverified. The earlier beta 20
+came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
+short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
 **10 Pass / 22 Partial / 32 Pending**. The equivalent iOS EOF/display behavior needs adoption review
 by @eneskirca; no wire change is introduced.
@@ -343,12 +369,12 @@ lifecycle and FPS matrix remains open.
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
 | [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 and beta 19 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
 | [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; beta 19 copy-mode Send and controlled SSH-handler recovery reconfirmed; exact beta-17 End and owned cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
-| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 installation was an earlier checkpoint; beta 20/code 21 is now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
+| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 installation was an earlier checkpoint; beta 21/code 22 is now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
 | [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
 
-| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 installed, bounded output/background partial with A132 open and A133 acceptance pending · Buffered output and unready-page commands outlive their terminal viewer |
+| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 was installed at that checkpoint; beta 21 now passes bounded active-output/background and A133 same-page checks, with original A132 attribution and wider lifecycle acceptance pending · Buffered output and unready-page commands outlive their terminal viewer |
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Output completion marker absent from native capture after all 1200 numbered rows; attribution pending |
-| [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed locally in this change; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full gates/CI/new APK/physical checks pending · Closed SSH/tmux exit erases the last visible pane |
+| [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention/Copy-sheet/link offers/font redraw pass, clipboard/post-font/wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
 
 ## A01
 
@@ -5322,7 +5348,7 @@ No source fix, Android-only attribution or checklist promotion is claimed.
 **Phone exit display no longer shows previously displayed terminal history**
 
 - Severity: **medium**; effort: small; area: phone; kind: bug.
-- Status: **Source-fixed locally in this change; full gates/CI/new APK/physical checks pending.**
+- Status: **Source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; final 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention/Copy-sheet/link offers/font redraw pass, clipboard/post-font/wider matrix unverified.**
 
 On beta 20/code 21 Pixel 7a through direct SSH to the same owned tmux target, a separate real
 phone Send contains `printf 'A131_17930152_MOBILE_FINAL_TAIL\n'; exit 0`. The later screenshot
@@ -5339,8 +5365,10 @@ transport capabilities stay unchanged; there is no Live/input path from the clos
 The [local source checkpoint](android.md#closed-sshtmux-exit-display-source-checkpoint-2026-10-07-a133)
 records 26 passing actual-xterm component cases, 11 semantic assertion mutants with 23-case
 control/restored and one additional 26-case geometry assertion mutant. Permanent behavioral
-JUnit and three app source-pin methods pass; full gates/CI/new APK and physical checks are
-pending. This preserves the last rendered pane on
+JUnit and three app source-pin methods pass; final 1033/110/app/TS and exact-head CI pass at
+`ef4caec2`, and beta 21/code 22 is installed. Bounded same-page retention/Copy-sheet/link offers
+and smaller-font redraw pass; clipboard/post-font/wider lifecycle checks remain unverified.
+This preserves the last rendered pane on
 one page, not backend full history/unpainted bytes or persistent history across backgrounding.
 The original phone final-marker emission remains unverified. iOS needs the equivalent EOF/display
 review by @eneskirca; no wire change is introduced.
@@ -5351,5 +5379,12 @@ swipe-barrier test. This follow-up advances that epoch only when the viewer/disp
 geometry still invalidates pending EOF captures through the separate revision. All 16 focused
 methods and the now-required 27 component cases pass. Reinstating the old epoch placement fails
 only the new layout/Enter assertion, with healthy/restored controls passing. The linked source
-checkpoint records this separately from the earlier mutation proofs; final publication/phone
-acceptance remains pending.
+checkpoint records this separately from the earlier mutation proofs. Final source publication,
+mandatory gates, exact-head CI and retained-signer beta21 installation pass. The later bounded
+Pixel7a case retains eight Unicode rows/wraps/final tail at exit0, exposes normal Copy-sheet
+filtering/selection and exact OSC8/plain URL offers, and survives smaller-font redraw. Its
+31-record physical review is `beta21-closed-physical-independent-xs0wdxrr/review.json`, SHA-256
+`7145b2cac1c7fbfed39503de5ef00acec8c1bfbce13650bfe6b3b1e5dee364ab`. Clipboard contents,
+final-marker Copy, post-font link hits and unrelated TUI/lifecycle checks remain unverified.
+The exact owned target/logger exit naturally; fixture/profile/key/reverse/timeout cleanup is
+separately recorded in the linked checkpoint. No full-device or A129/A130 acceptance is claimed.
