@@ -832,7 +832,7 @@ import {
   applyMutationToFlow,
   agentLaunchOverride,
   claudeLaunchCommand,
-  COLLAPSED_HEIGHT,
+  toggleCollapsed,
   alignNodes,
   arrangeByLineage,
   arrangeGroupChildren,
@@ -9308,22 +9308,7 @@ export function Canvas() {
 
   const toggleCollapseNodes = useCallback(
     (ids: string[]) => {
-      const set = new Set(ids)
-      setNodes((ns) =>
-        ns.map((n) => {
-          if (!set.has(n.id)) return n
-          const next = !n.data.collapsed
-          const expandedHeight =
-            (n.data.expandedHeight as number) ?? n.measured?.height ?? (n.height as number) ?? 300
-          const height = next ? COLLAPSED_HEIGHT : expandedHeight
-          return {
-            ...n,
-            height,
-            style: { ...n.style, height },
-            data: { ...n.data, collapsed: next, expandedHeight }
-          }
-        })
-      )
+      setNodes((ns) => toggleCollapsed(ns, ids))
       markDirty()
     },
     [setNodes, markDirty]

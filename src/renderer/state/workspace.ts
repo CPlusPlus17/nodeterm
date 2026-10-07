@@ -75,6 +75,33 @@ const FILES_SIZE = { width: 340, height: 460 }
 /** Height of a node when collapsed (header only). */
 export const COLLAPSED_HEIGHT = 40
 
+/**
+ * Flip `collapsed` on every node in `ids`. Collapsing records the LIVE height (a user
+ * resize never writes `expandedHeight`, so the stored value can be the load-time size); expanding
+ * gives back what was recorded.
+ */
+export function toggleCollapsed(nodes: CanvasNode[], ids: Iterable<string>): CanvasNode[] {
+  const set = new Set(ids)
+  return nodes.map((n) => {
+    if (!set.has(n.id)) return n
+    const next = !n.data.collapsed
+    const live = n.measured?.height ?? (n.height as number | undefined)
+    const stored = n.data.expandedHeight as number | undefined
+    const expandedHeight =
+      (next ? live ?? stored : stored ?? live) ?? COLLAPSED_FALLBACK_HEIGHT[n.type ?? 'terminal'] ?? 300
+    const height = next ? COLLAPSED_HEIGHT : expandedHeight
+    return {
+      ...n,
+      height,
+      style: { ...n.style, height },
+      data: { ...n.data, collapsed: next, expandedHeight }
+    }
+  })
+}
+/** Height when a node has neither a measurement nor a recorded size — the per-kind values the four
+ *  toggles this replaced each used. */
+const COLLAPSED_FALLBACK_HEIGHT: Partial<Record<string, number>> = { terminal: 300, sticky: 200, files: 460 }
+
 /** User data carried in the React Flow node's data field. */
 export interface NodeData {
   title: string
