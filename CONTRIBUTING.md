@@ -144,8 +144,8 @@ menu, the sessions-sidebar row menu and both kanban card menus (through
 `components/kanban/cardMenu.tsx`) build from it. Decide in the same change whether a card offers
 the new row: a card takes only `BOARD_NODE_ACTION_IDS`, and a row that acts on canvas position goes
 in `BOARD_SPATIAL_ROW_IDS` instead. Remember the board acts on nodes of projects that are NOT on the
-canvas (the Omni board): write through `nodeWritesFor(projectId)` (`lib/nodeWriteRouter.ts`), never
-a live-canvas callback, and report a failure with a `nodeterm:toast`.
+canvas (the Omni board): write through Canvas's `nodeWritesFor(projectId)` (built on
+`createNodeWriteRouter`, `lib/nodeWriteRouter.ts`), never a live-canvas callback, and report a failure with a `nodeterm:toast`.
 `lib/nodeActionItems.guard.test.ts` fails on a second copy of the rows.
 
 A board card's **source** is a registry entry, not a branch you add at a call site
