@@ -5,7 +5,27 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Native history published source checkpoint (2026-10-07, A129 — physical acceptance pending).**
+**Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
+Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
+checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
+and full TypeScript pass. [Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
+passes all five jobs and ten required steps. Retained-signer **beta 19/code 20** is installed
+on the intended Pixel 7a, SHA-256 `e7271ebe1c1d65d8f6a09f7c59ab4b0042081c152c421568caabdcf6965bad42`.
+The 6.18-second beta-17→19 update preserves first-install time and the notification grant/flags;
+actual SDK 36 artifact checks pass and SDK 37 tools are unavailable. Public SSH identity continuity
+and a fresh explicit-profile first pin pass through an owned ADB reverse tunnel. Emacs/vi copy-mode
+Send, brief background/resume draft retention, neutral viewer-close/manual Reattach and controlled
+SSH-handler recovery pass on the disposable Linux host; exact owned cleanup passes. Saved-profile/pin
+reuse, changed-key refusal, A129 native/session-host history, A130 held Live touch and the wider
+lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
+is unchanged.
+
+One normally authorized, tool-free Claude inference succeeds; it does not verify A105/A106
+live rule/question application. The fresh API-30 emulator boots initially but remains offline
+after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
+owned cleanup add no app/CA/APK acceptance. See [the scoped evidence](#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
+
+**Earlier native history publication (2026-10-07, A129 — physical acceptance pending).**
 Signed backend `0818bbed` and host/Android/producer/CI `2d693263` are included in the signed,
 pushed integration `1add0408`. They implement
 `pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
@@ -40,16 +60,16 @@ The separate published A128 checkpoint `944223ef` has **984 protocol methods / 1
 **360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
 [Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
 Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
-binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
+binding. At that earlier checkpoint, installed beta 17/code 18 remained from `a79375c3`; no new physical acceptance or change
 to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
 
-**Held Live-button source follow-up (2026-10-07, A130 — focused fix; publication pending).**
-Signed `9da36320` stops old momentum and the native pending-scroll queue on touch-down, preserving
-history and its display epoch until click. Three new LiveTouch JVM methods pass within
-**48 methods / 7 suites** in control and restored runs, with zero failures/errors/skips.
-**Three semantic mutants** (old handler, premature history close, parent gesture) fail assertions.
-Final integration gates/CI, a new APK and actual WebView/physical acceptance remain pending
-at this focused checkpoint; the `1add0408` held-touch failure remains historical.
+**Held Live-button published follow-up (2026-10-07, A130 — app acceptance pending).**
+Signed `9da36320`, included in published `5bda2c32`, stops old momentum and the native pending-scroll
+queue on touch-down, preserving history and its display epoch until click. Three new LiveTouch
+JVM methods pass within **48 methods / 7 suites** in control and restored runs, with zero
+failures/errors/skips. **Three semantic mutants** (old handler, premature history close, parent
+gesture) fail assertions. Exact-head final gates/CI pass and beta 19/code 20 is installed;
+actual WebView/physical acceptance remains pending. The `1add0408` failure remains historical.
 
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
@@ -58,8 +78,8 @@ socket; paste and Enter remain separate writes at least 150 ms apart. A lost rec
 may have been sent stays uncertain and never replays. Older live hosts refuse without being
 restarted. The public Android `pty.submitComposed` request/result is unchanged; its actual
 backend producers are tested through the relay and Kotlin client. Windows ConPTY and phone
-acceptance of these additional backends remain unverified. The installed beta 17 still comes
-from `a79375c3`; this host-side follow-up does not represent a new installed APK.
+acceptance of these additional backends remain unverified. At that earlier checkpoint, installed beta 17 still came
+from `a79375c3`; that host-side follow-up did not represent a new installed APK.
 
 **Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
 from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
@@ -559,6 +579,152 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
+### Beta 19 publication, provider and emulator checkpoint (2026-10-07)
+
+Signed, pushed `5bda2c321118712bb7684eda2b829eaa427f58d7` includes A130's held Live-touch fix.
+Fresh forced offline protocol checks execute **1015 methods / 106 suites** with zero failures,
+errors or skips; offline app compilation and full TypeScript pass. Exact-head
+[Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
+passes all five jobs and ten required steps. The private `a130-publication-final-kyernmsh/`
+receipts are `gates.json`, SHA-256
+`a2c06567f48f3583e3aa34dcc4881031626eb94a98afe23c6d0c4168cac892d7`, and `ci-result.json`, SHA-256
+`77c8a5c5dc92a4b41f3b84f3819d0756542f9aeb1d26f6e66e9b5f57b9d89135`.
+Retained-signer beta 19/code 20 hashes to
+`e7271ebe1c1d65d8f6a09f7c59ab4b0042081c152c421568caabdcf6965bad42`; its actual SDK-36 artifact
+review is `beta19-final-recipes-r5x3c9z6/build/artifact-review.json`, SHA-256
+`9157b0f7b1369c1a1e899c67cb4a82dae973e5eac286f2cf28483f972c202186`.
+SDK 37 is absent; no SDK-37 artifact verification or A129/A130 actual app/WebView acceptance
+is claimed by this checkpoint. One 6.18-second same-signer `adb install -r` updates the intended
+Pixel 7a from beta 17/code 18 to beta 19/code 20; the installed public APK hashes exactly to the
+reviewed artifact. First-install time and `POST_NOTIFICATIONS`'s `granted=true` plus full flags
+are identical before/after. The installer launches no app and makes no UI input; the later
+connection check below is separate. Saved-profile/pin reuse and notification behavior remain unverified.
+Update request `beta19-pixel7a-ui-v2-pzsxl_p5/receipts/update-request.json` hashes to
+`6ffca2c1f454c82cd7605feb2d586af2148340272feef15414b562ed6d22d11e`; actual
+`update-result.json` hashes to `a5478736d7cdedb48e12febdd5493e9cd522c5b1107c01ab66bad92defcad29e`.
+
+**Fresh direct-SSH admission.** Beta 19's normal Add SSH server screen displays the same public
+key as the pre-beta-17 admission: SHA-256
+`24fa408ccdbd50a77ae9328cdf2f8a247c4661370b50517c1993ed756c3dbcad` of the displayed line.
+A new temporary profile uses `qa@127.0.0.1:29453` and the explicit
+`/home/mgysin/.config/nodeterm-new-phone-fixture` folder. Its successful Add SSH screen shows
+the first host-key pin `SHA256:cKHWVYY2dvG+/iYairy/ZWCLnjqu8PsHOj81i2dWT44`, matching the fresh
+owned Linux fixture's ready receipt. This is physical Pixel 7a SSH authentication through an
+owned ADB reverse tunnel, not LAN, cellular, QR, relay or changed-host-key enforcement. No old
+saved profile/pin is reused; notification behavior and A129 native/session-host history or A130
+held Live-touch behavior remain unverified.
+
+The fixture is prepared through the ordinary Desktop renderer factory and public preload API:
+one original local project and two normal Terminal UI creations retain their original pane
+owners and full capture bytes across a normal reload. The shell's capture contains all 1800
+sequential markers; these are setup observations. The separate physical checks and exact owned
+cleanup below have their own raw evidence. Private setup proofs are:
+
+- `beta19-pixel7a-ui-v2-pzsxl_p5/receipts/beta19-connected.xml`, SHA-256
+  `5486fbca471c85178ff60cecd8c542689e495ea211d21cc7369f3db7083f031d`.
+- `nodeterm-new-phone-fixture-0z36dob3/proof/root-phone-key-admission.json`, SHA-256
+  `eb2594e7c2b1beef65511a1dd611b04932d91af22cacaf8e069712facad72fb4`; the prior public identity is
+  bound by `nodeterm-new-phone-fixture-q5v1nuem/proof/physical-pixel7a-beta17/01-public-key-admission.json`,
+  SHA-256 `457b3812c895fc12aa038ba4135f59bfcc5734ee49d1d5e519e44f5fabef9c9f`.
+- `nodeterm-new-phone-fixture-0z36dob3/proof/cdp-1791372226890-323869-result.json`, SHA-256
+  `462d35c846911a0c5267179264d56d9d35a5fe2205c7cdb7ee81119aad55e05a`, and its post-reload
+  `cdp-1791372268631-334926-result.json`, SHA-256
+  `d855b36fa4cefeb7247f8fdd1fc1798285ba6ae9888f0387eeadd838b440358b`.
+- Independent read-only setup/source review
+  `beta19-cdp-setup-independent-bvt63heg/independent-review.json`, SHA-256
+  `c243e7170fb5872ccbb181701e5e4af3e3c4813038aa951b5c2e0566f4dc7ab2`.
+
+**Bounded beta-19 Pixel 7a checks.** The original `%1` shell remains PID 460/birth `14650700`,
+with server PID 379/birth `14650581`, the same private socket inode 288 and unchanged sibling
+`%0` guard. At 50×43, emacs and vi copy-mode Send each executes its own witness exactly once
+(counter/output line 1), cancels copy mode and retains all 1800 earlier markers. The emacs
+acknowledgement clears the draft. One observed launcher/background→app resume preserves the
+draft; this does not establish process-death, long-background or notification behavior.
+
+Find returns one matching line in 1806 retained lines for the first
+`BETA19_QA_e7685ad9 0000` marker while preserving the unsent draft. The separate
+`beta19-pixel7a-ui-v2-pzsxl_p5/receipts/beta19-find-result.xml` receipt hashes to
+`a9e9ade92de37cf6543163019a717fa930de69249e8190f4efc03c3d035301a3`.
+
+Terminating only viewer PID 1643/birth `14692640` shows the neutral “terminal connection closed
+(exit 1)” notice, disables Send at its actual clickable ancestor and retains the draft. Manual
+Reattach creates viewer PID 2679/birth `14717301`, preserving the producer and the complete
+byte-identical 50×43 history; sending the retained draft adds exactly one execution (emacs counter 2).
+Terminating only that connection's SSH handler PID 568/birth `14660326` then automatically
+reconnects through handler 3015/birth `14723893` and viewer 3079/birth `14723975`. The vi draft,
+producer, guard and complete same-grid history survive; the counter stays 1 until explicit Send,
+then becomes 2 and the draft clears. The listener is not signalled. Temporary viewerless geometry
+is 88×24, so no same-grid history equality is claimed during that interval. The two screenshots
+show ordinary tmux history moving to earlier rows; they do not exercise A129's inert native history,
+A130's held Live button, FPS or momentum.
+
+Normal Forget removes only the temporary QA profile. Cleanup removes one exact phone public-key
+line from each of the two owned fixture homes while preserving all other authorization bytes;
+the owned `tcp:29453` reverse route is removed and the original screen timeout `600000` is restored.
+The current `0z36dob3` fixture stops through its nonce-validated supervisor: app/server exit, all six
+owned generations retire, both listeners close and generated private authentication is removed.
+All 21 runtime pins and 136 built outputs are independently rehashed unchanged. This is controlled
+owned cleanup, not ordinary app Quit or a new managed End test.
+
+The independent measured record `beta19-bounded-physical-review-sqflgg52/measured-cases.json`
+binds 74 raw files, SHA-256 `20d4e29ae1e07609c5b3df96db3e2a0a1100614cb9cf157ae7b9b1e454cbc9e1`.
+It includes the separate UI, native counter/history, signal and cleanup records. Actual current-host
+`nodeterm-new-phone-fixture-0z36dob3/proof/runner-result.json` hashes to
+`bca0f7a8e5697dc77f97fe30d3fba76b91b2e93d8b9cbc7a28ffe99d0c8a8d19`; fresh
+`nodeterm-new-phone-fixture-0z36dob3/proof/agent-stop-verification.json` hashes to
+`fe046dda3d77702886305694123494bbf2fbb816e4a17932c0f9da9cb4cc2db4` and binds this host's stop request,
+nonce, process generations and unchanged outputs. The deterministic successful runner result also
+matches the prior fixture's content hash; the current path/generation is separately verified.
+These Linux/direct-SSH observations leave A105/A106 live application, A129/A130 native app behavior,
+changed-key refusal, held/uncertain Send races, cellular/QR/relay and the original full device matrix open.
+
+Normal existing Claude authorization succeeds for **one bounded tool-free inference** in
+**3.865 seconds**, costing **$0.002988**. It copies no credentials, invokes no tool and verifies
+neither held remembered-rule application (`A105`) nor full-question application (`A106`).
+Their historical HTTP-401 attempts remain separate; this request establishes usable inference
+for the measured normal route only. Receipt
+`claude-provider-probe-proposal-6tr5n7o6/normal-auth-plan-v2/execution-record.json`, SHA-256
+`ec5c129e4d69446fb828099a8b4bf82160ba4105e7168d31e98c4ada6363fe5d`;
+its execution manifest hashes to `c41b2bbe5b75fbf8d23c592a043abbb1280058ecbb8cb19b30e13953d12bfb86`.
+Live managed-agent/app answers and physical rule persistence still require their own acceptance.
+
+The newly created API-30 emulator initially boots with measured root capability in **34.28 seconds**.
+Its separate provisioning fails: the first public CA write meets a read-only system, then the
+single authorized guest reboot never reaches a changed boot ID/live ADB within its 300-second
+observation. One subsequent serial-scoped private reconnect also stays offline for 60 seconds.
+The owned console responds with “virtual device is running”; its one official framebuffer
+request times out after 10 seconds and produces no PNG. One bounded read-only GDB stack capture
+then detaches explicitly, with the same QEMU non-stopped and `TracerPid=0`; the waiting renderer
+threads and stripped frames do not establish a conclusive cause. No app launch, installed APK,
+CA trust, TLS/relay or A129 app acceptance is established. All work targets this disposable
+emulator's private ADB port 5039, separate from the physical phone.
+
+Private raw proofs (under `/home/mgysin/.cache/nodeterm-android-work/`) are:
+
+- Initial `a129-disposable-emulator-h4w8ds5l/proof/ready.json`, SHA-256
+  `887fec47bfede3bf28c578c839de9bf78d15b9c886630a009e12f3facfee2b22`.
+- First CA-write refusal `a129-disposable-provision-fjf7ufxt/proof/provision-result.json`, SHA-256
+  `325009b480e3c259997a85e50004820e05c7838a75d7bd869a170f2767cb8f12`.
+- `a129-disposable-provision-fp5wo6vy/proof/provision-result.json`, SHA-256
+  `a07b93803acb47ed275393c96f320e8ca8c407ad99d897d7b81e1ef50a5c80ef`.
+- `a129-scoped-reconnect-ti7n8bs3/proof/result.json`, SHA-256
+  `5efebbbf3ddee482533835e9a0671d473ce9d02bbe2064fb65506f467b8a3c5c`.
+- `a129-owned-console-diagnostic-gqwvmz78/console-screenshot-result.json`, SHA-256
+  `a61411a50f2574c837a1ca23cb6e4ecaf361c24ebb289d92fe7da54ebcfd35fb`.
+- `a129-owned-qemu-backtrace-2_iu1f5z/result.json`, SHA-256
+  `00ae08c3b6da28bb394ad5bc793763a16534ac9deef96984ee93b727d530782b`;
+  its raw `backtrace.stdout.txt` hashes to
+  `5b4d5f68467d46c7acaabc3a05ac62039703e5711351171b378406a5075a95bc`.
+- `a129-disposable-emulator-h4w8ds5l/proof/stop-result.json`, SHA-256
+  `152926cb678b069e1409796951bf65f29d333a0b55cfce90c90d25d083df2d9a`.
+
+The exact owned supervisor is retired, both child processes are reaped and all owned ports close;
+pristine cached images and existing AVD metadata remain unchanged. No stopped fixture is reused.
+This failed disposable calibration leaves the original 64-item **10 Pass / 22 Partial /
+32 Pending** ledger unchanged. Next work is fresh owned-fixture app/phone acceptance, A105/A106
+live application and the remaining lifecycle/notification/hosted-backend obligations; it is
+not another blind emulator reboot or reconnect. Regular Desktop deployment and a PR remain separate.
+
 <a id="native-history-scrolling"></a>
 
 ### Native history scrolling implementation (A129)
@@ -619,8 +785,8 @@ receipt `a129-fixture-cleanup-proof-4ev5ts54/final-result.json` has SHA-256
 test plus one assertion-caught mutant. These separate scopes receive no combined mutation total.
 Published `1add0408` passes the fresh 1012/105 protocol, offline app, 568/52 affected Vitest
 (exactly four existing Windows process-tree skips), full TypeScript and all-five/ten-step
-Android CI `37602046133` checks. Signed beta 18/code 19 is ready and not installed on the intended phone. Installed
-beta 17, existing tmux/direct-SSH receipts and the physical checklist remain unchanged.
+Android CI `37602046133` checks. At that earlier checkpoint, signed beta 18/code 19 was ready
+and not installed on the intended phone; installed beta 17 and the physical checklist were unchanged.
 [A130](android-audit-2026-09.md#a130) separately records the historical held Live-button
 failure and focused source fix; neither source-level proof is actual WebView acceptance.
 
@@ -2802,16 +2968,18 @@ later fix left to a device.
 **Native history scrolling (`A129`, published source; acceptance pending).** Published
 `1add0408` adds negotiated inert history and mouse routing through its captured backend. The
 [implementation checkpoint](#native-history-scrolling) keeps the original component failure
-separate from the passing source gates and CI. Beta 18/code 19 is ready and not installed on the intended phone; the
-installed beta 17 has not acquired this change. Actual app/WebView, physical ConPTY and phone
-acceptance remain unverified.
+separate from the passing source gates and CI. At that earlier checkpoint, beta 18/code 19 was
+ready and not installed, and installed beta 17 had not acquired this change. The current beta-19
+checkpoint verifies bounded known-tmux/direct-SSH cases; inert native/session-host app history and
+physical ConPTY acceptance remain unverified.
 
 **Held Live-button touch (`A130`, focused source fix; acceptance pending).** Touch-down now
 stops old momentum and native pending movement without closing history or advancing its
 display epoch. The [finding](android-audit-2026-09.md#a130) retains the `1add0408` failure
 (20 additional requests / 23 notches over 512 ms) separately from the passing 48/7
-control/restored checks and three semantic assertion mutants. Final integration gates/CI, a
-new APK and actual WebView/physical acceptance remain pending at this focused checkpoint.
+control/restored checks and three semantic assertion mutants. Final gates/CI pass on published
+`5bda2c32`, and beta 19/code 20 is installed with measured update preservation. Actual
+WebView/physical behavior acceptance remains pending.
 Device checklist item 20 includes this held/moved/cancelled Live-touch and late-page check; the
 original 64-row physical ledger remains unchanged.
 

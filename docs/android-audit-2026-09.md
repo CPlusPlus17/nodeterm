@@ -16,7 +16,27 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Native history published source checkpoint (2026-10-07, A129 — physical acceptance pending).**
+**Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
+Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
+checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
+and full TypeScript pass. [Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
+passes all five jobs and ten required steps. Retained-signer **beta 19/code 20** is installed
+on the intended Pixel 7a, SHA-256 `e7271ebe1c1d65d8f6a09f7c59ab4b0042081c152c421568caabdcf6965bad42`.
+The 6.18-second beta-17→19 update preserves first-install time and the notification grant/flags;
+actual SDK 36 artifact checks pass and SDK 37 tools are unavailable. Public SSH identity continuity
+and a fresh explicit-profile first pin pass through an owned ADB reverse tunnel. Emacs/vi copy-mode
+Send, brief background/resume draft retention, neutral viewer-close/manual Reattach and controlled
+SSH-handler recovery pass on the disposable Linux host; exact owned cleanup passes. Saved-profile/pin
+reuse, changed-key refusal, A129 native/session-host history, A130 held Live touch and the wider
+lifecycle/provider matrix remain pending. The original **10 Pass / 22 Partial / 32 Pending** ledger
+is unchanged.
+
+One normally authorized, tool-free Claude inference succeeds; it does not verify A105/A106
+live rule/question application. The fresh API-30 emulator boots initially but remains offline
+after its one provisioning reboot; its bounded reconnect/screenshot/debugger diagnostics and
+owned cleanup add no app/CA/APK acceptance. See [the scoped evidence](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
+
+**Earlier native history publication (2026-10-07, A129 — physical acceptance pending).**
 Signed backend `0818bbed` and host/Android/producer/CI `2d693263` are included in the signed,
 pushed integration `1add0408`. They implement
 `pty.attach`'s `scrollV1` capability and `pty.scrollV1` for bounded, inert native/session-host
@@ -51,16 +71,16 @@ The separate published A128 checkpoint `944223ef` has **984 protocol methods / 1
 **360 affected Vitest tests / 26 files** and all five jobs/ten required steps green in
 [Android run `37594743169`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37594743169).
 Its private `a128-publication-1vq7hcgc/gates.json` and `ci-result.json` retain that exact source
-binding. Installed beta 17/code 18 remains from `a79375c3`; no new physical acceptance or change
+binding. At that earlier checkpoint, installed beta 17/code 18 remained from `a79375c3`; no new physical acceptance or change
 to the original **10 Pass / 22 Partial / 32 Pending** ledger is claimed.
 
-**Held Live-button source follow-up (2026-10-07, A130 — focused fix; publication pending).**
-Signed `9da36320` stops old momentum and the native pending-scroll queue on touch-down, preserving
-history and its display epoch until click. Three new LiveTouch JVM methods pass within
-**48 methods / 7 suites** in control and restored runs, with zero failures/errors/skips.
-**Three semantic mutants** (old handler, premature history close, parent gesture) fail assertions.
-Final integration gates/CI, a new APK and actual WebView/physical acceptance remain pending
-at this focused checkpoint; the `1add0408` held-touch failure remains historical.
+**Held Live-button published follow-up (2026-10-07, A130 — app acceptance pending).**
+Signed `9da36320`, included in published `5bda2c32`, stops old momentum and the native pending-scroll
+queue on touch-down, preserving history and its display epoch until click. Three new LiveTouch
+JVM methods pass within **48 methods / 7 suites** in control and restored runs, with zero
+failures/errors/skips. **Three semantic mutants** (old handler, premature history close, parent
+gesture) fail assertions. Exact-head final gates/CI pass and beta 19/code 20 is installed;
+actual WebView/physical acceptance remains pending. The `1add0408` failure remains historical.
 
 **Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
 attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
@@ -69,8 +89,8 @@ socket; paste and Enter remain separate writes at least 150 ms apart. A lost rec
 may have been sent stays uncertain and never replays. Older live hosts refuse without being
 restarted. The public Android `pty.submitComposed` request/result is unchanged; its actual
 backend producers are tested through the relay and Kotlin client. Windows ConPTY and phone
-acceptance of these additional backends remain unverified. The installed beta 17 still comes
-from `a79375c3`; this host-side follow-up does not represent a new installed APK.
+acceptance of these additional backends remain unverified. At that earlier checkpoint, installed beta 17 still came
+from `a79375c3`; that host-side follow-up did not represent a new installed APK.
 
 **Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
 from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
@@ -284,10 +304,10 @@ lifecycle and FPS matrix remains open.
 | [A124](#a124) | medium | | small | host/bug | ✅ fixed in `651f46da`; 38 affected tests / full TypeScript and three assertion-caught isolated mutants; one Pixel 7a manual-SSH shell creation/input/reopen/app-restart case passes on `40731381` · Managed SSH New rejects an available absolute default shell as unavailable |
 | [A125](#a125) | medium | | small | desktop/bug | ✅ source-fixed in `415dae9b`; eight bounded Linux Desktop reconnect cases pass at `5b7286b3` with A126; historical negative, 13 new/100 affected tests and six mutants retained; one two-host inactive-global native case passes at `59e4c93e`; phone/wider scope open · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
-| [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
-| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; exact owned End/cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
-| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 ready/not installed on the intended phone, physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
-| [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320` at focused checkpoint; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; original `1add0408` failure retained; final gates/CI/new APK and actual WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
+| [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 and beta 19 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
+| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; beta 19 copy-mode Send and controlled SSH-handler recovery reconfirmed; exact beta-17 End and owned cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
+| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
+| [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
 
 ## A01
 
@@ -3756,6 +3776,10 @@ The renderer-only mounted-node nudge left offscreen/closed-project sessions Slee
 
 ## A105
 
+**Current provider prerequisite (2026-10-07):** One normally authorized tool-free inference
+passes; live held-rule/question application and physical persistence remain unverified. See
+[the separate inference receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
+
 **Always allow uses original concrete hook rule scopes**
 
 Source change: `db4abccf, 7c206ec5`.
@@ -3763,6 +3787,10 @@ Source change: `db4abccf, 7c206ec5`.
 A56 is now implemented without its unsafe proposed blind digit. Eligible original addRules suggestions carry exact tool/content/destination and UI confirmation; the guarded v2 reply uses updatedPermissions. Android and Desktop/Server offer the same original scopes. Gone/replaced/unsupported requests never type keys. Actual shipped managed-shell consumer and Kotlin/TypeScript fixtures pass; live CLI rule application and physical persistence remain open. iOS adoption is owed to @eneskirca.
 
 ## A106
+
+**Current provider prerequisite (2026-10-07):** One normally authorized tool-free inference
+passes; live held-rule/question application and physical persistence remain unverified. See
+[the separate inference receipt](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07).
 
 **Complete held Claude questions have deterministic answers**
 
@@ -5056,7 +5084,8 @@ PTY, foreground CLI, physical Windows ConPTY or phone acceptance, and earns no m
 Existing tmux and direct-SSH scrolling provenance remains unchanged: those streams attach real
 tmux clients with mouse handling enabled. Their custom-binding, gesture and momentum checks do
 not verify native-backend history scrolling. A128 composed Send is a separate action and does
-not resolve this bug; the installed beta 17 and original **10 / 22 / 32** checklist are unchanged.
+not resolve this bug; at that earlier checkpoint, installed beta 17 and the original
+**10 / 22 / 32** checklist were unchanged.
 
 **Published source-fixed implementation.** `pty.attach` advertises `scrollV1:true`;
 `pty.scrollV1 {streamId, dir:"up"|"down", lines:1..20, viewId?}` returns `history` with `viewId`,
@@ -5097,12 +5126,12 @@ own source binding and classifications; no aggregate mixes them or prior attempt
 Published integration `1add0408` passes forced fresh 1012/105 protocol checks with no
 failures/errors/skips, offline app, 568/52 affected Vitest tests with exactly four existing
 Windows process-tree skips, full TypeScript and all-five/ten-step Android CI `37602046133`,
-attempt 1. Signed beta 18/code 19 is ready and not installed on the intended phone, SHA-256
+attempt 1. At that earlier checkpoint, signed beta 18/code 19 was ready and not installed on the intended phone, SHA-256
 `19d55ee177335064b1edb4874b6d27216862d16a7d30ebe476875c566cd263e0`; actual retained-signer
 artifact checks use SDK 36, while SDK 37 artifact verification is unavailable. Actual app/WebView
 and physical ConPTY/phone acceptance remain unverified. Regular Desktop is not deployed and
-no PR is opened. Installed beta 17/code 18 from `a79375c3` and the original 10/22/32 physical
-ledger remain unchanged. The separate published
+no PR is opened. At that earlier checkpoint, installed beta 17/code 18 from `a79375c3` and the
+original 10/22/32 physical ledger were unchanged. The separate published
 A128 `944223ef` 984/102 protocol, 360/26 Vitest and all-five/ten-step CI `37594743169` checkpoints
 are historical bindings, not A129 verification. Source-fixed does not promote the physical checklist.
 
@@ -5112,8 +5141,9 @@ are historical bindings, not A129 verification. Source-fixed does not promote th
 **A held touch on the displayed Live button leaves the previous fling running until click**
 
 - Severity: **medium**; effort: small; area: input; kind: bug.
-- Status: **Source-fixed at the focused checkpoint; final integration gates/CI, a new APK
-  and actual WebView/physical acceptance pending.** The failure below belongs to `1add0408`.
+- Status: **Source-fixed in `9da36320`, published in `5bda2c32`; mandatory gates/CI pass and
+  beta 19/code 20 is installed. Actual app/WebView/physical behavior acceptance remains pending.**
+  The failure below belongs to `1add0408`.
 
 On confirmed `1add0408`, `android/app/src/main/assets/terminal/terminal.js`'s Live-button `touchstart`
 listener stops propagation without calling `cancelScroll`. The terminal host's `touchstart`
@@ -5142,8 +5172,19 @@ parent gesture) fail assertions. Receipt `a130-live-touch-proof-3thll7zv/receipt
 the shipped page through explicit DOM/xterm/bridge stubs and deterministic RAF with a
 compiled JVM harness; it does not promote actual WebView or physical acceptance.
 
-Final integration gates/CI and a new APK remain pending at this focused checkpoint. A129's
-published history contract and separate `1add0408` evidence remain unchanged. Beta 18 is
-ready but not installed on the intended phone; installed beta 17 and the original 64-item
-**10 / 22 / 32** ledger are unchanged. Disposable-emulator provisioning is separate from
-app acceptance.
+Published `5bda2c32` passes forced fresh 1015 methods/106 suites with zero failures/errors/skips,
+offline app/full TypeScript and exact-head five-job/ten-step CI `37608652625`. Retained-signer
+beta 19/code 20 is installed on the intended Pixel 7a, SHA-256
+`e7271ebe1c1d65d8f6a09f7c59ab4b0042081c152c421568caabdcf6965bad42`; actual SDK-36 artifact
+review `beta19-final-recipes-r5x3c9z6/build/artifact-review.json` hashes to
+`9157b0f7b1369c1a1e899c67cb4a82dae973e5eac286f2cf28483f972c202186`. SDK 37 is absent.
+[Canonical gates/provider/emulator receipts](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
+retain full hashes and scoped negative diagnostics, plus the measured 6.18-second same-signer
+update's unchanged first-install time/notification grant/flags, public SSH identity continuity
+and one fresh explicit-profile authentication/first pin through an owned ADB reverse tunnel.
+Bounded beta-19 known-tmux emacs/vi Send, brief background draft retention, viewer-close/manual
+Reattach and controlled SSH-handler recovery pass with exact owned cleanup. Saved-profile/pin reuse,
+changed-key refusal, A129 native/session-host history and A130 held Live-touch acceptance remain pending. One successful tool-free Claude inference does not
+verify A105/A106 live rule/question application; the failed emulator provisioning and exact
+owned cleanup add no app/CA/APK proof. A129's earlier `1add0408` evidence and the original
+64-item **10 / 22 / 32** ledger remain unchanged.
