@@ -2501,7 +2501,10 @@ later fix left to a device.
     bar), or from an application such as vim (`"+y`). Record slow/fast drag gain, reversal and
     movement after finger lift, stopping on a new touch, and automatic focus/mouse reports during a
     drag. Keep moving through terminal redraws and check that the remaining drag and release still
-    work. *(A65, A85, A86, A87, A89)*
+    work. With inert native history open, fling, then hold, move or cancel a touch on the displayed
+    Live button: momentum and pending scroll stop immediately, without closing history until click.
+    Click Live to return to live output; a late old page must not reopen history.
+    *(A65, A85, A86, A87, A89, A130)*
 21. A large OSC 52 copy. In the pane, run
     `printf '\033]52;c;%s\a' "$(head -c 150000 /dev/zero | tr '\0' x | base64 | tr -d '\n')"`
     (the desktop's tmux passes an application's OSC 52 on): the phone says it is too large to copy and
@@ -2809,7 +2812,8 @@ display epoch. The [finding](android-audit-2026-09.md#a130) retains the `1add040
 (20 additional requests / 23 notches over 512 ms) separately from the passing 48/7
 control/restored checks and three semantic assertion mutants. Final integration gates/CI, a
 new APK and actual WebView/physical acceptance remain pending at this focused checkpoint.
-The original 64-item device checklist is unchanged.
+Device checklist item 20 includes this held/moved/cancelled Live-touch and late-page check; the
+original 64-row physical ledger remains unchanged.
 
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The eight controlled Linux Desktop reconnect cases, 294 affected tests, incremental TypeScript,
