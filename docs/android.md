@@ -5,17 +5,23 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
-Output batches and commands waiting for page readiness belong to their original terminal viewer.
-Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
-and the current ready page retains its final output before exit. Final focused control/restored
-runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
-pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
-mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
-beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
-32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+**Beta 20 published and installed (2026-10-07, A131 — physical checks partial).**
+Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
+offline app compilation and full TypeScript; [Android run `37659190980`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37659190980)
+passes all five jobs and ten required steps. Retained-signer **beta 20/code 21** is installed on
+Pixel 7a; the 4.875-second beta-19→20 update preserves first-install time and notification grant/flags.
+A resumed direct-SSH screenshot contains later numbered rows than the earlier capture; active
+production during backgrounding is unproven, so no background-delivery pass is claimed. The guard
+shows only its own prompt. All 1200 numbered rows remain in native capture, but its completion marker is
+absent there too ([A132](android-audit-2026-09.md#a132), attribution pending). After a separate
+phone Send/exit, the terminal shows `[exited]` and an exit-0 overlay without the previously displayed
+history ([A133](android-audit-2026-09.md#a133), cause pending); final-marker emission was not captured.
+A131's focused **71/8** and **10 behavioral/four app source-pin mutants** remain source evidence,
+not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 native history,
+wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
+remain outside these observations. See [the bounded receipts](#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
-**Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
+**Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
 and full TypeScript pass. [Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
@@ -595,6 +601,72 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
+### Beta 20 publication and bounded output checks (2026-10-07)
+
+Signed source `11fbff08c83bfb8403e1186e740796175e705b77` runs fresh forced **1029/108**
+protocol with no failures/errors/skips, offline app compilation and full TypeScript. Actual Desktop
+inputs are unchanged from the fully gated `644445aa` baseline, so local Vitest is not repeated.
+Private `a131-output-publication-beta20-5ao9hwe5/publication/gates.json` hashes to
+`40d3584420787739da30b7b2dd9bd48363e8465355f2017c413174d3847cf517`; its exact-head
+five-job/ten-step [CI run `37659190980`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37659190980)
+receipt `publication/ci-result.json` hashes to
+`90407a81af43a778cb82fd74a0156269fb8bfade80f5505797bd7a58413867c4`.
+
+The same root's `artifacts/nodeterm-android-0.1.0-beta.20.apk` hashes to
+`823b78b7efbb2ce994ecb96f35ef002729464df735204cc2a7cdc94f8df036d8`.
+Its `build/artifact-review.json` hashes to
+`1859f8cd360cd454fa841453a5615ca1f6ffd8b0203115d763b1bd5aac41f669`;
+public metadata hashes to `ff15cb06b4421bc637d8e48debdf06e7d24dc6d0630de614ad6679ebbf0e5389`.
+Actual SDK 36 verifies code 21, nondebuggable release and the retained `c610c3a0…` certificate;
+SDK 37 tools remain unavailable. The actual 4.874877-second in-place update on Pixel 7a verifies
+installed bytes and unchanged first-install time/notification grant and flags; the receipt
+`beta20-phone-bound-zd_nnqz9/receipts/update-result.json` hashes to
+`b627318b9275011a4c78f4a9c69c23728b664979b0ec724dc1099157e808ae97`.
+
+On fresh owned Linux/tmux fixture `nodeterm-new-phone-fixture-c04fvzwg`, ordinary Desktop
+factories create distinct target/guard panes. Phone screenshots under
+`beta20-phone-bound-zd_nnqz9/receipts/` show rows 1053–1094 in `flow1.png`, then 1160–1199
+in `resumedflow.png` after background/resume. Home occurs after the producer's nominal finish;
+active-production overlap is unproven, so this is no background-delivery/retention pass.
+`targetreopened.png` shows the scoped target's
+prompt; it does not prove the numbered rows stay displayed on every reopen. `guardafterflow.png`
+shows only its original prompt. Native `proof/plain-terminal-output-exercise-1791395248323-1641707-result.json`
+hashes to `abdb84f3d3cb48d1a3bde499fd6903dc0ff9da1cc4278ace52180508f90bb05e`:
+all 1200 numbered rows occur once, the original shell owner is restored and the guard remains
+unchanged, but `flowDone`/`complete` are false. Raw `proof/root-raw-tmux-output.txt` hashes to
+`29ed96409aa98a40b3a8d47064233d80e75f3538c42073eab75adf91e2c8f7ec` and also lacks
+`FLOW_DONE`; [A132](android-audit-2026-09.md#a132) records the unlocated completion loss.
+
+A separate phone Send contains `printf 'A131_17930152_MOBILE_FINAL_TAIL\n'; exit 0`.
+`mobilefinaltail.png` hashes to `5cef21d34ec337b9a3f804a0ba38552194276cfb7b9590d4670f086cf6fcc576`
+and shows `[exited]`, an exit-0 overlay and no previously displayed history; `mobilefinalstate.xml`
+hashes to `7e9d859cf8b2e724dea150c61ffe08fa4c1baa68b040ff5ab0b7888520539a52`.
+No pre-exit capture proves emission of that final marker, and this does not establish an
+Android-only cause. [A133](android-audit-2026-09.md#a133) keeps exit-display attribution open.
+The owned 30-minute host retirement passes: `proof/runner-result.json` hashes to
+`fbe456714d65464f8160e20463883ba0b391a4558a3634303da05322d2ff15fc`;
+`proof/supervisor-result.json` hashes to `42e5d9ae083049001f16bbcf022e0c2d4449db08a042a8c7950fad5ce7d3ba16`.
+Both listeners close, generated private auth is removed and source/tools/held outputs remain bound.
+`beta20-phone-bound-zd_nnqz9/receipts/root-public-admission-cleanup.json` hashes to
+`b43a97658f917ec7bc1ef57ed2ff795ed55e328acde0f10a0a3f6437cec8a1b4`: only the admitted
+phone public-key line and reverse port 29453 are removed, and the original auth body is restored.
+Normal Forget removes only the QA profile; Welcome is observed. The final phone cleanup receipt
+`beta20-phone-bound-zd_nnqz9/receipts/root-final-phone-cleanup.json` hashes to
+`dce22b6e06fdf9d103aacfeb9fc99029e3463395573df1b2262b86341de4281c`.
+It verifies the same installed beta-20 bytes/grant/first-install time and timeout already at the
+original 15000 ms. The restore helper refuses before its setting write; after ordinary wake,
+Welcome and 15000 are observed again. No timeout restore write or security change is claimed.
+These direct-SSH observations provide no
+native/session-host history, held Live-button, physical queue-race or full checklist acceptance.
+The original Pixel 10 Pro ledger remains **10 Pass / 22 Partial / 32 Pending**.
+
+The frozen physical checkpoint is
+`beta20-physical-checkpoint-jn5pg_a6/physical-checkpoint.json`, SHA-256
+`96b4356cf2b8c8d25c75396a19b51a572f9a644a2d8cdea1b76bdbd34534be04`.
+It binds 124 raw artifacts and keeps the scoped passes, partial cases, A132/A133 failures and
+owned cleanup separate. These records do not establish output overlapping backgrounding or
+successful final-marker emission.
+
 ### Viewer output lifetime source checks (2026-10-07, A131)
 
 Final forced focused control/restored runs pass **71 methods / 8 suites**, zero failures/errors/skips.
@@ -612,9 +684,10 @@ final receipt `a131-output-final-proof-p06l8grq/receipt.json` hashes to
 The six-file final source inventory hashes to
 `a8997ab31466b732a855137bd00a631db4a61ac241e18a1e04395aa0ab89a313`.
 Root independently rehashed both windows' logs/compiled descriptors/XML; peer review checks the
-actual intended assertion failures and reconstructed mutations. Full final gates/publication and
-same-signer beta-20 phone acceptance remain pending. JavaScript already dispatched to a ready
-WebView is outside this fix. Items 25/26 and the original **10/22/32** ledger remain scoped.
+actual intended assertion failures and reconstructed mutations. Signed `11fbff08` now passes full
+publication and same-signer beta-20 installation; the bounded physical checks above are partial,
+with A132/A133 open. JavaScript already dispatched to a ready WebView is outside this fix.
+Items 25/26 and the original **10/22/32** ledger remain scoped.
 
 ### Beta 19 publication, provider and emulator checkpoint (2026-10-07)
 

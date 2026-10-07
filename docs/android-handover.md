@@ -3,22 +3,28 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A131`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A133`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
 
-**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
-Output batches and commands waiting for page readiness belong to their original terminal viewer.
-Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
-and the current ready page retains its final output before exit. Final focused control/restored
-runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
-pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
-mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
-beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
-32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+**Beta 20 published and installed (2026-10-07, A131 — physical checks partial).**
+Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
+offline app compilation and full TypeScript; [Android run `37659190980`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37659190980)
+passes all five jobs and ten required steps. Retained-signer **beta 20/code 21** is installed on
+Pixel 7a; the 4.875-second beta-19→20 update preserves first-install time and notification grant/flags.
+A resumed direct-SSH screenshot contains later numbered rows than the earlier capture; active
+production during backgrounding is unproven, so no background-delivery pass is claimed. The guard
+shows only its own prompt. All 1200 numbered rows remain in native capture, but its completion marker is
+absent there too ([A132](android-audit-2026-09.md#a132), attribution pending). After a separate
+phone Send/exit, the terminal shows `[exited]` and an exit-0 overlay without the previously displayed
+history ([A133](android-audit-2026-09.md#a133), cause pending); final-marker emission was not captured.
+A131's focused **71/8** and **10 behavioral/four app source-pin mutants** remain source evidence,
+not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 native history,
+wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
+remain outside these observations. See [the bounded receipts](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
-**Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
+**Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
 and full TypeScript pass. [Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
@@ -487,6 +493,17 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Beta 20 output/background checks (2026-10-07)
+
+Signed `11fbff08` passes fresh 1029/108, app/TypeScript and five-job/ten-step CI; retained-signer
+beta 20/code 21 installs with unchanged first-install time and notification grant/flags. The
+resumed screenshot contains later rows and keeps the sibling guard scoped; active-production
+background overlap is unproven. A132 records the missing
+completion marker in native capture; A133 records history absent after exit without claiming final
+marker emission or an Android-only cause. Host/profile/public-key/reverse cleanup passes; the
+timeout is already the original 15000 ms, with no restore write. The original 10/22/32 ledger
+is unchanged. See [the canonical receipts](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
 ### Pixel 7a A105/A106 and changed SSH key (2026-10-07)
 
@@ -1615,16 +1632,18 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**Viewer queue follow-up (`A131`):** focused control/restored and mutation checks pass; finish
-fresh full gates and signed publication, then update to beta 20 and test ordinary output,
-background/reconnect and final-tail behavior on fresh owned terminals. The user removed the
-Pixel 7a's screen lock and authorized ongoing tests; wake it normally without repeating unlock
-questions. Commands already dispatched to WebView are outside the pending-page queue fix.
-A129/A130's actual native-history/Live tests need trusted HTTPS/WSS and the real native/session-host
-relay route; direct SSH returns tmux input and cannot demonstrate that overlay. Keep the phone's
-normal trust policy. Held Send receipt/draft/Ctrl edits, uncertainty and the wider matrix remain.
+**Viewer queue follow-up (`A131`):** source is fixed/published in `11fbff08`, with fresh
+1029/108/app/TypeScript, all-five/ten-step CI and retained-signer beta 20/code 21 installed.
+Bounded output/background observations are partial: investigate [A132](android-audit-2026-09.md#a132)'s
+missing native completion marker and [A133](android-audit-2026-09.md#a133)'s exit display/history loss
+on a new owned fixture, capturing actual bytes before attributing either failure. Test ordinary
+output, background/reconnect and final-tail behavior; do not repeat a successful installation.
+The user removed the Pixel 7a's screen lock and authorized ongoing tests; wake it normally without
+repeating unlock questions. Already-dispatched WebView commands remain outside the queue fix.
+A129/A130 need trusted HTTPS/WSS and real native/session-host relay; direct SSH cannot prove that
+overlay. Held Send receipt/draft/Ctrl races, uncertainty and wider lifecycle/notification cases remain.
 
-**Current publication and acceptance follow-up (`A129`/`A130`):** Signed `5bda2c32` is
+**Earlier beta-19 publication; current remaining `A129`/`A130` acceptance:** Signed `5bda2c32` is
 published with fresh forced 1015/106 protocol, offline app/full TypeScript and all-five/ten-step
 Android CI `37608652625`. Retained-signer beta 19/code 20 is installed with actual SDK-36
 verification; SDK 37 is absent. The 6.18-second in-place update preserves first-install time and
@@ -1962,8 +1981,8 @@ Verified:
 - `A131` final focused control/restored passes 71 methods/8 suites, zero failures/errors/skips:
   11 new behavioral queue/page methods, three app source pins and existing lifecycle/input tests.
   Ten unchanged queue/page behavioral mutants and four final app source-pin mutants fail assertions.
-  No Android Handler/WebView execution or physical race is claimed; final publication gates
-  and phone acceptance are pending. See [the scoped checkpoint](android.md#viewer-output-lifetime-source-checks-2026-10-07-a131).
+  Fresh full publication and beta-20 installation pass; bounded background/output checks are partial
+  with A132/A133 open. No physical queue race is claimed. See [the scoped checkpoint](android.md#viewer-output-lifetime-source-checks-2026-10-07-a131).
 
 - Exact merged `a79375c3` executes full forced 982/102 with zero failures/errors/skips plus app
   Kotlin, affected 187/11 and full TypeScript; Android run `37523703627` has all five jobs/ten critical
@@ -2218,7 +2237,9 @@ source before editing. A100–A120 close retained history, typed read recovery, 
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
 host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
-Retained-signer beta 19/code20 from `5bda2c32` is installed on the separately authorized Pixel 7a.
+Retained-signer beta 20/code21 from `11fbff08` is installed on the separately authorized Pixel 7a.
+Fresh 1029/108/app/TypeScript and five-job/ten-step CI pass; A131 physical output checks are partial.
+A132/A133 require completion/exit-display attribution on a fresh owned fixture.
 At Desktop `e06b5547`, its original A105 remembered-rule and A106 single/nonadjacent-multi choices
 pass real sibling Claude application. Saved manual SSH profile/pin reuse after app process restart
 and changed-host-key refusal pass. Both fresh fixtures, the QA profile/public-key admission and
@@ -2230,9 +2251,9 @@ At the earlier beta 17 checkpoint, `a79375c3` passed 982/102 protocol/app and af
 gates plus all-five CI. Its nine-case physical report binds 303 raw hashes for emacs/vi Send,
 transport recovery, raw Ctrl, viewer-close/manual Reattach, managed creation and exact owned
 End/cleanup. Those dated results and A128's source/configuration mutations remain historical.
-The installed beta 19 APK/runtime provenance is separate from later docs-only publication heads;
+The installed beta 20 APK/runtime provenance is separate from later docs-only publication heads;
 publish only after fresh exact-revision offline gates and all-five/ten-critical-step CI, keeping
-those receipts private. The existing beta 19 APK stays installed.
+those receipts private. The existing beta 20 APK stays installed.
 
 Use only the authorized Pixel 7a, verifying its serial and app focus before input. The user's
 current availability/wake authorization persists; do not repeatedly request unlock while the
@@ -2243,7 +2264,7 @@ owned fixture and untouched sibling guard; never restart a retired fixture. Resu
 history/held Live-touch acceptance, remaining lifecycle/background/notification and held composed
 Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
 and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those
-paths. Keep beta 19 installed and preserve historical proofs and all unrelated profiles/panes.
+paths. Keep beta 20 installed and preserve historical proofs and all unrelated profiles/panes.
 
 Immediate FCM (A25) and fresh-different-desktop relay refusal (A93) need the hosted backend maintainers;
 the user has no backend repository to supply. A111 implements a host-owned launch API on current

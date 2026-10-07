@@ -16,17 +16,23 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
-Output batches and commands waiting for page readiness belong to their original terminal viewer.
-Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
-and the current ready page retains its final output before exit. Final focused control/restored
-runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
-pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
-mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
-beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
-32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+**Beta 20 published and installed (2026-10-07, A131 — physical checks partial).**
+Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
+offline app compilation and full TypeScript; [Android run `37659190980`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37659190980)
+passes all five jobs and ten required steps. Retained-signer **beta 20/code 21** is installed on
+Pixel 7a; the 4.875-second beta-19→20 update preserves first-install time and notification grant/flags.
+A resumed direct-SSH screenshot contains later numbered rows than the earlier capture; active
+production during backgrounding is unproven, so no background-delivery pass is claimed. The guard
+shows only its own prompt. All 1200 numbered rows remain in native capture, but its completion marker is
+absent there too ([A132](android-audit-2026-09.md#a132), attribution pending). After a separate
+phone Send/exit, the terminal shows `[exited]` and an exit-0 overlay without the previously displayed
+history ([A133](android-audit-2026-09.md#a133), cause pending); final-marker emission was not captured.
+A131's focused **71/8** and **10 behavioral/four app source-pin mutants** remain source evidence,
+not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 native history,
+wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
+remain outside these observations. See [the bounded receipts](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
-**Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
+**Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
 and full TypeScript pass. [Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
@@ -322,10 +328,12 @@ lifecycle and FPS matrix remains open.
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
 | [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 and beta 19 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
 | [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; beta 19 copy-mode Send and controlled SSH-handler recovery reconfirmed; exact beta-17 End and owned cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
-| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
+| [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 installation was an earlier checkpoint; beta 20/code 21 is now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
 | [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
 
-| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed in this change; final focused control/restored 71/8 includes 11 new behavioral methods and three app source pins, zero failures/errors/skips; ten behavioral and four app source-pin mutants caught; full publication/phone checks pending · Buffered output and unready-page commands outlive their terminal viewer |
+| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 installed, bounded output/background partial with A132/A133 open · Buffered output and unready-page commands outlive their terminal viewer |
+| [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Output completion marker absent from native capture after all 1200 numbered rows; attribution pending |
+| [A133](#a133) | medium | | unknown | verification/gap | **OPEN** · Phone exit display loses previously shown history; final-marker emission and cause unverified |
 
 ## A01
 
@@ -5227,8 +5235,8 @@ emulator provisioning and exact owned cleanup add no app/CA/APK proof. A129's ea
 **Buffered output and commands waiting for page readiness can outlive their terminal viewer**
 
 - Severity: **medium**; effort: small; area: phone; kind: bug.
-- Status: **Source-fixed in this change; final focused control/restored and mutation checks pass.
-  Full publication and physical acceptance remain pending.**
+- Status: **Source-fixed/published in `11fbff08`; full gates/CI and beta-20 installation pass.
+  Bounded physical output/background checks are partial; A132/A133 remain open.**
 
 At `644445aa`, `TerminalController` checks the viewer ticket before appending to a shared binary
 buffer. Its delayed flush carries no ticket, and backgrounding leaves that buffer scheduled.
@@ -5257,8 +5265,51 @@ The unchanged queue/page/test's first frozen window passes 32/3 control/restored
 behavioral mutants. The tightened final controller's separate 71/8 window catches four app
 source-pin mutants; the earlier three wiring variants are historical, not extra unique mutations.
 [Canonical receipts](android.md#viewer-output-lifetime-source-checks-2026-10-07-a131) bind actual
-compiled source, fresh XML and assertion failures. Continue with fresh full protocol/app gates,
-signed publication/green Android CI, then same-signer beta 20 and bounded disposable-terminal
-output/lifecycle checks.
+compiled source, fresh XML and assertion failures. Fresh 1029/108/app/TypeScript and all-five/ten-step
+CI pass on `11fbff08`; retained-signer beta 20/code 21 is installed. Bounded direct-SSH observations
+show later rows in a resumed screenshot and keep the sibling guard scoped; active-production
+background overlap is unproven. A132/A133 require
+separate completion/exit-display attribution. Full physical lifecycle/race acceptance is not claimed.
 A129/A130 need a trusted relay/native-history route; direct SSH supplies no Live history overlay.
 The 64-item ledger remains **10 Pass / 22 Partial / 32 Pending**.
+
+
+## A132
+
+**Completion marker absent from native capture after all numbered output rows**
+
+- Severity: **medium**; effort: unknown; area: verification; kind: gap.
+- Status: **OPEN — reproduced bounded observation; product/fixture attribution pending.**
+
+At signed `11fbff08` on an owned Linux/tmux fixture, one fixed Python command requests 1200
+numbered rows and then `FLOW_DONE`; the final marker's actual emission is unproven. The native observer finds all rows 0000–1199 once and the
+original shell owner restored, but `flowDone`/`complete` are false. Independent raw tmux capture
+also lacks the completion marker, so this does not establish an Android queue drop. The default
+Fedora prompt is a suspected interaction, not a proven cause. Preserve the original negative.
+[Canonical receipts](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07) bind the
+native result `abdb84f3…` and raw capture `29ed9640…`.
+
+Next: use a fresh exact owned producer and byte recorder to capture its completion and prompt
+ordering across raw PTY/tmux/transport/display. Add a regression only after identifying the failed
+supported layer; a successful dispatch or numbered-row count alone must not satisfy completion.
+No source fix, Android-only attribution or checklist promotion is claimed.
+
+## A133
+
+**Phone exit display no longer shows previously displayed terminal history**
+
+- Severity: **medium**; effort: unknown; area: verification; kind: gap.
+- Status: **OPEN — physical observation; final-marker emission and cause pending.**
+
+On beta 20/code 21 Pixel 7a through direct SSH to the same owned tmux target, a separate real
+phone Send contains `printf 'A131_17930152_MOBILE_FINAL_TAIL\n'; exit 0`. The later screenshot
+shows `[exited]` and an exit-0 overlay without the prior displayed history. No byte capture before
+exit proves that final marker was emitted; neither its loss nor an Android-only cause is established.
+See [the exact screenshot/XML](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
+
+Re-read current `TerminalController.sinkFor.onExit`/`autoReattach`, `TerminalOutput.finish` and
+`terminal.js`, and record the actual SSH/tmux client's shutdown control sequences before choosing
+a fix. Preserve live TUI alternate-screen behavior and tmux-owned scrolling. On a fresh owned terminal, capture acknowledged
+pre-exit bytes and actual exit/repaint order; a real WebView regression must retain earlier displayed
+rows and the confirmed tail under the settled Ended overlay while rejecting retired-view output.
+A131's component final-flush checks pass; they do not prove this physical display behavior.

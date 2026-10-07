@@ -6,17 +6,23 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
-Output batches and commands waiting for page readiness belong to their original terminal viewer.
-Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
-and the current ready page retains its final output before exit. Final focused control/restored
-runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
-pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
-mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
-beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
-32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+**Beta 20 published and installed (2026-10-07, A131 — physical checks partial).**
+Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
+offline app compilation and full TypeScript; [Android run `37659190980`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37659190980)
+passes all five jobs and ten required steps. Retained-signer **beta 20/code 21** is installed on
+Pixel 7a; the 4.875-second beta-19→20 update preserves first-install time and notification grant/flags.
+A resumed direct-SSH screenshot contains later numbered rows than the earlier capture; active
+production during backgrounding is unproven, so no background-delivery pass is claimed. The guard
+shows only its own prompt. All 1200 numbered rows remain in native capture, but its completion marker is
+absent there too ([A132](../docs/android-audit-2026-09.md#a132), attribution pending). After a separate
+phone Send/exit, the terminal shows `[exited]` and an exit-0 overlay without the previously displayed
+history ([A133](../docs/android-audit-2026-09.md#a133), cause pending); final-marker emission was not captured.
+A131's focused **71/8** and **10 behavioral/four app source-pin mutants** remain source evidence,
+not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 native history,
+wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
+remain outside these observations. See [the bounded receipts](../docs/android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
-**Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
+**Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
 and full TypeScript pass. [Android run `37608652625`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37608652625)
