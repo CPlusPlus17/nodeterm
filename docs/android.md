@@ -24,11 +24,12 @@ remain outside these observations. See [the bounded receipts](#beta-20-publicati
 **Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
 Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
 This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
-Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **26 shipped-xterm
+Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **27 shipped-xterm
 component cases pass in the permanent behavioral JUnit regression**, alongside **three passing
-app source-pin methods**; **11 semantic mutants** fail assertions with 23-case control/restored,
-and one additional geometry mutant fails its 26-case assertion. Three separate app source-pin
-mutants fail only their intended assertions, with healthy/restored controls passing. Full gates/CI,
+app source-pin methods** and the existing swipe suite. The first full run caught a same-view delayed
+Enter regression; layout changes now preserve it while viewer retirement still cancels it. Its
+27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
+mutant and three separate app source-pin mutants remain separately recorded below. Full gates/CI,
 a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
 `656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -723,6 +724,22 @@ and restored controls pass. `a133-wiring-pin-mutations-zxu7m35n/run-h0czovso/rec
 `8ae3c307ba0f98a0f148ea9f5f50e2a58a14cb8f5222f0f317ca6fd6378c36d0`, retains five runs of the
 same three compiled test/helper classes. These lexical source assertions are separate from the
 twelve renderer behavior mutants and provide no device acceptance.
+
+**Integration regression and repair.** The first full run at signed `94c8d2c4` executed 1033
+methods in 110 suites and failed the existing delayed-submit swipe assertion (no errors/skips).
+Its retained `a133-publication-beta21-gates-v3-t_51tdks/protocol.log` records the failure; that
+revision was not pushed or installed. Geometry invalidation incorrectly advanced the submission
+epoch. Advancing that epoch only when the viewer/display clears preserves a same-view delayed
+Enter while keeping begin/retire/paint/reset/pagehide/suspend barriers and pending EOF revision checks.
+
+A fresh forced focused run (`a133-layout-focused-ndsg_4be`, result `809132cf…`) passes all 16
+methods across the closed-view, wiring and existing swipe suites. The behavioral method now
+requires 27 exact cases, including combined refit/font/resize during submission. Reinstating
+the old epoch placement fails only that new assertion; 27-case healthy/restored controls pass
+in `a133-layout-mutant-jberi26g/receipt.json`, SHA-256
+`9f0a3879bfa081cc8be4199c63c88dce2119a5475c6fd3cb5915ad68d987373c`.
+This additional mutation is separate from the earlier twelve component and three source-pin
+mutants. The final full gates/CI/APK and physical acceptance remain pending.
 
 ### Viewer output lifetime source checks (2026-10-07, A131)
 

@@ -27,11 +27,12 @@ remain outside these observations. See [the bounded receipts](android.md#beta-20
 **Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
 Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
 This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
-Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **26 shipped-xterm
+Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **27 shipped-xterm
 component cases pass in the permanent behavioral JUnit regression**, alongside **three passing
-app source-pin methods**; **11 semantic mutants** fail assertions with 23-case control/restored,
-and one additional geometry mutant fails its 26-case assertion. Three separate app source-pin
-mutants fail only their intended assertions, with healthy/restored controls passing. Full gates/CI,
+app source-pin methods** and the existing swipe suite. The first full run caught a same-view delayed
+Enter regression; layout changes now preserve it while viewer retirement still cancels it. Its
+27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
+mutant and three separate app source-pin mutants remain separately recorded below. Full gates/CI,
 a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
 `656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays

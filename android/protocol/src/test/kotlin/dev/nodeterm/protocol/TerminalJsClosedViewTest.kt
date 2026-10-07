@@ -75,13 +75,14 @@ class TerminalJsClosedViewTest {
             "geometry invalidates only a pending EOF promotion",
             "old closed link touch cannot activate a successor snapshot",
             "same-view JS submit keeps separated Enter",
+            "same-view delayed Enter survives refit font and resize barriers",
             "delayed JS Enter cannot cross begin",
             "delayed JS Enter cannot cross retire",
             "settled snapshot redraw uses changed layout and font for its owned link touch",
             "stationary closed touch on wrapped plain URL offers the exact complete URL",
             "generated tmux TUI repaint keeps live alternate modes and reports before EOF",
         )
-        assertEquals(26, cases.size, "every required case must execute")
+        assertEquals(27, cases.size, "every required case must execute")
         assertEquals(names.size, names.toSet().size, "case names must be unique")
         assertEquals(expected, names, "exact ordered component inventory")
         for (case in cases) assertTrue(case["passed"]!!.jsonPrimitive.boolean,

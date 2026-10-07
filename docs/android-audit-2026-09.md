@@ -35,11 +35,12 @@ remain outside these observations. See [the bounded receipts](android.md#beta-20
 **Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
 Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
 This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
-Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **26 shipped-xterm
+Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **27 shipped-xterm
 component cases pass in the permanent behavioral JUnit regression**, alongside **three passing
-app source-pin methods**; **11 semantic mutants** fail assertions with 23-case control/restored,
-and one additional geometry mutant fails its 26-case assertion. Three separate app source-pin
-mutants fail only their intended assertions, with healthy/restored controls passing. Full gates/CI,
+app source-pin methods** and the existing swipe suite. The first full run caught a same-view delayed
+Enter regression; layout changes now preserve it while viewer retirement still cancels it. Its
+27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
+mutant and three separate app source-pin mutants remain separately recorded below. Full gates/CI,
 a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
 `656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -347,7 +348,7 @@ lifecycle and FPS matrix remains open.
 
 | [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 installed, bounded output/background partial with A132 open and A133 acceptance pending · Buffered output and unready-page commands outlive their terminal viewer |
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Output completion marker absent from native capture after all 1200 numbered rows; attribution pending |
-| [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed locally in this change; 26 renderer cases, 11 semantic mutants plus one geometry assertion; full gates/CI/new APK/physical checks pending · Closed SSH/tmux exit erases the last visible pane |
+| [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed locally in this change; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full gates/CI/new APK/physical checks pending · Closed SSH/tmux exit erases the last visible pane |
 
 ## A01
 
@@ -5343,3 +5344,12 @@ pending. This preserves the last rendered pane on
 one page, not backend full history/unpainted bytes or persistent history across backgrounding.
 The original phone final-marker emission remains unverified. iOS needs the equivalent EOF/display
 review by @eneskirca; no wire change is introduced.
+
+The first full run at unpushed `94c8d2c4` exposed an integration regression: refit/font/resize
+advanced the legacy submission epoch, dropping a same-view delayed Enter and failing the existing
+swipe-barrier test. This follow-up advances that epoch only when the viewer/display clears;
+geometry still invalidates pending EOF captures through the separate revision. All 16 focused
+methods and the now-required 27 component cases pass. Reinstating the old epoch placement fails
+only the new layout/Enter assertion, with healthy/restored controls passing. The linked source
+checkpoint records this separately from the earlier mutation proofs; final publication/phone
+acceptance remains pending.

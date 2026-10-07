@@ -98,7 +98,6 @@
   closedLayer.style.cssText = 'position:absolute;inset:0;padding:2px 2px 2px 4px;background:#000;color:#e6e6e6;overflow:hidden;touch-action:none;z-index:3'
   host.appendChild(closedLayer)
   function invalidatePendingClosedCapture() {
-    viewerEpoch++
     userInput = false
     closedTouch = null
     if (endViewer) {
@@ -109,6 +108,7 @@
     }
   }
   function clearClosedCapture() {
+    viewerEpoch++
     invalidatePendingClosedCapture()
     closedPage = null
     closedLayer.hidden = true

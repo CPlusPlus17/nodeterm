@@ -49,6 +49,7 @@ const EXPECTED_CASES = Object.freeze([
   "geometry invalidates only a pending EOF promotion",
   "old closed link touch cannot activate a successor snapshot",
   "same-view JS submit keeps separated Enter",
+  "same-view delayed Enter survives refit font and resize barriers",
   "delayed JS Enter cannot cross begin",
   "delayed JS Enter cannot cross retire",
   "settled snapshot redraw uses changed layout and font for its owned link touch",
@@ -181,6 +182,15 @@ async function main() {
   })
   await test('same-view JS submit keeps separated Enter',async()=>{
     const e=await environment();try {await e.begin();e.win.nt.submit(Buffer.from('TEXT').toString('base64'),true);assert.deepEqual(e.inputs,['TEXT']);await pause(180);assert.deepEqual(e.inputs,['TEXT','\r']);return {inputs:e.inputs}} finally {e.close()}
+  })
+  await test('same-view delayed Enter survives refit font and resize barriers',async()=>{
+    const e=await environment();try {
+      await e.begin();e.win.nt.submit(Buffer.from('TEXT').toString('base64'),true)
+      e.win.nt.refit();e.win.nt.setFontSize(19);e.win.dispatchEvent(new e.win.Event('resize'))
+      await e.drain();await pause(180)
+      assert.deepEqual(e.inputs,['TEXT','\r']);assert.deepEqual(e.scrolls,[])
+      return {inputs:e.inputs,sameViewerLayoutChanges:true}
+    } finally {e.close()}
   })
   for(const action of ['begin','retire']) await test('delayed JS Enter cannot cross '+action,async()=>{
     const e=await environment();try {await e.begin();e.win.nt.submit(Buffer.from('TEXT').toString('base64'),true);if(action==='begin')e.win.nt.beginViewer('two',true);else e.win.nt.retireViewer();await pause(180);assert.deepEqual(e.inputs,['TEXT']);return {inputs:e.inputs}} finally {e.close()}
