@@ -16007,19 +16007,14 @@ export function Canvas() {
       // Delete is swapped for End session rather than offered beside it.
       const body: MenuItem[] =
         projectId === activeProjectId
-          ? (() => {
-              const full = selectionItems([id])
-              // Drop the canvas menu's trailing "Delete" (destructive deleteNodes) and any
-              // separator left dangling before it, then append the session row's "End session".
-              // Found by label rather than fixed index so this stays correct if the canvas
-              // menu's tail changes — Delete is the only 'Delete'-labelled row.
-              const withoutDelete = full.filter((it) => !('label' in it && it.label === 'Delete'))
-              return [
-                ...tidySeparators(withoutDelete),
-                { type: 'separator' },
-                { label: 'End session', icon: <IconTrash />, danger: true, onClick: () => closeSession(projectId, id) }
-              ]
-            })()
+          ? [
+              // The canvas menu minus its trailing "Delete" (destructive deleteNodes) — the
+              // builder drops the section and any rule it leaves dangling — then the session
+              // row's "End session" in its place.
+              ...selectionItems([id], undefined, { omit: ['delete'] }),
+              { type: 'separator' },
+              { label: 'End session', icon: <IconTrash />, danger: true, onClick: () => closeSession(projectId, id) }
+            ]
           : [
               // Non-active project: the shared rows read the active canvas's live nodes + per-node
               // registered closures, which don't exist here. Keep the narrow set that works for any
