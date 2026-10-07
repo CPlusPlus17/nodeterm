@@ -6,6 +6,16 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
+attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
+The host owns one-use tickets scoped to its live session generation and the original subscriber
+socket; paste and Enter remain separate writes at least 150 ms apart. A lost receipt after input
+may have been sent stays uncertain and never replays. Older live hosts refuse without being
+restarted. The public Android `pty.submitComposed` request/result is unchanged; its actual
+backend producers are tested through the relay and Kotlin client. Windows ConPTY and phone
+acceptance of these additional backends remain unverified. The installed beta 17 still comes
+from `a79375c3`; this host-side follow-up does not represent a new installed APK.
+
 **Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
 from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
 Vanadium `154.0.8037.126.0`) against a fresh disposable Desktop from the same source.
@@ -515,6 +525,14 @@ tested where the layer allows, and the numbered
 | Notifications | local | See "Notifications" below |
 
 ## Before using it away from your computer
+
+**Native history scrolling is currently broken ([A129](../docs/android-audit-2026-09.md#a129),
+open).** On native/session-host terminals reached through the relay, a history swipe can send
+wheel input to the foreground application when mouse reporting is off. The confirmed proof uses
+actual Kotlin/E2EE host components and explicit native byte recorders, not a phone or physical
+Windows ConPTY. Retained-history browsing on these backends is future work; existing tmux/direct
+SSH scrolling checks keep their original scope. This does not change the installed beta 17 or
+the physical checklist.
 
 The full device pass is still outstanding. The intended Pixel has the private beta and basic SSH
 listing/input works. Its corrected code-3 update (`A85`) fills a 52×45 viewport and shows pre-attach

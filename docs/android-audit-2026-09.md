@@ -16,6 +16,16 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
+attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
+The host owns one-use tickets scoped to its live session generation and the original subscriber
+socket; paste and Enter remain separate writes at least 150 ms apart. A lost receipt after input
+may have been sent stays uncertain and never replays. Older live hosts refuse without being
+restarted. The public Android `pty.submitComposed` request/result is unchanged; its actual
+backend producers are tested through the relay and Kotlin client. Windows ConPTY and phone
+acceptance of these additional backends remain unverified. The installed beta 17 still comes
+from `a79375c3`; this host-side follow-up does not represent a new installed APK.
+
 **Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
 from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
 Vanadium `154.0.8037.126.0`) against a fresh disposable Desktop from the same source.
@@ -229,7 +239,8 @@ lifecycle and FPS matrix remains open.
 | [A125](#a125) | medium | | small | desktop/bug | ✅ source-fixed in `415dae9b`; eight bounded Linux Desktop reconnect cases pass at `5b7286b3` with A126; historical negative, 13 new/100 affected tests and six mutants retained; one two-host inactive-global native case passes at `59e4c93e`; phone/wider scope open · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
 | [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
-| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; exact owned End/cleanup verified, wider physical scope pending · Composed Send clears a draft without submitting it while tmux history is open |
+| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; exact owned End/cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
+| [A129](#a129) | medium | | medium | input/bug | **OPEN**; actual Kotlin/E2EE host component reproduces wheel writes with mouse reporting off at `ce1121ba`; native writers are recorders, not physical ConPTY/phone proof · Native history swipes send wheel input to the foreground instead of browsing retained history |
 
 ## A01
 
@@ -4863,6 +4874,19 @@ compiled callback recipe `/tmp/nodeterm-a127-verify.py`, SHA-256
 
 ## A128
 
+**2026-10-07 backend follow-up:** Current local relay Send also routes to the captured direct
+native Windows PTY or a session host negotiating `composed-input-v1`. Internal v2
+prepare/write/cancel requests use host-minted one-use tickets bound to the exact live session
+generation and subscribed socket, with a 10-second expiry and per-terminal lock across paste
+and a separately checked Enter at least 150 ms later. The client checks the captured subscriber
+registration and original transport inside its deferred send. A sent-phase receipt loss or
+RPC exception stays uncertain without replay; old hosts refuse without restart. Busy/stale
+attachment refusals do not request an update. The Android outer action/result is unchanged;
+actual producer-to-Kotlin tests accompany the host change. The separate Linux kernel-PTY proof
+and native byte-recorder interop do not verify physical Windows ConPTY or phone use of these
+backends. See [the source/verification checkpoint](android.md#composed-send-backend-follow-up-2026-10-07-a128)
+for final evidence and limitations; iOS availability adoption remains with **@eneskirca**.
+
 **Composed Send clears a draft without submitting it while tmux history is open (2026-10-06).**
 
 - Severity: **high (BLOCKS a reliable input release)**; effort: medium; area: input; kind: bug.
@@ -4951,3 +4975,45 @@ real-PAM/power-loss/platform or SDK-37 acceptance follows. Installed APK/runtime
 `a79375c3`; later docs-only publication gates/CI have separate receipts and imply no reinstall.
 The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged. See also the
 [source checkpoint](android.md#composed-send-source-checkpoint-2026-10-06-a128).
+
+## A129
+
+**Native history swipes send wheel input to the foreground when application mouse reporting is off**
+
+- Severity: **medium**; effort: medium; area: input; kind: bug.
+- Status: **OPEN**, confirmed on source `ce1121ba56617defd7facdd44743d416e92b19e4`;
+  no scrolling fix or new capability has landed.
+
+Android's `terminal.js:435–446` drains every history gesture through `bridge.onScroll`.
+`TerminalController.onScroll` and `TerminalActions` order that action, then
+`RelayHostConnection.scroll` calls `pty.scroll`. In `src/main/remote/host-service.ts:638–660`,
+the handler assumes a tmux client and writes fixed SGR wheel bytes through `pty.write` without
+checking the backend or current application mouse mode. `PtyManager.write` forwards them to
+`session.proc.write`. For direct native Windows and session-host panes, that is foreground input,
+not a retained-history viewport. The native emulators already retain history; its existence does
+not make this wheel route browse it. A swipe can therefore feed unexpected terminal input to the
+application even when it has requested no mouse reports.
+
+The isolated component receipt is
+`/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`, SHA-256
+`c5d50310e539ad02d1c825ac12d19865b4c488184d1d50a8c809aad44b7cbb1a`.
+Freshly compiled Kotlin `RelayConnector`/`RelayHostConnection` calls reach the actual approved
+E2EE host handler, `NativeWindowsPane` and standalone session-host/client with real emulators.
+After synthetic output disables mouse reporting and supplies 200 history lines, scrolling up
+three and down two notches records three `ESC[<64;1;1M` and two `ESC[<65;1;1M` writes in each
+backend; retained history remains available. The PTY writers are explicit byte recorders and
+the host PTY bridge is a component adapter. This is not full Desktop, WebView gesture, kernel
+PTY, foreground CLI, physical Windows ConPTY or phone acceptance, and earns no mutation credit.
+
+Existing tmux and direct-SSH scrolling provenance remains unchanged: those streams attach real
+tmux clients with mouse handling enabled. Their custom-binding, gesture and momentum checks do
+not verify native-backend history scrolling. A128 composed Send is a separate action and does
+not resolve this bug; the installed beta 17 and original **10 / 22 / 32** checklist are unchanged.
+
+Future work should negotiate native history support and bind each scroll to the attached live
+generation/subscriber. Read the current application mouse mode after the actual output barrier:
+mouse-off history browsing must write no PTY input and expose bounded viewer-local retained
+history, including pre-attach output; mouse-on input must use the application's requested mouse
+protocol. Preserve tmux/direct-SSH gesture ordering and momentum. The host, Android client and
+actual producer interop must land together, with the iOS implication raised for @eneskirca.
+This is a proposed design, not an implemented wire contract or a fixed finding.

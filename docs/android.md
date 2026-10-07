@@ -5,6 +5,16 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
+attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
+The host owns one-use tickets scoped to its live session generation and the original subscriber
+socket; paste and Enter remain separate writes at least 150 ms apart. A lost receipt after input
+may have been sent stays uncertain and never replays. Older live hosts refuse without being
+restarted. The public Android `pty.submitComposed` request/result is unchanged; its actual
+backend producers are tested through the relay and Kotlin client. Windows ConPTY and phone
+acceptance of these additional backends remain unverified. The installed beta 17 still comes
+from `a79375c3`; this host-side follow-up does not represent a new installed APK.
+
 **Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
 from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
 Vanadium `154.0.8037.126.0`) against a fresh disposable Desktop from the same source.
@@ -440,8 +450,8 @@ describes as the future. The Android client implements what the host actually se
 | List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob, and beside it **`lan`** (new, `A74-refresh`): the computer's current LAN address and SSH host keys, which refresh the paired record | same blob (and never a `lan`), from `workspace.json` + `tmux ls` + `agent-status.json` in the desktop's userData or the Server Edition's data dir; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`). Then what a desktop that drives the computer over SSH left there (`A27`): `nodeterm-rmt` sessions, the `.nodeterm/project.json` above each, and the `~/.nodeterm/agent-status-<projectId>.json` slices (stale after 120 s) |
 | Open an existing terminal | `pty.attach` → `{streamId, fresh}` (a session the phone starts adds `projectId`/`accountId`/`agentId`; the desktop resolves them itself — the project folder, the account, the agent's hook env and the pane's owning project — and applies them only when this attach creates the session), Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | which socket has the session (`node-terminal` first, then `nodeterm-rmt`; a reserved phone UUID uses only validated `nodeterm-phone`), then a pty exec of `tmux attach-session` on it — never `new-session`: a session of the computer's own index that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay (a driven project's session that is not running says it starts from its own desktop, and one no listing names is refused without the relay) |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
-| Input-bar Send (`A128`) | additive **`pty.submitComposed {streamId, input:{kind:"paste"\|"control", text, enter}}`** → `{status:"delivered"\|"refused"\|"uncertain", message?}`; current local-tmux host binds the attached stream to its captured viewer/pane generation; legacy, native Windows/session-host and SSH-project relay routes explicitly refuse | explicit actor submission to the captured Unix SSH viewer/pane; cancel host copy mode, paste with tmux-owned bracketed framing, then wait 150 ms before a separately guarded Enter; a control action is one raw byte with `enter:false` |
-| Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
+| Input-bar Send (`A128`) | additive **`pty.submitComposed {streamId, input:{kind:"paste"\|"control", text, enter}}`** → `{status:"delivered"\|"refused"\|"uncertain", message?}`; current local-tmux, direct native Windows PTY and negotiated session-host backends bind Send to the attached stream and captured generation; older/unverifiable hosts and SSH-project relay routes explicitly refuse | explicit actor submission to the captured Unix SSH viewer/pane; cancel host copy mode, paste with tmux-owned bracketed framing, then wait 150 ms before a separately guarded Enter; a control action is one raw byte with `enter:false` |
+| Scroll | `pty.scroll` writes SGR wheel events for tmux; native/session-host history routing is broken when application mouse reporting is off ([A129](android-audit-2026-09.md#a129), open) | the phone writes the same SGR wheel events to its attached tmux client |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
 | Wake on open (`A103`, `A104`) | existing remote-viewer nudge wakes a mounted node or resolves one saved offscreen/closed-project node without switching views; exact owner/generation and Pause guards, no fresh shell or uncertain input replay | explicit Sleeping wake offer uses the agent's measured approval policy and host capabilities; the existing shell/WakeContext checks and user tap remain |
 | Wake, refresh, rename | `node.wake\|refresh\|rename` | current Desktop's selected-profile SSH service (`A108`); older hosts need an allowed relay; Server has no node nudges |
@@ -502,6 +512,76 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Native history scrolling finding (2026-10-07, A129 open)
+
+At `ce1121ba`, actual Kotlin relay calls through the approved E2EE host handler reproduce
+foreground wheel writes on native/session-host backends with mouse reporting off. Up three and
+down two notches produce five SGR wheel writes at explicit byte-recorder boundaries while
+retained history remains available. The real native emulators and session-host/client are
+exercised, with a component host PTY adapter; this is not full Desktop, WebView gesture, kernel
+PTY, physical ConPTY or phone proof. Receipt: `/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`,
+SHA-256 `c5d50310e539ad02d1c825ac12d19865b4c488184d1d50a8c809aad44b7cbb1a`.
+[A129 remains open](android-audit-2026-09.md#a129); mode-aware native retained-history browsing
+is future work. Existing tmux/direct-SSH scrolling receipts and the physical checklist are unchanged.
+
+### Composed Send backend follow-up (2026-10-07, A128)
+
+`PtyManager.submitComposed` routes an attached local stream to its tmux receipt, captured
+`NativeWindowsPane`, or captured `SessionHostPty`. The outer `pty.submitComposed` wire contract
+and Android completion policy remain unchanged. SSH-project relay input still refuses this
+operation; direct Unix SSH retains its separately attested tmux path.
+
+Session-host protocol v2 adds the independently negotiated `composed-input-v1` feature and
+`prepareComposedV1`, `writeComposedV1`, `cancelComposedV1` requests. Preparation mints a
+single-use ticket bound to the live `HostSession` generation and actually subscribed socket.
+It expires after 10 seconds. A lock spans paste and its later Enter across all subscribers.
+The actual emulator's output barrier determines bracketed paste mode; the host rechecks the
+same live generation, subscriber and ticket before each native write. Both client and host
+enforce the 150 ms minimum. Cancellation, expiry and detach consume the ticket without input.
+
+The client captures the original subscriber registration, session generation and transport.
+It checks them inside the actual deferred send turn, including a provably unwritten retry.
+A ticket cannot be redeemed over a replacement socket. After a paste frame may have been sent,
+missing receipts and RPC exceptions are uncertain, including server errors; they never authorize
+a replay or an Enter on a replacement. Only a structured before-write refusal is a refusal.
+Busy/stale/failed-attachment messages describe the current action; only an absent negotiated
+feature tells the user to update the computer. An older running host retains its sessions and
+refuses the new operation without a forced restart or name-only input fallback.
+
+The direct native Windows adapter uses the same ticketed writer with its captured PTY lifetime
+and actual emulator barrier. This is explicit terminal input, separate from agent-message
+process attestation and observed-screen submission. Raw keyboard/report/wheel semantics remain
+unchanged. A positive receipt means submission through the owned terminal API, not application
+execution. The timing bound is between native write calls; ConPTY can queue/coalesce writes,
+so this source result does not prove Windows kernel delivery spacing under backpressure.
+
+The independently reviewed frozen candidate passes **181 affected Vitest tests / 17 files**,
+full TypeScript and **19 focused actual Gradle methods**: five composed relay methods (including
+the two actual backend producers), one executable CI-registration reader and 13 workflow-path
+checks. **26 distinct mutations fail assertions**. The 21 initial semantic variants have 47-test
+control/restored runs; the final disconnected-capability guard adds one catch with 48-test
+control/restored runs, with the exact single production-line delta checked. Four deletions of
+the newly required CI registrations fail the actual compiled reader, with control/restored passes.
+Failed infrastructure/startup attempts are excluded. The separate final Linux kernel-PTY proof
+binds the actual backend/client/socket and records complete framed/plain bytes, one raw Ctrl,
+151.038 ms between native writes and 150.844 ms between the corresponding kernel reads in its
+measured case, plus no Enter/replay after retirement. These are bounded component results.
+
+Durable private evidence: `/home/mgysin/.cache/nodeterm-android-work/a128-alt-backends-evidence-ic6w1072/archive.json`,
+SHA-256 `60bf42315e6b945e27f7b04c57ae5f58205bac2606ab94729c57895a99ca4cca`;
+its 91 byte-identical archived evidence files and 21 source files retain the original aggregate
+`0a10d94e817caf932588d6400f031553c72daccb7d901139a46dd9212a75cfc7`
+and exact patch `4bdf58a3ad0d24da1a45be84dc96c2a3e37416ffb0aafb2c0ca2d497714996c6`.
+Mandatory merged full protocol/app and affected Desktop gates are run for publication;
+exact-head CI is checked after every push.
+The actual producer-to-Kotlin tests use the production backend/client/emulator and encrypted
+relay with an explicitly labeled native byte recorder. A separate genuine Linux kernel-PTY and
+session-host/socket proof covers delivery. Neither substitutes for physical Windows ConPTY or
+phone acceptance. Remaining device checks include lifecycle, held/lost acknowledgements,
+changed host keys, notification actions/permissions and usable live-provider authorization.
+The original 10 Pass / 22 Partial / 32 Pending ledger stays unchanged. iOS **@eneskirca** can
+adopt the additional availability with the same public action/result and retention rules.
 
 ### Pixel 7a beta 17 upgrade and composed Send (2026-10-06)
 
@@ -601,8 +681,9 @@ and unchanged draft revision; editing away and back to identical text preserves 
 A newly rearmed Ctrl is preserved. Refused, uncertain and stale outcomes retain input without
 replay. Synchronous WebView preparation failure also retains the draft. Delivery means input
 submitted to the attested pane/PTY, not proof that its application executed the command.
-Direct Unix SSH and current local-tmux relay hosts support this operation; legacy or unverifiable
-hosts, native Windows/session-host and SSH-project relay routes explicitly refuse it.
+At that source checkpoint, direct Unix SSH and local-tmux relay hosts support this operation;
+legacy/unverifiable, native Windows/session-host and SSH-project relay routes explicitly refuse it.
+The [2026-10-07 follow-up](#composed-send-backend-follow-up-2026-10-07-a128) adds the two local PTY backends.
 
 The frozen candidate passes **170 distinct affected Kotlin methods / 8 suites**, **187 affected
 Vitest tests / 11 files**, full TypeScript and forced offline app compilation. **26 isolated
@@ -2615,6 +2696,11 @@ later fix left to a device.
     *(A27, A49)*
 
 ## Known gaps
+
+**Native history scrolling (`A129`, open).** A history swipe through the relay can write wheel
+bytes into a native/session-host foreground application even when mouse reporting is off.
+The [component finding](#native-history-scrolling-finding-2026-10-07-a129-open) confirms the
+route; safe retained-history browsing and dynamic mouse-mode routing are not implemented.
 
 A125 is source-fixed in `415dae9b`; A126 is committed in `5b7286b3`.
 The eight controlled Linux Desktop reconnect cases, 294 affected tests, incremental TypeScript,

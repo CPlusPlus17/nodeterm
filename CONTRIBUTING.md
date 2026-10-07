@@ -93,6 +93,15 @@ verify and stop any remaining host. Never recommend **End session** (it deletes 
 resume depends on supported, saved conversation history; it does not preserve running tasks.
 See `docs/windows-session-host.md` for the user-controlled preparation/recovery steps and limits.
 
+**Explicit phone Send is a captured-terminal transaction.** The public `pty.submitComposed`
+request/result stays the same across local tmux, direct native Windows PTYs and negotiated
+session hosts. `composed-input-v1` preparation mints one-use tickets bound to the live session
+generation and original subscribed socket; it never redeems a ticket on a replacement.
+Check lifetime inside the deferred send turn and after the actual emulator mode barrier.
+Paste and Enter are separate writes at least 150 ms apart. Sent-phase errors are uncertain,
+never automatic retries. Older live hosts refuse without being replaced or restarted.
+This explicit input path is separate from observed-screen agent-message submission.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

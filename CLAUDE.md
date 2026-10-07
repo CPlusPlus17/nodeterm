@@ -5363,6 +5363,23 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
 
 ## Conventions
 
+**Explicit composed Send keeps one captured backend owner (A128).** The public phone
+`pty.submitComposed` contract routes attached local streams to their exact tmux viewer receipt,
+captured direct `NativeWindowsPane`, or captured `SessionHostPty`. The internal v2
+`composed-input-v1` feature negotiates prepare/write/cancel: a host-minted ticket is one-use,
+expires after 10 seconds, and binds the actual `HostSession` generation and subscriber socket.
+Its lock spans paste and a separately guarded Enter, with both host and client enforcing the
+150 ms minimum. Check lifetime after the actual emulator output/mode barrier and immediately
+before every native write. The client checks its original subscriber registration and socket
+inside the real deferred send turn; a replacement socket cannot redeem the ticket. A phase
+that may have reached the socket is uncertain on missing receipt/RPC error, never replayed.
+Cancellation/expiry/detach only consume tickets. Older live hosts refuse without restart or
+name-only input fallback. Busy/stale attachment errors do not prescribe an update. This is
+explicit terminal input, separate from agent process attestation and observed-screen messages;
+a positive receipt proves terminal writes, not that its application executed the command.
+The outer Android action/result remains unchanged, with actual backend producer interop owed;
+flag additional iOS availability and retention adoption for @eneskirca.
+
 **Co-view terminal replies have one live owner (A126).** Within one renderer, scope automatic
 xterm responses to the exact `api.pty` object and actual session id, with live promotion on
 exit/closed/recycled subscription or final disposal. Preserve genuine keyboard/paste/SGR mouse

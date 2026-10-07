@@ -1,12 +1,22 @@
-# Android companion: handover (updated 2026-10-06)
+# Android companion: handover (updated 2026-10-07)
 
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A128`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A129`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+**Composed Send backend follow-up (2026-10-07, A128).** Current source also supports the
+attached direct native Windows PTY and a session host that negotiates `composed-input-v1`.
+The host owns one-use tickets scoped to its live session generation and the original subscriber
+socket; paste and Enter remain separate writes at least 150 ms apart. A lost receipt after input
+may have been sent stays uncertain and never replays. Older live hosts refuse without being
+restarted. The public Android `pty.submitComposed` request/result is unchanged; its actual
+backend producers are tested through the relay and Kotlin client. Windows ConPTY and phone
+acceptance of these additional backends remain unverified. The installed beta 17 still comes
+from `a79375c3`; this host-side follow-up does not represent a new installed APK.
 
 **Beta 17 Pixel 7a follow-up (2026-10-06, A127/A128).** Retained-signer beta 17/code 18
 from `a79375c3` is installed on the intended Pixel 7a (Android 17/API 37,
@@ -395,6 +405,35 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### A129 native history scrolling finding (2026-10-07, open)
+
+At `ce1121ba`, actual Kotlin/E2EE host calls through native and session-host emulators reproduce
+five foreground SGR wheel writes for an up-three/down-two history scroll with mouse reporting
+off. The native writer boundaries are recorders and the host PTY bridge is a component adapter;
+there is no full Desktop, WebView gesture, kernel PTY, physical ConPTY or phone claim.
+Receipt `/tmp/nodeterm-native-scroll-triage-ylpvdie0/receipt.json`, SHA-256
+`c5d50310e539ad02d1c825ac12d19865b4c488184d1d50a8c809aad44b7cbb1a`.
+[A129](android-audit-2026-09.md#a129) is **OPEN**, independent of composed Send. Existing
+tmux/direct-SSH scroll evidence, installed beta 17 and the original 10/22/32 ledger are unchanged.
+
+### A128 composed Send backend follow-up (2026-10-07)
+
+Current local relay Send supports direct native Windows PTYs and session hosts advertising
+`composed-input-v1`. The v2 internal prepare/write/cancel extension owns one-use 10-second
+socket/generation-bound tickets and holds the per-terminal lock across paste and separately
+guarded Enter at least 150 ms later. Subscriber registration and original socket are checked
+inside the deferred client write. Lost transmitted-phase receipts/RPC errors stay uncertain,
+with no replay; old live hosts refuse without restart. Busy/stale attachment failures do not
+prescribe an update. The public Android action/result stays unchanged, with actual backend
+producer-to-Kotlin coverage in the same change and an iOS availability note for @eneskirca.
+
+See [the source and verification checkpoint](android.md#composed-send-backend-follow-up-2026-10-07-a128).
+Installed beta 17 remains `a79375c3`; native Linux component proof and recorded backend byte
+fixtures do not verify Windows ConPTY or a phone using these additional backends. Keep the
+remaining device/provider/backend obligations and original paused ledger separate. Before
+publication, run the mandatory offline protocol/app and affected Vitest/full TypeScript gates;
+after push, manually dispatch beta preparation and verify all five jobs on that exact revision.
 
 ### Beta 17 installed; merged gates and bounded A127/A128 device cases (2026-10-06)
 
@@ -1421,6 +1460,17 @@ are verified. No natural-periodic background Done watch has started and no resul
 The remaining phone cleanup and notification checks can continue when the correct Pixel returns.
 
 ### What is still open
+
+**Immediate source follow-up (`A129`, open):** Implement native retained-history browsing
+separately from the A128 backend Send extension. Preserve tmux/direct-SSH
+gestures and momentum; native mouse-off history actions must write no foreground bytes, while
+mouse-on actions must follow the current application's requested protocol. Backend negotiation
+alone cannot substitute for live mode/generation checks. Host, Android and producer interop
+changes are future work, with the iOS implication owed to @eneskirca.
+
+**Backend Send follow-up:** The current source adds negotiated session-host and direct native
+Windows Send; physical ConPTY and phone acceptance remain pending. See the
+[2026-10-07 checkpoint](android.md#composed-send-backend-follow-up-2026-10-07-a128).
 
 **Immediate follow-up:** Beta 17/code 18 from `a79375c3` is installed; merged forced 982/102 protocol and app
 and affected Desktop gates pass, and exact-head Android run `37523703627` has all five jobs/ten
