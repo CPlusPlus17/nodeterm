@@ -86,17 +86,183 @@
     // Do not cancel/restart the touch or animation here: a response may arrive mid-drag.
   }
 
+
+  // A closed SSH tmux painter restores its outer terminal after clearing the alternate screen.
+  // Keep the last visible pane separately; never suppress control sequences in the live parser.
+  var endViewer = null
+  var viewerEpoch = 0
+  var closedPage = null
+  var closedLayer = document.createElement('div')
+  closedLayer.id = 'closed-view'
+  closedLayer.hidden = true
+  closedLayer.style.cssText = 'position:absolute;inset:0;padding:2px 2px 2px 4px;background:#000;color:#e6e6e6;overflow:hidden;touch-action:none;z-index:3'
+  host.appendChild(closedLayer)
+  function invalidatePendingClosedCapture() {
+    viewerEpoch++
+    userInput = false
+    closedTouch = null
+    if (endViewer) {
+      endViewer.revision++
+      endViewer.candidate = null
+      endViewer.leftAlternate = false
+      endViewer.ending = false
+    }
+  }
+  function clearClosedCapture() {
+    invalidatePendingClosedCapture()
+    closedPage = null
+    closedLayer.hidden = true
+    closedLayer.replaceChildren()
+  }
+  function beginViewer(token, sshTmux) {
+    clearClosedCapture()
+    var viewer = { token: token, sshTmux: sshTmux === true, revision: 0,
+      capturing: false, enteredAlternate: false, leftAlternate: false, candidate: null, ending: false }
+    endViewer = viewer
+    // Previously dispatched writes parse before the new viewer may capture anything.
+    term.write('', function () { if (endViewer === viewer) viewer.capturing = true })
+  }
+  function retireViewer() {
+    clearClosedCapture()
+    endViewer = null
+  }
+  function captureAlternate(viewer) {
+    // Refuse an oversized frame, including blank frames, rather than keeping an older candidate.
+    viewer.candidate = null
+    if (term.rows > 200 || term.cols > 1000 || term.rows * term.cols > 20000) return
+    var buf = term.buffer.active
+    var rows = []
+    var uris = Object.create(null), ranges = 0, budget = 0
+    var encoder = new TextEncoder()
+    for (var r = 0; r < term.rows; r++) {
+      var line = buf.getLine(buf.viewportY + r)
+      var text = line ? line.translateToString(false) : ''
+      budget += encoder.encode(text).length
+      if (budget > 256 * 1024) return
+      var links = []
+      for (var c = 0; line && c < term.cols; c++) {
+        var cell = line.getCell(c)
+        var id = cell && cell.extended ? cell.extended.urlId : 0
+        if (id && !Object.prototype.hasOwnProperty.call(uris, id)) {
+          var data = term._core._oscLinkService.getLinkData(id)
+          if (Object.keys(uris).length >= 128 || (data && data.uri && data.uri.length > 4096)) return
+          uris[id] = oscLinkUri(id)
+        }
+        var href = id ? uris[id] : null
+        var last = links[links.length - 1]
+        if (href && last && last.url === href && last.end === c) last.end++
+        else if (href) {
+          if (++ranges > 512) return
+          budget += encoder.encode(href).length + 64
+          if (budget > 256 * 1024) return
+          links.push({ start: c, end: c + 1, url: href })
+        }
+      }
+      rows.push({ text: text, isWrapped: !!(line && line.isWrapped), section: 'alternate', links: links })
+    }
+    var candidate = { cols: term.cols, rows: rows, copy: snapshot(true) }
+    if (encoder.encode(JSON.stringify(candidate)).length <= 1024 * 1024) viewer.candidate = candidate
+  }
+  term.parser.registerCsiHandler({ final: 'J' }, function (params) {
+    var viewer = endViewer
+    if (params[0] === 2 && viewer && viewer.sshTmux && viewer.capturing && viewer.enteredAlternate && term.buffer.active.type === 'alternate') captureAlternate(viewer)
+    return false
+  })
+  ;['h', 'l'].forEach(function (final) {
+    term.parser.registerCsiHandler({ prefix: '?', final: final }, function (params) {
+      var viewer = endViewer
+      if (viewer && viewer.sshTmux && viewer.capturing && params.some(function (p) { return p === 47 || p === 1047 || p === 1049 })) {
+        if (final === 'h') { viewer.enteredAlternate = true; viewer.leftAlternate = false; viewer.candidate = null }
+        else if (viewer.enteredAlternate && term.buffer.active.type === 'alternate') viewer.leftAlternate = true
+      }
+      return false
+    })
+  })
+  term.onWriteParsed(function () {
+    var viewer = endViewer
+    // A real live repaint supersedes the pre-clear frame; ED2 alone leaves it pending for teardown.
+    if (viewer && viewer.candidate && term.buffer.active.type === 'alternate') {
+      for (var r = 0; r < term.buffer.active.length; r++) {
+        if (term.buffer.active.getLine(r).translateToString(true)) { viewer.candidate = null; break }
+      }
+    }
+  })
+  function endViewerDisplay(token) {
+    var viewer = endViewer
+    if (!viewer || viewer.token !== token || !viewer.sshTmux || viewer.ending) return
+    viewer.ending = true
+    var revision = viewer.revision
+    term.write('', function () {
+      if (endViewer !== viewer || viewer.revision !== revision || !viewer.ending || !viewer.leftAlternate || term.buffer.active.type !== 'normal' || !viewer.candidate) return
+      closedPage = viewer.candidate
+      scrollActive = false
+      cancelScroll()
+      closeScrollView()
+      renderClosedPage()
+    })
+  }
+  function renderClosedPage() {
+    if (!closedPage) return
+    var rect = term.element.querySelector('.xterm-screen').getBoundingClientRect()
+    var cellWidth = rect.width / term.cols, cellHeight = rect.height / term.rows
+    closedPage.metrics = { left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+      cellWidth: cellWidth, cellHeight: cellHeight }
+    closedLayer.replaceChildren()
+    closedPage.rows.forEach(function (row) {
+      var line = document.createElement('div')
+      line.textContent = row.text || ' '
+      line.style.cssText = 'pointer-events:none;white-space:pre;font-family:monospace'
+      line.style.fontSize = fontSize + 'px'
+      line.style.height = line.style.lineHeight = cellHeight + 'px'
+      closedLayer.appendChild(line)
+    })
+    closedLayer.hidden = false
+  }
+  function closedGeometryChanged() {
+    // Resize invalidates a pending EOF capture, but keeps a settled pane and its Copy snapshot.
+    invalidatePendingClosedCapture()
+    renderClosedPage()
+  }
+  var closedTouch = null
+  function closedLinkAt(x, y) {
+    var cell = cellAt(x, y)
+    var url = cell ? linkAt(cell.row, cell.col) : null
+    if (url) openUrl(url)
+  }
+  closedLayer.addEventListener('touchstart', function (e) {
+    e.stopPropagation()
+    closedTouch = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null
+  }, { passive: true })
+  closedLayer.addEventListener('touchmove', function (e) {
+    e.stopPropagation(); e.preventDefault()
+    if (closedTouch && (e.touches.length !== 1 || Math.abs(e.touches[0].clientX - closedTouch.x) > TAP_SLOP || Math.abs(e.touches[0].clientY - closedTouch.y) > TAP_SLOP)) closedTouch = null
+  }, { passive: false })
+  closedLayer.addEventListener('touchend', function (e) {
+    e.stopPropagation(); e.preventDefault()
+    var touch = closedTouch
+    closedTouch = null
+    var end = e.changedTouches && e.changedTouches[0]
+    if (closedPage && touch && end && e.touches.length === 0 && Math.abs(end.clientX - touch.x) <= TAP_SLOP && Math.abs(end.clientY - touch.y) <= TAP_SLOP) closedLinkAt(touch.x, touch.y)
+  }, { passive: false })
+  closedLayer.addEventListener('touchcancel', function (e) { e.stopPropagation(); closedTouch = null }, { passive: true })
+  closedLayer.addEventListener('click', function (e) {
+    e.stopPropagation(); e.preventDefault()
+    if (closedPage) closedLinkAt(e.clientX, e.clientY)
+  })
+  window.addEventListener('pagehide', retireViewer)
+
   var lastCols = 0
   var lastRows = 0
   function doFit(force) {
     try { fit.fit() } catch (e) { /* not laid out yet */ }
     if (force || term.cols !== lastCols || term.rows !== lastRows) {
+      closedGeometryChanged()
       lastCols = term.cols
       lastRows = term.rows
       bridge.onResize(term.cols, term.rows)
     }
   }
-  window.addEventListener('resize', function () { doFit(false) })
+  window.addEventListener('resize', function () { doFit(false); closedGeometryChanged() })
 
   function b64ToBytes(b64) {
     var bin = atob(b64)
@@ -139,11 +305,12 @@
   term.onData(function (d) {
     var fromUser = userInput
     userInput = false
+    if (closedPage) return
     if (mouseReport(d) || (!fromUser && (hasInputOrigin || generatedReport(d)))) bridge.onReport(d)
     else { cancelInputScroll(); bridge.onInput(d) }
   })
   // In this xterm bundle onBinary is used only by the legacy mouse encoding.
-  term.onBinary(function (d) { userInput = false; bridge.onReport(d) })
+  term.onBinary(function (d) { userInput = false; if (!closedPage) bridge.onReport(d) })
 
   // Copy: tmux's copy-mode emits OSC 52 (set-clipboard on). The whole sequence goes to Kotlin's
   // Osc52.parse, which mirrors the desktop's parseOsc52: the ';' is required, a read query ('?') is
@@ -207,13 +374,14 @@
     return out
   }
 
-  function bufferView() {
-    if (historyPage) return {
-      cols: historyPage.cols,
+  function bufferView(liveOnly) {
+    var capturedPage = !liveOnly && (closedPage || historyPage)
+    if (capturedPage) return {
+      cols: capturedPage.cols,
       history: true,
-      length: historyPage.rows.length,
+      length: capturedPage.rows.length,
       line: function (row) {
-        var line = historyPage.rows[row]
+        var line = capturedPage.rows[row]
         return line ? { isWrapped: line.isWrapped, section: line.section,
           text: function (trim) { return trim ? line.text.replace(/\s+$/, '') : line.text } } : undefined
       }
@@ -317,11 +485,17 @@
 
   /** The URL at a buffer cell: an OSC 8 link's, else a URL in the text's paragraph. */
   function linkAt(row, col) {
-    var osc8 = historyPage ? null : osc8UrlAt(row, col)
+    if (closedPage) {
+      var capturedRow = closedPage.rows[row]
+      var link = capturedRow && capturedRow.links.find(function (link) { return col >= link.start && col < link.end })
+      if (link) return link.url
+    }
+    var capturedPage = closedPage || historyPage
+    var osc8 = capturedPage ? null : osc8UrlAt(row, col)
     if (osc8) return osc8
     var p = paragraphContaining(bufferView(), row)
     if (!p) return null
-    var idx = historyPage ? p.rowOffsets[row - p.startRow] + historyStringIndex(historyPage.rows[row].text, col)
+    var idx = capturedPage ? p.rowOffsets[row - p.startRow] + historyStringIndex(capturedPage.rows[row].text, col)
       : (row - p.startRow) * term.cols + col
     var tokens = matchUrlTokens(p.text)
     for (var i = 0; i < tokens.length; i++) {
@@ -335,23 +509,24 @@
   function cellAt(x, y) {
     var screen = term.element && term.element.querySelector('.xterm-screen')
     if (!screen || term.cols <= 0 || term.rows <= 0) return null
-    var rect = screen.getBoundingClientRect()
+    var rect = closedPage ? closedPage.metrics : screen.getBoundingClientRect()
     var dx = x - rect.left
     var dy = y - rect.top
     if (dx < 0 || dy < 0 || dx >= rect.width || dy >= rect.height) return null
-    var cw = rect.width / term.cols
-    var ch = rect.height / term.rows
+    var cw = closedPage ? rect.cellWidth : rect.width / term.cols
+    var ch = closedPage ? rect.cellHeight : rect.height / term.rows
     if (cw <= 0 || ch <= 0) return null
     var row = Math.floor(dy / ch)
-    if (historyPage && (row >= historyPage.rows.length || Math.floor(dx / cw) >= historyPage.cols)) return null
-    return { col: Math.floor(dx / cw), row: row + (historyPage ? 0 : term.buffer.active.viewportY) }
+    var capturedPage = closedPage || historyPage
+    if (capturedPage && (row >= capturedPage.rows.length || Math.floor(dx / cw) >= capturedPage.cols)) return null
+    return { col: Math.floor(dx / cw), row: row + (capturedPage ? 0 : term.buffer.active.viewportY) }
   }
 
   // A mouse click on a link (a phone with a mouse, while the pane does not report the mouse; xterm's
   // own link handling stands aside when it does). On a touch screen the tap handler below runs first.
   term.registerLinkProvider({
     provideLinks: function (y, callback) {
-      if (historyPage) { callback(undefined); return }
+      if (closedPage || historyPage) { callback(undefined); return }
       var p = paragraphContaining(bufferView(), y - 1)
       if (!p) {
         callback(undefined)
@@ -378,8 +553,9 @@
   // lines to select, copies or shares them under its clipboard cap, and offers the links.
   var SNAPSHOT_ROWS = 500
   var SNAPSHOT_LINKS = 50
-  function snapshot() {
-    if (historyPage) {
+  function snapshot(liveOnly) {
+    if (closedPage && !liveOnly) return closedPage.copy
+    if (historyPage && !liveOnly) {
       var captured = historyPage.rows
       var lines = []
       captured.forEach(function (row, index) {
@@ -402,7 +578,7 @@
       return { lines: lines, links: links, firstVisible: 0 }
     }
     var buf = term.buffer.active
-    var view = bufferView()
+    var view = bufferView(true)
     var end = buf.length
     var start = Math.max(0, end - SNAPSHOT_ROWS)
     // A line cut off at the top would start part-way through.
@@ -631,18 +807,21 @@
   host.addEventListener('touchcancel', cancelScroll, { passive: true })
 
   window.nt = {
+    beginViewer: beginViewer,
+    endViewer: endViewerDisplay,
+    retireViewer: retireViewer,
     write: function (b64) { term.write(b64ToBytes(b64)) },
     // The attach snapshot: the current screen, painted before live output.
-    paint: function (b64) { cancelInputScroll(); term.reset(); term.write(b64ToText(b64).replace(/\r?\n/g, '\r\n')) },
-    reset: function () { cancelInputScroll(); term.reset() },
+    paint: function (b64) { clearClosedCapture(); cancelInputScroll(); term.reset(); term.write(b64ToText(b64).replace(/\r?\n/g, '\r\n')) },
+    reset: function () { clearClosedCapture(); cancelInputScroll(); term.reset() },
     showScrollView: showScrollView,
     closeScrollView: closeScrollView,
     scrollFailed: function (epoch) { if (epoch === displayEpoch) cancelScroll() },
     cancelScroll: cancelScroll,
-    suspendScroll: function () { scrollActive = false; cancelInputScroll() },
-    resumeScroll: function () { scrollActive = true },
+    suspendScroll: function () { retireViewer(); scrollActive = false; cancelInputScroll() },
+    resumeScroll: function () { if (!closedPage) scrollActive = true },
     // Native raw chips cancel on this JS thread before their input reaches the host.
-    raw: function (b64) { cancelInputScroll(); bridge.onInput(b64ToText(b64)) },
+    raw: function (b64) { if (closedPage) return; cancelInputScroll(); bridge.onInput(b64ToText(b64)) },
     focus: function () { term.focus() },
     blur: function () { term.blur() },
     // The ⌨ chip (audit A46): the Kotlin side has just given the WebView Android's focus and asks
@@ -662,6 +841,7 @@
     // Special keys from the native key row. Arrows follow the pane's DECCKM state, which this
     // emulator tracks because it parses the very stream the pane writes.
     key: function (name) {
+      if (closedPage) return
       cancelInputScroll()
       var app = term.modes.applicationCursorKeysMode
       var csi = app ? '\x1bO' : '\x1b['
@@ -674,10 +854,12 @@
       if (seq) bridge.onInput(seq)
     },
     submit: function (b64, enter) {
+      if (closedPage) return
       cancelInputScroll()
       var text = b64ToText(b64)
       if (text) term.paste(text)
-      if (enter) setTimeout(function () { cancelInputScroll(); bridge.onInput('\r') }, text ? 150 : 0)
+      var epoch = viewerEpoch
+      if (enter) setTimeout(function () { if (closedPage || viewerEpoch !== epoch) return; cancelInputScroll(); bridge.onInput('\r') }, text ? 150 : 0)
     }
   }
 

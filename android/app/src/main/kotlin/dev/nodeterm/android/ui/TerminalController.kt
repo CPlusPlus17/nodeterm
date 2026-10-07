@@ -63,6 +63,7 @@ import dev.nodeterm.protocol.model.Keys
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.Osc52
 import dev.nodeterm.protocol.model.TerminalCopy
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -252,6 +253,7 @@ class TerminalController(
                 // stream too), or a stream a superseded attach or a launch held. Not a drop to recover from.
                 if (!slot.isCurrent(ticket)) return@post
                 output.finish(ticket)
+                jsViewer(ticket, "nt.endViewer('$ticket')")
                 if (!slot.ended(ticket)) return@post
                 retireOutput()
                 retireActions()
@@ -772,7 +774,6 @@ class TerminalController(
         val ticket = slot.begin()
         page.viewerChanged(ticket)
         output.begin(ticket)
-        val sink = sinkFor(ticket)
         val managed = session.managedSessionCreation.receiptFor(nodeId)
         managedReceiptBlocked = false
         attachJob = graph.scope.launch {
@@ -792,6 +793,10 @@ class TerminalController(
                     PendingLaunches.peek(nodeId) != null -> session.connectionFor(Capability.REGISTER_NODE, onStatus = onStatus)
                     else -> session.ensureConnected()
                 }
+                withContext(Dispatchers.Main.immediate) {
+                    if (slot.isCurrent(ticket)) jsViewer(ticket, "nt.beginViewer('$ticket',${conn.kind == TransportKind.SSH})")
+                }
+                val sink = sinkFor(ticket)
                 val c = if (cols > 0) cols else 80
                 val r = if (rows > 0) rows else 24
                 // A session this phone is starting: let the host create it in its project, under

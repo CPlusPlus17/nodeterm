@@ -22,6 +22,20 @@ not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 
 wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
 remain outside these observations. See [the bounded receipts](../docs/android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
+**Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
+Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
+This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
+Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **26 shipped-xterm
+component cases pass in the permanent behavioral JUnit regression**, alongside **three passing
+app source-pin methods**; **11 semantic mutants** fail assertions with 23-case control/restored,
+and one additional geometry mutant fails its 26-case assertion. Three separate app source-pin
+mutants fail only their intended assertions, with healthy/restored controls passing. Full gates/CI,
+a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
+`656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
+original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
+**10 Pass / 22 Partial / 32 Pending**. The equivalent iOS EOF/display behavior needs adoption review
+by @eneskirca; no wire change is introduced.
+
 **Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation

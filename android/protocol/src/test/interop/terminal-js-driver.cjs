@@ -196,6 +196,7 @@ class Terminal {
       addEventListener(type, fn) { listen(textareaListeners, type, fn) }
     }
     this.parser = {
+      registerCsiHandler() { return { dispose() {} } },
       registerOscHandler(ident, fn) {
         oscHandlers[ident] = fn
       }
@@ -213,6 +214,7 @@ class Terminal {
     linkProviders.push(provider)
     return { dispose() {} }
   }
+  onWriteParsed() { return { dispose() {} } }
   onData(fn) { this.dataCallback = fn }
   onBinary(fn) { this.binaryCallback = fn }
   onKey(fn) { this.keyCallback = fn }

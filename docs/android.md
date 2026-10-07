@@ -21,6 +21,20 @@ not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 
 wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
 remain outside these observations. See [the bounded receipts](#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
+**Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
+Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
+This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
+Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **26 shipped-xterm
+component cases pass in the permanent behavioral JUnit regression**, alongside **three passing
+app source-pin methods**; **11 semantic mutants** fail assertions with 23-case control/restored,
+and one additional geometry mutant fails its 26-case assertion. Three separate app source-pin
+mutants fail only their intended assertions, with healthy/restored controls passing. Full gates/CI,
+a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
+`656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
+original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
+**10 Pass / 22 Partial / 32 Pending**. The equivalent iOS EOF/display behavior needs adoption review
+by @eneskirca; no wire change is introduced.
+
 **Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
@@ -666,6 +680,49 @@ The frozen physical checkpoint is
 It binds 124 raw artifacts and keeps the scoped passes, partial cases, A132/A133 failures and
 owned cleanup separate. These records do not establish output overlapping backgrounding or
 successful final-marker emission.
+
+### Closed SSH/tmux exit display source checkpoint (2026-10-07, A133)
+
+The frozen native exit discriminator `a133-tmux-raw-exit-v3-rpn5n03z` records immediate and
+150-ms-delayed final writes: each confirms 17 bytes containing `A133_FINAL_TAIL`. Its actual
+outer tmux suffix clears the alternate screen with `CSI 2 J` before `CSI ?1049l`, then writes
+`[exited]`; capturing only at alternate-screen departure is too late. Results `7574288b…` and
+`95700b01…` bind both final traces. Replay checks settled parser/Copy state, not whether the tail
+was briefly painted during the recorded delay. The earlier beta-20 phone marker remains unconfirmed.
+
+This change passively captures the current visible alternate pane before erasure, including a
+blank pane which replaces an older capture. Only the current known SSH/tmux viewer's EOF opts in;
+an xterm parser-drain barrier and viewer/revision checks precede the closed display. Native/relay
+paths stay unopted. Copy and touch links use the captured physical rows/wraps/URLs; there is no Live
+button or PTY input from that layer. Settled rows and Copy survive font/layout changes; new attach,
+paint/reset, page retirement or suspension clears them. Backgrounding still uses the existing
+reattach flow. This preserves the last rendered pane on one page, not backend history or bytes
+tmux never painted. Control sequences are neither swallowed nor stripped, and no tmux capability,
+live TUI behavior or transport contract changes. The equivalent iOS EOF/display implication is
+for @eneskirca to review.
+
+Actual shipped-xterm component controls pass **23 cases**, then **26** with layout-touch, wrapped
+plain-URL touch and outer-TUI/query controls. Private
+`a133-augmented-control-root-zruk3bem/result.json` hashes to
+`90d9df1e2820eea048d60aebcf0cafa326fcb3e7f974f60dec0734541fd4aef2`.
+Eleven semantic mutants are assertion-caught with healthy/restored 23-case controls in
+`a133-component-mutations-lg2vrii9/receipt.json`, SHA-256
+`a8d17ca753eb00d30d90109745ab8435738adfdf6b96236b04003f0bedb6cba6`.
+An additional stale-geometry mutant fails the intended assertion against all 26 cases;
+`a133-geometry-mutant-root-0fapgav5/execution.json` binds its result `fdcf14f3…` and recipe
+`83172a2b…`. Grouped EOF/origin policies do not establish individual redundant-clause coverage.
+These are real xterm5.5 parser tests with jsdom layout/canvas stubs, not WebView/phone/SSH-runtime
+acceptance. The permanent behavioral JUnit method and three explicitly labeled app source-pin
+methods pass in a fresh forced offline focused run (`a133-permanent-focused-t_nycdfq`), with all
+26 component cases required and no failures/errors/skips. Full publication gates/CI, the next APK and physical checks
+remain pending. The installed beta-20/source `11fbff08` and original **10/22/32** ledger are unchanged.
+
+The three app source pins are separately mutation-checked: removing SSH-only admission, the owned
+EOF display call or background capture retirement fails only its intended assertion, while healthy
+and restored controls pass. `a133-wiring-pin-mutations-zxu7m35n/run-h0czovso/receipt.json`, SHA-256
+`8ae3c307ba0f98a0f148ea9f5f50e2a58a14cb8f5222f0f317ca6fd6378c36d0`, retains five runs of the
+same three compiled test/helper classes. These lexical source assertions are separate from the
+twelve renderer behavior mutants and provide no device acceptance.
 
 ### Viewer output lifetime source checks (2026-10-07, A131)
 
@@ -2862,7 +2919,9 @@ later fix left to a device.
     terminal reattaches by itself ("Disconnected. Reconnecting…" clears) and the draft then sends. Arm Ctrl and send "c" from the input bar: the
     pane gets ^C, with no Enter after it. With continuous numbered output, background and resume
     repeatedly: each reattach paints its own snapshot without replaying the previous viewer's
-    buffered bytes. A current terminal's final tail remains visible before its exit. *(A41, A34, A36, A131)*
+    buffered bytes. A current terminal's final tail remains visible before its exit. After a known
+    SSH/tmux viewer ends, its last visible pane and Copy/links stay on the same page; a retired EOF
+    cannot restore them into a new viewer. *(A41, A34, A36, A131, A133)*
 26. The terminal WebView's renderer goes away. A kill while the terminal is on screen: the app stays
     open and the terminal is rebuilt and reattached by itself; a third kill within a minute offers
     "Reopen terminal" instead. A crash offers "Reopen terminal", never an automatic reattach. A kill
@@ -3136,6 +3195,12 @@ later fix left to a device.
     *(A27, A49)*
 
 ## Known gaps
+
+**Closed SSH/tmux exit display (`A133`, local source repair; acceptance pending).** The
+[source checkpoint](#closed-sshtmux-exit-display-source-checkpoint-2026-10-07-a133) retains only
+the last visible pane at a current known SSH/tmux EOF, with inert Copy/links and no Live/input.
+Full gates/CI, the next APK and physical acceptance are pending; beta 20 still has the earlier
+exit display. Checklist item 25 covers this same-page retention without promoting the 64-row ledger.
 
 **Native history scrolling (`A129`, published source; acceptance pending).** Published
 `1add0408` adds negotiated inert history and mouse routing through its captured backend. The

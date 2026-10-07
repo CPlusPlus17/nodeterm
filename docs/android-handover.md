@@ -24,6 +24,20 @@ not full lifecycle acceptance. Already-dispatched WebView JavaScript, A129/A130 
 wider lifecycle/notification cases and the original **10 Pass / 22 Partial / 32 Pending** ledger
 remain outside these observations. See [the bounded receipts](android.md#beta-20-publication-and-bounded-output-checks-2026-10-07).
 
+**Closed SSH/tmux display follow-up (A133 — local source repair; publication/phone checks pending).**
+Native raw exit traces confirm `CSI 2 J` erases the visible alternate pane before `CSI ?1049l`.
+This change retains that pane only at an admitted SSH/tmux EOF, as an inert same-page display with
+Copy/links; live parsing, scrolling and transport capabilities stay unchanged. **26 shipped-xterm
+component cases pass in the permanent behavioral JUnit regression**, alongside **three passing
+app source-pin methods**; **11 semantic mutants** fail assertions with 23-case control/restored,
+and one additional geometry mutant fails its 26-case assertion. Three separate app source-pin
+mutants fail only their intended assertions, with healthy/restored controls passing. Full gates/CI,
+a new APK and physical acceptance of this repair are pending. Installed beta 20 still comes from `11fbff08`;
+`656e5d8a` is the later docs-only head. A132's clean native short/long-prompt controls pass, but the
+original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
+**10 Pass / 22 Partial / 32 Pending**. The equivalent iOS EOF/display behavior needs adoption review
+by @eneskirca; no wire change is introduced.
+
 **Earlier beta 19 checkpoint (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
@@ -1634,10 +1648,12 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 **Viewer queue follow-up (`A131`):** source is fixed/published in `11fbff08`, with fresh
 1029/108/app/TypeScript, all-five/ten-step CI and retained-signer beta 20/code 21 installed.
-Bounded output/background observations are partial: investigate [A132](android-audit-2026-09.md#a132)'s
-missing native completion marker and [A133](android-audit-2026-09.md#a133)'s exit display/history loss
-on a new owned fixture, capturing actual bytes before attributing either failure. Test ordinary
-output, background/reconnect and final-tail behavior; do not repeat a successful installation.
+Bounded output/background observations are partial. [A132](android-audit-2026-09.md#a132)'s clean
+native 2-ms short/long-prompt controls pass; the original Fedora 40-ms/phone case remains open.
+[A133](android-audit-2026-09.md#a133) is locally source-fixed after native raw exit discrimination;
+permanent regressions now pass; complete full gates/CI/new APK before its physical same-page
+Copy/link/exit checks. Background/reconnect and wider lifecycle checks remain separate; do not
+repeat a successful installation.
 The user removed the Pixel 7a's screen lock and authorized ongoing tests; wake it normally without
 repeating unlock questions. Already-dispatched WebView commands remain outside the queue fix.
 A129/A130 need trusted HTTPS/WSS and real native/session-host relay; direct SSH cannot prove that
@@ -2239,7 +2255,7 @@ host-owned managed New over SSH, revoke reporting, dictation language, host reti
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
 Retained-signer beta 20/code21 from `11fbff08` is installed on the separately authorized Pixel 7a.
 Fresh 1029/108/app/TypeScript and five-job/ten-step CI pass; A131 physical output checks are partial.
-A132/A133 require completion/exit-display attribution on a fresh owned fixture.
+A132 retains the original completion-marker gap; A133 has a local display repair pending publication and physical checks.
 At Desktop `e06b5547`, its original A105 remembered-rule and A106 single/nonadjacent-multi choices
 pass real sibling Claude application. Saved manual SSH profile/pin reuse after app process restart
 and changed-host-key refusal pass. Both fresh fixtures, the QA profile/public-key admission and
