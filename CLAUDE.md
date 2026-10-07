@@ -3539,6 +3539,20 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   store at send time, not only at render. Same trap as the in-place restart's `/exit`. The bar's ↻
   reloads on demand (beside the empty state's Retry), since a session whose hooks never report
   `working` never takes the turn-finish reload.
+  **A chat prompt is TYPED for claude, never pasted** (`core/typed-input.ts`, `TYPED_INPUT_CAPABLE`).
+  Claude Code records a multi-line paste as `<pasted_content>`, which its model is told may not be
+  the user's words; typed text (lines joined by tmux's `M-Enter`, measured on 2.1.281) is recorded
+  as plain user text. Three rules: (1) **core decides it from the agent id** inside
+  `sendChatPrompt` (`typedFor`), never a renderer-sent flag — every other agent and every other
+  `sendText` caller keeps the paste; (2) **every write into a pane is serialized per pane**
+  (`PtyManager.serializePaneWrite`, wrapping `sendText` AND `sendEnvelope`): a typed send takes
+  seconds (one paste per line, then a settle wait before Enter), and an agent message, a reminder
+  or dictation arriving in that window would otherwise land between its lines and be submitted as
+  part of it; (3) **the screen is checked again right before the Enter** (`TypedSurface.canSubmit`):
+  the dialog check `sendChatPrompt` makes is seconds old by then, and an Enter into a dialog that
+  opened meanwhile would ANSWER it — the text stays in the composer and the caller hears
+  `pasted-not-submitted`. The panel ignores a second Enter while a send is in flight (the draft is
+  cleared only once it lands).
   **The agent's OWN dialogs are read off the screen** (`shared/agents/claude-screen.ts`, claude
   only — `SCREEN_DIALOG_READABLE`). The folder-trust prompt, `/model` and one-time setup questions
   fire NO hook, so the state gate above reads `done` while one owns the keyboard, and a paste into
