@@ -7478,11 +7478,90 @@ body,
   pointer-events: auto;
 }
 
+/* ---- Resize grab zones -------------------------------------------------------------------------
+   React Flow's resize lines are 1px and its corner handles 5px, so the resize cursor appeared only
+   on a hairline. Each control gets an invisible ::before hit region (the cursor and the press both
+   belong to the control); the visible line and handle are unchanged. HIG pointing-devices.md ›
+   "Add padding around interactive elements to create comfortable hit regions" — 12pt for an element
+   with a visible edge — and accessibility.md: desktop targets 20x20pt minimum, which the corners get.
+   - Edges: 12 screen px, biased OUTWARD (8 outside the border, 4 inside — and never more than 6
+     flow px inside), so the band takes as little as possible from header buttons and text.
+   - Corners: 20x20 screen px (14 outside, 6 inside, inner capped at 6 flow px), drawn after the lines so a corner wins where
+     they overlap, and covering the whole band intersection, so sliding along the border never
+     drops to the default cursor (HIG: contiguous hit regions).
+   - Sized in SCREEN px through `--nt-zoom` (lib/canvasZoomVar.ts); below zoom 0.3 the zone shrinks
+     with the node instead of swallowing a tiny one.
+   Exists only while the resizer renders, i.e. while the node is selected. */
+:root {
+  --nt-zoom: 1;
+}
+.react-flow__resize-control {
+  --rz-k: max(var(--nt-zoom), 0.3);
+  --rz-out: calc(8px / var(--rz-k));
+  /* The INNER part is also capped in flow px (6): zoomed out, 4 screen px is a big slice of a
+     small node's header — its drag area and its close/maximize buttons. */
+  --rz-in: min(calc(4px / var(--rz-k)), 6px);
+  /* Corner handles are already counter-scaled by React Flow (`scale: max(1/zoom, 1)`), so below
+     zoom 1 their flow px ARE screen px; only above it does the size need dividing. */
+  --rc-k: max(var(--nt-zoom), 1);
+  --rc-out: calc(14px / var(--rc-k));
+  /* Inner part: 6 screen px, at most 6 flow px (below zoom 1 the handle's own scale is 1/zoom). */
+  --rc-in: calc(6px * min(var(--nt-zoom), 1) / var(--rc-k));
+}
 /* The node's resize controls are a SIBLING of its root (so a glass root's backdrop-filter cannot
    clip them), which puts the later-painted root over their inner half. Lift them above the root
    and the terminal's hover guard (z 2); the kanban half-pill stays above them. */
 .react-flow__node > .react-flow__resize-control {
   z-index: 3;
+}
+.react-flow__resize-control::before {
+  content: '';
+  position: absolute;
+}
+.react-flow__resize-control.line.left::before {
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--rz-out));
+  right: calc(-1 * var(--rz-in));
+}
+.react-flow__resize-control.line.right::before {
+  top: 0;
+  bottom: 0;
+  right: calc(-1 * var(--rz-out));
+  left: calc(-1 * var(--rz-in));
+}
+.react-flow__resize-control.line.top::before {
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--rz-out));
+  bottom: calc(-1 * var(--rz-in));
+}
+.react-flow__resize-control.line.bottom::before {
+  left: 0;
+  right: 0;
+  bottom: calc(-1 * var(--rz-out));
+  top: calc(-1 * var(--rz-in));
+}
+/* A handle's padding box is 5px, centred on the corner: offsets are from that centre. */
+.react-flow__resize-control.handle::before {
+  width: calc(var(--rc-out) + var(--rc-in));
+  height: calc(var(--rc-out) + var(--rc-in));
+}
+.react-flow__resize-control.handle.left::before {
+  left: calc(2.5px - var(--rc-out));
+}
+.react-flow__resize-control.handle.right::before {
+  left: calc(2.5px - var(--rc-in));
+}
+.react-flow__resize-control.handle.top::before {
+  top: calc(2.5px - var(--rc-out));
+}
+.react-flow__resize-control.handle.bottom::before {
+  top: calc(2.5px - var(--rc-in));
+}
+/* The paint-only copies (`.nt-resize-ghost`) carry no grab zone. */
+.react-flow__resize-control.nt-resize-ghost::before {
+  content: none;
 }
 
 /* Bound to a git worktree: a checkout, not a loose grouping. Solid, thicker border (the tint is

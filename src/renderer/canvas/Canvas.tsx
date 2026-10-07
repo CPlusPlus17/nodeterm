@@ -19,6 +19,7 @@ import { useMirrorIdentitySeed } from './useMirrorIdentitySeed'
 import { useShallow } from 'zustand/react/shallow'
 import { playSfx, primeSfx } from '@renderer/lib/sfx'
 import { fanoutStillWorking } from '@renderer/lib/completionAlert'
+import { publishCanvasZoom } from '@renderer/lib/canvasZoomVar'
 import {
   addEdge,
   applyEdgeChanges,
@@ -32,6 +33,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStoreApi,
   type Connection,
   type EdgeChange,
   type Viewport
@@ -1965,6 +1967,10 @@ export function Canvas() {
     getNodes,
     getNodesBounds
   } = useReactFlow()
+
+  // `--nt-zoom` on React Flow's root: the resize grab zones size themselves in screen px with it.
+  const rfStore = useStoreApi()
+  useEffect(() => publishCanvasZoom(rfStore), [rfStore])
 
   // Single "fit everything" path for every fit-view entry point (dock button, the built-in
   // Controls button, the ⌘K palette and the context menu) so they behave identically and there's
