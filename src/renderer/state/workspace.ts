@@ -75,15 +75,27 @@ const FILES_SIZE = { width: 340, height: 460 }
 /** Height of a node when collapsed (header only). */
 export const COLLAPSED_HEIGHT = 40
 
+/** The node kinds that render a header-only collapsed state. Any other kind squashed to
+ *  COLLAPSED_HEIGHT crushes its content (a group frame strands its children outside it), so
+ *  neither the menu nor the toggle offers collapse to them. */
+export const COLLAPSIBLE_KINDS: ReadonlySet<string> = new Set(['terminal', 'sticky', 'files'])
+export const isCollapsible = (n: Pick<CanvasNode, 'type'>): boolean =>
+  COLLAPSIBLE_KINDS.has(n.type ?? 'terminal')
+/** Whether the collapse toggle may act on `n`: a collapsible kind either way, or ANY node that is
+ *  already collapsed — an older build collapsed every kind, and such a node must still expand. */
+export const canToggleCollapse = (n: Pick<CanvasNode, 'type' | 'data'>): boolean =>
+  isCollapsible(n) || !!n.data.collapsed
+
 /**
- * Flip `collapsed` on every node in `ids`. Collapsing records the LIVE height (a user
+ * Flip `collapsed` on every node in `ids` the toggle may act on (`canToggleCollapse`): a
+ * non-collapsible kind is only ever EXPANDED. Collapsing records the LIVE height (a user
  * resize never writes `expandedHeight`, so the stored value can be the load-time size); expanding
  * gives back what was recorded.
  */
 export function toggleCollapsed(nodes: CanvasNode[], ids: Iterable<string>): CanvasNode[] {
   const set = new Set(ids)
   return nodes.map((n) => {
-    if (!set.has(n.id)) return n
+    if (!set.has(n.id) || !canToggleCollapse(n)) return n
     const next = !n.data.collapsed
     const live = n.measured?.height ?? (n.height as number | undefined)
     const stored = n.data.expandedHeight as number | undefined

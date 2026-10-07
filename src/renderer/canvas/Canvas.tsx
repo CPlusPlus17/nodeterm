@@ -833,6 +833,7 @@ import {
   agentLaunchOverride,
   claudeLaunchCommand,
   toggleCollapsed,
+  canToggleCollapse,
   alignNodes,
   arrangeByLineage,
   arrangeGroupChildren,
@@ -10514,7 +10515,11 @@ export function Canvas() {
             }
           ] as MenuItem[])
         : []),
-      ...(isHidden('collapse', hidden)
+      ...(isHidden('collapse', hidden) ||
+      !ids.some((nid) => {
+        const n = nodesRef.current.find((nd) => nd.id === nid)
+        return !!n && canToggleCollapse(n)
+      })
         ? []
         : ([
             {
