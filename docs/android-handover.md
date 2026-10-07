@@ -3,10 +3,20 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A130`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A131`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
+Output batches and commands waiting for page readiness belong to their original terminal viewer.
+Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
+and the current ready page retains its final output before exit. Final focused control/restored
+runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
+pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
+mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
+beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
+32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
 
 **Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
@@ -1605,6 +1615,15 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+**Viewer queue follow-up (`A131`):** focused control/restored and mutation checks pass; finish
+fresh full gates and signed publication, then update to beta 20 and test ordinary output,
+background/reconnect and final-tail behavior on fresh owned terminals. The user removed the
+Pixel 7a's screen lock and authorized ongoing tests; wake it normally without repeating unlock
+questions. Commands already dispatched to WebView are outside the pending-page queue fix.
+A129/A130's actual native-history/Live tests need trusted HTTPS/WSS and the real native/session-host
+relay route; direct SSH returns tmux input and cannot demonstrate that overlay. Keep the phone's
+normal trust policy. Held Send receipt/draft/Ctrl edits, uncertainty and the wider matrix remain.
+
 **Current publication and acceptance follow-up (`A129`/`A130`):** Signed `5bda2c32` is
 published with fresh forced 1015/106 protocol, offline app/full TypeScript and all-five/ten-step
 Android CI `37608652625`. Retained-signer beta 19/code 20 is installed with actual SDK-36
@@ -1939,6 +1958,12 @@ of the new advertised action and receipt is owed to @eneskirca.
 ## What is verified, and what is not
 
 Verified:
+
+- `A131` final focused control/restored passes 71 methods/8 suites, zero failures/errors/skips:
+  11 new behavioral queue/page methods, three app source pins and existing lifecycle/input tests.
+  Ten unchanged queue/page behavioral mutants and four final app source-pin mutants fail assertions.
+  No Android Handler/WebView execution or physical race is claimed; final publication gates
+  and phone acceptance are pending. See [the scoped checkpoint](android.md#viewer-output-lifetime-source-checks-2026-10-07-a131).
 
 - Exact merged `a79375c3` executes full forced 982/102 with zero failures/errors/skips plus app
   Kotlin, affected 187/11 and full TypeScript; Android run `37523703627` has all five jobs/ten critical

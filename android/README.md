@@ -6,6 +6,16 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
+Output batches and commands waiting for page readiness belong to their original terminal viewer.
+Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
+and the current ready page retains its final output before exit. Final focused control/restored
+runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
+pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
+mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
+beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
+32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+
 **Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation

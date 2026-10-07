@@ -238,6 +238,11 @@ lane unaffected.
   that fallback can still duplicate replies. This renderer-local invariant claims no cross-window
   or Server-client ownership guarantee and changes no Android/iOS wire contract.
 
+- **Android queued output belongs to one viewer (A131).** Fence buffered bytes, delayed flushes
+  and commands waiting for page readiness by their original viewer. Paint before later bytes;
+  preserve the ready page's final tail before exit. Keep font setup and suspension page-global.
+  This does not fence JavaScript already dispatched to the WebView.
+
 - **Android contracts change together.** Keep host verbs, project/mirror/pairing payloads,
   SSH-visible files and Android interop in the same change; flag iOS adoption for @eneskirca.
   Retained history search addresses the attached generation/exact pane with bounded literal

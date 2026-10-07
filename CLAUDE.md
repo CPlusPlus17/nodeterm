@@ -5363,6 +5363,13 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
 
 ## Conventions
 
+**Android output buffers and pending page commands belong to one viewer (A131).** Check reader
+admission and delayed-flush ownership under the same lock; a retired callback must not drain a
+replacement batch. Paint snapshots before later bytes, preserve the current ready page's final
+tail before exit, and retire viewer-owned JavaScript still waiting for page readiness on reconnect,
+background, renderer loss or disposal. Font setup and lifecycle suspension remain page-global.
+This does not fence JavaScript already dispatched to the WebView or change a host wire contract.
+
 **Native history is inert and owned by one viewer (A129).** Advertise `pty.attach.scrollV1`
 only for the served `pty.scrollV1 {streamId, dir, lines, viewId?}` route. Its `history` result
 carries physical text/wrap/normal-or-alternate rows and viewer token/offset/total/cols/truncation/

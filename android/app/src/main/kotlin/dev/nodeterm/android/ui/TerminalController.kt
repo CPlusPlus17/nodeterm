@@ -48,6 +48,7 @@ import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.PhoneLaunch
 import dev.nodeterm.protocol.host.StreamLease
 import dev.nodeterm.protocol.host.TerminalPage
+import dev.nodeterm.protocol.host.TerminalOutput
 import dev.nodeterm.protocol.host.TerminalActions
 import dev.nodeterm.protocol.host.TerminalExit
 import dev.nodeterm.protocol.host.TerminalSink
@@ -68,7 +69,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 
 sealed interface TermState {
     data object Connecting : TermState
@@ -218,20 +218,12 @@ class TerminalController(
     private var rows = 0
     private var disposed = false
 
-    private val outBuf = ByteArrayOutputStream()
-    private var flushScheduled = false
-    private val flush = Runnable {
-        val data = synchronized(outBuf) {
-            flushScheduled = false
-            outBuf.toByteArray().also { outBuf.reset() }
-        }
-        var off = 0
-        while (off < data.size) {
-            val n = minOf(CHUNK, data.size - off)
-            js("nt.write('${b64(data.copyOfRange(off, off + n))}')")
-            off += n
-        }
-    }
+    private val output = TerminalOutput(
+        isCurrent = slot::isCurrent,
+        post = { delay, callback -> main.postDelayed({ callback() }, delay) },
+        onPaint = { ticket, text -> jsViewer(ticket, "nt.paint('${b64(text.toByteArray(Charsets.UTF_8))}')") },
+        onOutput = { ticket, bytes -> jsViewer(ticket, "nt.write('${b64(bytes)}')") }
+    )
 
     /**
      * One sink per attach, tied to its [ViewerSlot] ticket: a stream this screen no longer shows (a
@@ -240,18 +232,11 @@ class TerminalController(
      */
     private fun sinkFor(ticket: Long) = object : TerminalSink {
         override fun onPaint(text: String) {
-            main.post { if (slot.isCurrent(ticket)) js("nt.paint('${b64(text.toByteArray(Charsets.UTF_8))}')") }
+            output.paint(ticket, text)
         }
 
         override fun onOutput(bytes: ByteArray) {
-            if (!slot.isCurrent(ticket)) return
-            synchronized(outBuf) {
-                outBuf.write(bytes)
-                if (!flushScheduled) {
-                    flushScheduled = true
-                    main.postDelayed(flush, 16)
-                }
-            }
+            output.append(ticket, bytes)
         }
 
         override fun onResized(cols: Int, rows: Int) {
@@ -265,7 +250,10 @@ class TerminalController(
             main.post {
                 // Not the stream this screen shows: our own detach on ON_STOP or on leaving (it ends the
                 // stream too), or a stream a superseded attach or a launch held. Not a drop to recover from.
+                if (!slot.isCurrent(ticket)) return@post
+                output.finish(ticket)
                 if (!slot.ended(ticket)) return@post
+                retireOutput()
                 retireActions()
                 // exit 0 with the session still running = another client attached with -D and
                 // detached us — audit A13. A current desktop no longer does this to a relay-attached
@@ -305,7 +293,7 @@ class TerminalController(
             main.post {
                 if (c <= 0 || r <= 0 || !page.isCurrent(gen)) return@post
                 actions?.closeScrollView()
-                js("nt.closeScrollView()")
+                jsPage("nt.closeScrollView()")
                 cols = c
                 rows = r
                 sizedElsewhere = null
@@ -564,20 +552,35 @@ class TerminalController(
         // replaces was on ON_STOP; onStart resumes it.
         if (stopped) onPause()
         webView = this
-        js("nt.setFontSize(${graph.hosts.fontSize})")
+        jsPage("nt.setFontSize(${graph.hosts.fontSize})")
     }
 
     private fun js(code: String) {
+        val ticket = output.owner ?: return
+        jsViewer(ticket, code)
+    }
+
+    private fun jsViewer(ticket: Long, code: String) {
+        if (disposed) return
+        if (page.offerViewer(ticket, code)) webView?.evaluateJavascript(code, null)
+    }
+
+    private fun jsPage(code: String) {
         if (disposed) return
         // Queued until the page is ready, also while there is no page at all: after the renderer was
         // lost, a reattach can paint before the replacement WebView is built (A45).
         if (page.offer(code)) webView?.evaluateJavascript(code, null)
     }
 
+    private fun retireOutput() {
+        output.retire()
+        page.viewerChanged(null)
+    }
+
     private fun retireActions() {
         actions?.close()
         actions = null
-        js("nt.closeScrollView()")
+        jsPage("nt.closeScrollView()")
     }
 
     private fun inputBusy() {
@@ -621,6 +624,7 @@ class TerminalController(
         // Read before anything below changes it.
         val showing = showing(state)
         webView = null
+        retireOutput()
         page.lost()
         retireActions()
         // Detached as on ON_STOP. A launch still holding the stream finishes first (A40), and the
@@ -628,11 +632,6 @@ class TerminalController(
         attachJob?.cancel()
         attachJob = null
         slot.leave()
-        main.removeCallbacks(flush)
-        synchronized(outBuf) {
-            outBuf.reset()
-            flushScheduled = false
-        }
         // The dead page's size. The new page reports its own before it reattaches.
         cols = 0
         rows = 0
@@ -769,8 +768,10 @@ class TerminalController(
         // resume or dropping it (afterAttach). Until then it cannot be typed.
         resumeSettled = false
         retireActions()
-        js("nt.suspendScroll()")
+        jsPage("nt.suspendScroll()")
         val ticket = slot.begin()
+        page.viewerChanged(ticket)
+        output.begin(ticket)
         val sink = sinkFor(ticket)
         val managed = session.managedSessionCreation.receiptFor(nodeId)
         managedReceiptBlocked = false
@@ -848,6 +849,7 @@ class TerminalController(
                 val msg = e.message ?: "This session opens through the relay."
                 main.post {
                     if (!slot.isCurrent(ticket)) return@post
+                    retireOutput()
                     // No relay leg to open (remote access not set up or off, the route set to SSH only,
                     // or a computer added by its SSH address — A27): the same fact, with what is in
                     // the way for this computer instead of a relay offer.
@@ -858,6 +860,7 @@ class TerminalController(
                 // is stale by then, so nothing is shown.
                 main.post {
                     if (slot.isCurrent(ticket)) {
+                        retireOutput()
                         managedReceiptBlocked = managed != null
                         state = TermState.Ended(e.message ?: "Couldn't open the terminal.")
                     }
@@ -1039,7 +1042,7 @@ class TerminalController(
     fun showKeyboard() {
         val wv = webView ?: return
         wv.requestFocus()
-        js("nt.focusForKeyboard()")
+        jsPage("nt.focusForKeyboard()")
         Choreographer.getInstance().postFrameCallback {
             wv.post {
                 // The view was replaced (renderer lost, A45) or the screen left meanwhile.
@@ -1052,7 +1055,7 @@ class TerminalController(
 
     fun setFontSize(size: Int) {
         graph.hosts.fontSize = size
-        js("nt.setFontSize(${graph.hosts.fontSize})")
+        jsPage("nt.setFontSize(${graph.hosts.fontSize})")
     }
 
     /** The screen went to the background: detach (the session keeps running on the computer). */
@@ -1061,8 +1064,9 @@ class TerminalController(
     fun onStop() {
         if (disposed || stopped) return
         stopped = true
+        retireOutput()
         closeHistory()
-        js("nt.suspendScroll()")
+        jsPage("nt.suspendScroll()")
         retireActions()
         // Stops a connect or an approval wait; an attach already sent still lands, and is let go of
         // by the hand-off (see attach(), A40). onStart begins its own.
@@ -1085,13 +1089,13 @@ class TerminalController(
 
     fun dispose() {
         disposed = true
+        retireOutput()
         closeHistory()
         retireActions()
         // Detaches the stream (after a launch that still holds it, A40), and refuses every attach
         // still on its way. attachJob is deliberately not cancelled: an attach that lands now is
         // let go of by the hand-off, and a session it created still gets its launch.
         slot.close()
-        main.removeCallbacks(flush)
         webView?.let { destroyWebView(it, rendererAlive = true) }
         webView = null
     }
@@ -1100,7 +1104,6 @@ class TerminalController(
         const val UNREGISTERED_NOTICE =
             "The computer didn't add this session to the project, so it won't appear on the canvas. It keeps running; " +
                 "end it here when you are done, or find it in nodeterm's session list (the RAM pill) on the computer."
-        private const val CHUNK = 192 * 1024
         private val COPY_TOO_LARGE =
             "Too large to copy: nodeterm copies up to %,d characters to the clipboard.".format(Osc52.MAX_TEXT_CHARS)
         private const val COPY_REJECTED_SIZE = "Could not copy: too large for the clipboard."

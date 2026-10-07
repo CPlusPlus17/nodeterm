@@ -16,6 +16,16 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
+Output batches and commands waiting for page readiness belong to their original terminal viewer.
+Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
+and the current ready page retains its final output before exit. Final focused control/restored
+runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
+pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
+mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
+beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
+32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+
 **Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
@@ -314,6 +324,8 @@ lifecycle and FPS matrix remains open.
 | [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; beta 19 copy-mode Send and controlled SSH-handler recovery reconfirmed; exact beta-17 End and owned cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
 | [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
 | [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
+
+| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed in this change; final focused control/restored 71/8 includes 11 new behavioral methods and three app source pins, zero failures/errors/skips; ten behavioral and four app source-pin mutants caught; full publication/phone checks pending · Buffered output and unready-page commands outlive their terminal viewer |
 
 ## A01
 
@@ -5209,3 +5221,44 @@ remained unverified; the later `e06b5547` phone cases above verify those bounded
 A129 native/session-host history and A130 held Live-touch acceptance remain pending. The failed
 emulator provisioning and exact owned cleanup add no app/CA/APK proof. A129's earlier `1add0408` evidence and the original
 64-item **10 / 22 / 32** ledger remain unchanged.
+
+## A131
+
+**Buffered output and commands waiting for page readiness can outlive their terminal viewer**
+
+- Severity: **medium**; effort: small; area: phone; kind: bug.
+- Status: **Source-fixed in this change; final focused control/restored and mutation checks pass.
+  Full publication and physical acceptance remain pending.**
+
+At `644445aa`, `TerminalController` checks the viewer ticket before appending to a shared binary
+buffer. Its delayed flush carries no ticket, and backgrounding leaves that buffer scheduled.
+An old flush can therefore run after a new viewer paints, and a reader that passed the earlier
+check can refill the buffer after retirement. `TerminalPage` also keeps untagged strings while
+loading: old paint/output or raw/key commands can survive a reconnect on that same unready page.
+These are source ownership findings, not reproduced physical failures.
+
+`TerminalOutput` checks admission, viewer ownership and a one-use flush reservation under the same
+lock. Snapshot admission replaces earlier bytes and gates later bytes behind its paint. Every
+viewer retirement invalidates its buffer and callbacks; an ordered current exit flushes its final
+snapshot/tail before retirement when the page is ready. The 16-ms batching and 192-KiB binary
+chunks remain, including split UTF-8. `TerminalPage` tags viewer commands and drops them on
+retirement, preserving page-global font setup and lifecycle suspension.
+
+Eleven new behavioral methods exercise the actual Kotlin queue/page/slot with an explicit
+scheduler and a paused producer. Three separate source pins check the app wiring. The focused
+forced offline control/restored passes **71 methods / 8 suites**, zero failures/errors/skips,
+including existing page/handoff/actions/composed-input/completion/keyboard-chip coverage. This is component/source
+proof; it does not execute Android Handler/WebView or demonstrate a physical race. JavaScript
+already dispatched to a ready WebView is outside this fix. Host verbs, pairing, mirrors and
+SSH-visible files are unchanged; no producer interop contract changes. iOS implication for
+@eneskirca: review equivalent viewer buffer/pending-page retirement, without a wire migration.
+
+The unchanged queue/page/test's first frozen window passes 32/3 control/restored and catches ten
+behavioral mutants. The tightened final controller's separate 71/8 window catches four app
+source-pin mutants; the earlier three wiring variants are historical, not extra unique mutations.
+[Canonical receipts](android.md#viewer-output-lifetime-source-checks-2026-10-07-a131) bind actual
+compiled source, fresh XML and assertion failures. Continue with fresh full protocol/app gates,
+signed publication/green Android CI, then same-signer beta 20 and bounded disposable-terminal
+output/lifecycle checks.
+A129/A130 need a trusted relay/native-history route; direct SSH supplies no Live history overlay.
+The 64-item ledger remains **10 Pass / 22 Partial / 32 Pending**.

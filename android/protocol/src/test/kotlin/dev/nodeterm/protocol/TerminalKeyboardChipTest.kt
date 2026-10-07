@@ -57,7 +57,7 @@ class TerminalKeyboardChipTest {
     @Test
     fun `the WebView takes focus, then the page, then the keyboard is asked for after the focus change`() {
         val body = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalController.kt"), "fun showKeyboard()")
-        AppSourcePins.assertInOrder(body, ".requestFocus()", "js(\"nt.focusForKeyboard()\")", ".post {", "showSoftInput(", "InputMethodManager.SHOW_IMPLICIT")
+        AppSourcePins.assertInOrder(body, ".requestFocus()", "jsPage(\"nt.focusForKeyboard()\")", ".post {", "showSoftInput(", "InputMethodManager.SHOW_IMPLICIT")
         // Only the deferred call: a synchronous request right after requestFocus races the focus change.
         assertEquals(1, Regex("""showSoftInput\(""").findAll(body).count())
     }

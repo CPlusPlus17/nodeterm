@@ -20,7 +20,9 @@ class TerminalPage {
     private var generation = 0
     private var ready = false
     private var replacing = false
-    private val pending = ArrayList<String>()
+    private data class Offered(val code: String, val viewer: Long?)
+    private val pending = ArrayList<Offered>()
+    private var viewer: Long? = null
     val currentGeneration: Int
         @Synchronized get() = generation
 
@@ -58,14 +60,30 @@ class TerminalPage {
         if (ready) return emptyList()
         ready = true
         replacing = false
-        return pending.toList().also { pending.clear() }
+        return pending.filter { it.viewer == null || it.viewer == viewer }.map { it.code }.also { pending.clear() }
     }
 
     /** JavaScript for the page: true = run it now; false = queued until the page is ready. */
     @Synchronized
     fun offer(code: String): Boolean {
         if (ready) return true
-        pending += code
+        pending += Offered(code, null)
+        return false
+    }
+
+    /** Same-page reconnects retire viewer JS too, while keeping page-global font/config setup. */
+    @Synchronized
+    fun viewerChanged(ticket: Long?) {
+        viewer = ticket
+        pending.removeAll { it.viewer != null }
+    }
+
+    /** Paint, output and input must never be adopted by a later viewer of the same unready page. */
+    @Synchronized
+    fun offerViewer(ticket: Long, code: String): Boolean {
+        if (viewer != ticket) return false
+        if (ready) return true
+        pending += Offered(code, ticket)
         return false
     }
 
@@ -79,6 +97,7 @@ class TerminalPage {
         generation++
         ready = false
         replacing = true
+        viewer = null
         pending.clear()
     }
 }

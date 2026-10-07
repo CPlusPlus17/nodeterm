@@ -5,6 +5,16 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Viewer output lifetime follow-up (2026-10-07, A131 — source verified).**
+Output batches and commands waiting for page readiness belong to their original terminal viewer.
+Reconnect, backgrounding and renderer loss discard retired work; snapshots precede later bytes,
+and the current ready page retains its final output before exit. Final focused control/restored
+runs pass **71 methods / 8 suites**, including **11 new behavioral cases and three app source
+pins**, with zero failures/errors/skips. The unchanged queue/page code catches **10 behavioral
+mutants**; the final app wiring catches **four source-pin mutants**. Full publication gates and
+beta-20 phone checks remain pending. Beta 19 is installed; the original **10 Pass / 22 Partial /
+32 Pending** ledger is unchanged. Already-dispatched WebView JavaScript is outside this fix.
+
 **Beta 19 published and installed (2026-10-07 — bounded direct-SSH checks pass).**
 Signed, pushed `5bda2c32` includes the A130 held Live-touch fix. Forced fresh offline protocol
 checks pass **1015 methods / 106 suites**, zero failures/errors/skips; offline app compilation
@@ -584,6 +594,27 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Viewer output lifetime source checks (2026-10-07, A131)
+
+Final forced focused control/restored runs pass **71 methods / 8 suites**, zero failures/errors/skips.
+Eleven new methods exercise the actual Kotlin queue/page/slot with an explicit scheduler and paused
+producer; three new source pins check app wiring. The existing keyboard-chip source pin follows
+its now page-global focus call. The unchanged pure queue/page/test catches **ten behavioral mutants**
+in a frozen first window (32/3 control/restored); the final controller catches **four app source-pin
+mutants** in a separate 71/8 window. The earlier three wiring variants are historical, not extra
+unique mutations. These checks do not run Android Handler/WebView or reproduce a physical race.
+
+Private first-window receipt `a131-output-proof-6yng04t0/receipt.json` hashes to
+`67424776a015bfa3bc7b3bb45bb773fc24408a8b73b816bee1c4a4a5f60c3cae`;
+final receipt `a131-output-final-proof-p06l8grq/receipt.json` hashes to
+`9271e1a22ebfd50c237486bdded708becc629df12fc5cd19e03f58dcbdb2e9a9`.
+The six-file final source inventory hashes to
+`a8997ab31466b732a855137bd00a631db4a61ac241e18a1e04395aa0ab89a313`.
+Root independently rehashed both windows' logs/compiled descriptors/XML; peer review checks the
+actual intended assertion failures and reconstructed mutations. Full final gates/publication and
+same-signer beta-20 phone acceptance remain pending. JavaScript already dispatched to a ready
+WebView is outside this fix. Items 25/26 and the original **10/22/32** ledger remain scoped.
 
 ### Beta 19 publication, provider and emulator checkpoint (2026-10-07)
 
@@ -2756,7 +2787,9 @@ later fix left to a device.
 25. With a terminal open, turn on airplane mode: the input bar's draft stays (Send, the sending key
     chips and Resume are disabled, and the keyboard's Send leaves the text in place). Turn it off: the
     terminal reattaches by itself ("Disconnected. Reconnecting…" clears) and the draft then sends. Arm Ctrl and send "c" from the input bar: the
-    pane gets ^C, with no Enter after it. *(A41, A34, A36)*
+    pane gets ^C, with no Enter after it. With continuous numbered output, background and resume
+    repeatedly: each reattach paints its own snapshot without replaying the previous viewer's
+    buffered bytes. A current terminal's final tail remains visible before its exit. *(A41, A34, A36, A131)*
 26. The terminal WebView's renderer goes away. A kill while the terminal is on screen: the app stays
     open and the terminal is rebuilt and reattached by itself; a third kill within a minute offers
     "Reopen terminal" instead. A crash offers "Reopen terminal", never an automatic reattach. A kill
@@ -2764,7 +2797,8 @@ later fix left to a device.
     screen shows "The session ended", "Open through the relay" or "Reopen terminal": that answer stays
     and nothing attaches. One way to provoke them, not tried: on an emulator with `adb root`, `kill -9`
     the WebView's renderer process for a kill; a crash needs the renderer itself to crash (for
-    example `chrome://crash` from DevTools). *(A45)*
+    example `chrome://crash` from DevTools). Old buffered output and commands waiting for page
+    readiness must not cross into the replacement viewer. *(A45, A131)*
 27. Send the app to the background with a terminal attached through the relay, for a few minutes: the
     desktop's view of that session is no longer held to the phone's size, and the 8 s refresh stops.
     Coming back reattaches. *(A18)*
