@@ -30,6 +30,7 @@ import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react'
 import type { DirEntry } from '@shared/types'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
 import { toggleCollapsed, type CanvasNode } from '../state/workspace'
+import { MaximizeButton } from './MaximizeButton'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import {
   breadcrumbs,
@@ -521,6 +522,7 @@ export function FilesNode({ id, data, selected }: NodeProps<CanvasNode>) {
         >
           ⟳
         </button>
+        {!collapsed && <MaximizeButton id={id} maximized={!!data.premaxRect} />}
         <button className="term-node__close" title="Close" onClick={() => deleteElements({ nodes: [{ id }] })}>
           ×
         </button>

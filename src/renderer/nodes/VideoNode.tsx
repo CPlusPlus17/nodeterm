@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Tooltip } from '../components/Tooltip'
+import { MaximizeButton } from './MaximizeButton'
 import { IconClose } from '../components/icons'
 import { Handle, NodeResizer, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
@@ -91,6 +92,7 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
           {fileName}
         </span>
         <span className="term-node__spacer" />
+        <MaximizeButton id={id} maximized={!!data.premaxRect} />
         <Tooltip label="Close">
           <button className="term-node__close" aria-label="Close" onClick={() => deleteElements({ nodes: [{ id }] })}>
             <IconClose />
