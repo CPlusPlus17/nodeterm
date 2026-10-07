@@ -5987,7 +5987,6 @@ export function TerminalNode({
       onMouseEnter={() => (hoveredRef.current = true)}
       onMouseLeave={() => (hoveredRef.current = false)}
     >
-      <NodeResizer minWidth={NODE_MIN_SIZES.terminal.width} minHeight={NODE_MIN_SIZES.terminal.height} isVisible={selected && !collapsed} color="#0a84ff" />
       {/* Invisible source handle so edges to subagent/loop nodes can attach. */}
       <Handle
         id="flow-out"
@@ -6004,32 +6003,6 @@ export function TerminalNode({
         isConnectable={false}
         style={{ opacity: 0, pointerEvents: 'none', top: 0 }}
       />
-      {/* Link handles (all terminal nodes): drag right→left to link. Between two context-capable
-          (Claude) nodes this shares context; from a sticky note it attaches the note as context.
-          Vertically centered on the side edges; raised above the body so they're never buried. */}
-      <Handle
-        id="link-out"
-        type="source"
-        position={Position.Right}
-        className="bridge-handle bridge-handle--out"
-        data-tip={
-          contextLinkCapable
-            ? "Link out — drag to another Claude node so they can read each other's context"
-            : 'Link out — drag to a sticky note to attach it as context'
-        }
-      />
-      <Handle
-        id="link-in"
-        type="target"
-        position={Position.Left}
-        className="bridge-handle bridge-handle--in"
-        data-tip={
-          contextLinkCapable
-            ? 'Link in — drop a link here to share context with this Claude session'
-            : 'Link in — drop a sticky note link here to attach it as context'
-        }
-      />
-
       <div className="term-node__header">
         <Tooltip label={collapsed ? 'Expand' : 'Collapse'}>
           <button
@@ -6880,6 +6853,40 @@ export function TerminalNode({
         <NodeCommentsPanel id={id} />
       </div>
     )}
+    {/* Link handles (all terminal nodes): drag right→left to link. Between two context-capable
+        (Claude) nodes this shares context; from a sticky note it attaches the note as context.
+        Vertically centered on the side edges; raised above the body so they're never buried.
+        Siblings AFTER the root, like the resizer: inside a glass root (backdrop-filter = its own
+        stacking context) their z-index only counted inside it, so the resize controls covered
+        them and the outer half was clipped. */}
+    <Handle
+      id="link-out"
+      type="source"
+      position={Position.Right}
+      className="bridge-handle bridge-handle--out"
+      data-tip={
+        contextLinkCapable
+          ? "Link out — drag to another Claude node so they can read each other's context"
+          : 'Link out — drag to a sticky note to attach it as context'
+      }
+    />
+    <Handle
+      id="link-in"
+      type="target"
+      position={Position.Left}
+      className="bridge-handle bridge-handle--in"
+      data-tip={
+        contextLinkCapable
+          ? 'Link in — drop a link here to share context with this Claude session'
+          : 'Link in — drop a sticky note link here to attach it as context'
+      }
+    />
+    {/* Sibling of the root, not a child: under Liquid Glass the root has a backdrop-filter,
+        which makes it the containing block for these absolute edges, so they were clipped and
+        covered (only the top edge stayed grabbable). Out here they sit on the node wrapper.
+        AFTER the root, never before it: focus mode reparents the root out of this wrapper, and
+        React inserting a control "before the root" would then throw NotFoundError. */}
+    <NodeResizer minWidth={NODE_MIN_SIZES.terminal.width} minHeight={NODE_MIN_SIZES.terminal.height} isVisible={selected && !collapsed && !focused} color="#0a84ff" />
     </>
   )
 }

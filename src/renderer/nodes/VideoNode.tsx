@@ -73,11 +73,11 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
   }, [filePath, remote])
 
   return (
+    <>
     <div
       className={`term-node video-node${selected ? ' selected' : ''}`}
       style={{ borderTopColor: data.color }}
     >
-      <NodeResizer minWidth={NODE_MIN_SIZES.video.width} minHeight={NODE_MIN_SIZES.video.height} isVisible={selected} color={data.color} />
       {/* Invisible target handle so a rope from the agent node that opened this can attach. */}
       <Handle
         id="flow-in"
@@ -121,5 +121,12 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
         </div>
       </div>
     </div>
+    {/* Sibling of the root, not a child: under Liquid Glass the root has a backdrop-filter,
+        which makes it the containing block for these absolute edges, so they were clipped and
+        covered (only the top edge stayed grabbable). Out here they sit on the node wrapper.
+        AFTER the root, never before it: focus mode reparents the root out of this wrapper, and
+        React inserting a control "before the root" would then throw NotFoundError. */}
+    <NodeResizer minWidth={NODE_MIN_SIZES.video.width} minHeight={NODE_MIN_SIZES.video.height} isVisible={selected} color={data.color} />
+    </>
   )
 }
