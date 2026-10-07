@@ -113,6 +113,7 @@ import { Dock } from '../components/Dock'
 import { TabBar } from '../components/TabBar'
 import { ContextMenu, type MenuItem } from '../components/ContextMenu'
 import { tidySeparators } from '../lib/tidySeparators'
+import { createNodeWriteRouter, type NodeWrites } from '../lib/nodeWriteRouter'
 import {
   buildAccountSwitchRows,
   buildNodeActionItems,
@@ -8821,6 +8822,34 @@ export function Canvas() {
     [setNodeIcon]
   )
 
+  /** Writes to one node of `projectId`, wherever it lives right now: React Flow when it holds that
+   *  project, else the projects store + disk (lib/nodeWriteRouter). Used by the kanban card menus
+   *  and the Omni board, which act on nodes of projects that are not on the canvas. */
+  const nodeWritesFor = useCallback(
+    (projectId: string): NodeWrites =>
+      createNodeWriteRouter({
+        isLive: () =>
+          liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId),
+        live: { setColor: setNodesColor, setIcon: setNodeIcon, pickIcon: pickNodeIcon },
+        storedNode: (nodeId) =>
+          useProjects.getState().getProject(projectId)?.nodes.find((n) => n.id === nodeId),
+        recolorStored: (nodeId, color) => useProjects.getState().recolorNode(projectId, nodeId, color),
+        setStoredIcon: (nodeId, icon) =>
+          useProjects.setState((s) => ({
+            projects: s.projects.map((p) =>
+              p.id === projectId
+                ? { ...p, nodes: p.nodes.map((n) => (n.id === nodeId ? ({ ...n, icon } as never) : n)) }
+                : p
+            )
+          })),
+        persist: writeDisk,
+        iconDialog: nodeIconDialog,
+        toast: (message) =>
+          window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
+      }),
+    [setNodesColor, setNodeIcon, pickNodeIcon, writeDisk]
+  )
+
   const alignToGrid = useCallback(
     (ids: string[]) => {
       const g = useSettings.getState().settings.gridSize || GRID
@@ -15814,17 +15843,7 @@ export function Canvas() {
     }
     const onGlobalSetIcon = (e: CustomEvent<{ projectId: string; nodeId: string; icon: import('@shared/node-icon').NodeIcon | undefined }>) => {
       const { projectId, nodeId, icon } = e.detail
-      if (projectId === useProjects.getState().activeProjectId) {
-        setNodes((ns) => ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, icon } } : n)))
-        markDirty()
-      } else {
-        useProjects.setState((s) => ({
-          projects: s.projects.map((p) =>
-            p.id === projectId ? { ...p, nodes: p.nodes.map((n) => (n.id === nodeId ? { ...n, icon } as never : n)) } : p
-          )
-        }))
-        void writeDisk()
-      }
+      nodeWritesFor(projectId).setIcon(nodeId, icon)
     }
     window.addEventListener('nodeterm:global-rename' as never, onGlobalRename as never)
     window.addEventListener('nodeterm:global-edit-sticky' as never, onGlobalEditSticky as never)
@@ -15838,7 +15857,7 @@ export function Canvas() {
       window.removeEventListener('nodeterm:global-delete' as never, onGlobalDelete as never)
       window.removeEventListener('nodeterm:global-set-icon' as never, onGlobalSetIcon as never)
     }
-  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, closeStoredNodes])
+  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, closeStoredNodes, nodeWritesFor])
 
   // Sidebar "Name with AI": generate a title from the session's captured terminal output
   // (same BYO-agent path as the terminal node's ✦), then apply it via renameSession.
