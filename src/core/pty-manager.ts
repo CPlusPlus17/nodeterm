@@ -58,6 +58,7 @@ import { recordPendingRemoteKill, type PendingRemoteKill } from './pending-remot
 import { probeAgentSockToPin } from './remote-ssh/agent-probe'
 import { parsePaneCursor } from './pane-cursor'
 import { HISTORY_MAX_BYTES, searchTerminalHistory, type HistorySearch } from './terminal-history'
+import type { NativeScrollResult } from '../shared/history-scroll'
 import { classifyPaneCwd } from './pane-cwd'
 import {
   recordFreshSpawnOwner,
@@ -4339,6 +4340,35 @@ export class PtyManager {
     if (clientId !== null && session.nodeId && presenceHub.peerCount() > 1)
       presenceHub.noteTyping(clientId, session.nodeId)
     session.proc.write(data)
+  }
+
+  /** Scroll only this captured live viewer; native history never falls through to raw input. */
+  async scrollAttached(clientId: ClientId | null, sessionId: string, up: boolean, lines: number, capture: boolean,
+    current: () => boolean): Promise<NativeScrollResult> {
+    const session = this.sessions.get(sessionId)
+    const refused = (): NativeScrollResult => ({ status: 'refused', message: 'This terminal viewer is no longer attached or cannot provide safe history scrolling.' })
+    const uncertain = (): NativeScrollResult => ({ status: 'uncertain', message: 'Wheel input may have reached the terminal. It was not sent again.' })
+    const valid = (): boolean => !!session && current() && this.sessions.get(sessionId) === session
+    if (!session || !valid() || typeof up !== 'boolean' || typeof capture !== 'boolean' ||
+        !Number.isInteger(lines) || lines < 1 || lines > 20) return refused()
+    if (session.nativeWindowsPane) return session.nativeWindowsPane.scrollForHistory(up, lines, capture, valid)
+    if (session.sessionHost) {
+      const proc = session.proc as unknown as SessionHostPty
+      return typeof proc.scrollForHistory === 'function' ? proc.scrollForHistory(up, lines, capture, valid) : refused()
+    }
+    if (!session.tmuxBacked || !session.persistKey) return refused()
+    let attempted = false
+    try {
+      const data = `\x1b[<${up ? 64 : 65};1;1M`
+      for (let i = 0; i < lines; i++) {
+        if (!valid()) return attempted ? uncertain() : refused()
+        if (!attempted && clientId !== null && session.nodeId && presenceHub.peerCount() > 1)
+          presenceHub.noteTyping(clientId, session.nodeId)
+        attempted = true
+        session.proc.write(data)
+      }
+      return valid() ? { status: 'input' } : uncertain()
+    } catch { return attempted ? uncertain() : refused() }
   }
 
   /** Explicit composer action on this captured viewer only. Raw input never enters this path. */

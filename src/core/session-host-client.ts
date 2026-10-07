@@ -44,6 +44,32 @@ import { retryInterruptedSessionRead } from './session-host-read-retry'
 import { waitForComposedEnter, type ComposedPrepareResult, type ComposedWriteResult } from './composed-pty'
 import { COMPOSED_INPUT_UNCERTAIN, COMPOSED_INPUT_UNSUPPORTED, parseComposedInput,
   type ComposedInput, type ComposedInputResult } from '../shared/composed-input'
+import { HISTORY_CAPTURE_MAX_BYTES, HISTORY_CAPTURE_MAX_ROWS, type NativeScrollResult } from '../shared/history-scroll'
+
+function nativeScrollResult(value: unknown): NativeScrollResult | null {
+  if (!value || typeof value !== 'object') return null
+  const result = value as Record<string, unknown>
+  if (result.status === 'input') return { status: 'input' }
+  if ((result.status === 'refused' || result.status === 'uncertain') && typeof result.message === 'string' &&
+      result.message.length > 0 && result.message.length <= 1024) return { status: result.status, message: result.message }
+  if (result.status !== 'history') return null
+  if (result.capture === undefined) return { status: 'history' }
+  if (!result.capture || typeof result.capture !== 'object') return null
+  const capture = result.capture as Record<string, unknown>
+  if (!Number.isInteger(capture.cols) || (capture.cols as number) < 1 || (capture.cols as number) > 65535 ||
+      !Number.isInteger(capture.viewportRows) || (capture.viewportRows as number) < 1 || (capture.viewportRows as number) > 200 ||
+      typeof capture.olderTruncated !== 'boolean' || !Array.isArray(capture.rows) || capture.rows.length > HISTORY_CAPTURE_MAX_ROWS) return null
+  let bytes = 0
+  for (const value of capture.rows) {
+    if (!value || typeof value !== 'object' || typeof value.text !== 'string' || typeof value.isWrapped !== 'boolean' ||
+        (value.section !== 'normal' && value.section !== 'alternate')) return null
+    bytes += Buffer.byteLength(value.text, 'utf8')
+    if (bytes > HISTORY_CAPTURE_MAX_BYTES) return null
+  }
+  if (Buffer.byteLength(JSON.stringify(capture), 'utf8') > HISTORY_CAPTURE_MAX_BYTES) return null
+  return { status: 'history', capture: { cols: capture.cols as number, viewportRows: capture.viewportRows as number,
+    olderTruncated: capture.olderTruncated, rows: capture.rows.map((row) => ({ text: row.text, isWrapped: row.isWrapped, section: row.section })) } }
+}
 
 export interface SessionSubscriber {
   onData(data: string): void
@@ -251,6 +277,7 @@ export class SessionHostClient {
    *  long as this is the host's only connection — the common case, and the one issue #914 is. */
   private hostGeometryEvents = false
   private hostComposedInput = false
+  private hostScrollView = false
   /** Monotonic activity clock for `SizeClaim.recency`. */
   private claimClock = 0
   private nextId = 1
@@ -517,6 +544,7 @@ export class SessionHostClient {
       let protocolVersion: 1 | 2 | null = null
       let geometryEvents = false
       let composedInput = false
+      let scrollView = false
       const finish = (ok: boolean, trailing: SessionHostFrame[] = []): void => {
         if (settled) return
         settled = true
@@ -530,7 +558,7 @@ export class SessionHostClient {
             failHandshake(new Error('session-host hello did not negotiate a protocol version'))
             return
           }
-          this.attachSocket(socket, protocolVersion, geometryEvents, composedInput)
+          this.attachSocket(socket, protocolVersion, geometryEvents, composedInput, scrollView)
           for (const frame of trailing) this.handleFrame(socket, frame)
         } else {
           try {
@@ -627,6 +655,7 @@ export class SessionHostClient {
             const features = (frame.result as HelloResult | undefined)?.features
             geometryEvents = Array.isArray(features) && features.includes('geometry')
             composedInput = negotiated === 2 && Array.isArray(features) && features.includes('composed-input-v1')
+            scrollView = negotiated === 2 && Array.isArray(features) && features.includes('scroll-view-v1')
             finish(true, frames.slice(index + 1))
           } else {
             failHandshake(new Error(`session-host hello rejected: ${frame.error}`))
@@ -646,11 +675,12 @@ export class SessionHostClient {
     })
   }
 
-  private attachSocket(socket: net.Socket, protocolVersion: 1 | 2, geometryEvents: boolean, composedInput = false): void {
+  private attachSocket(socket: net.Socket, protocolVersion: 1 | 2, geometryEvents: boolean, composedInput = false, scrollView = false): void {
     this.socket = socket
     this.negotiatedProtocolVersion = protocolVersion
     this.hostGeometryEvents = geometryEvents
     this.hostComposedInput = composedInput
+    this.hostScrollView = scrollView
     this.everConnected = true
     const framer = new LineFramer()
     socket.on('data', (chunk: Buffer) => {
@@ -680,6 +710,7 @@ export class SessionHostClient {
       this.negotiatedProtocolVersion = null
       this.hostGeometryEvents = false
       this.hostComposedInput = false
+      this.hostScrollView = false
       for (const state of this.sessions.values()) {
         // The next connection re-learns the size from its own attach replies.
         state.hostGeometry = null
@@ -1589,6 +1620,32 @@ export class SessionHostClient {
         void this.requestOnSocket(ownerSocket, { cmd: 'cancelComposedV1', name, generation, ticket }).catch(() => {})
       }
     }
+  }
+
+  /** A mixed history/input operation stays on its original attached socket, never replayed. */
+  async scrollForHistory(name: string, sub: SessionSubscriber, up: boolean, lines: number, capture: boolean,
+    current: () => boolean): Promise<NativeScrollResult> {
+    const state = this.sessions.get(name), entry = state?.entries.get(sub), generation = state?.generation
+    const socket = this.socket
+    const refused = (): NativeScrollResult => ({ status: 'refused', message: 'This terminal viewer or scroll action is no longer current. Reattach before scrolling.' })
+    const uncertain = (): NativeScrollResult => ({ status: 'uncertain', message: 'Wheel input may have reached the terminal. It was not sent again.' })
+    if (!state || !entry || !generation || !socket || socket.destroyed ||
+        typeof up !== 'boolean' || typeof capture !== 'boolean' || !Number.isInteger(lines) || lines < 1 || lines > 20) return refused()
+    const valid = (): boolean => current() && this.sessions.get(name) === state && state.entries.get(sub) === entry &&
+      entry.phase === 'attached' && state.generation === generation && !this.killReplayBarriers.has(name) &&
+      this.socket === socket && !socket.destroyed && state.appliedSocket === socket && state.appliedAttached
+    if (!valid()) return refused()
+    if (!this.hostScrollView) return { status: 'refused', message: 'Safe native history scrolling is unavailable on this host. Update nodeterm on the computer.' }
+    let sent = false
+    try {
+      const result = nativeScrollResult(await this.requestOnSocket<unknown>(socket,
+        { cmd: 'scrollViewV1', name, generation, up, lines, capture }, undefined, () => { sent = true },
+        () => valid() && this.hostScrollView))
+      if (!result) return uncertain()
+      if (result.status === 'history') return valid() ? result : refused()
+      if (result.status === 'input') return valid() ? result : uncertain()
+      return result
+    } catch { return sent ? uncertain() : refused() }
   }
 
   async paneCommand(name: string): Promise<string | null> {

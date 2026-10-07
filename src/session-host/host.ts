@@ -336,6 +336,7 @@ async function main(): Promise<void> {
    *  `geometry` push: an older client reads any non-`data` push frame as an exit (issue #914). */
   const geometrySockets = new WeakSet<net.Socket>()
   const composedSockets = new WeakSet<net.Socket>()
+  const scrollSockets = new WeakSet<net.Socket>()
   const composedPanes = new WeakMap<HostSession, ComposedPty>()
 
   /** Tell every geometry-aware subscriber the size the pty now actually runs at. */
@@ -371,6 +372,7 @@ async function main(): Promise<void> {
       : []
     if (features.includes('geometry')) geometrySockets.add(socket)
     if (features.includes('composed-input-v1')) composedSockets.add(socket)
+    if (features.includes('scroll-view-v1')) scrollSockets.add(socket)
     return features.length > 0
       ? { protocolVersion: currentProtocolVersion(), features }
       : { protocolVersion: currentProtocolVersion() }
@@ -900,6 +902,17 @@ async function main(): Promise<void> {
         if (req.cmd === 'cancelComposedV1') return { ok: true, result: pane.cancel(socket, req.ticket) }
         if (req.phase !== 'paste' && req.phase !== 'enter') return { ok: true, result: { status: 'refused' } }
         return { ok: true, result: await pane.write(socket, req.ticket, req.phase, current) }
+      }
+      case 'scrollViewV1': {
+        const s = sessions.get(req.name)
+        const current = (): boolean => !!s && !s.exited && !s.retiring &&
+          sessions.get(req.name) === s && s.generation === req.generation &&
+          !socket.destroyed && s.subscribers.has(socket) && scrollSockets.has(socket)
+        if (!s || !current() || typeof req.up !== 'boolean' || typeof req.capture !== 'boolean' ||
+            !Number.isInteger(req.lines) || req.lines < 1 || req.lines > 20) {
+          return { ok: true, result: { status: 'refused', message: 'This terminal viewer or scroll action is no longer current.' } }
+        }
+        return { ok: true, result: await s.scrollForHistory(req.up, req.lines, req.capture, current) }
       }
       case 'paneCommand': {
         const s = sessions.get(req.name)

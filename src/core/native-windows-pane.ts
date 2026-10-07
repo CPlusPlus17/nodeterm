@@ -9,6 +9,7 @@ import { pasteThenSubmitWhenSettled, type SettleOptions } from './settled-submit
 import { validSleepingWakeInput } from '../session-host/sleeping-wake'
 import { ComposedPty, waitForComposedEnter } from './composed-pty'
 import { COMPOSED_INPUT_UNCERTAIN, type ComposedInput, type ComposedInputResult } from '../shared/composed-input'
+import type { NativeScrollResult } from '../shared/history-scroll'
 
 export { sameNativeProcess } from '../session-host/windows-pane-owner'
 
@@ -52,6 +53,31 @@ export class NativeWindowsPane {
     await this.tail
     if (!this.alive) throw new Error('This terminal has exited.')
     return this.screen.historyText()
+  }
+
+  /** Decide behind actual output/geometry, then write only to this still-owned native pane. */
+  scrollForHistory(up: boolean, lines: number, capture: boolean, current: () => boolean): Promise<NativeScrollResult> {
+    const refused = (): NativeScrollResult => ({ status: 'refused', message: 'This terminal viewer is no longer current or its mouse state is unavailable.' })
+    const uncertain = (): NativeScrollResult => ({ status: 'uncertain', message: 'Wheel input may have reached the terminal. It was not sent again.' })
+    const valid = (): boolean => this.alive && current()
+    const scrolling = this.tail.then((): NativeScrollResult => {
+      if (!valid()) return refused()
+      let attempted = false
+      try {
+        const plan = this.screen.scrollPlan(up, lines, capture)
+        if (!valid()) return refused()
+        if (plan.status !== 'wheel') return plan
+        for (const data of plan.data) {
+          if (!valid()) return attempted ? uncertain() : refused()
+          attempted = true
+          this.proc.write(data)
+        }
+        return valid() ? { status: 'input' } : uncertain()
+      } catch { return attempted ? uncertain() : refused() }
+    }, () => { this.alive = false; return refused() })
+    // Later output and geometry follow this turn; failed wheel writes do not poison raw input.
+    this.tail = scrolling.then(() => {}, () => { this.alive = false })
+    return scrolling
   }
 
   async owner(): Promise<PaneOwner | null> {
