@@ -19,13 +19,17 @@ screens show numbered/Unicode rows, the completion marker and older tmux history
 The crossing uses receipt/filesystem order, not exact phone-monotonic latency. The original A132
 negative remains separate, with attribution open. A133's same-page exit-0 display retains eight
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
-and smaller-font redraw pass. Clipboard contents, final-marker Copy and post-font link hits are
-unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The APK is bound to `ef4caec2`; a later documentation-only commit has separate provenance.
+and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
+row through the normal clipboard into the ended composer; OSC8/plain link offers match after
+smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
+subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
 with no PIN input or lock/security changes. The owned QA profile/public-key line/reverse are
-removed, timeout restored to 15000 ms, and the exact disposable host retires with listeners closed
-and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
+removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
+retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
@@ -54,8 +58,9 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
-installed. Bounded same-page closed-screen, Copy-sheet, link-offer and font-redraw checks pass;
-clipboard, post-font link hits and wider lifecycle/TUI checks remain unverified. The earlier beta 20
+installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
+paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
+lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -795,16 +800,67 @@ behavior, the A133 closed-screen check, wider lifecycle latency or overall fixtu
 wrapped text, an OSC8 anchor, a 128-character plain URL and a successful 25-byte LF final write.
 The pane recorder contains 1396 bytes (LF becomes CRLF), the target ends naturally with exit 0,
 and its output-only logger receives pipe EOF. The phone's same-page closed screen retains the
-rows, wraps, final tail and logout with Copy enabled and sending disabled. Normal Copy-sheet
-filtering and one selected URL are observed; this is not proof of clipboard contents or copying
-the final marker. Exact original OSC8 and full plain URLs are offered before font changes.
-A-minus redraw retains the pane/tail; A-plus restoration is root-observed. Link hit testing after
-font changes remains unverified. Private `beta21-closed-physical-independent-xs0wdxrr/review.json`,
+rows, wraps, final tail and logout with Copy enabled and sending disabled. At that first pilot, normal Copy-sheet
+filtering and one selected URL are observed without proof of clipboard contents or final-marker
+copying. Exact original OSC8 and full plain URLs are offered before font changes; A-minus redraw
+retains the pane/tail and A-plus restoration is root-observed. Post-font link hits were not yet
+verified at that checkpoint. Private `beta21-closed-physical-independent-xs0wdxrr/review.json`,
 SHA-256 `7145b2cac1c7fbfed39503de5ef00acec8c1bfbce13650bfe6b3b1e5dee364ab`, binds 31 records.
 Opening the sibling guard retires the same-page old closed text. This supplies no unrelated live-TUI,
 native-history/held-Live, persistent-ended-history or full-checklist acceptance.
 
-**Owned cleanup.** Root's exact pidfd/nonce stop completes the host runner with exit 0;
+**Later beta21 clipboard and post-font link pilot.** A fresh owned direct-SSH/tmux fixture
+`nodeterm-new-phone-fixture-nvfslwqv` uses the unchanged `ef4caec2` build/APK under docs-only
+`9e740cec`. Its original target completes a witnessed 25-byte final write; the output-only
+logger receives EOF with 1402 raw bytes, SHA-256
+`dd9c14d73dbc156f02a5abf340c5dfaea7324b46f28fce16034b64970a216e16`.
+The original sibling guard's process and complete capture are unchanged before a later deliberate
+view of that guard. Normal Copy selects only the visually checked final-marker row, then only
+`03 Ω🧭`; normal clipboard paste into the independently verified empty ended composer yields
+exact `A133_c9981a9b_FINAL_TAIL` and `A133_c9981a9b_03 Ω🧭`, with Send disabled.
+The exact 74-character OSC8 and 128-character plain URLs are offered after both A-minus and
+A-plus restoration through stationary native touch hits at the current visible glyph positions.
+Browser navigation and Share were not tested. The first AX-derived row coordinate selected a URL
+rather than the marker. Screenshot-calibrated stationary touches select the actual visible row;
+later paste admissions independently verify the empty exit-0 composer and disabled Send. That
+fixture calibration is not a new Copy-index product finding; the failed initial overlapping
+composer-clear capture receives no credit. Raw XML/PNG receipts are under
+`a133-copy-link-followup-v3-s3jznolt/phone/receipts/` (`selected-final-tail-visual.png`,
+`pasted-final-tail-visual.xml`, `selected-unicode.png`, `pasted-unicode.xml` and all four
+`osc8/plain-after-smaller/restored-font.xml` files). Native ownership/write/EOF evidence is
+`nodeterm-new-phone-fixture-nvfslwqv/proof/native-fixture-stop-1791407461302681663-2796520-result.json`,
+SHA-256 `e276c131230b2e9130ab93cc442c1da205741b1b4978461c536792c8f09d48b5`.
+The calibrated final-marker review is `a133-clipboard-calibrated-independent-4_cp_agf/review.json`,
+SHA-256 `9d48a7a0ba23cc236bf693ebef89ab7ba342597bfb1ae37084b3c056a6665f25`. The Unicode/post-font
+review rehashes that proof and 81 source/evidence records:
+`a133-unicode-postfont-independent-9l6o_i4c/review.json`, SHA-256
+`4ba6927d86a79ae4c07b85c39ed86ce12f1294de2bf68e4160fbacca198bf2f7`. A later normal opening
+of the sibling guard shows only its own prompt/title, with no old closed rows or exit overlay.
+These bounded same-page checks do not establish persistent ended history, unrelated live TUI,
+A129/A130 native history, the original A132 attribution or the full 64-item ledger.
+
+**Later pilot owned cleanup.** Exact pidfd/nonce SIGTERM completes the current host runner with
+exit 0; its receipt is `89d9022eca1f787c3e27d92ce662cb97cf1ce10015d815cbb99f50baf230157e`.
+`nodeterm-new-phone-fixture-nvfslwqv/proof/root-cleanup-verification.json`, SHA-256
+`7d1e316dd88764391707a7a5a31e91bb6f67ea2aa777ecdd4f98d037251dbdb8`, confirms seven admitted
+processes and their namespace are gone, both listeners close, private authentication is absent,
+and runtime pins/held outputs remain unchanged. This is owned SIGTERM cleanup, not normal Quit.
+The exact admitted public-key line and reverse are removed, original authorized bytes restored,
+and normal Forget returns only the temporary profile to Welcome. The first timeout restore writes
+900000→15000 but fails its post-write window check; its uncertain result is preserved. A retry
+refuses before another write, and a separate guarded read confirms 15000 with the same APK,
+first-install time and notification grant/flags:
+`a133-copy-link-followup-v3-s3jznolt/phone/receipts/screen-timeout-restore-reconciled.json`, SHA-256
+`088a91d9f917a949a7e82449c752a0e18c52b2102060244c44ed0ff3d5211cee`.
+Independent saved-evidence cleanup review is
+`beta21-copy-cleanup-independent-03y913yc/review.json`, SHA-256
+`8e7433a47948f6d623c17da92b4c7b066174236c47c5fe3863b5c7ba5ce67932`.
+It rehashes 184 evidence files and all 136 immutable build outputs, checks 2510 source entries
+under the docs-only current/build binding, and confirms 2506 non-doc canonical entries and modes
+agree. Recorded cleanup, the new guard view and actual 15000-ms reconciliation pass; the reviewer
+performs no runtime or device probes.
+
+**Earlier pilot owned cleanup.** Root's exact pidfd/nonce stop completes the host runner with exit 0;
 `runner-result.json` hashes to `18d31a6eaa3ca12c5a89ea49085e17e2ec3dd1b05a45c8e19f9c61f43b24f01a`.
 The supervisor's admitted app/server SIGTERM cleanup passes; ordinary native Quit is unverified.
 The exact processes retire, SSH/CDP listeners close, generated private authentication is removed,
@@ -3290,8 +3346,8 @@ later fix left to a device.
 the last visible pane at a current known SSH/tmux EOF, with inert Copy/links and no Live/input.
 Full 1033/110/app/TypeScript gates and exact-head five-job/ten-step CI pass at `ef4caec2`;
 beta 21/code 22 is installed. One same-page closed-screen/Copy-sheet/link-offer/font-redraw
-physical case passes. Clipboard contents, final-marker Copy, post-font link hits and wider TUI/lifecycle
-checks remain unverified. Checklist item 25 covers this retention without promoting the 64-row ledger.
+physical case passes. The later exact final-marker/Unicode clipboard paste and post-font OSC8/plain
+link-offer pilot also passes; browser navigation, Share and wider TUI/lifecycle checks remain unverified. Checklist item 25 covers this retention without promoting the 64-row ledger.
 
 **Native history scrolling (`A129`, published source; acceptance pending).** Published
 `1add0408` adds negotiated inert history and mouse routing through its captured backend. The

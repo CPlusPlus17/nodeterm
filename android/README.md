@@ -20,13 +20,17 @@ screens show numbered/Unicode rows, the completion marker and older tmux history
 The crossing uses receipt/filesystem order, not exact phone-monotonic latency. The original A132
 negative remains separate, with attribution open. A133's same-page exit-0 display retains eight
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
-and smaller-font redraw pass. Clipboard contents, final-marker Copy and post-font link hits are
-unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The APK is bound to `ef4caec2`; a later documentation-only commit has separate provenance.
+and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
+row through the normal clipboard into the ended composer; OSC8/plain link offers match after
+smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
+subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
 with no PIN input or lock/security changes. The owned QA profile/public-key line/reverse are
-removed, timeout restored to 15000 ms, and the exact disposable host retires with listeners closed
-and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
+removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
+retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
@@ -55,8 +59,9 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
-installed. Bounded same-page closed-screen, Copy-sheet, link-offer and font-redraw checks pass;
-clipboard, post-font link hits and wider lifecycle/TUI checks remain unverified. The earlier beta 20
+installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
+paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
+lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays

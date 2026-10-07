@@ -22,13 +22,17 @@ screens show numbered/Unicode rows, the completion marker and older tmux history
 The crossing uses receipt/filesystem order, not exact phone-monotonic latency. The original A132
 negative remains separate, with attribution open. A133's same-page exit-0 display retains eight
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
-and smaller-font redraw pass. Clipboard contents, final-marker Copy and post-font link hits are
-unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The APK is bound to `ef4caec2`; a later documentation-only commit has separate provenance.
+and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
+row through the normal clipboard into the ended composer; OSC8/plain link offers match after
+smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
+subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
 with no PIN input or lock/security changes. The owned QA profile/public-key line/reverse are
-removed, timeout restored to 15000 ms, and the exact disposable host retires with listeners closed
-and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
+removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
+retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
@@ -57,8 +61,9 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 27-case mutation/control/restored checks pass. Earlier **11 semantic mutants** plus one geometry
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
-installed. Bounded same-page closed-screen, Copy-sheet, link-offer and font-redraw checks pass;
-clipboard, post-font link hits and wider lifecycle/TUI checks remain unverified. The earlier beta 20
+installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
+paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
+lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -535,6 +540,16 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### Beta 21 clipboard and post-font link pilot (2026-10-07)
+
+A fresh same-page ended SSH/tmux pane copies the exact final marker and one Unicode row through
+normal clipboard paste into its disabled-Send composer. Both full OSC8/plain URLs are offered
+after A-minus/A-plus changes; opening the sibling guard removes the old closed display. Exact
+fixture/key/reverse/profile cleanup passes. The timeout restore has an uncertain post-write check;
+guarded readback confirms the original 15000 ms without another write. Browser/Share/wider
+TUI/lifecycle/native-history checks and the 10/22/32 ledger stay unchanged. See the
+[bounded receipts](android.md#closed-sshtmux-exit-display-source-checkpoint-2026-10-07-a133).
+
 ### Beta 21 publication and closed SSH display (2026-10-07)
 
 Signed `94c8d2c4` retains the last visible SSH/tmux pane at an owned EOF; `ef4caec2` preserves
@@ -543,8 +558,9 @@ control/restored mutation checks, forced 1033/110 protocol, offline app/full Typ
 five-job/ten-step CI pass. Retained-signer beta 21/code 22 is installed. A fresh 1200-row/40-ms
 output case crosses actual background/resume and reaches the phone with its completion marker.
 A separate natural exit retains Unicode/wraps/final text; Copy-sheet filtering, original link
-offers and font redraw pass. Clipboard contents, post-font link hits and the wider matrix remain
-unverified. All temporary phone/host admissions retire cleanly. The original A132 attribution and
+offers and font redraw pass. A later fresh same-page pilot copies the exact final marker and one
+Unicode row into the ended composer and offers both exact URLs after smaller/restored fonts;
+browser navigation, Share and the wider matrix remain unverified. All temporary phone/host admissions retire cleanly. The original A132 attribution and
 10/22/32 ledger remain unchanged; see the [bounded receipts](android.md#closed-sshtmux-exit-display-source-checkpoint-2026-10-07-a133).
 
 ### Beta 20 output/background checks (2026-10-07)
@@ -1693,8 +1709,9 @@ unverified. [A132](android-audit-2026-09.md#a132)'s original Fedora completion l
 the clean native 2-ms controls and fresh Linux/direct-SSH/40-ms case do not locate its cause.
 [A133](android-audit-2026-09.md#a133) is source-fixed/published at `ef4caec2` after native raw exit
 discrimination. Final forced 1033/110/app/TypeScript and CI five/ten pass; beta 21/code 22 is
-installed. Its bounded same-page retention/Copy-sheet/link offers/font redraw pass; clipboard,
-final-marker Copy, post-font link hits and unrelated TUI/lifecycle checks remain unverified. Do not
+installed. Its bounded same-page retention, exact final-marker/Unicode clipboard paste and
+post-font OSC8/plain link offers pass; browser navigation, Share and unrelated TUI/lifecycle
+checks remain unverified. Do not
 repeat a successful installation.
 The user removed the Pixel 7a's screen lock and authorized ongoing tests; wake it normally without
 repeating unlock questions. Already-dispatched WebView commands remain outside the queue fix.
@@ -2299,8 +2316,8 @@ Retained-signer beta 21/code22 from `ef4caec2` is installed on the separately au
 Fresh forced 1033/110/app/TypeScript and five-job/ten-step CI `37678829862` pass. A fresh owned
 40-ms/1200-row direct-SSH flow completes with its marker visible after Home/resume/scroll; the
 original A132 negative remains historical. A133 source is published and its bounded same-page
-retention/Copy-sheet/link offers/font redraw pass. Clipboard, final-marker Copy, post-font link hits
-and the wider A131/TUI/lifecycle matrix remain unverified. The fresh owned profile/public key/reverse
+retention, exact final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass.
+Browser navigation, Share and the wider A131/TUI/lifecycle matrix remain unverified. The fresh owned profile/public key/reverse
 and timeout lease are retired/restored; the disposable host's exact cleanup passes.
 At Desktop `e06b5547`, its original A105 remembered-rule and A106 single/nonadjacent-multi choices
 pass real sibling Claude application. Saved manual SSH profile/pin reuse after app process restart
