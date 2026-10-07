@@ -18476,7 +18476,8 @@ export function Canvas() {
         <GlobalKanbanView
           live={globalKanbanLive}
           onModalNodeChange={setKanbanModalNode}
-          liveLinkMenuItems={liveLinkMenuItems}
+          nodeActionItems={boardNodeActionItems}
+          onAiName={aiNameFromKanban}
         />
       ) : perProjectKanbanOpen && (
         <KanbanView

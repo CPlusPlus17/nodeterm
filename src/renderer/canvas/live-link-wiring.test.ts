@@ -126,7 +126,7 @@ describe('Canvas live-link wiring', () => {
       'const liveLink = (nodeId: string): MenuItem[] => liveLinkMenuItems(nodeId, projectId)'
     )
     expect(src).toContain('nodeActionItems={activeBoardNodeActionItems}')
-    expect(src).toMatch(/<GlobalKanbanView[\s\S]{0,200}liveLinkMenuItems=\{liveLinkMenuItems\}/)
+    expect(src).toMatch(/<GlobalKanbanView[\s\S]{0,200}nodeActionItems=\{boardNodeActionItems\}/)
   })
 
   it('the card modal\'s action reaches the opener with its project', () => {
