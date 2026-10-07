@@ -21,9 +21,9 @@ negative remains separate, with attribution open. A133's same-page exit-0 displa
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
 and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
 row through the normal clipboard into the ended composer; OSC8/plain link offers match after
-smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
-[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+smaller and restored fonts. At that copy/link checkpoint, browser navigation and Share were untested; wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The preceding docs-only `9b8bba2b` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37690764287`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37690764287),
 all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
 subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
@@ -31,6 +31,19 @@ with no PIN input or lock/security changes. The owned QA profile/public-key line
 removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
 retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
+
+**Fresh native diagnostics (2026-10-08; source unchanged).** The `9b8bba2b` normal-Fedora
+40-ms run records all 1200 rows and its standalone marker; original A132 attribution stays open.
+Linux session-host V8/V9 pilots stay blank before input; V9's 30-second gate/all-thread observations
+still do not prove original creation or attachment. A129/A130 acceptance remains pending. See
+[the scoped evidence](#fresh-fedora-output-and-native-desktop-readiness-2026-10-08).
+
+**Browser/Share pilot (2026-10-08; bounded live SSH).** Normal Copy Links Open reaches Vanadium's
+exact nonce address and rendered content; Share previews only the selected marker and Back returns
+to the owned terminal. Browser Back remains unverified; ordinary resume succeeds. Original
+producer/guard continuity and exact owned cleanup pass; Open-focus and timeout uncertainties
+are reconciled without replay.
+No recipient, closed-page browser-lifecycle, wider matrix or ledger credit is claimed.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
 Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
@@ -59,8 +72,8 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
 installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
-paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
-lifecycle/TUI checks remain unverified. The earlier beta 20
+paste and post-font OSC8/plain link-offer checks pass. The later normal browser/Share pilot is
+bounded as above; wider lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -712,6 +725,98 @@ The frozen physical checkpoint is
 It binds 124 raw artifacts and keeps the scoped passes, partial cases, A132/A133 failures and
 owned cleanup separate. These records do not establish output overlapping backgrounding or
 successful final-marker emission.
+
+### Fresh Fedora output and native Desktop readiness (2026-10-08)
+
+Both follow-ups use clean `9b8bba2b`; product source and the installed beta21 artifact remain
+unchanged. Paths below are private under `/home/mgysin/.cache/nodeterm-android-work/`.
+
+**A132 fresh discriminator.** Normal Fedora public login startup, a fresh private home, a
+49×48 pane and the unchanged original 226-byte/40-ms Python command produce all 1200 ordered
+rows exactly once in output-only raw recording and native capture, with one standalone
+`A131_17930152_FLOW_DONE`; the tmux client's raw bytes also contain the full marker. The same
+original Bash returns to the foreground. Existing Bash OSC3008 reports `exit=success`, a natural
+shell report rather than a producer wait status or a final PTY-write witness. Fresh user/hostname,
+private cwd and literal native send-keys delivery do not reproduce the earlier exact prompt,
+NSS/hostname or Desktop paste path. The original A132 attribution stays **OPEN**; this supplies
+no SSH or phone result. Exact owned server/process/socket cleanup passes.
+
+`a132-normal-fedora-discriminator-roamz0e_/run-hyojm26y/result.json` hashes to
+`0f12736ffe6713f81380a8be1fc8c42f30e3277e03d6ed9c3855506cd6819d98`;
+its `root-review.json` hashes to
+`c24d515fab7756e85ef01be3c0dc179b5198d9561f04cf5bdb160181e35a8bba`.
+Independent `a132-normal-fedora-actual-independent-zfratst7/review.json`, SHA-256
+`45490e72c1fb9749dfe5d1fb9ceb1b61e8d8cc70c74e37786578086ab71ef8a9`, binds 108 records.
+
+**Native Desktop V8 negative.** In `native-session-host-run-uno5mppu`, the ordinary factory
+creates `term-muynv94j-6403f949`. Its 74 capture observations stay empty; readiness expires before
+any producer input. Exact read-only renderer-navigation `-32000` recovery is preserved. Early
+and final snapshots record the same protocol-2 daemon, private socket and token metadata, with
+no children visible from its main task only. Other threads were not traversed. Linux's null
+pane-owner result is expected; null command/empty capture do not prove attachment or shell absence.
+Harness readiness remains unresolved, with no product attribution or A129/A130 acceptance.
+The eight-second gate is shorter than supported cold-create budgets; it cannot classify a
+startup defect. Source-budget review `a129-native-v8-actual-source-independent-utmwd1m1/review.json`
+hashes to `314e5a3a065ae753414f01671ed7fbaa72db32af1b789d059a07812ab44abbd0`.
+All 2510 canonical inputs, 136 built outputs and 35 tool pins agree with the saved binding.
+Independent `a129-native-v8-negative-independent-6dce7opt/review.json` hashes to
+`33a676c41ba01eaef75951abcdd1b58754eedd6dbdecb8aa9fe262f7a1d02830`.
+Saved `native-session-host-run-uno5mppu/proof/root-cleanup-review.json`, SHA-256
+`d7c651ee487c983df17d4ae2badcc0e3774d111ce4089781a9575308e56affb8`, verifies the original
+outer generation gone and zero namespace survivors before separate namespace reuse. Normal Quit
+remains unverified. V9 adds the bounded all-thread observation below without replaying input.
+
+**Native Desktop V9 negative.** In `native-session-host-run-wtuahva_`, a 30-second shell-readiness
+window still leaves the original `term-muyo5cl0-26e8f7ba` blank: 280 captures are empty and no
+producer input is sent. Two complete ten-thread snapshots have no child processes at their
+observation points, but belong to different daemon generations: 1064 exits empty after 30 seconds,
+then capture starts 2372. They do not establish continuity or shell absence throughout the run.
+No original renderer create request/settlement or attachment is proved; the saved renderer warning
+also supplies no such evidence. Source, 136 built outputs and 35 tools remain unchanged. The
+next discriminant is passive observation of the original spawn decision and create dispatch/settlement,
+without another readiness-only run or replay. No product startup bug or A129/A130 acceptance is claimed.
+
+Independent `a129-native-v9-actual-source-independent-oovxt4vw/review-normalized.json`, SHA-256
+`789babc5f49a7f7f4ae43d29a3cd67184e0eb1e3f1440596c2ad3b140f26ed8c`, binds 349 records and
+2510 normalized source inputs. Saved `native-session-host-run-wtuahva_/proof/root-cleanup-review.json`,
+SHA-256 `cde2a35067394cdae9cb63b1e757f0d08b5cec4e289f174d36f1952ca8f29e62`, verifies the
+original outer generation gone and zero namespace survivors; normal Quit is not verified.
+**Browser/Share physical pilot.** The fresh owned direct-SSH fixture `vu4s5z1a` uses the same
+installed beta21/code22/source `ef4caec2` under clean `9b8bba2b`. One normal Copy Links Open
+initially records a focus-check uncertainty; no second Open is sent. Read-only reconciliation
+records Vanadium's address field `example.com/#nt-beta21-60f53a4e`, its secure connection indicator
+and rendered explanatory content. No Example Domain heading or activity-level full URI is claimed.
+One Back has no verified return; ordinary app resume succeeds. Both uncertainties are retained.
+
+Normal Share opens the system chooser, whose XML and screenshot preview exactly
+`SHARE_60f53a4e_ONLY`. One Back returns to the same owned terminal scope. Native observation
+retains the original server/socket/pane generations, genuine producer and unchanged guard capture.
+The selection uses screenshot/OCR glyph position y=1090 rather than the discrepant AX row center;
+no failed AX tap occurs in this run. No recipient/delivery, ended-page retention across browser
+backgrounding, A129/A130 or wider matrix acceptance is claimed.
+Normal Forget reaches Welcome; only the original added public-key line and owned reverse are
+removed. Exact intentional fixture stop retires all admitted process generations and its namespace,
+closes both listeners and removes five private-auth paths; 22 tools/136 outputs remain held. This is
+not normal App Quit. Timeout restore writes the original 15000 ms once, then loses post-write focus;
+that uncertain receipt is retained. A later read-only check confirms 15000, reverse absence and
+unchanged installed APK/first-install time/notification grant, with no second setting write.
+
+Phone paths below are under `beta21-browser-share-phone-bound-ipaufgcy/receipts/`:
+`browser-original-open-reconciled.json` hashes to
+`eab11ce62cedddb344d2f289f0156ae5b67433183c1a7389dff999da53e32bb1`;
+`external-observe-7ff8c2d7cec04279bcf1cc2d352d8231.json` hashes to
+`5e7c711675ae8fd9068ee239656d547b930428b1eea2c27b669504ec903eae17`;
+`external-chooser-back-result.json` hashes to
+`53c24a531a9e3a59db1fab18fa1166c68f86e090395aad98738c605ca67d94e0`.
+Native `nodeterm-new-phone-fixture-vu4s5z1a/proof/browser-share-native-observe-1791412545417254277-3571190-result.json`
+hashes to `36b6da39f892d11fa5d88e8cf6e972fee0fd47fb0ba06cb4d0d6e32d4c381084`.
+Cleanup `nodeterm-new-phone-fixture-vu4s5z1a/proof/browser-share-root-cleanup-review.json` hashes to
+`51b138d878baa3c85b97767c4bca74b30e54a6b7b13d07f430ccfb11293af824`;
+phone `screen-timeout-original-restored-readonly.json` hashes to
+`6aa57e3ffbd9080c9d52123b869356ecd495b6301dd71e5c8e401a5696137e86`.
+Independent `beta21-browser-share-physical-independent-nntykgrg/review.json`, SHA-256
+`f566c4d258a8aec47b619a4af20c9cac351b638cac9f933487a424afce98e58d`, confirms these bounded observations and cleanup.
+The original 64-row ledger remains unchanged at 10/22/32.
 
 ### Closed SSH/tmux exit display source checkpoint (2026-10-07, A133)
 
@@ -3347,7 +3452,9 @@ the last visible pane at a current known SSH/tmux EOF, with inert Copy/links and
 Full 1033/110/app/TypeScript gates and exact-head five-job/ten-step CI pass at `ef4caec2`;
 beta 21/code 22 is installed. One same-page closed-screen/Copy-sheet/link-offer/font-redraw
 physical case passes. The later exact final-marker/Unicode clipboard paste and post-font OSC8/plain
-link-offer pilot also passes; browser navigation, Share and wider TUI/lifecycle checks remain unverified. Checklist item 25 covers this retention without promoting the 64-row ledger.
+link-offer pilot also passes. The later [normal browser/Share pilot](#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+is bounded to observed navigation/chooser preview; wider TUI/lifecycle checks remain unverified.
+Checklist item 25 covers this retention without promoting the 64-row ledger.
 
 **Native history scrolling (`A129`, published source; acceptance pending).** Published
 `1add0408` adds negotiated inert history and mouse routing through its captured backend. The

@@ -22,9 +22,9 @@ negative remains separate, with attribution open. A133's same-page exit-0 displa
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
 and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
 row through the normal clipboard into the ended composer; OSC8/plain link offers match after
-smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
-[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+smaller and restored fonts. At that copy/link checkpoint, browser navigation and Share were untested; wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The preceding docs-only `9b8bba2b` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37690764287`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37690764287),
 all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
 subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
@@ -32,6 +32,19 @@ with no PIN input or lock/security changes. The owned QA profile/public-key line
 removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
 retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
+
+**Fresh native diagnostics (2026-10-08; source unchanged).** The `9b8bba2b` normal-Fedora
+40-ms run records all 1200 rows and its standalone marker; original A132 attribution stays open.
+Linux session-host V8/V9 pilots stay blank before input; V9's 30-second gate/all-thread observations
+still do not prove original creation or attachment. A129/A130 acceptance remains pending. See
+[the scoped evidence](../docs/android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08).
+
+**Browser/Share pilot (2026-10-08; bounded live SSH).** Normal Copy Links Open reaches Vanadium's
+exact nonce address and rendered content; Share previews only the selected marker and Back returns
+to the owned terminal. Browser Back remains unverified; ordinary resume succeeds. Original
+producer/guard continuity and exact owned cleanup pass; Open-focus and timeout uncertainties
+are reconciled without replay.
+No recipient, closed-page browser-lifecycle, wider matrix or ledger credit is claimed.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
 Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
@@ -60,8 +73,8 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
 installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
-paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
-lifecycle/TUI checks remain unverified. The earlier beta 20
+paste and post-font OSC8/plain link-offer checks pass. The later normal browser/Share pilot is
+bounded as above; wider lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays

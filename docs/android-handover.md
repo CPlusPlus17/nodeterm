@@ -1,4 +1,4 @@
-# Android companion: handover (updated 2026-10-07)
+# Android companion: handover (updated 2026-10-08)
 
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
@@ -24,9 +24,9 @@ negative remains separate, with attribution open. A133's same-page exit-0 displa
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
 and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
 row through the normal clipboard into the ended composer; OSC8/plain link offers match after
-smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
-[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+smaller and restored fonts. At that copy/link checkpoint, browser navigation and Share were untested; wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The preceding docs-only `9b8bba2b` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37690764287`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37690764287),
 all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
 subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
@@ -34,6 +34,19 @@ with no PIN input or lock/security changes. The owned QA profile/public-key line
 removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
 retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
+
+**Fresh native diagnostics (2026-10-08; source unchanged).** The `9b8bba2b` normal-Fedora
+40-ms run records all 1200 rows and its standalone marker; original A132 attribution stays open.
+Linux session-host V8/V9 pilots stay blank before input; V9's 30-second gate/all-thread observations
+still do not prove original creation or attachment. A129/A130 acceptance remains pending. See
+[the scoped evidence](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08).
+
+**Browser/Share pilot (2026-10-08; bounded live SSH).** Normal Copy Links Open reaches Vanadium's
+exact nonce address and rendered content; Share previews only the selected marker and Back returns
+to the owned terminal. Browser Back remains unverified; ordinary resume succeeds. Original
+producer/guard continuity and exact owned cleanup pass; Open-focus and timeout uncertainties
+are reconciled without replay.
+No recipient, closed-page browser-lifecycle, wider matrix or ledger credit is claimed.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
 Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
@@ -62,8 +75,8 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
 installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
-paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
-lifecycle/TUI checks remain unverified. The earlier beta 20
+paste and post-font OSC8/plain link-offer checks pass. The later normal browser/Share pilot is
+bounded as above; wider lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -539,6 +552,16 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Fresh native diagnostics and Browser/Share pilot (2026-10-08)
+
+At unchanged `9b8bba2b`, the normal-Fedora discriminator records all rows and its marker while
+original A132 attribution stays open; V8/V9 native readiness remains unclassified before input.
+Installed beta 21/source `ef4caec2` opens the nonce URL in Vanadium and previews the selected Share
+marker. Browser Back remains unverified; ordinary resume and chooser Back succeed. Exact owned
+cleanup and original-timeout readback pass; Open-focus/restore uncertainties are retained without
+replay. No A129/A130 or 64-row ledger promotion. See the
+[scoped receipts](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08).
 
 ### Beta 21 clipboard and post-font link pilot (2026-10-07)
 
@@ -1706,17 +1729,27 @@ The remaining phone cleanup and notification checks can continue when the correc
 21/code 22 is installed. Its bounded 1200-row/40-ms output case continues during backgrounding
 and reaches the resumed phone with the confirmed completion marker. Wider lifecycle checks remain
 unverified. [A132](android-audit-2026-09.md#a132)'s original Fedora completion loss remains open;
-the clean native 2-ms controls and fresh Linux/direct-SSH/40-ms case do not locate its cause.
+the clean native 2-ms controls, fresh normal-Fedora 40-ms discriminator and later direct-SSH
+case do not locate its cause. The normal-Fedora result records all rows and the standalone marker,
+with exact owned cleanup; it has no historical prompt parity or final-write/wait-status witness.
 [A133](android-audit-2026-09.md#a133) is source-fixed/published at `ef4caec2` after native raw exit
 discrimination. Final forced 1033/110/app/TypeScript and CI five/ten pass; beta 21/code 22 is
 installed. Its bounded same-page retention, exact final-marker/Unicode clipboard paste and
-post-font OSC8/plain link offers pass; browser navigation, Share and unrelated TUI/lifecycle
-checks remain unverified. Do not
+post-font OSC8/plain link offers pass. The later normal browser/Share pilot records the exact
+address-field nonce and selected chooser preview; browser Back remains unverified and ordinary
+resume succeeds, while chooser Back returns to the owned terminal. Wider TUI/lifecycle checks remain
+unverified. Do not
 repeat a successful installation.
 The user removed the Pixel 7a's screen lock and authorized ongoing tests; wake it normally without
 repeating unlock questions. Already-dispatched WebView commands remain outside the queue fix.
 A129/A130 need trusted HTTPS/WSS and real native/session-host relay; direct SSH cannot prove that
-overlay. Held Send receipt/draft/Ctrl races, uncertainty and wider lifecycle/notification cases remain.
+overlay. Separate V8/V9 native Desktop pilots stop at empty capture before producer input.
+V8's eight-second gate is shorter than supported cold-create budgets. V9's 30-second gate still
+has 280 empty captures; two complete ten-thread snapshots observe different empty daemon
+generations, not proven original creation or attachment. Next passively observe the original spawn
+and create dispatch/settlement without replay or another blind readiness run. [Scoped receipts](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+retain both negatives and exact owned cleanup without product attribution or A129/A130 acceptance.
+Held Send receipt/draft/Ctrl races, uncertainty and wider lifecycle/notification cases remain.
 
 **Earlier beta-19 publication; current remaining `A129`/`A130` acceptance:** Signed `5bda2c32` is
 published with fresh forced 1015/106 protocol, offline app/full TypeScript and all-five/ten-step
@@ -2317,8 +2350,13 @@ Fresh forced 1033/110/app/TypeScript and five-job/ten-step CI `37678829862` pass
 40-ms/1200-row direct-SSH flow completes with its marker visible after Home/resume/scroll; the
 original A132 negative remains historical. A133 source is published and its bounded same-page
 retention, exact final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass.
-Browser navigation, Share and the wider A131/TUI/lifecycle matrix remain unverified. The fresh owned profile/public key/reverse
-and timeout lease are retired/restored; the disposable host's exact cleanup passes.
+The later normal browser/Share pilot records Vanadium's exact address-field nonce and the selected
+chooser marker, with no recipient action. Browser Back remains unverified; ordinary resume succeeds,
+while chooser Back returns to the owned terminal. Wider A131/TUI/lifecycle checks remain unverified.
+Both copy/link and browser/Share fixtures are retired with exact owned cleanup. The original
+15000-ms timeout is confirmed by read-only reconciliation after the sole restore's post-focus
+uncertainty; no second write occurs. Current docs-only `9b8bba2b` also passes all-five/ten-step
+CI `37690764287`; keep future publication receipts distinct from installed artifact source `ef4caec2`.
 At Desktop `e06b5547`, its original A105 remembered-rule and A106 single/nonadjacent-multi choices
 pass real sibling Claude application. Saved manual SSH profile/pin reuse after app process restart
 and changed-host-key refusal pass. Both fresh fixtures, the QA profile/public-key admission and

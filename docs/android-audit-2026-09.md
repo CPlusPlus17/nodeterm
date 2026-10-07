@@ -32,9 +32,9 @@ negative remains separate, with attribution open. A133's same-page exit-0 displa
 Unicode rows, wraps and the final tail; Copy-sheet filtering/selection, exact OSC8/plain URL offers
 and font redraw pass. A fresh same-page follow-up copies the exact final marker and one Unicode
 row through the normal clipboard into the ended composer; OSC8/plain link offers match after
-smaller and restored fonts. Browser navigation, Share and wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
-The later docs-only `9e740cec` checkpoint passes forced 1033/110/app/TypeScript and
-[Android run `37685272697`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37685272697),
+smaller and restored fonts. At that copy/link checkpoint, browser navigation and Share were untested; wider lifecycle/TUI checks remain unverified. A129/A130 native-history acceptance and wider lifecycle/notification checks remain separate. The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged.
+The preceding docs-only `9b8bba2b` checkpoint passes forced 1033/110/app/TypeScript and
+[Android run `37690764287`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37690764287),
 all five jobs and ten required steps. The build and installed APK remain bound to `ef4caec2`;
 subsequent documentation publication requires fresh exact-revision gates and CI receipts.
 The user authorized ongoing tests without a screen lock: ordinary wake and app launch are allowed,
@@ -42,6 +42,19 @@ with no PIN input or lock/security changes. The owned QA profile/public-key line
 removed, actual timeout readback confirms the original 15000 ms, and the exact disposable host
 retires with listeners closed and private authentication removed. Beta21 remains installed. The regular Desktop is not deployed
 and no PR is opened.
+
+**Fresh native diagnostics (2026-10-08; source unchanged).** The `9b8bba2b` normal-Fedora
+40-ms run records all 1200 rows and its standalone marker; original A132 attribution stays open.
+Linux session-host V8/V9 pilots stay blank before input; V9's 30-second gate/all-thread observations
+still do not prove original creation or attachment. A129/A130 acceptance remains pending. See
+[the scoped evidence](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08).
+
+**Browser/Share pilot (2026-10-08; bounded live SSH).** Normal Copy Links Open reaches Vanadium's
+exact nonce address and rendered content; Share previews only the selected marker and Back returns
+to the owned terminal. Browser Back remains unverified; ordinary resume succeeds. Original
+producer/guard continuity and exact owned cleanup pass; Open-focus and timeout uncertainties
+are reconciled without replay.
+No recipient, closed-page browser-lifecycle, wider matrix or ledger credit is claimed.
 
 **Earlier beta 20 publication and installation (2026-10-07, A131 — physical checks partial).**
 Signed `11fbff08` passes forced **1029 methods / 108 suites**, zero failures/errors/skips,
@@ -70,8 +83,8 @@ Enter regression; layout changes now preserve it while viewer retirement still c
 mutant and three separate app source-pin mutants remain separately recorded below. Final
 1033/110/app/TypeScript gates and all-five/ten-step CI pass at `ef4caec2`; beta 21/code 22 is
 installed. Bounded same-page closed-screen, Copy-sheet, exact final-marker/Unicode clipboard
-paste and post-font OSC8/plain link-offer checks pass; browser navigation, Share and wider
-lifecycle/TUI checks remain unverified. The earlier beta 20
+paste and post-font OSC8/plain link-offer checks pass. The later normal browser/Share pilot is
+bounded as above; wider lifecycle/TUI checks remain unverified. The earlier beta 20
 came from `11fbff08`, with `656e5d8a` as its later docs-only head. A132's clean native
 short/long-prompt controls pass, but the
 original Fedora 40-ms/phone completion-marker case remains open. The original 64-row ledger stays
@@ -378,8 +391,8 @@ lifecycle and FPS matrix remains open.
 | [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
 
 | [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 was installed at that checkpoint; beta 21 now passes bounded active-output/background and A133 same-page checks, with original A132 attribution and wider lifecycle acceptance pending · Buffered output and unready-page commands outlive their terminal viewer |
-| [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Output completion marker absent from native capture after all 1200 numbered rows; attribution pending |
-| [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; browser/Share/wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
+| [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Original completion marker absent after all 1200 rows; fresh normal-Fedora 40-ms raw/capture discriminator passes, historical attribution pending |
+| [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
 
 ## A01
 
@@ -5143,7 +5156,12 @@ The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged. See also
 
 - Severity: **medium**; effort: medium; area: input; kind: bug.
 - Status: **Source-fixed in `0818bbed` and `2d693263`, published with mandatory gates and
-  exact-head CI at `1add0408`; physical acceptance pending.** The confirmed failure belongs to
+  exact-head CI at `1add0408`; physical acceptance pending.** Later genuine Linux Desktop V8/V9
+  pilots stop at blank readiness before input. V8's eight-second gate is shorter than supported
+  cold-create budgets; V9's 30-second gate and complete all-thread snapshots still do not prove
+  original creation or attachment. [Scoped evidence](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+  retains both negatives and exact owned cleanup without product attribution or acceptance credit.
+  The confirmed failure belongs to
   `ce1121ba56617defd7facdd44743d416e92b19e4`; its original receipt remains historical.
 
 On that confirmed source, Android's `terminal.js:435–446` drained every history gesture through
@@ -5343,8 +5361,16 @@ the same shell and retire the owned server. Private
 `476ff53ed890a9c1fa2657e8b30e8e5cb7e705ee17efcaa5273e2cc53c1f202c`, binds 70 artifacts.
 These are not the original Fedora prompt/40-ms command, SSH or phone checks; A132 remains open.
 
-Next: use a fresh exact owned producer and byte recorder to capture its completion and prompt
-ordering across raw PTY/tmux/transport/display. Add a regression only after identifying the failed
+A fresh normal-Fedora login discriminator at `9b8bba2b` also passes with the unchanged original
+226-byte/40-ms producer: all 1200 rows and one standalone marker are present in output-only raw
+recording/native capture, with marker bytes in the client raw stream. Existing Bash OSC3008
+reports success, but no producer wait status or final-write witness is added. Current user/hostname,
+private cwd and native literal send-keys delivery do not establish historical prompt/Desktop paste
+parity. Exact owned cleanup and the independent 108-record review pass;
+[canonical evidence](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+keeps the original negative and attribution **OPEN**.
+
+Next: isolate the original completion and prompt ordering across raw PTY/tmux/transport/display. Add a regression only after identifying the failed
 supported layer; a successful dispatch or numbered-row count alone must not satisfy completion.
 No source fix, Android-only attribution or checklist promotion is claimed.
 
@@ -5353,7 +5379,7 @@ No source fix, Android-only attribution or checklist promotion is claimed.
 **Phone exit display no longer shows previously displayed terminal history**
 
 - Severity: **medium**; effort: small; area: phone; kind: bug.
-- Status: **Source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; final 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; browser/Share/wider matrix unverified.**
+- Status: **Source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; final 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot now measured as separately scoped; wider matrix unverified.**
 
 On beta 20/code 21 Pixel 7a through direct SSH to the same owned tmux target, a separate real
 phone Send contains `printf 'A131_17930152_MOBILE_FINAL_TAIL\n'; exit 0`. The later screenshot
@@ -5373,7 +5399,8 @@ control/restored and one additional 26-case geometry assertion mutant. Permanent
 JUnit and three app source-pin methods pass; final 1033/110/app/TS and exact-head CI pass at
 `ef4caec2`, and beta 21/code 22 is installed. Bounded same-page retention/Copy-sheet/link offers
 and font redraw pass. The later exact final-marker/Unicode clipboard paste and post-font OSC8/plain
-link offers pass; browser navigation, Share and wider lifecycle checks remain unverified.
+link offers pass. The later [normal browser/Share pilot](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+records the address-field nonce/chooser preview; wider lifecycle checks remain unverified.
 This preserves the last rendered pane on
 one page, not backend full history/unpainted bytes or persistent history across backgrounding.
 The original phone final-marker emission remains unverified. iOS needs the equivalent EOF/display
@@ -5393,6 +5420,7 @@ filtering/selection and exact OSC8/plain URL offers, and survives smaller-font r
 `7145b2cac1c7fbfed39503de5ef00acec8c1bfbce13650bfe6b3b1e5dee364ab`. At that earlier pilot, clipboard
 contents and post-font hit tests were not yet verified. The later fresh pilot in the linked checkpoint
 verifies exact final-marker/Unicode clipboard paste and both URLs after smaller/restored fonts.
-Browser navigation, Share and unrelated TUI/lifecycle checks remain unverified.
+At that copy/link pilot, browser navigation and Share were untested. The later separately scoped
+pilot is linked above; unrelated TUI/lifecycle checks remain unverified.
 The exact owned target/logger exit naturally; fixture/profile/key/reverse/timeout cleanup is
 separately recorded in the linked checkpoint. No full-device or A129/A130 acceptance is claimed.
