@@ -96,6 +96,8 @@ export function DinoNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
     <>
     <div className={`dino-node${selected ? ' selected' : ''}`} style={{ borderColor: data.color }}>
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color={data.color} lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       <div className="dino-node__header" style={{ background: `${data.color}33` }}>
         <span className="term-node__color" style={{ background: data.color }} />
         <input

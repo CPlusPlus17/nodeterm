@@ -37,18 +37,50 @@ const FILTERED_ROOTS: Record<string, string> = {
 /** Index of the root's closing tag: the last 4-space-indented `</div>` of the component's return. */
 const rootClose = (src: string): number => src.lastIndexOf('\n    </div>\n')
 
+/** Every `<NodeResizer …/>` tag in the file, with its offset. */
+const resizers = (src: string): { at: number; tag: string }[] =>
+  [...src.matchAll(/<NodeResizer\b[\s\S]*?\/>/g)].map((m) => ({ at: m.index!, tag: m[0] }))
+/** The paint-only copy: a second NodeResizer whose controls carry `nt-resize-ghost`. */
+const isPaintCopy = (tag: string): boolean =>
+  /lineClassName="nt-resize-ghost"/.test(tag) && /handleClassName="nt-resize-ghost"/.test(tag)
+const colorOf = (tag: string) => tag.match(/color=(\{[^}]*\}|"[^"]*")/)?.[1]
+
 describe('NodeResizer sits outside, after, a backdrop-filtered node root', () => {
   it.each(Object.entries(FILTERED_ROOTS))('%s', (file, rootClass) => {
     const src = read(file)
+    expect(src.indexOf(`className={\`${rootClass}`)).toBeGreaterThan(-1)
+    const live = resizers(src).filter((r) => !isPaintCopy(r.tag))
+    expect(live).toHaveLength(1)
+    expect(live[0].at).toBeGreaterThan(rootClose(src))
+  })
+
+  it.each(Object.entries(FILTERED_ROOTS))('%s paints the old resize box from inside the root', (file, rootClass) => {
+    const src = read(file)
     const root = src.indexOf(`className={\`${rootClass}`)
-    const resizer = src.indexOf('<NodeResizer')
-    expect(root).toBeGreaterThan(-1)
-    expect(resizer).toBeGreaterThan(rootClose(src))
+    const copies = resizers(src).filter((r) => isPaintCopy(r.tag))
+    expect(copies).toHaveLength(1)
+    expect(copies[0].at).toBeGreaterThan(root)
+    expect(copies[0].at).toBeLessThan(rootClose(src))
+    // the same colour expression as the live resizer, so it paints what the old one painted
+    const live = resizers(src).find((r) => !isPaintCopy(r.tag))!
+    expect(colorOf(copies[0].tag)).toBe(colorOf(live.tag))
   })
 
   it('the terminal link dots sit outside, after, the root too', () => {
     const src = read('TerminalNode.tsx')
     for (const id of ['id="link-out"', 'id="link-in"']) expect(src.indexOf(id)).toBeGreaterThan(rootClose(src))
+  })
+})
+
+describe('the moved resizer paints above the root it now follows', () => {
+  const css = read('../styles.css')
+  const z = (sel: string): number => {
+    const i = css.indexOf(`${sel} {`)
+    return Number(css.slice(i, css.indexOf('}', i)).match(/z-index:\s*(\d+)/)?.[1])
+  }
+  it('is above the root and the terminal hover guard (z 2), below the kanban half-pill', () => {
+    expect(z('.react-flow__node > .react-flow__resize-control')).toBeGreaterThan(2)
+    expect(z('.kanban-node-pill')).toBeGreaterThan(z('.react-flow__node > .react-flow__resize-control'))
   })
 })
 

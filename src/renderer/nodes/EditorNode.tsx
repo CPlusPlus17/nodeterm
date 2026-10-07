@@ -268,6 +268,8 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
       onMouseEnter={() => (hoveredRef.current = true)}
       onMouseLeave={() => (hoveredRef.current = false)}
     >
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color={data.color} lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       {/* Invisible target handle so a rope from an agent node that opened this can attach. */}
       <Handle
         id="flow-in"

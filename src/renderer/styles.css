@@ -7478,6 +7478,13 @@ body,
   pointer-events: auto;
 }
 
+/* The node's resize controls are a SIBLING of its root (so a glass root's backdrop-filter cannot
+   clip them), which puts the later-painted root over their inner half. Lift them above the root
+   and the terminal's hover guard (z 2); the kanban half-pill stays above them. */
+.react-flow__node > .react-flow__resize-control {
+  z-index: 3;
+}
+
 /* Bound to a git worktree: a checkout, not a loose grouping. Solid, thicker border (the tint is
    bumped inline from the group's own data.color — no separate palette) so it reads as bound from
    across the canvas, where the label pill is too small to parse. */
@@ -12927,6 +12934,8 @@ button.pull-checks__name {
   text-overflow: ellipsis;
   cursor: pointer;
   backdrop-filter: blur(4px);
+  /* Over the node's resize controls (z 3). */
+  z-index: 4;
 }
 .kanban-node-pill:hover {
   filter: brightness(1.3);
@@ -17199,6 +17208,39 @@ body.focus-mode .dock:hover {
 }
 :root[data-nt-glass='on'] .react-flow__node:not(.react-flow__node-group) .react-flow__resize-control.line {
   border-color: var(--glass-edge) !important;
+}
+/* The live resize controls moved OUTSIDE the node root (direct children of the node wrapper) only
+   take the pointer; they paint nothing in any look. A control outside the root cannot reproduce
+   where the old one painted (under glass: against the root's padding box, cut by its rounded
+   clip; in every look: partly under the node's own body), so each node also renders a second,
+   paint-only <NodeResizer> in the old place inside the root, its controls classed
+   `.nt-resize-ghost` and taking no pointer — so no second resizer can ever start a drag.
+   Specific enough, and !important, to beat React Flow's inline colour and the glass overrides. */
+:root .flow-wrap .react-flow .react-flow__node:not(.react-flow__node-group) > .react-flow__resize-control:is(.handle, .line) {
+  background-color: transparent !important;
+  border-color: transparent !important;
+}
+.react-flow__resize-control.nt-resize-ghost {
+  pointer-events: none;
+}
+/* Link dots moved OUTSIDE a terminal's root (so a glass root's backdrop-filter, its own stacking
+   context, no longer buries them under the resize controls) keep the look they had while that
+   root clipped them: laid out against its PADDING box, so centred 1px inside the border, and
+   showing only their inner half. Scoped to exactly when the root's backdrop-filter is live — it
+   is dropped while the camera moves with "Keep blur while moving" off (.canvas-moving) and under
+   Reduce Transparency, and there nothing was clipped. A clip-path also clips hit testing, so the
+   outer half goes to the resize band exactly as before; the tooltip (above, growing inward) stays
+   inside the clip, so on a node narrower than it the tooltip is no longer cut at the node's far
+   edge as it was (not reproduced: the clip box cannot reach the node's width). */
+@media (prefers-reduced-transparency: no-preference) {
+  :root[data-nt-glass='on'] .flow-wrap:not(.canvas-moving) .react-flow__node > .bridge-handle--in {
+    left: 1px;
+    clip-path: inset(-48px -480px -48px 50%);
+  }
+  :root[data-nt-glass='on'] .flow-wrap:not(.canvas-moving) .react-flow__node > .bridge-handle--out {
+    right: 1px;
+    clip-path: inset(-48px 50% -48px -480px);
+  }
 }
 /* State stays visible without the accent colour: selection is a neutral ink outline; unread and
    attention keep their own glows (app state, not a per-node colour), and their border reads

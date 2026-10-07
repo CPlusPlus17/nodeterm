@@ -62,6 +62,8 @@ export function SubagentNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
     <>
     <div onPointerDownCapture={select} className={`subagent-node${working ? ' working' : ' done'}`}>
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color="#d97757" lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <div className="subagent-node__head nodrag" onClick={toggle} style={{ cursor: 'pointer' }}>
         <button

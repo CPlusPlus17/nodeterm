@@ -78,6 +78,8 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
       className={`term-node video-node${selected ? ' selected' : ''}`}
       style={{ borderTopColor: data.color }}
     >
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color={data.color} lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       {/* Invisible target handle so a rope from the agent node that opened this can attach. */}
       <Handle
         id="flow-in"

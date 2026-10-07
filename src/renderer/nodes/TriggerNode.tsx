@@ -202,6 +202,8 @@ export function TriggerNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
     <>
     <div className={`trigger-node${selected ? ' selected' : ''}`} style={{ borderColor: data.color }}>
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color={data.color} lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       <div className="trigger-node__header" style={{ background: `${data.color}33` }}>
         <span className="term-node__color" style={{ background: data.color }} />
         <input

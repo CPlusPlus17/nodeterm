@@ -56,6 +56,8 @@ export function LoopNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
     <>
     <div onPointerDownCapture={select} className={`loop-node${active ? ' working' : ''}`}>
+      {/* Paint only: the old resize box in its old place (see .nt-resize-ghost in styles.css). */}
+      <NodeResizer isVisible={selected} color="var(--state-automation)" lineClassName="nt-resize-ghost" handleClassName="nt-resize-ghost" />
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <div className="loop-node__head nodrag" onClick={toggle} style={{ cursor: 'pointer' }}>
         <button
