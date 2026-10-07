@@ -8832,6 +8832,7 @@ export function Canvas() {
       createNodeWriteRouter({
         isLive: () =>
           liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId),
+        liveHas: (nodeId) => nodesRef.current.some((n) => n.id === nodeId),
         live: { setColor: setNodesColor, setIcon: setNodeIcon, pickIcon: pickNodeIcon },
         storedNode: (nodeId) =>
           useProjects.getState().getProject(projectId)?.nodes.find((n) => n.id === nodeId),

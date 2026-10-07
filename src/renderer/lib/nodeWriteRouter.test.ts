@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CanvasNodeState } from '@shared/types'
 import {
   createNodeWriteRouter,
+  ICON_PICKER_FAILED_MESSAGE,
   NODE_GONE_MESSAGE,
   SAVE_FAILED_MESSAGE,
   type NodeWriteRouterDeps
@@ -13,6 +14,7 @@ const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 function deps(over: Partial<NodeWriteRouterDeps> = {}): NodeWriteRouterDeps {
   return {
     isLive: () => false,
+    liveHas: (id) => id === 'n1',
     live: { setColor: vi.fn(), setIcon: vi.fn(), pickIcon: vi.fn() },
     storedNode: (id) => (id === 'n1' ? stored('n1') : undefined),
     recolorStored: vi.fn(),
@@ -73,6 +75,35 @@ describe('createNodeWriteRouter', () => {
     const d = deps({ iconDialog: vi.fn(async () => undefined) })
     createNodeWriteRouter(d).pickIcon('n1')
     await flush()
+    expect(d.setStoredIcon).not.toHaveBeenCalled()
+  })
+
+  it('a live node that is gone is reported and nothing is written', () => {
+    const d = deps({ isLive: () => true })
+    const w = createNodeWriteRouter(d)
+    w.setColor(['gone'], '#0a84ff')
+    w.setIcon('gone', undefined)
+    w.pickIcon('gone')
+    expect(d.toast).toHaveBeenCalledTimes(3)
+    expect(d.toast).toHaveBeenCalledWith(NODE_GONE_MESSAGE)
+    expect(d.live.setColor).not.toHaveBeenCalled()
+    expect(d.live.setIcon).not.toHaveBeenCalled()
+    expect(d.live.pickIcon).not.toHaveBeenCalled()
+  })
+
+  it('a live recolor writes the present nodes and reports the missing ones once', () => {
+    const d = deps({ isLive: () => true })
+    createNodeWriteRouter(d).setColor(['n1', 'gone', 'gone2'], '#0a84ff')
+    expect(d.live.setColor).toHaveBeenCalledWith(['n1'], '#0a84ff')
+    expect(d.toast).toHaveBeenCalledTimes(1)
+    expect(d.toast).toHaveBeenCalledWith(NODE_GONE_MESSAGE)
+  })
+
+  it('an icon picker that fails to open is reported', async () => {
+    const d = deps({ iconDialog: vi.fn(async () => { throw new Error('boom') }) })
+    createNodeWriteRouter(d).pickIcon('n1')
+    await flush()
+    expect(d.toast).toHaveBeenCalledWith(ICON_PICKER_FAILED_MESSAGE)
     expect(d.setStoredIcon).not.toHaveBeenCalled()
   })
 })

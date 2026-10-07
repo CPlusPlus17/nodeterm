@@ -7,8 +7,9 @@
  * node and does nothing). That is the trap the kanban card menus — the Omni board above all — walk
  * into, because they act on nodes of projects that are not on the canvas.
  *
- * Never silent: a node that is no longer in its project, and a save that fails, each raise a
- * `nodeterm:toast` (the caller's `toast`).
+ * Never silent: a node that is no longer in its project (on the live canvas or in the store), a
+ * save that fails, and an icon picker that fails to open each raise a `nodeterm:toast` (the
+ * caller's `toast`).
  */
 import type { NodeIcon } from '@shared/node-icon'
 import type { CanvasNodeState } from '@shared/types'
@@ -17,6 +18,7 @@ import { applyIconChoice } from './nodeIconChoice'
 
 export const NODE_GONE_MESSAGE = 'That session is no longer in its project — nothing was changed.'
 export const SAVE_FAILED_MESSAGE = 'The change could not be saved to disk.'
+export const ICON_PICKER_FAILED_MESSAGE = "Couldn't open the icon picker."
 
 export interface NodeWrites {
   setColor: (ids: string[], color: string) => void
@@ -28,6 +30,8 @@ export interface NodeWrites {
 export interface NodeWriteRouterDeps {
   /** React Flow holds this project right now. Asked on every write, never cached. */
   isLive: () => boolean
+  /** The node is on the live canvas right now (the live funnels do nothing for a missing id). */
+  liveHas: (nodeId: string) => boolean
   /** The live canvas's own funnels (Canvas `setNodesColor` / `setNodeIcon` / `pickNodeIcon`). */
   live: NodeWrites
   /** The node in the project's stored copy, or undefined when it is gone. */
@@ -46,7 +50,8 @@ export function createNodeWriteRouter(d: NodeWriteRouterDeps): NodeWrites {
   }
   const setIcon = (nodeId: string, icon: NodeIcon | undefined): void => {
     if (d.isLive()) {
-      d.live.setIcon(nodeId, icon)
+      if (d.liveHas(nodeId)) d.live.setIcon(nodeId, icon)
+      else d.toast(NODE_GONE_MESSAGE)
       return
     }
     if (!d.storedNode(nodeId)) {
@@ -59,7 +64,9 @@ export function createNodeWriteRouter(d: NodeWriteRouterDeps): NodeWrites {
   return {
     setColor(ids, color) {
       if (d.isLive()) {
-        d.live.setColor(ids, color)
+        const live = ids.filter((id) => d.liveHas(id))
+        if (live.length < ids.length) d.toast(NODE_GONE_MESSAGE)
+        if (live.length > 0) d.live.setColor(live, color)
         return
       }
       const present = ids.filter((id) => d.storedNode(id))
@@ -71,7 +78,8 @@ export function createNodeWriteRouter(d: NodeWriteRouterDeps): NodeWrites {
     setIcon,
     pickIcon(nodeId) {
       if (d.isLive()) {
-        d.live.pickIcon(nodeId)
+        if (d.liveHas(nodeId)) d.live.pickIcon(nodeId)
+        else d.toast(NODE_GONE_MESSAGE)
         return
       }
       const node = d.storedNode(nodeId)
@@ -82,6 +90,7 @@ export function createNodeWriteRouter(d: NodeWriteRouterDeps): NodeWrites {
       void d
         .iconDialog({ nodeId, title: node.title ?? '', icon: node.icon })
         .then((choice) => applyIconChoice(choice, (icon) => setIcon(nodeId, icon)))
+        .catch(() => d.toast(ICON_PICKER_FAILED_MESSAGE))
     }
   }
 }

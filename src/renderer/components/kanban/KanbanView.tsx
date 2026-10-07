@@ -150,7 +150,7 @@ export interface KanbanViewProps {
   /**
    * "Start with agent ▸" rows for a GitHub issue card — the canvas's own agent + account picker
    * (`agentCreationEntries`), pointed at starting a bound session on that issue. Optional for the
-   * same reason as `accountMenuItems`: a board with no canvas behind it offers none.
+   * same reason as `nodeActionItems`: a board with no canvas behind it offers none.
    */
   issueAgentMenu?: (issue: GitHubIssueCardView) => MenuItem[]
   /**
