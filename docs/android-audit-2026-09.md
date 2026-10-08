@@ -16,6 +16,15 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
+`0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
+factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
+reload and input to the same original shell before/after it. The complete sibling capture and
+original daemon/Bash/producer/socket generations stay unchanged; owned retirement is verified.
+Android native-history/Live-overlay acceptance, silent network loss and held replies remain open.
+Installed beta21 and the original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
+See [the native consumer receipt](android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
+
 **Login-shell deadline (2026-10-08, A134 — published; original create verified).**
 Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
 full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
@@ -410,7 +419,7 @@ lifecycle and FPS matrix remains open.
 | [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 was installed at that checkpoint; beta 21 passes bounded active-output/background, controlled direct-SSH recovery/draft/explicit Send and A133 same-page checks; original A132 attribution and wider lifecycle acceptance remain pending · Buffered output and unready-page commands outlive their terminal viewer |
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Original completion marker absent after all 1200 rows; fresh normal-Fedora 40-ms raw/capture discriminator passes, historical attribution pending |
 | [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
-| [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; fresh original session-host create/Bash prompt verified without input; V13 cause/fallback and native-history/phone acceptance unverified · Login-shell probe can outlive its child timeout |
+| [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; original create/Bash prompt plus fresh native 200-marker capture/reload/input continuity verified; V13 cause/fallback and native-history phone/gesture acceptance unverified · Login-shell probe can outlive its child timeout |
 
 ## A01
 
@@ -5451,7 +5460,7 @@ separately recorded in the linked checkpoint. No full-device or A129/A130 accept
 **Login-shell executable-resolution probe can outlive its child timeout**
 
 - Severity: **medium**; effort: small; area: desktop; kind: bug.
-- Status: **Source-fixed/published; original session-host create/visible prompt verified; native-history/phone acceptance pending.**
+- Status: **Source-fixed/published; original create/visible prompt and scoped native capture/reload/input verified; native-history phone/gesture acceptance pending.**
 
 `execFile`'s timeout sends a signal, while its callback can still await process/stream completion.
 The shared PATH/environment resolver previously relied on that callback to settle cached callers.
@@ -5472,3 +5481,11 @@ remain unverified. Every push still requires fresh exact-revision gates/CI. See 
 [canonical stage/source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
 This shared Desktop behavior also benefits the iOS companion; @eneskirca needs no wire change.
 The installed beta21 artifact and original 64-row ledger are unchanged.
+
+A separate fresh original-consumer case at immutable build `0d8594a6` and docs-only checkout
+`98907171` passes both original factory/kernel admissions before producer input, capture of all
+200 unique marker names with Unicode, normal renderer reload and `q`/`r` input/ACK to the same
+original shell. The original daemon/state/socket/token/Bash/producer generations and complete
+sibling capture stay unchanged; owned retirement is verified. This does not promote Android
+native-history/Live, canvas gestures or full rendered payload parity. See the
+[scoped consumer receipt](android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).

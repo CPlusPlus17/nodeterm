@@ -6,6 +6,15 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
+`0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
+factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
+reload and input to the same original shell before/after it. The complete sibling capture and
+original daemon/Bash/producer/socket generations stay unchanged; owned retirement is verified.
+Android native-history/Live-overlay acceptance, silent network loss and held replies remain open.
+Installed beta21 and the original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
+See [the native consumer receipt](../docs/android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
+
 **Login-shell deadline (2026-10-08, A134 — published; original create verified).**
 Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
 full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.

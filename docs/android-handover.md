@@ -8,6 +8,15 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
+**Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
+`0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
+factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
+reload and input to the same original shell before/after it. The complete sibling capture and
+original daemon/Bash/producer/socket generations stay unchanged; owned retirement is verified.
+Android native-history/Live-overlay acceptance, silent network loss and held replies remain open.
+Installed beta21 and the original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
+See [the native consumer receipt](android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
+
 **Login-shell deadline (2026-10-08, A134 — published; original create verified).**
 Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
 full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
@@ -569,6 +578,17 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Native Desktop consumer continuity (2026-10-08)
+
+Fresh immutable Desktop/build `0d8594a6`, with docs-only checkout `98907171`, now verifies
+two original native factories, both original producer lineages before capture, 200 retained
+unique marker names/Unicode, normal renderer reload and exactly one `q`/`r` input/ACK to the
+same original target. The sibling producer records no input and its whole capture is unchanged.
+Source/tools/outputs hold and owned retirement is verified. Android native-history/Live,
+canvas gestures and full rendered payload equality remain unverified; installed beta21 and
+the 64-row ledger are unchanged. See the
+[native consumer receipt](android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
 
 ### Direct SSH continuity (2026-10-08)
 
@@ -1760,10 +1780,12 @@ The remaining phone cleanup and notification checks can continue when the correc
 ### What is still open
 
 **Login-shell probe (`A134`):** the source fix, caller controls, exact-revision gates/CI and one
-fresh original session-host create/visible Bash prompt are verified. This is not native history,
-producer/input, reload or native-route phone acceptance. Next cover those original-owned consumer paths and
-A129/A130 through their supported native route; the V13 child cause and whether fallback fired
-remain unknown. Preserve the installed beta21 artifact.
+fresh original session-host create/visible Bash prompt are verified. A separate fresh consumer
+case now passes production native capture retention and ordinary renderer reload/input with the
+original daemon/Bash/producer/socket and untouched sibling. Next cover A129/A130 on the phone
+through their supported native route, silent network loss and held-reply races; canvas history
+gestures, full rendered payload equality, the V13 child cause and whether fallback fired remain
+unverified. Preserve the installed beta21 artifact.
 
 **Viewer queue follow-up (`A131`):** source is fixed/published in `11fbff08`. Current
 `ef4caec2` passes forced 1033/110/app/TypeScript and all-five/ten-step CI; retained-signer beta
@@ -2423,10 +2445,12 @@ trusted endpoint and usable foreground are valid. Obtain a current main Wireless
 endpoint only if that trusted connection is unavailable. Every new physical case requires a fresh
 owned fixture and untouched sibling guard; never restart a retired fixture. Resume the expanded
 64-item checklist without inheriting older passes for new flows. A134's exact-revision gates/CI
-and fresh original native create/visible prompt pass, without PTY input or history acceptance;
-its controlled comparison does not establish V13's child cause or whether fallback fired.
-Next are original-owned native producer/history/reattach checks and A129/A130 native app
-history/held Live-touch acceptance, wider lifecycle/notification and held composed
+and fresh original native create/visible prompt pass. A separate fresh consumer verifies native
+capture retention and normal renderer reload/input with the same original kernel tuple and
+untouched sibling; canvas gestures and Android history remain unverified. The controlled shell
+comparison does not establish V13's child cause or whether fallback fired.
+Next are A129/A130 native app history/held Live-touch acceptance, silent network loss,
+wider lifecycle/notification and held composed
 Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
 and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those
 paths. Keep beta 21 installed and preserve historical proofs and all unrelated profiles/panes.

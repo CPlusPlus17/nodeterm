@@ -5,6 +5,15 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
+`0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
+factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
+reload and input to the same original shell before/after it. The complete sibling capture and
+original daemon/Bash/producer/socket generations stay unchanged; owned retirement is verified.
+Android native-history/Live-overlay acceptance, silent network loss and held replies remain open.
+Installed beta21 and the original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
+See [the native consumer receipt](#native-desktop-capture-and-renderer-reattach-2026-10-08).
+
 **Login-shell deadline (2026-10-08, A134 — published; original create verified).**
 Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
 full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
@@ -676,6 +685,39 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Native Desktop capture and renderer reattach (2026-10-08)
+
+The fresh private `native-session-host-run-smz7f03m` uses immutable source/build `0d8594a6`
+with the signed `98907171` checkout differing only in four Android documentation files. The
+before/after guards cover all 2510 tracked inputs, 136 built outputs and 35 public/native tools.
+Tmux is genuinely unavailable inside the private home/PID/network namespace, so the normal
+Terminal factory selects the bundled session-host backend. Each of the two original factories
+has a correlated positive attach response and renderer fulfillment, then a unique original Bash
+kernel admission before its fixed producer is started once. Both producer lineages are admitted
+before the first production capture.
+
+All 200 unique numbered marker names appear exactly once in retained capture, with CJK, emoji
+and a combining accent. Normal renderer keyboard input sends `q` once; capture contains its ACK.
+A normal renderer reload preserves both node IDs and reconnects to the same daemon 1382,
+target Bash 1407/producer 1464 and sibling Bash 1479/producer 1572, with their original births,
+TTYs, private state/socket/token metadata and generations. Normal keyboard input then sends
+`r` once and receives its ACK. The actual target raw-input journal is exactly hex `71`, `72`;
+the sibling producer records no input and its complete capture stays byte-identical. This verifies
+production capture retention and normal renderer reattachment/input. It does not verify full
+rendered payload equality, canvas history gestures, Android `scrollV1`/Live or physical ConPTY.
+
+Private `proof/native-pilot-result.json` hashes to
+`0b756240cde658fe57a248f7f93527b458c8a003be447f5e94ff5118b299c160`;
+`kernel-before-reload.json` and `kernel-after-reload.json` share SHA-256
+`71f7310203a4349aec27d99c25c09f9795dd3ff0975df1df8ee1d5d03a03026a`.
+The root execution closes with exit 0 and `passed:true`. Birth-guarded cleanup uses daemon
+SIGTERM, app SIGTERM/SIGKILL and Xvfb SIGTERM; it is not normal App Quit.
+`proof/root-final-retirement.json`, SHA-256
+`7803f4b22f3fd0e6aab024802bfd3bc470f23a42e61cda97f9d2efafbce42e72`, records the original
+outer bwrap birth retired and no visible members of its private PID namespace; 549 namespace-read
+permission denials are excluded, so the scan is not exhaustive. The original V8/V9/V13 negatives and
+V14 create-only result remain separate. Installed beta21 and the 64-item ledger are unchanged.
 
 ### Direct SSH reconnect and active background continuity (2026-10-08)
 
