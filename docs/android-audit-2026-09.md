@@ -16,6 +16,15 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
+`04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
+admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
+a new viewer while it is paused, preserving the original shell, producer, tmux server/socket and
+guard. The unsent draft and its saved rendered text remain; one later explicit Send executes once
+and receives a real ACK. Whole-host/network loss, cursor position and lost-reply races remain
+unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchanged. See
+[the bounded receipt](android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
+
 **Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
 `0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
 factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
@@ -3903,6 +3912,10 @@ executes two Bash calls without a second hold (nine hooks, 45.982 seconds total)
 rule itself. [Actual result and independent review](android.md#beta-19-publication-provider-and-emulator-checkpoint-2026-10-07)
 retain the original-node/request correlation. Rule persistence after CLI restart, production-pane-child
 launch and wider scope remain pending; A106's scoped pass is below. The original 10/22/32 ledger is unchanged.
+
+A separate private FD/TTY component calibration (`a105-toy-fd-actual-822fkn84`) fails before any
+provider action. It establishes no production-pane-child launch or restart acceptance and is not
+a new product finding; the pending limits above remain.
 
 **Always allow uses original concrete hook rule scopes**
 

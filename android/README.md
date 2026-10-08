@@ -6,6 +6,15 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
+`04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
+admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
+a new viewer while it is paused, preserving the original shell, producer, tmux server/socket and
+guard. The unsent draft and its saved rendered text remain; one later explicit Send executes once
+and receives a real ACK. Whole-host/network loss, cursor position and lost-reply races remain
+unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchanged. See
+[the bounded receipt](../docs/android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
+
 **Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
 `0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
 factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer

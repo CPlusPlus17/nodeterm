@@ -8,6 +8,15 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
+**Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
+`04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
+admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
+a new viewer while it is paused, preserving the original shell, producer, tmux server/socket and
+guard. The unsent draft and its saved rendered text remain; one later explicit Send executes once
+and receives a real ACK. Whole-host/network loss, cursor position and lost-reply races remain
+unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchanged. See
+[the bounded receipt](android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
+
 **Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
 `0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
 factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
@@ -578,6 +587,15 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Silent SSH peer recovery (2026-10-08)
+
+A fresh `04da9b9e`/Desktop `0d8594a6` fixture and unchanged beta21 recover automatically while
+one old peer is paused for 45 seconds. Original shell/producer/server/socket/guard survive; the
+unsent draft remains in XML and saved pixels. One later Send has one witness/real ACK, still unique
+92.719 seconds later. Owned cleanup passes. Image-preview blankness was disproved by actual PNG
+pixels, so no new rendering finding is established. Whole-host/network loss, cursor position and
+lost replies remain untested. See [the bounded receipt](android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
 
 ### Native Desktop consumer continuity (2026-10-08)
 
@@ -1779,6 +1797,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+**Silent SSH peer pilot:** automatic recovery, retained draft text/glyphs and one explicit
+Send/application ACK pass through one old-peer pause on shared loopback. Whole-host/network loss,
+cursor position and held/lost replies remain unverified. The initial image-preview rendering
+interpretation is withdrawn after raw-pixel comparison. See [the bounded case](android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
+
 **Login-shell probe (`A134`):** the source fix, caller controls, exact-revision gates/CI and one
 fresh original session-host create/visible Bash prompt are verified. A separate fresh consumer
 case now passes production native capture retention and ordinary renderer reload/input with the
@@ -2449,7 +2472,7 @@ and fresh original native create/visible prompt pass. A separate fresh consumer 
 capture retention and normal renderer reload/input with the same original kernel tuple and
 untouched sibling; canvas gestures and Android history remain unverified. The controlled shell
 comparison does not establish V13's child cause or whether fallback fired.
-Next are A129/A130 native app history/held Live-touch acceptance, silent network loss,
+Next are A129/A130 native app history/held Live-touch acceptance, whole-host/network loss,
 wider lifecycle/notification and held composed
 Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
 and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those

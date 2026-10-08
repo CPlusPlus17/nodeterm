@@ -5,6 +5,15 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
+`04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
+admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
+a new viewer while it is paused, preserving the original shell, producer, tmux server/socket and
+guard. The unsent draft and its saved rendered text remain; one later explicit Send executes once
+and receives a real ACK. Whole-host/network loss, cursor position and lost-reply races remain
+unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchanged. See
+[the bounded receipt](#silent-ssh-peer-recovery-and-single-send-2026-10-08).
+
 **Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
 `0d8594a6`, observed with the docs-only `98907171` checkout, passes two original session-host
 factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
@@ -685,6 +694,54 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Silent SSH peer recovery and single Send (2026-10-08)
+
+The fresh `nodeterm-new-phone-fixture-ajwhcupk` uses signed docs-only checkout `04da9b9e`, immutable
+Desktop/build `0d8594a6` and unchanged installed Pixel 7a beta21/code22 APK/source `ef4caec2`.
+The admitted original post-auth SSH peer 568 is stopped for **45.000 seconds** using its exact
+generation. New phone viewer 886/handler 854 appears while that peer is paused. Original target
+Bash 378/TTY `/dev/pts/1`, producer 605, tmux server 376/socket and sibling Bash 459/complete
+capture remain unchanged. This is one silent peer on shared loopback: the listener and new
+connections remain available. Whole-host sleep, network blackholing, AUTO relay fallback and
+attribution to a particular timeout detector remain unverified.
+
+No Send occurs during the pause. Four before/during/recovered XML snapshots retain the exact
+125-character draft in the same focused composer bounds. Actual PNG decoding confirms matching
+text-band positions/counts before the pause, and byte-identical early/late/recovered composer RGB
+pixels for `(40,2030,920,2290)`, SHA-256
+`b47c389b670dbb80561a6cea78560343d129dd97f3cb30f18563a2cf80c64a2e`.
+An initial blank-rendering interpretation from inconsistent image-tool previews is discarded;
+the saved pixels retain the draft glyphs and establish no new rendering defect. Cursor position
+is not serialized or verified. The correction is recorded in
+`a135-saved-png-pixel-correction-9cmoh7hy/review.json`, SHA-256
+`ae348ad5bdb3bad0f1e62e9bd9d398f1955a9e7f3924e881dd06cedbeb7415cf`;
+the earlier visual interpretations stay preserved privately with their conclusions superseded.
+
+One later normal Send produces exactly one `outage` witness from the original Bash/node/TTY and
+a real ACK in production capture, then clears the composer. The final journal is checked
+**92.719 seconds after that invocation**, with no duplicate. A guarded SSH transport-write receipt
+alone is not an application ACK; this separate witness/capture supplies that evidence. No lost
+reply is injected, and relay composed-input ticket/race semantics receive no credit.
+Private `proof/silent-ssh45-result.json` hashes to
+`0b710828a6f14fcf1015b26b570904de31c57ce05cbdf1865eef9152be40d6d8`;
+`silent-ssh-final-witness-root.json` to
+`7fdc378795882a1c0ed99a3b1bda08ee5f134486d4e1a34fac345c1cf043ec96`.
+
+Normal QA-profile Forget, exact public authorization restoration, owned reverse removal and
+15000-ms timeout restoration are recorded in `silent-ssh-root-phone-cleanup.json`, SHA-256
+`3bf9a78e1268b86d71b0d7cef8d7f5c6b95f233462b0c6401a94c36bc0c2d312`.
+The runner closes with exit 0/`passed:true` after its exact stop request. Retirement receipt
+`silent-ssh-root-final-retirement.json`, SHA-256
+`f3319b12002aa7456106966a1d640cb048b8136d7d2320a91f78cb743d98414f`, records all 13 captured
+generations retired, listeners absent, private authentication removed and 22 runtime tools,
+2510 inputs and 136 built outputs held. Its 519 excluded namespace-read permission denials make
+the scan non-exhaustive; this is owned SIGTERM retirement, not normal App Quit. Independent final
+review `beta21-silent-ssh45-final-cleanup-peer-_rhq3ufq/review.json` hashes to
+`b4669575ab81c0edc0dbb5242232477a786011f3702907f0084dc6bf3537641f`; its earlier visual limit is
+superseded by the raw-pixel correction above. Item 14's whole-host/network scope and the original
+**10 Pass / 22 Partial / 32 Pending** ledger remain unchanged. Native-history, held replies and
+wider lifecycle checks remain open; no source or wire change is required by this scoped pilot.
 
 ### Native Desktop capture and renderer reattach (2026-10-08)
 
@@ -3153,6 +3210,11 @@ permission request and the manifest are pinned in the source; how the dictation 
 on a phone is a device check.
 
 ## Device checklist
+
+A later Pixel 7a beta21 pilot verifies recovery from a 45-second stop of one old SSH peer,
+retained draft text/glyphs and one subsequent Send/application ACK. This narrower case does not
+pass item 14's whole-host/network scope or change the original 64-row results above. See
+[the bounded receipt](#silent-ssh-peer-recovery-and-single-send-2026-10-08).
 
 Partial results are recorded in "What is verified, and how": beta 10 / code 11 is installed on
 the intended Pixel 10 Pro, with its exact APK hash/retained signer, non-debuggable metadata,
