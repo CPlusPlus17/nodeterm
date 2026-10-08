@@ -6,12 +6,24 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
+**Held Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/direct-SSH
+case observes the exact newer 146-character draft with Send disabled before a measured
+9.000280-second post-execution receipt hold ends; after release the same draft remains with Send
+enabled. One original-TTY witness/ACK stays unique 168.735781 seconds later, with the original
+Bash/server/producer/socket/guard retained. Observed checkout `50e7a876`, Desktop build `0d8594a6`
+and installed beta21/code22 APK/source `ef4caec2` are distinct; no product or APK change occurs.
+Owned phone/host cleanup completes, with original timeout 15000 ms independently confirmed after
+an uncertain restore, without replay. Lost reply, network blackhole, remount/Ctrl during pending
+Send and native TLS/history remain unverified; the original **10/22/32** ledger is unchanged.
+See [the measured receipt hold](../docs/android.md#held-send-reply-and-newer-draft-2026-10-08).
+
+**Earlier nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
 fixture uses unchanged Desktop/build `0d8594a6` and stock beta21/APK source `ef4caec2`.
 One Send and a draft suffix return before the same SSH peer resumes, but the final newer-draft/
 disabled-Send XML observation misses the pause deadline; the original wrapper remains failed.
 Later XML retains the exact newer draft and saved pixels show its suffix; Send is enabled and one
-original-TTY witness/real ACK stays unique 125.310 seconds later. The strict timed race and lost-reply cases remain unverified.
+original-TTY witness/real ACK stays unique 125.310 seconds later. At that earlier checkpoint, the
+strict timed race and lost-reply cases were unverified; the failed wrapper remains preserved.
 See [the bounded follow-up](../docs/android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
 
 **Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
@@ -28,7 +40,7 @@ unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchang
 factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
 reload and input to the same original shell before/after it. The complete sibling capture and
 original daemon/Bash/producer/socket generations stay unchanged; owned retirement is verified.
-Android native-history/Live-overlay acceptance, silent network loss and held replies remain open.
+Android native-history/Live-overlay acceptance, silent network loss and native-route held/lost replies remain open.
 Installed beta21 and the original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 See [the native consumer receipt](../docs/android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
 

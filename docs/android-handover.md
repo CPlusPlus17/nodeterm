@@ -8,12 +8,24 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
+**Held Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/direct-SSH
+case observes the exact newer 146-character draft with Send disabled before a measured
+9.000280-second post-execution receipt hold ends; after release the same draft remains with Send
+enabled. One original-TTY witness/ACK stays unique 168.735781 seconds later, with the original
+Bash/server/producer/socket/guard retained. Observed checkout `50e7a876`, Desktop build `0d8594a6`
+and installed beta21/code22 APK/source `ef4caec2` are distinct; no product or APK change occurs.
+Owned phone/host cleanup completes, with original timeout 15000 ms independently confirmed after
+an uncertain restore, without replay. Lost reply, network blackhole, remount/Ctrl during pending
+Send and native TLS/history remain unverified; the original **10/22/32** ledger is unchanged.
+See [the measured receipt hold](android.md#held-send-reply-and-newer-draft-2026-10-08).
+
+**Earlier nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
 fixture uses unchanged Desktop/build `0d8594a6` and stock beta21/APK source `ef4caec2`.
 One Send and a draft suffix return before the same SSH peer resumes, but the final newer-draft/
 disabled-Send XML observation misses the pause deadline; the original wrapper remains failed.
 Later XML retains the exact newer draft and saved pixels show its suffix; Send is enabled and one
-original-TTY witness/real ACK stays unique 125.310 seconds later. The strict timed race and lost-reply cases remain unverified.
+original-TTY witness/real ACK stays unique 125.310 seconds later. At that earlier checkpoint, the
+strict timed race and lost-reply cases were unverified; the failed wrapper remains preserved.
 See [the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
 
 **Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
@@ -30,7 +42,7 @@ unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchang
 factories, retained capture of all 200 unique numbered markers with Unicode, one normal renderer
 reload and input to the same original shell before/after it. The complete sibling capture and
 original daemon/Bash/producer/socket generations stay unchanged; owned retirement is verified.
-Android native-history/Live-overlay acceptance, silent network loss and held replies remain open.
+Android native-history/Live-overlay acceptance, silent network loss and native-route held/lost replies remain open.
 Installed beta21 and the original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 See [the native consumer receipt](android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
 
@@ -596,13 +608,22 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### Held Send reply and newer draft (2026-10-08)
+
+A fresh Pixel 7a/beta21 direct-SSH case passes the measured post-execution receipt hold:
+the exact newer draft and disabled Send are observed before release, then the same draft remains
+with Send enabled. One original-TTY witness/ACK stays unique 168.735781 seconds later, with the
+original terminal/producer/guard retained. Owned cleanup completes; original timeout 15000 ms is
+confirmed after an uncertain restore without replay. Lost reply, blackhole and remount/Ctrl cases
+remain open. See [the measured receipt hold](android.md#held-send-reply-and-newer-draft-2026-10-08).
+
 ### Nine-second Send/newer-draft follow-up (2026-10-08)
 
 A fresh `d361ce8f`/Desktop `0d8594a6` fixture with unchanged beta21 returns one Send and a suffix
 input before its original peer resumes. The final new-draft/disabled-Send observation misses the
 nine-second deadline, so the wrapper remains failed. Later the exact newer draft and visible suffix
 remain with Send enabled; one original-TTY witness/ACK is still unique 125.310 seconds later.
-Owned cleanup completes; the strict timed race and lost replies remain unverified. See
+Owned cleanup completes; that earlier case verifies no strict timed race or lost reply. See
 [the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
 
 ### Silent SSH peer recovery (2026-10-08)
@@ -1816,14 +1837,16 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 **Silent SSH peer pilot:** automatic recovery, retained draft text/glyphs and one explicit
 Send/application ACK pass through one old-peer pause on shared loopback. Whole-host/network loss,
-cursor position and held/lost replies remain unverified. The initial image-preview rendering
+cursor position and lost replies remain unverified. The separate fresh retained-receipt case
+passes the newer-draft/disabled-Send boundary through release; network blackhole and remount/Ctrl
+during pending Send remain next steps. The initial image-preview rendering
 interpretation is withdrawn after raw-pixel comparison. See [the bounded case](android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
 
 **Login-shell probe (`A134`):** the source fix, caller controls, exact-revision gates/CI and one
 fresh original session-host create/visible Bash prompt are verified. A separate fresh consumer
 case now passes production native capture retention and ordinary renderer reload/input with the
 original daemon/Bash/producer/socket and untouched sibling. Next cover A129/A130 on the phone
-through their supported native route, silent network loss and held-reply races; canvas history
+through their supported native route, silent network loss and native-route held/lost-reply races; canvas history
 gestures, full rendered payload equality, the V13 child cause and whether fallback fired remain
 unverified. Preserve the installed beta21 artifact.
 
@@ -1856,7 +1879,8 @@ stay unverified. [Scoped receipts](android.md#fresh-fedora-output-and-native-des
 retain both negatives and exact owned cleanup without product attribution or A129/A130 acceptance.
 Controlled direct-SSH recovery, two active Home/resume cycles and explicit Send now pass as
 [separately scoped](android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
-Held Send receipt/draft/Ctrl races, silent network outages and wider lifecycle/notification cases remain.
+Native-route held replies, pending-Send remount/Ctrl races, silent network outages and wider
+lifecycle/notification cases remain.
 
 **Earlier beta-19 publication; current remaining `A129`/`A130` acceptance:** Signed `5bda2c32` is
 published with fresh forced 1015/106 protocol, offline app/full TypeScript and all-five/ten-step
@@ -2193,6 +2217,12 @@ of the new advertised action and receipt is owed to @eneskirca.
 
 Verified:
 
+- Fresh beta21/direct-SSH successful-receipt hold: exact newer draft and disabled Send before
+  release, the same draft retained/enabled afterward, one original-TTY witness/ACK still unique
+  168.735781 seconds later, unchanged original terminal/guard and owned cleanup. Lost reply,
+  blackhole, remount/Ctrl and native TLS/history stay unverified; see
+  [the measured receipt hold](android.md#held-send-reply-and-newer-draft-2026-10-08).
+
 - `A131` final focused control/restored passes 71 methods/8 suites, zero failures/errors/skips:
   11 new behavioral queue/page methods, three app source pins and existing lifecycle/input tests.
   Ten unchanged queue/page behavioral mutants and four final app source-pin mutants fail assertions.
@@ -2490,10 +2520,10 @@ capture retention and normal renderer reload/input with the same original kernel
 untouched sibling; canvas gestures and Android history remain unverified. The controlled shell
 comparison does not establish V13's child cause or whether fallback fired.
 Next are A129/A130 native app history/held Live-touch acceptance, whole-host/network loss,
-wider lifecycle/notification and held composed
-Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
-and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those
-paths. Keep beta 21 installed and preserve historical proofs and all unrelated profiles/panes.
+wider lifecycle/notification, lost SSH replies, network blackhole and remount/Ctrl during
+pending Send. The measured successful-receipt/newer-draft case passes separately. A105 rule
+persistence after CLI restart, genuine production-pane-child launch and the wider question/layout/
+platform matrix remain pending. The bounded sibling CLI passes do not cover those paths. Keep beta 21 installed and preserve historical proofs and all unrelated profiles/panes.
 
 Immediate FCM (A25) and fresh-different-desktop relay refusal (A93) need the hosted backend maintainers;
 the user has no backend repository to supply. A111 implements a host-owned launch API on current
