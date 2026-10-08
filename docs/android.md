@@ -5,13 +5,22 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
-An independent five-second timer settles PATH/environment probes when the child callback never
-arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
-37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
-and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
-acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+**Login-shell deadline (2026-10-08, A134 — published; original create verified).**
+Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
+full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
+[Run `37702852854`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37702852854), attempt 1, passes all five jobs and ten required steps.
+A fresh source-built Desktop observes one original Linux session-host create fulfill and display
+its Bash prompt, with zero PTY input. V13's child cause and whether fallback fired remain unknown;
+native history and its phone overlay remain pending. Installed beta21/source `ef4caec2` and the
+original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 See [the scoped source checkpoint](#login-shell-probe-completion-deadline-2026-10-08-a134).
+
+**Direct SSH continuity (2026-10-08, Pixel 7a / beta21).** Desktop `0d8594a6` with the unchanged
+stock APK/source `ef4caec2` passes controlled SSH-handler recovery, two active Home/resume cycles,
+draft retention and one explicit Send to the original tmux pane. The producer/server/socket and
+sibling guard remain unchanged. Phone cleanup is verified; the outer runner stop-accounting
+negative is preserved. Native-history/relay/notification and wider lifecycle cases stay open.
+See [the bounded continuity receipt](#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
 
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
@@ -668,9 +677,57 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
+### Direct SSH reconnect and active background continuity (2026-10-08)
+
+This fresh Pixel 7a pilot uses Desktop/build `0d8594a6` and the unchanged retained-signer stock
+beta21/code22 APK/source `ef4caec2`. Two original factory-created tmux panes and their kernel Bash
+owners are admitted. Only the phone SSH handler 658 receives SIGTERM: it retires, and automatic
+recovery creates viewer 1133/handler 1101 without reconnect input. Original producer 569, Bash 374,
+tmux server 373/socket and the entire sibling guard remain unchanged.
+
+The staged command is byte-identical after controlled loss and both normal Home/resume cycles.
+Producer write records advance **808→825** and **853→870** while the phone is on Home; the witness
+journal stays at zero invocations throughout. One explicit Send then creates exactly one `outage`
+witness invocation from the original Bash/node/TTY/script; native capture contains its ACK and
+`continuity-after-send.xml` has an empty composer. This is a controlled SSH-handler drop, not a
+45-second silent network outage or held-receipt race. Native-history/relay, port-22/TLS/FCM,
+iOS/Windows, wider lifecycle and the original 64-item ledger receive no acceptance credit.
+
+Private `nodeterm-new-phone-fixture-5ca5k3lt/proof/` retains
+`continuity-native-interrupt-handler-1791416998900172828-4064486-result.json`, SHA-256
+`bd3b9c5365713acb26b820ff5fd0f691cc9c904fa2a82a943f46f15509807f68`, and post-Send
+`continuity-native-observe-1791417127474220491-4070832-result.json`, SHA-256
+`806cce70f92fb60e4a667c9c4917f3140cfdef6fee6bca5a9a6ace7da1a67c03`.
+`root-phone-home-1-result.json` / `root-phone-home-2-result.json` hash to
+`af493a721eaf01bbeb8cd66d4410da1b4a02d79f0a55af3a5cec845b2c0c71b9` /
+`a245660ee0a6b0d2ac19409f2ea420a384c77d59cee7046777f72f52df9e7c52`.
+
+The custom fixture profile initially needs its private conventional `node-terminal` alias and
+normal Refresh for discovery. The original producer's READY-substring check misses a wrapped
+prompt; a read-only reconciliation admits that same once-started producer without replay or an
+original-helper success claim. These are fixture calibrations, not new product findings.
+Independent physical reviews `beta21-continuity-loss-independent-r2gidnqc/review.json`, SHA-256
+`d82d6a63a62939e76399a2a9f4145888c72bb2fa21aa59fb434a4bfda91d2654`, and
+`beta21-continuity-send-independent-p1i5jgkq/review.json`, SHA-256
+`f65e105beeba054102c7d8fb5c21850522ef442180fc26d66b0e2f78925e270f`, confirm these bounded
+cases. `proof/root-phone-cleanup.json`, SHA-256
+`0f2bc9f7cd20bcfd79582cc0186e714343fb4c73e76c0b7ad8f51c43846e0464`, records normal Forget
+of only the QA profile/Welcome, exact original authorization bytes, only the owned reverse removed,
+original 15000-ms timeout readback and unchanged APK/first-install/grant/private ADB generation.
+
+The outer `runner-result.json` remains **`passed:false`**, despite `exitCode:0` and held
+source/tools/outputs: root directly atomically publishes the exact-nonce stop request instead of
+signalling its launcher, so `intentionalStop` and `stopRequestWritten` stay false. The separate
+supervisor validates that request, sends owned app/server SIGTERM and observes both exit; this
+is not normal App Quit or an outer-runner success. Final
+`proof/root-final-retirement-reconciliation.json`, SHA-256
+`845b31a9d8b0ab2fd1247c245b996137c7014907d9f6365b3d7921ebe057a345`, verifies the original
+owned generations and listeners retired, generated authentication absent and source/tools/136 outputs
+held. Its 597 unrelated namespace-scan permission denials limit global process-absence claims.
+
 ### Login-shell probe completion deadline (2026-10-08, A134)
 
-The passive V13 diagnostic at `70fde6b0`, using unchanged `ef4caec2` Desktop outputs, admits the
+The earlier passive V13 diagnostic at `70fde6b0`, using unchanged `ef4caec2` Desktop outputs, admits the
 original renderer/main observers and one normal factory action. Its original create reaches
 `M1-path-before` but no later stage before the unchanged 100-second diagnostic bound. It sends
 zero producer input and does not establish native attachment, PTY/history or phone acceptance.
@@ -682,8 +739,9 @@ five-second Promise deadline. Failure preserves the inherited-PATH/null fallback
 cache/coalesced callers once; late callbacks cannot replace the result. Cleanup uses only the
 returned `ChildProcess`, signals it only while both exit fields are null, and releases its owned
 stdio. It never searches for or signals descendants, reused PIDs, process groups or other servers.
-Normal parsing and Windows behavior stay unchanged. Every push requires fresh exact-revision
-gates/CI; a real post-fix startup result remains pending.
+Normal parsing and Windows behavior stay unchanged. The signed source fix is `3f382367`;
+`0d8594a6` corrects six existing caller mocks to use Node's direct stdout callback. Every push
+requires fresh exact-revision gates/CI.
 
 Private `a129-native-v13-actual-stage-peer-j29xcq9l/review.json`, SHA-256
 `1c41cedcdc2619944b5a447263ab9b7ad2f8547b0474bf5905ae83b74075e586`, binds the actual stage
@@ -694,7 +752,7 @@ and **seven assertion-caught mutants** with healthy/restored leaf controls (29 p
 After correcting six caller mocks to use Node's direct stdout callback, the expanded nine-file
 union passes **161 tests**, with the same five Windows skips. The single-user regression also
 checks that desktop attachment preserves phone viewers; its separate `-D` mutant is caught.
-These checks do not establish real startup.
+Those controlled checks alone do not establish real startup.
 A separate controlled TERM-ignoring child comparison leaves the original unresolved at 6253.53 ms;
 the candidate settles null at 5006.04 ms with its exact child gone by 6254.08 ms and both namespaces
 empty after exit (`exec-path-real-comparison-zxccybzi/actual-ado4gout/receipt.json`, SHA-256
@@ -702,6 +760,26 @@ empty after exit (`exec-path-real-comparison-zxccybzi/actual-ado4gout/receipt.js
 Independent static source review `exec-path-deadline-independent-p2a62fmt/source-review.json`,
 SHA-256 `4bbf36ff60dbf9b738956309f3243f1da4aea9a4fe67f843b5634fa255ab3829`, reports no
 source issue; it does not independently execute the controls or establish runtime acceptance.
+The published `0d8594a6` checkpoint passes forced **1033 methods / 110 suites** without failures,
+errors or skips, offline app compilation, full TypeScript and **161 tests/nine affected files**
+with five known Windows-only skips. `a134-publication-41c5uiyz/gates.json`, SHA-256
+`83c5a6d7d645784b26c257e1e05a6b5f11d7e58347746ff0ab15f25743195d69`, and `ci-result.json`,
+SHA-256 `f3e058762bda093339e729784c427c75760749df6f6b20b598e6f15a136fffe6`, bind the
+exact source and [run `37702852854`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37702852854), attempt 1: all five jobs and ten required steps pass.
+
+Its fresh `94gqsiav` Desktop build uses that same source (2510 raw inputs, 136 outputs, 25.47 s).
+V14's one normal factory observes the original PATH wait settle, attach request 2 receive success,
+ready and renderer fulfillment for fresh persistent `pty-1`, and the visible `bash-5.3$` prompt.
+The original daemon/Bash identities agree in early/final records. It sends zero PTY input and
+performs no capture, producer, history or phone test; the diagnostic keeps acceptance flags false.
+This does not locate V13's child cause or show whether the independent fallback fired.
+`a129-native-v14-actual-independent-uu9npxeq/review.json`, SHA-256
+`171ec86b253559dacd6e1835ddb40012f16512a0ca7f3bf78db0597d65191de6`, independently reviews
+that bounded result. `native-session-host-run-stjrb_65/proof/root-cleanup-review.json`, SHA-256
+`c8998f3af47b0afaff586ae62913c1a118dda1a44c94d06d2022fbf6b965860c`, records exact owned
+retirement, an empty namespace and held source/tools/outputs; this is not normal App Quit.
+Native producer/history/new-intent, Android and Windows acceptance remain unverified.
+
 This shared Desktop fix also benefits iOS companion terminal creation: flag it for @eneskirca,
 with no mirror, RPC or wire change. Installed beta21/source `ef4caec2` and the original
 **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.

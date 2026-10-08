@@ -16,13 +16,22 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
-An independent five-second timer settles PATH/environment probes when the child callback never
-arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
-37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
-and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
-acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+**Login-shell deadline (2026-10-08, A134 — published; original create verified).**
+Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
+full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
+[Run `37702852854`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37702852854), attempt 1, passes all five jobs and ten required steps.
+A fresh source-built Desktop observes one original Linux session-host create fulfill and display
+its Bash prompt, with zero PTY input. V13's child cause and whether fallback fired remain unknown;
+native history and its phone overlay remain pending. Installed beta21/source `ef4caec2` and the
+original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 See [the scoped source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
+
+**Direct SSH continuity (2026-10-08, Pixel 7a / beta21).** Desktop `0d8594a6` with the unchanged
+stock APK/source `ef4caec2` passes controlled SSH-handler recovery, two active Home/resume cycles,
+draft retention and one explicit Send to the original tmux pane. The producer/server/socket and
+sibling guard remain unchanged. Phone cleanup is verified; the outer runner stop-accounting
+negative is preserved. Native-history/relay/notification and wider lifecycle cases stay open.
+See [the bounded continuity receipt](android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
 
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
@@ -398,10 +407,10 @@ lifecycle and FPS matrix remains open.
 | [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 installation was an earlier checkpoint; beta 21/code 22 is now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
 | [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
 
-| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 was installed at that checkpoint; beta 21 now passes bounded active-output/background and A133 same-page checks, with original A132 attribution and wider lifecycle acceptance pending · Buffered output and unready-page commands outlive their terminal viewer |
+| [A131](#a131) | medium | | small | phone/bug | ✅ source-fixed/published in `11fbff08`; focused 71/8 plus ten behavioral/four app source-pin mutants, full 1029/108/app/TS and CI five/ten pass; beta 20 was installed at that checkpoint; beta 21 passes bounded active-output/background, controlled direct-SSH recovery/draft/explicit Send and A133 same-page checks; original A132 attribution and wider lifecycle acceptance remain pending · Buffered output and unready-page commands outlive their terminal viewer |
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Original completion marker absent after all 1200 rows; fresh normal-Fedora 40-ms raw/capture discriminator passes, historical attribution pending |
 | [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
-| [A134](#a134) | medium | | small | desktop/bug | **Source-fixed; startup verification pending** · Independent five-second fallback and owned-child/pipe cleanup; focused 37/three files plus five Windows-only skips, seven caught mutants and full TS pass; real startup and native/phone acceptance pending |
+| [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; fresh original session-host create/Bash prompt verified without input; V13 cause/fallback and native-history/phone acceptance unverified · Login-shell probe can outlive its child timeout |
 
 ## A01
 
@@ -5308,8 +5317,9 @@ emulator provisioning and exact owned cleanup add no app/CA/APK proof. A129's ea
 **Buffered output and commands waiting for page readiness can outlive their terminal viewer**
 
 - Severity: **medium**; effort: small; area: phone; kind: bug.
-- Status: **Source-fixed/published in `11fbff08`; full gates/CI and beta-20 installation pass.
-  Bounded physical output/background checks are partial; A132/A133 remain open.**
+- Status: **Source-fixed/published in `11fbff08`; full gates/CI and beta-20 installation pass at
+  that earlier checkpoint. Beta21 bounded output/background and controlled SSH recovery/draft/Send
+  pass; original A132 attribution and wider lifecycle/races remain open.**
 
 At `644445aa`, `TerminalController` checks the viewer ticket before appending to a shared binary
 buffer. Its delayed flush carries no ticket, and backgrounding leaves that buffer scheduled.
@@ -5338,11 +5348,13 @@ The unchanged queue/page/test's first frozen window passes 32/3 control/restored
 behavioral mutants. The tightened final controller's separate 71/8 window catches four app
 source-pin mutants; the earlier three wiring variants are historical, not extra unique mutations.
 [Canonical receipts](android.md#viewer-output-lifetime-source-checks-2026-10-07-a131) bind actual
-compiled source, fresh XML and assertion failures. Fresh 1029/108/app/TypeScript and all-five/ten-step
-CI pass on `11fbff08`; retained-signer beta 20/code 21 is installed. Bounded direct-SSH observations
-show later rows in a resumed screenshot and keep the sibling guard scoped; active-production
-background overlap is unproven. A132/A133 require
-separate completion/exit-display attribution. Full physical lifecycle/race acceptance is not claimed.
+compiled source, fresh XML and assertion failures. At that earlier beta20 checkpoint, fresh
+1029/108/app/TypeScript and all-five/ten-step CI pass on `11fbff08`; the direct-SSH observations
+show later rows in a resumed screenshot, but active-production background overlap is unproven.
+A132/A133 then require separate completion/exit-display attribution. Later beta21 controlled
+SSH recovery, two active Home/resume cycles, draft retention and one explicit Send pass as
+[separately scoped](android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08);
+A133's closed-view checks are separate. Full physical lifecycle/race acceptance is not claimed.
 A129/A130 need a trusted relay/native-history route; direct SSH supplies no Live history overlay.
 The 64-item ledger remains **10 Pass / 22 Partial / 32 Pending**.
 
@@ -5439,11 +5451,11 @@ separately recorded in the linked checkpoint. No full-device or A129/A130 accept
 **Login-shell executable-resolution probe can outlive its child timeout**
 
 - Severity: **medium**; effort: small; area: desktop; kind: bug.
-- Status: **Source-fixed; focused controls pass; real startup and native/phone acceptance pending.**
+- Status: **Source-fixed/published; original session-host create/visible prompt verified; native-history/phone acceptance pending.**
 
 `execFile`'s timeout sends a signal, while its callback can still await process/stream completion.
 The shared PATH/environment resolver previously relied on that callback to settle cached callers.
-The passive original-create diagnostic at `70fde6b0` reaches the PATH await and no later stage
+The earlier passive original-create diagnostic at `70fde6b0` reaches the PATH await and no later stage
 within its bound; the actual child's signal/profile/stream cause is unproven. This does not prove
 native attachment or a shell absence, and the earlier V8/V9 negatives remain separate.
 
@@ -5453,7 +5465,10 @@ and releases that child's pipes; no descendant/PID/group search or global termin
 Parsing, shared-cache/coalescing, inherited fallback and Windows behavior remain. Focused checks
 pass: 37 tests/three affected files, five existing Windows-only skips, seven assertion-caught mutants
 with healthy/restored controls and full TypeScript. A separate controlled real-child comparison
-also passes; real startup remains pending and every push requires fresh full gates/CI. See the
+also passes. Published `3f382367`/`0d8594a6` pass fresh 1033/110/app/TypeScript, 161 affected tests
+with five Windows-only skips and CI five/ten. Fresh V14's original session-host create fulfills and
+shows its Bash prompt without PTY input; V13 cause/fallback and native-history/phone acceptance
+remain unverified. Every push still requires fresh exact-revision gates/CI. See the
 [canonical stage/source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
 This shared Desktop behavior also benefits the iOS companion; @eneskirca needs no wire change.
 The installed beta21 artifact and original 64-row ledger are unchanged.

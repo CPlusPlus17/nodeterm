@@ -8,13 +8,22 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
-An independent five-second timer settles PATH/environment probes when the child callback never
-arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
-37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
-and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
-acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+**Login-shell deadline (2026-10-08, A134 — published; original create verified).**
+Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
+full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
+[Run `37702852854`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37702852854), attempt 1, passes all five jobs and ten required steps.
+A fresh source-built Desktop observes one original Linux session-host create fulfill and display
+its Bash prompt, with zero PTY input. V13's child cause and whether fallback fired remain unknown;
+native history and its phone overlay remain pending. Installed beta21/source `ef4caec2` and the
+original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 See [the scoped source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
+
+**Direct SSH continuity (2026-10-08, Pixel 7a / beta21).** Desktop `0d8594a6` with the unchanged
+stock APK/source `ef4caec2` passes controlled SSH-handler recovery, two active Home/resume cycles,
+draft retention and one explicit Send to the original tmux pane. The producer/server/socket and
+sibling guard remain unchanged. Phone cleanup is verified; the outer runner stop-accounting
+negative is preserved. Native-history/relay/notification and wider lifecycle cases stay open.
+See [the bounded continuity receipt](android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
 
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
@@ -561,13 +570,22 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### Direct SSH continuity (2026-10-08)
+
+Desktop `0d8594a6` with the unchanged stock beta21 APK passes a controlled handler drop/automatic
+recovery, two Home/resume cycles during active output, retained draft and one explicit Send.
+Original producer/server/Bash/socket and the entire sibling guard stay unchanged. Phone cleanup
+is verified; the supervisor stop and outer runner accounting negative stay separate. This does not
+cover silent network outages, held replies or the native-history relay route. See the
+[bounded continuity receipt](android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
+
 ### Login-shell completion deadline (2026-10-08, A134)
 
-Passive original-create records stop at the PATH wait, without classifying the child cause.
-The local shared Desktop helper now settles fallback on its own five-second timer and releases
-only its returned child/pipes. Focused checks pass (37 tests/three files, five Windows-only skips,
-seven caught mutants and full TypeScript); real startup verification remains pending.
-Installed beta21 and native/phone acceptance are unchanged. See the
+The signed source/caller checkpoints `3f382367`/`0d8594a6` pass forced 1033/110/app/TypeScript,
+161 affected tests with five Windows-only skips, and all-five/ten-step CI run `37702852854`.
+A fresh source-built V14 diagnostic observes one original session-host create fulfill and its Bash
+prompt without PTY input; exact owned retirement is verified. V13's child cause/fallback remains
+unknown. Native history and its phone overlay stay pending; installed beta21 is unchanged. See the
 [scoped source checkpoint](android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
 
 ### Fresh native diagnostics and Browser/Share pilot (2026-10-08)
@@ -1741,11 +1759,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**Login-shell probe (`A134`):** the independent deadline and focused/mutation controls are complete.
-The controlled real-child comparison also passes. Run the required checks before each push,
-then observe one original native create through settlement without PTY probes or replay.
-The concrete child cause and A129/A130 native/phone acceptance remain unverified;
-preserve the installed beta21 artifact.
+**Login-shell probe (`A134`):** the source fix, caller controls, exact-revision gates/CI and one
+fresh original session-host create/visible Bash prompt are verified. This is not native history,
+producer/input, reload or native-route phone acceptance. Next cover those original-owned consumer paths and
+A129/A130 through their supported native route; the V13 child cause and whether fallback fired
+remain unknown. Preserve the installed beta21 artifact.
 
 **Viewer queue follow-up (`A131`):** source is fixed/published in `11fbff08`. Current
 `ef4caec2` passes forced 1033/110/app/TypeScript and all-five/ten-step CI; retained-signer beta
@@ -1769,12 +1787,14 @@ A129/A130 need trusted HTTPS/WSS and real native/session-host relay; direct SSH 
 overlay. Separate V8/V9 native Desktop pilots stop at empty capture before producer input.
 V8's eight-second gate is shorter than supported cold-create budgets. V9's 30-second gate still
 has 280 empty captures; two complete ten-thread snapshots observe different empty daemon
-generations, not proven original creation or attachment. The later passive V13 observation reaches
-only the original PATH wait. A134 locally bounds that probe; after required checks, use one fresh
-original startup observation without replay. Native/phone acceptance and the child cause stay
-unverified. [Scoped receipts](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
+generations, not proven original creation or attachment. The earlier passive V13 observation
+reaches only the original PATH wait; after the A134 fix, fresh V14 observes its original create
+fulfill and Bash prompt without input. Native history/phone acceptance and the V13 child cause
+stay unverified. [Scoped receipts](android.md#fresh-fedora-output-and-native-desktop-readiness-2026-10-08)
 retain both negatives and exact owned cleanup without product attribution or A129/A130 acceptance.
-Held Send receipt/draft/Ctrl races, uncertainty and wider lifecycle/notification cases remain.
+Controlled direct-SSH recovery, two active Home/resume cycles and explicit Send now pass as
+[separately scoped](android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
+Held Send receipt/draft/Ctrl races, silent network outages and wider lifecycle/notification cases remain.
 
 **Earlier beta-19 publication; current remaining `A129`/`A130` acceptance:** Signed `5bda2c32` is
 published with fresh forced 1015/106 protocol, offline app/full TypeScript and all-five/ten-step
@@ -2402,11 +2422,11 @@ current availability/wake authorization persists; do not repeatedly request unlo
 trusted endpoint and usable foreground are valid. Obtain a current main Wireless debugging
 endpoint only if that trusted connection is unavailable. Every new physical case requires a fresh
 owned fixture and untouched sibling guard; never restart a retired fixture. Resume the expanded
-64-item checklist without inheriting older passes for new flows. First finish A134's required
-publication checks, then one fresh original native-create observation with no capture/input replay.
-Its controlled real-child comparison passes; the observed PATH wait does not prove its child cause.
-Next are A129/A130 native app
-history/held Live-touch acceptance, remaining lifecycle/background/notification and held composed
+64-item checklist without inheriting older passes for new flows. A134's exact-revision gates/CI
+and fresh original native create/visible prompt pass, without PTY input or history acceptance;
+its controlled comparison does not establish V13's child cause or whether fallback fired.
+Next are original-owned native producer/history/reattach checks and A129/A130 native app
+history/held Live-touch acceptance, wider lifecycle/notification and held composed
 Send races, A105 rule persistence after CLI restart and genuine production-pane-child launch,
 and the wider question/layout/platform matrix. The bounded sibling CLI passes do not cover those
 paths. Keep beta 21 installed and preserve historical proofs and all unrelated profiles/panes.

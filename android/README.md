@@ -6,13 +6,22 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Login-shell deadline (2026-10-08, A134 — source fix; startup verification pending).**
-An independent five-second timer settles PATH/environment probes when the child callback never
-arrives, with cleanup limited to the returned live child and its pipes. Focused checks pass:
-37 tests in three affected files, five existing Windows-only skips, seven assertion-caught mutants
-and full TypeScript. The observed PATH wait does not establish the child cause or native/phone
-acceptance. Installed beta21/source `ef4caec2` and the original 10/22/32 ledger are unchanged.
+**Login-shell deadline (2026-10-08, A134 — published; original create verified).**
+Signed, pushed `3f382367`/`0d8594a6` pass forced **1033 methods / 110 suites**, offline app compilation,
+full TypeScript and **161 tests in nine affected Vitest files**, with five known Windows-only skips.
+[Run `37702852854`](https://github.com/CPlusPlus17/nodeterm/actions/runs/37702852854), attempt 1, passes all five jobs and ten required steps.
+A fresh source-built Desktop observes one original Linux session-host create fulfill and display
+its Bash prompt, with zero PTY input. V13's child cause and whether fallback fired remain unknown;
+native history and its phone overlay remain pending. Installed beta21/source `ef4caec2` and the
+original **10 Pass / 22 Partial / 32 Pending** ledger are unchanged.
 See [the scoped source checkpoint](../docs/android.md#login-shell-probe-completion-deadline-2026-10-08-a134).
+
+**Direct SSH continuity (2026-10-08, Pixel 7a / beta21).** Desktop `0d8594a6` with the unchanged
+stock APK/source `ef4caec2` passes controlled SSH-handler recovery, two active Home/resume cycles,
+draft retention and one explicit Send to the original tmux pane. The producer/server/socket and
+sibling guard remain unchanged. Phone cleanup is verified; the outer runner stop-accounting
+negative is preserved. Native-history/relay/notification and wider lifecycle cases stay open.
+See [the bounded continuity receipt](../docs/android.md#direct-ssh-reconnect-and-active-background-continuity-2026-10-08).
 
 **Beta 21 published and installed (2026-10-07 — bounded closed SSH display verified).**
 Signed, pushed `ef4caec2` passes forced **1033 methods / 110 suites**, zero failures/errors/skips,
