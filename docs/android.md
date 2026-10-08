@@ -5,13 +5,14 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Pending Send after remount (2026-10-08, A137 — source fixed; local checks pass).**
-Pending Send state and outcome guidance now belong to the retained terminal entry. Button and IME
-share exact-attempt admission; earlier uncertainty survives remount and a later known refusal until
-explicit dismissal. Focused66/9, full1069/116 and offline app compilation pass; thirteen intended
-mutants are caught. Publication, a new APK and the controlled pending-Send phone case remain pending.
-Installed beta22/code23 remains source `2ba0b142`; the original **10 Pass / 22 Partial / 32 Pending**
-ledger is unchanged. See [the scoped finding](#pending-send-outcome-after-remount-2026-10-08-a137).
+**Pending Send after remount (2026-10-08, A137 — published; beta23 prepared).**
+Pending Send state and guidance belong to the retained entry, with exact button/IME admission and
+uncertainty preserved until dismissal. Source `b9e4cbc7` passes focused66/9, thirteen intended mutants,
+fresh1069/116/offline app and CI37740459063 all-five/ten-step. Retained-signer beta23/code24 is
+prepared and reviewed with 46 available SDK36/R8/metadata checks; actual SDK37 verification is absent.
+A read-only pre-install snapshot refused before any update dispatch. Installation and the controlled
+pending-Send phone case remain unverified; beta22/code23/source `2ba0b142` is last verified installed.
+The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged. See [the scoped finding](#pending-send-outcome-after-remount-2026-10-08-a137).
 
 **Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
 retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
@@ -763,7 +764,7 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ### Pending Send outcome after remount (2026-10-08, A137)
 
-**Source fixed; local checks pass.** Before this change, at observed checkout `bb519eac`, installed
+**Source fixed and published; beta23 prepared.** Before this change, at observed checkout `bb519eac`, installed
 beta22/code23 and the archived Desktop build both used source `2ba0b142`. `TerminalDrafts.State` retains the
 editor/revision/Ctrl, while `TerminalController` owns only local `submitting` and `notice`. A normal
 PairHost cover disposes that controller. `TerminalActions` resolves queued input as REFUSED or
@@ -787,9 +788,33 @@ Android wiring methods, focused healthy/restored **66 methods / 9 suites**, full
 remain. The thirteen final variants catch their intended assertions: ten behavior and three wiring
 mutants, with no errors or skips. Source/Android delegation review passes; this grants no physical
 WebView/Handler/Compose timing credit. The whole suite includes the existing isolated SSH/tmux/desktop
-interop; new A137 cases execute entry/actor policy and lexical Android checks. Signed-source gates/CI,
-a new APK/update and the fresh
-controlled pending-Send cover/Back comparison remain pending. The original 64-item ledger is unchanged.
+interop; new A137 cases execute entry/actor policy and lexical Android checks.
+
+**Publication and artifact review pass.** Signed source `b9e4cbc746e9a405844df9985f07cf47acef5607`
+passes fresh forced **1069 methods / 116 suites**, zero failures/errors/skips, and offline app compilation.
+[CI37740459063](https://github.com/CPlusPlus17/nodeterm/actions/runs/37740459063), attempt 1, passes all
+five jobs and ten required steps at that exact source. Retained-signer `0.1.0-beta.23` / code `24`
+uses the same artifact source, APK SHA-256
+`a0c336b5fb2dee849f27bc4af1cbdccaf4460828110a87322e6323cfc2a9a3a2`.
+All 46 available artifact checks pass, including actual SDK36 signature/alignment, R8 and public metadata;
+actual SDK37 artifact verification remains unverified. Archived Desktop build/source `2ba0b142` is unchanged.
+
+**Installation and physical comparison remain unverified.** A read-only pre-install snapshot refused
+with no available Pixel transport; no update was dispatched. Beta22/code23/source `2ba0b142` is last
+verified installed. A fresh controlled pending-Send cover/Back check still needs actual update and
+fresh owned viewer/native admissions. Source tests and A136's no-Send pass grant no physical pending-Send
+or duplicate-execution credit. The original 64-item ledger is unchanged.
+
+Private publication records: `pending-send-publication-zl2sk4sl/gates.json`, SHA-256
+`728e7658595a06cf55179112027ca75dd44164c812df42ae996d00a39679a9f0`, and independent
+`a137-publication-saved-independent-ly_qo2dg/review.json`, SHA-256
+`36513b83ccfe3a989a8ec1bc62da55a2e6ab14a806b171fb830d14ab53a08bbb`.
+Artifact records: `beta23-send-recipes-q06owcwo/build/artifact-review.json`, SHA-256
+`8e507c30335cd70f762c5dcdb5a9942a1815d1635490f82063a24a972cf39bf2`, and
+`beta23-send-recipes-q06owcwo/artifacts/beta-metadata.json`, SHA-256
+`efdc88f2f3897584038f97d62dedfdcd104e6febe2d11b77298289fe18fd92b4`.
+Independent artifact review `beta23-artifact-saved-independent-n6mszggd/review.json`, SHA-256
+`91ada275643e9f64c861335e80adc393b43ea73decf5c517e708945bb696a45a`, adds no install or phone credit.
 The final mutation receipt is `pending-send-entry-candidate-6pciadbm/proof-final/mutation-receipt.json`,
 SHA-256 `2b72eb43ef1b467d4367f8a7725fc22bc1efc062c0ae090c03fdfd93ea1944c3`.
 iOS @eneskirca should compare local entry-owned attempt/guidance lifetimes and stale clearing.

@@ -16,13 +16,14 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Pending Send after remount (2026-10-08, A137 — source fixed; local checks pass).**
-Pending Send state and outcome guidance now belong to the retained terminal entry. Button and IME
-share exact-attempt admission; earlier uncertainty survives remount and a later known refusal until
-explicit dismissal. Focused66/9, full1069/116 and offline app compilation pass; thirteen intended
-mutants are caught. Publication, a new APK and the controlled pending-Send phone case remain pending.
-Installed beta22/code23 remains source `2ba0b142`; the original **10 Pass / 22 Partial / 32 Pending**
-ledger is unchanged. See [the scoped finding](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
+**Pending Send after remount (2026-10-08, A137 — published; beta23 prepared).**
+Pending Send state and guidance belong to the retained entry, with exact button/IME admission and
+uncertainty preserved until dismissal. Source `b9e4cbc7` passes focused66/9, thirteen intended mutants,
+fresh1069/116/offline app and CI37740459063 all-five/ten-step. Retained-signer beta23/code24 is
+prepared and reviewed with 46 available SDK36/R8/metadata checks; actual SDK37 verification is absent.
+A read-only pre-install snapshot refused before any update dispatch. Installation and the controlled
+pending-Send phone case remain unverified; beta22/code23/source `2ba0b142` is last verified installed.
+The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged. See [the scoped finding](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
 
 **Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
 retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
@@ -499,7 +500,7 @@ lifecycle and FPS matrix remains open.
 | [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; original create/Bash prompt plus fresh native 200-marker capture/reload/input continuity verified; V13 cause/fallback and native-history phone/gesture acceptance unverified · Login-shell probe can outlive its child timeout |
 | [A135](#a135) | medium | | small | input/bug | ✅ source fixed; five policy/three wiring methods and three policy/one wiring mutants pass; published/installed beta22; physical timing acceptance pending · Delayed raw-input consumption can clear newly armed Ctrl |
 | [A136](#a136) | medium | | small | phone/bug | ✅ source fixed; original beta21 loses draft/Ctrl on retained-entry remount; nine policy/three wiring methods and seven policy/one wiring mutants pass; published/installed beta22; one no-Send remount retains draft/Ctrl, broader acceptance pending · Retained terminal entry loses its editor when composition is removed |
-| [A137](#a137) | medium | | small | input/bug | ✅ source fixed; twelve behavior/three wiring methods, ten behavior/three wiring mutants, full1069/116/offline app pass; publication/new APK/phone pending; no physical duplicate or automatic retry claim · Retained terminal remount loses pending Send state and outcome guidance |
+| [A137](#a137) | medium | | small | input/bug | ✅ source fixed; twelve behavior/three wiring methods, ten behavior/three wiring mutants, full1069/116/offline app and exact-head CI five/ten pass; published `b9e4cbc7`, beta23/code24 prepared; install/phone unverified; no physical duplicate or automatic retry claim · Retained terminal remount loses pending Send state and outcome guidance |
 
 ## A01
 
@@ -5638,7 +5639,7 @@ change; iOS @eneskirca should compare local editor lifetime.
 **Retained terminal remount loses pending Send state and outcome guidance**
 
 - Severity: **medium**; effort: small; area: Android input/navigation; kind: bug.
-- Status: **Source fixed; local checks pass; publication/new APK/phone pending.**
+- Status: **Published at `b9e4cbc7`; beta23/code24 prepared and reviewed; installation/phone comparison unverified.**
 
 Before the fix, the entry retained its editor/Ctrl, but a replacement controller started without the
 old pending state or uncertainty notice. Once reattached it could offer Send for that draft without prior
@@ -5647,7 +5648,10 @@ The fix shares button/IME admission through one entry-owned identity attempt, pr
 visible uncertainty notice across remount and later refusal, and seals retired handles. Original
 viewer/stream/actor and editor/Ctrl revision fences still prevent stale positive clearing. Twelve
 behavior and three wiring methods pass, with ten behavior/three wiring mutants caught. Full1069/116
-and offline app pass; signed publication/new APK and controlled fixed-phone comparison remain pending.
-Installed beta22 and A136's no-Send evidence are unchanged; the original
-64-item ledger is unchanged. No host wire or process-death persistence change; iOS @eneskirca should
+and offline app pass; fresh exact-source gates and CI37740459063 attempt 1 pass all five jobs/ten
+required steps. Retained-signer beta23/code24/source `b9e4cbc7` passes 46 available SDK36/R8/metadata
+artifact checks; actual SDK37 remains unverified. Pre-install snapshot refusal occurred before update
+dispatch. Beta22/code23/source `2ba0b142` is last verified installed; guarded installation and the
+controlled pending-Send phone comparison remain unverified. A136's no-Send evidence and the original
+64-item ledger are unchanged. No host wire or process-death persistence change; iOS @eneskirca should
 compare local entry-owned attempt/guidance lifetime. [Full scope](android.md#pending-send-outcome-after-remount-2026-10-08-a137).

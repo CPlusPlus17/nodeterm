@@ -8,13 +8,14 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Pending Send after remount (2026-10-08, A137 — source fixed; local checks pass).**
-Pending Send state and outcome guidance now belong to the retained terminal entry. Button and IME
-share exact-attempt admission; earlier uncertainty survives remount and a later known refusal until
-explicit dismissal. Focused66/9, full1069/116 and offline app compilation pass; thirteen intended
-mutants are caught. Publication, a new APK and the controlled pending-Send phone case remain pending.
-Installed beta22/code23 remains source `2ba0b142`; the original **10 Pass / 22 Partial / 32 Pending**
-ledger is unchanged. See [the scoped finding](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
+**Pending Send after remount (2026-10-08, A137 — published; beta23 prepared).**
+Pending Send state and guidance belong to the retained entry, with exact button/IME admission and
+uncertainty preserved until dismissal. Source `b9e4cbc7` passes focused66/9, thirteen intended mutants,
+fresh1069/116/offline app and CI37740459063 all-five/ten-step. Retained-signer beta23/code24 is
+prepared and reviewed with 46 available SDK36/R8/metadata checks; actual SDK37 verification is absent.
+A read-only pre-install snapshot refused before any update dispatch. Installation and the controlled
+pending-Send phone case remain unverified; beta22/code23/source `2ba0b142` is last verified installed.
+The original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged. See [the scoped finding](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
 
 **Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
 retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
@@ -661,7 +662,10 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 Source tracing confirms that retained editor state outlives controller-local pending/outcome state.
 The entry-owned attempt/guidance fix preserves original viewer/revision fences and uncertainty
 across a later known refusal. Focused66/9, full1069/116, offline app and thirteen intended mutants
-pass. Source publication/new APK and fixed-phone comparison remain pending; [canonical scope](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
+pass. Source `b9e4cbc7` is published with fresh1069/116/offline app and CI37740459063 five/ten passing;
+retained-signer beta23/code24 passes 46 available artifact checks. Pre-install snapshot refusal means no
+update was dispatched; beta22 is last verified installed and the controlled phone comparison remains
+unverified. See [canonical scope](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
 
 ### Beta22 publication, update and bounded remount (2026-10-08)
 
@@ -1926,9 +1930,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**A137 follow-up:** local behavior/mutation/full1069/116/offline app and source review pass.
-Publish/install the verified source, then measure one fresh pending-Send cover/Back case with
-unique native execution. The source gap does not establish physical duplication or automatic retry.
+**A137 follow-up:** source `b9e4cbc7`, fresh1069/116/offline app and exact-head CI five/ten pass;
+retained-signer beta23/code24 is prepared and reviewed. Installation remains unverified after the
+pre-install snapshot refusal, with no update dispatch. Once the intended Pixel route is admitted,
+perform the guarded update and measure one fresh pending-Send cover/Back case with unique native
+execution. The source gap does not establish physical duplication or automatic retry.
 
 **A136 follow-up:** publication, beta22/code23 update and one no-Send remount comparison pass.
 Owned cleanup is verified with the uncertain timeout result preserved and 15000 read back. Verify
@@ -2320,8 +2326,11 @@ of the new advertised action and receipt is owed to @eneskirca.
 
 A137's source fix keeps exact attempt/notice identities through retained-entry remount while
 preserving original positive-clearing fences. Local66/9, full1069/116, offline app and thirteen
-intended mutants pass. Publication/new APK and fixed-phone acceptance remain pending; A136's no-Send pass
-provides no pending-Send credit. See [canonical scope](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
+intended mutants pass. Published source `b9e4cbc7` also passes fresh1069/116/offline app and CI five/ten;
+retained-signer beta23/code24 passes its 46 available artifact checks. Installation and the controlled
+phone case remain unverified: the pre-install snapshot refused before any update dispatch. Beta22 is
+last verified installed; A136's no-Send pass provides no pending-Send credit.
+See [canonical scope](android.md#pending-send-outcome-after-remount-2026-10-08-a137).
 
 A136 original-beta loss stays historical. Source/policy/mutation and beta22 installation pass;
 one fresh no-Send PairHost/Back retains the exact draft/checked Ctrl. Original native controls
@@ -2649,14 +2658,16 @@ retains draft/Ctrl and its fixture/profile/auth/reverse are retired. Original150
 read back after the sole restore uncertainty without replay. Original beta21 loss stays historical.
 Selection/IME/activity recreation and pending-Send/Ctrl follow-ups still need measurement.
 A137 now identifies a source-confirmed pending/outcome visibility gap across retained-entry remount.
-Local checks and source review of the exact-attempt/retained-guidance fix pass. Publish its verified
-source/new APK, then measure a fresh pending-Send cover/Back case. Do not remove stale-viewer/revision fences,
-replay an old command or treat A136's no-Send pass as pending-Send acceptance.
+The exact-attempt/retained-guidance fix is published at `b9e4cbc7`; fresh1069/116/offline app,
+CI37740459063 five/ten and retained-signer beta23/code24 artifact review pass. No update was dispatched
+after the read-only pre-install snapshot refused. Revalidate the intended Pixel route, perform the
+guarded in-place update, then measure a fresh pending-Send cover/Back case. Do not remove original
+viewer/revision fences, replay an old command or treat A136's no-Send pass as pending-Send acceptance.
 Next are A129/A130 native app history/held Live-touch acceptance, whole-host/network loss,
 wider lifecycle/notification, native-route lost replies, network blackhole and remount/Ctrl during
 pending Send. The measured held- and lost-successful-receipt/newer-draft cases pass separately. A105 rule
 persistence after CLI restart, genuine production-pane-child launch and the wider question/layout/
-platform matrix remain pending. The bounded sibling CLI passes do not cover those paths. Keep beta22 installed and preserve historical proofs and all unrelated profiles/panes.
+platform matrix remain pending. The bounded sibling CLI passes do not cover those paths. Beta22 is last verified installed; preserve historical proofs and all unrelated profiles/panes during the guarded update.
 
 Immediate FCM (A25) and fresh-different-desktop relay refusal (A93) need the hosted backend maintainers;
 the user has no backend repository to supply. A111 implements a host-owned launch API on current
