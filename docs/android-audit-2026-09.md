@@ -16,6 +16,14 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
+fixture uses unchanged Desktop/build `0d8594a6` and stock beta21/APK source `ef4caec2`.
+One Send and a draft suffix return before the same SSH peer resumes, but the final newer-draft/
+disabled-Send XML observation misses the pause deadline; the original wrapper remains failed.
+Later XML retains the exact newer draft and saved pixels show its suffix; Send is enabled and one
+original-TTY witness/real ACK stays unique 125.310 seconds later. The strict timed race and lost-reply cases remain unverified.
+See [the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
+
 **Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
 `04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
 admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
@@ -5087,6 +5095,13 @@ compiled callback recipe `/tmp/nodeterm-a127-verify.py`, SHA-256
 `4956f76e79041e585bf9312395d24ccaa1af341539928f73d3cf3cb850e257cc`.
 
 ## A128
+
+**2026-10-08 physical follow-up (bounded partial):** One normal Send and a newer-draft suffix
+return before a nine-second pause of the original SSH peer ends. The final required XML observation
+misses that deadline, preserving the wrapper failure. Later the exact newer draft remains visible
+with Send enabled and one original-TTY witness/ACK stays unique 125.310 seconds later. This is no
+strict timed-race, post-write held-result or lost-reply pass; the installed beta21/source `ef4caec2`
+and original 64-row ledger stay unchanged. See [the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
 
 **2026-10-07 backend follow-up:** Current local relay Send also routes to the captured direct
 native Windows PTY or a session host negotiating `composed-input-v1`. Internal v2

@@ -8,6 +8,14 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
+**Nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
+fixture uses unchanged Desktop/build `0d8594a6` and stock beta21/APK source `ef4caec2`.
+One Send and a draft suffix return before the same SSH peer resumes, but the final newer-draft/
+disabled-Send XML observation misses the pause deadline; the original wrapper remains failed.
+Later XML retains the exact newer draft and saved pixels show its suffix; Send is enabled and one
+original-TTY witness/real ACK stays unique 125.310 seconds later. The strict timed race and lost-reply cases remain unverified.
+See [the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
+
 **Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
 `04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
 admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
@@ -587,6 +595,15 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Nine-second Send/newer-draft follow-up (2026-10-08)
+
+A fresh `d361ce8f`/Desktop `0d8594a6` fixture with unchanged beta21 returns one Send and a suffix
+input before its original peer resumes. The final new-draft/disabled-Send observation misses the
+nine-second deadline, so the wrapper remains failed. Later the exact newer draft and visible suffix
+remain with Send enabled; one original-TTY witness/ACK is still unique 125.310 seconds later.
+Owned cleanup completes; the strict timed race and lost replies remain unverified. See
+[the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
 
 ### Silent SSH peer recovery (2026-10-08)
 

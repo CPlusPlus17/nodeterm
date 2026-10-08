@@ -5,6 +5,14 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
+fixture uses unchanged Desktop/build `0d8594a6` and stock beta21/APK source `ef4caec2`.
+One Send and a draft suffix return before the same SSH peer resumes, but the final newer-draft/
+disabled-Send XML observation misses the pause deadline; the original wrapper remains failed.
+Later XML retains the exact newer draft and saved pixels show its suffix; Send is enabled and one
+original-TTY witness/real ACK stays unique 125.310 seconds later. The strict timed race and lost-reply cases remain unverified.
+See [the bounded follow-up](#nine-second-send-and-newer-draft-follow-up-2026-10-08).
+
 **Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
 `04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
 admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
@@ -742,6 +750,50 @@ review `beta21-silent-ssh45-final-cleanup-peer-_rhq3ufq/review.json` hashes to
 superseded by the raw-pixel correction above. Item 14's whole-host/network scope and the original
 **10 Pass / 22 Partial / 32 Pending** ledger remain unchanged. Native-history, held replies and
 wider lifecycle checks remain open; no source or wire change is required by this scoped pilot.
+
+### Nine-second Send and newer-draft follow-up (2026-10-08)
+
+The fresh `nodeterm-new-phone-fixture-p4w1lpc2` uses docs-only checkout `d361ce8f`, immutable
+Desktop/build `0d8594a6` and unchanged installed Pixel 7a beta21/code22 APK/source `ef4caec2`.
+Only its admitted original SSH peer is paused for **9.000066 seconds** and resumed through the same
+pidfd. Original viewer 633/peer 573, target Bash 377/TTY `/dev/pts/1`, producer 987, tmux server
+375/socket and sibling Bash 458/whole capture remain unchanged.
+
+One normal Send and the suffix input both return before actual SIGCONT. The middle XML observes
+the original 125-character focused draft with Send disabled and no connection/exit/uncertainty
+overlay. The final newer-draft/disabled-Send XML observation crosses the resume deadline, so
+`held-send-nine-ui-result.json` keeps **`passed:false`**; no strict pre-resume race pass is claimed.
+Disabled Send alone does not establish SSH dispatch, and the dispatch phase before resume is
+unobserved. The independently controlled lease passes without replay or extending its deadline.
+
+After completion, XML retains the exact 146-character draft ending `NEXT_UNSENT_553007ef`, with
+Send enabled and no connection/exit/uncertainty overlay. Saved PNG/crop inspection confirms visible
+suffix text; it supplies neither exact OCR nor pre-resume glyph evidence. The original Bash/node/TTY
+executes exactly one witness and production capture contains its real ACK; the journal is still
+at one invocation **125.310 seconds later**. The suffix is not sent automatically.
+
+Private `proof/held-send-nine-ui-result.json` / `held-send-nine-result.json` hash to
+`c7475dba4ecadd0faa9d9c635f9b7ca5565fcac4bee702ceb5c8ea2187ef3094` /
+`486585fcdeab5b4d09bfd8a692cf1862a636a2b7aabea32e02d933102e88830e`.
+`held-send-final-witness.json` hashes to
+`58017ce64dc4d626125138a11f0a2c52bf04098a35460a8c7c83173685574a82`;
+independent partial review `beta21-held-send-nine-partial-peer-y59ymx4j/review.json` to
+`bdbce739393853beaeeeac56a5271f0cada3fee8bb9eacbb04cc2bd6ec71973b`.
+
+Normal own-profile Forget, exact authorization restoration and reverse removal complete; the
+stock APK/install/grant stay unchanged. A fresh readback reconciles timeout **15000 ms** while
+preserving the original restore helper's uncertain result, with no setting replay. Phone cleanup
+`proof/silent-ssh-root-phone-cleanup.json` hashes to
+`2207a36a1dbf9a6dec8912b4a8218ec9877ee57f3776bcb21630d56969058ce3`.
+Intentional stop closes the runner with exit 0 and the validated supervisor stop passes; retirement
+`proof/silent-ssh-root-final-retirement.json`, SHA-256
+`22f9cf900ec67b495d5620cfcc65a3c542439400358cd99645720610cd90ff33`, records 14 captured generations
+retired, listeners absent and 22 tools/2510 inputs/136 outputs held. Its 549 excluded namespace-read
+permission denials make the scan non-exhaustive; normal App Quit is not verified.
+This adds bounded later draft/one-Send evidence, not a product finding or a post-write held-response/
+lost-reply test. Native-history/relay ticket races, whole items 14/25 and wider lifecycle stay open;
+the original **10 Pass / 22 Partial / 32 Pending** ledger remains unchanged. No product, wire,
+build or APK change is introduced.
 
 ### Native Desktop capture and renderer reattach (2026-10-08)
 

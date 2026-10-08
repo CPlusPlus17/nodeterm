@@ -6,6 +6,14 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
+fixture uses unchanged Desktop/build `0d8594a6` and stock beta21/APK source `ef4caec2`.
+One Send and a draft suffix return before the same SSH peer resumes, but the final newer-draft/
+disabled-Send XML observation misses the pause deadline; the original wrapper remains failed.
+Later XML retains the exact newer draft and saved pixels show its suffix; Send is enabled and one
+original-TTY witness/real ACK stays unique 125.310 seconds later. The strict timed race and lost-reply cases remain unverified.
+See [the bounded follow-up](../docs/android.md#nine-second-send-and-newer-draft-follow-up-2026-10-08).
+
 **Silent SSH peer recovery (2026-10-08, Pixel 7a / beta21 — bounded pass).** Fresh owned checkout
 `04da9b9e` uses unchanged Desktop/build `0d8594a6` and installed APK/source `ef4caec2`. Only the
 admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
