@@ -1,5 +1,8 @@
 // Native PTY boundary recorder. The real manager constructs the shell/env; the Kotlin client sees
 // the resulting output and sends its launch line through the real host stream. No shell runs.
+// This pure env selector remains the production helper. Only executable discovery is recorded;
+// the full relative import avoids the manager-only ./exec-path alias redirecting back here.
+export { envPathKey } from '../../../../../src/core/exec-path'
 export function findExecutableSync(): null { return null }
 export function findInPathString(): null { return null }
 export function findInLoginPath(): null { return null }

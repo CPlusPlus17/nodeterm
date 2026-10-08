@@ -22,21 +22,25 @@ function pairingServiceCall(): string {
 }
 
 describe('main hands the phone revoke the session-cutting revoker', () => {
-  it('builds ONE peer revoker, before the pairing service that uses it', () => {
-    const at = SRC.indexOf('const peerRevoker = createPeerRevoker()')
-    expect(at).toBeGreaterThan(-1)
-    expect(at).toBeLessThan(SRC.indexOf('createPairingService({'))
+  it('uses the registered-host revoke primitive for both paths', () => {
+    expect(SRC).toContain("import { revokeAllPhones, revokePeerKey } from './remote/peer-revoke'")
     // A second, hand-assembled revoker is how one revoke path ends up cutting less than the other.
     expect(SRC).not.toContain('createRevoker(')
   })
 
   it('the pairing service revokes a phone relay key through it', () => {
-    expect(pairingServiceCall()).toContain('revokeRelayKey: (pub) => peerRevoker.revoke(pub)')
+    const call = pairingServiceCall()
+    expect(call).toContain("return revokePeerKey(pub, ['phone'])")
+    expect(call).toMatch(/revokeRelayKey: \(pub\) => \{\s+rememberRevokedStandingPhone\(pub\)\s+return revokePeerKey/)
+    expect(pairingServiceCall()).toContain('revokePhoneRelayTrust: revokeAllPhones')
   })
 
   it('`remote:revoke-peer` goes through the same revoker', () => {
     const handler = SRC.indexOf('ipcMain.handle(IPC.remoteRevokePeer')
     expect(handler).toBeGreaterThan(-1)
-    expect(SRC.slice(handler, handler + 200)).toContain('peerRevoker.revoke(')
+    const call = SRC.slice(handler, SRC.indexOf('\n  })', handler))
+    expect(call).toContain('return revokePeerKey(pub, PIN_ROLES)')
+    expect(call.indexOf('rememberRevokedStandingPhone(pub)')).toBeGreaterThan(-1)
+    expect(call.indexOf('rememberRevokedStandingPhone(pub)')).toBeLessThan(call.indexOf('revokePeerKey(pub, PIN_ROLES)'))
   })
 })

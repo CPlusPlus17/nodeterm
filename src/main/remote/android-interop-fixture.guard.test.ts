@@ -123,7 +123,7 @@ describe('the Android interop fixture is type-checked against the desktop interf
     const fixture = code(join(INTEROP_DIR, 'host-fixture.ts'))
     const index = code(join(REPO_ROOT, 'src', 'main', 'index.ts'))
     expect(index).toMatch(/\blanReport: createHostLanReporter\(\{ getPairingInterface: \(\) => settingsStore\.get\(\)\.phonePairingInterface \}\)/)
-    expect(index).toMatch(/createPairingService\([\s\S]+?\}, \{ getPairingInterface: \(\) => settingsStore\.get\(\)\.phonePairingInterface \}\)/)
+    expect(index).toMatch(/createPairingService\([\s\S]+?\}, \{\s+getPairingInterface: \(\) => settingsStore\.get\(\)\.phonePairingInterface,\s+revokePhoneRelayTrust: revokeAllPhones\s+\}\)/)
     expect(fixture).toMatch(/\blanReport: createHostLanReporter\(\{/)
     expect(fixture).toMatch(/from '\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/src\/main\/remote\/host-lan-report'/)
     expect(fixture, 'the fixture must not read this machine\'s /etc/ssh').toMatch(/\bsshHostKeyDirs: \[process\.env\.FIXTURE_SSH_HOST_KEY_DIR \|\|/)

@@ -6,6 +6,19 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Upstream PR conflict integration (2026-10-08).** The Android contribution now incorporates
+upstream `main` at `adde5e85` (v0.4.2), retaining the phone's typed host verbs, managed terminal
+ownership, SSH-visible files and marker-framed v2 answers alongside upstream chat, role-scoped
+pairing and session backends. Android also recognizes upstream Antigravity and matches its
+`agy` launch/resume grammar without inventing approval flags. The merged managed hook uses revision 6: older revision-5 hooks
+are not admitted for upstream unmarked structured answers, while legacy phone answers keep
+their separate contract. The current merge has its own offline, desktop and CI checks; it does
+not change the source binding of the prepared beta23 APK or the last verified installed
+beta22/code23. Merged-source device acceptance remains pending, and the original
+**10 Pass / 22 Partial / 32 Pending** ledger is unchanged. **iOS implications for @eneskirca:**
+the upstream chat/role changes and new structured-answer revision gate are shared host behavior;
+the existing Android/iOS phone verbs and v2 framing remain compatible.
+
 **Pending Send after remount (2026-10-08, A137 — published; beta23 prepared).**
 Pending Send state and guidance belong to the retained entry, with exact button/IME admission and
 uncertainty preserved until dismissal. Source `b9e4cbc7` passes focused66/9, thirteen intended mutants,

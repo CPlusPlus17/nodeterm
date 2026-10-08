@@ -36,7 +36,8 @@
 #     with a warning — they are harmless: the installed hook command is self-guarded and becomes
 #     a silent no-op once the script it points to is deleted.
 #   - macOS and Linux. On Windows use the NSIS uninstaller (Add/Remove Programs), then delete
-#     %APPDATA%\nodeterm and %USERPROFILE%\.nodeterm.
+#     %APPDATA%\node-terminal, %USERPROFILE%\.nodeterm and (once no nodeterm-sessionhost-v2.exe
+#     runs) %LOCALAPPDATA%\nodeterm\session-host.
 set -u
 
 DRY_RUN=0
@@ -60,16 +61,21 @@ note()  { printf '  \033[2m%s\033[0m\n' "$1"; }
 HOME="${HOME:-$(cd ~ && pwd)}"
 
 # ---- locations (must mirror what the app writes; see docs/uninstall.md) ----------------------
+# Electron's app.name — and with it the user-data dir, the Keychain "Safe Storage" entry and
+# electron-updater's cache dir — is package.json's top-level `name`, NOT `build.productName`:
+# electron-builder strips `build` from the packaged package.json, so "nodeterm" only ever names
+# the bundle and the installer. Must equal package.json `name` (scripts/uninstall.test.ts).
+APP_NAME="node-terminal"
 # Electron names userData after package.json `name` ("node-terminal"): the top-level package.json
 # has no `productName` (only `build.productName`, which electron-builder does not copy into the
 # packaged package.json), so the installed app's dir is `node-terminal`, the same path the app's
 # own hook shell walks (src/core/agents/hook-endpoint-failover-sh.ts). `nodeterm` is kept as a
 # legacy location so an older layout is still cleaned up.
 if [ "$OS" = "Darwin" ]; then
-  USER_DATA="$HOME/Library/Application Support/node-terminal"
+  USER_DATA="$HOME/Library/Application Support/$APP_NAME"
   LEGACY_USER_DATA="$HOME/Library/Application Support/nodeterm"
 else
-  USER_DATA="${XDG_CONFIG_HOME:-$HOME/.config}/node-terminal"
+  USER_DATA="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_NAME"
   LEGACY_USER_DATA="${XDG_CONFIG_HOME:-$HOME/.config}/nodeterm"
 fi
 NT_HOME="$HOME/.nodeterm"                       # agent-hooks, ssh-cm sockets, acks, push-grants…
@@ -365,18 +371,19 @@ add_dir "$NT_HOME"
 add_dir "$USER_DATA"
 add_dir "$LEGACY_USER_DATA"
 if [ "$OS" = "Darwin" ]; then
-  add_dir "$HOME/Library/Caches/node-terminal"
+  add_dir "$HOME/Library/Caches/$APP_NAME"
   add_dir "$HOME/Library/Caches/nodeterm"
   add_dir "$HOME/Library/Caches/com.nodeterm.app"
   add_dir "$HOME/Library/Caches/com.nodeterm.app.ShipIt"
-  add_dir "$HOME/Library/Application Support/Caches/nodeterm-updater"
+  add_dir "$HOME/Library/Caches/$APP_NAME-updater"
   add_dir "$HOME/Library/Preferences/com.nodeterm.app.plist"
   add_dir "$HOME/Library/Saved Application State/com.nodeterm.app.savedState"
   add_dir "$HOME/Library/HTTPStorages/com.nodeterm.app"
-  add_dir "$HOME/Library/Logs/node-terminal"
+  add_dir "$HOME/Library/Logs/$APP_NAME"
   add_dir "$HOME/Library/Logs/nodeterm"
 else
-  add_dir "${XDG_CACHE_HOME:-$HOME/.cache}/node-terminal"
+  add_dir "${XDG_CACHE_HOME:-$HOME/.cache}/$APP_NAME"
+  add_dir "${XDG_CACHE_HOME:-$HOME/.cache}/$APP_NAME-updater"
   add_dir "${XDG_CACHE_HOME:-$HOME/.cache}/nodeterm"
 fi
 add_dir "$SERVER_APP"
@@ -390,7 +397,7 @@ if [ "$OS" = "Darwin" ]; then
   elif [ -d "$APP_BUNDLE" ]; then
     plan "Delete $APP_BUNDLE"; FOUND_ANY=1
   fi
-  for kc in "nodeterm Safe Storage" "node-terminal Safe Storage"; do
+  for kc in "nodeterm Safe Storage" "$APP_NAME Safe Storage"; do
     if security find-generic-password -s "$kc" >/dev/null 2>&1; then
       plan "Delete the '$kc' Keychain entry"; FOUND_ANY=1
     fi
@@ -520,7 +527,7 @@ if [ "$OS" = "Darwin" ]; then
       || warn "Could not delete $APP_BUNDLE — drag it to the Trash"
   fi
   security delete-generic-password -s "nodeterm Safe Storage" >/dev/null 2>&1 || true
-  security delete-generic-password -s "node-terminal Safe Storage" >/dev/null 2>&1 || true
+  security delete-generic-password -s "$APP_NAME Safe Storage" >/dev/null 2>&1 || true
   defaults delete com.nodeterm.app >/dev/null 2>&1 || true
 fi
 

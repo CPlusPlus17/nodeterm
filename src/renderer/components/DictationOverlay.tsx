@@ -20,12 +20,16 @@ import { PcmCapture } from '../lib/pcm-capture'
 import { useSession } from '../session/session'
 import { useSettings } from '../state/settings'
 import { hasSpeechModel } from '@shared/speech'
+import { deliverToComposer } from '../lib/chatComposerDictation'
 
-export interface DictationTarget {
-  kind: 'terminal'
-  nodeId: string
-  title: string
-}
+/**
+ * Where a take lands. `terminal` types it into the node's pane (`pty.sendText`, no Enter);
+ * `chat-composer` hands it to ONE mounted ⌘M composer's textarea by its per-mount id
+ * (lib/chatComposerDictation.ts) — a draft the user edits and sends, never typed into the pane.
+ */
+export type DictationTarget =
+  | { kind: 'terminal'; nodeId: string; title: string }
+  | { kind: 'chat-composer'; nodeId: string; composerId: string; title: string }
 
 export interface DictationOverlayProps {
   target: DictationTarget | null
@@ -157,11 +161,19 @@ export function DictationOverlay({ target, stopSignal, onClose, onOpenLicense }:
       // An in-flight transcription can't be aborted — dropping the result honors the user's
       // dismissal (nothing may land after a cancel).
       if (discardedRef.current) return
-      const ok = await api.pty.sendText(target.nodeId, transcribed, { enter: false })
-      if (!ok) {
-        setError('Could not insert — the terminal session is not available.')
-        setPhase('idle')
-        return
+      if (target.kind === 'chat-composer') {
+        if (!deliverToComposer(target.composerId, transcribed)) {
+          setError('Could not insert — the chat composer was closed.')
+          setPhase('idle')
+          return
+        }
+      } else {
+        const ok = await api.pty.sendText(target.nodeId, transcribed, { enter: false })
+        if (!ok) {
+          setError('Could not insert — the terminal session is not available.')
+          setPhase('idle')
+          return
+        }
       }
       // A stale (remounted-over) instance still delivers its own transcript into the
       // terminal — the target closure is per-instance and correct — but must not close the
@@ -192,16 +204,33 @@ export function DictationOverlay({ target, stopSignal, onClose, onOpenLicense }:
         setError(err instanceof Error ? err.message : 'Could not request microphone access.')
         return
       }
+      // Closed during the consent round trip — never open the mic for an overlay that is gone.
+      if (!mountedRef.current || discardedRef.current) return
     }
 
+    // Owned BEFORE the mic finishes opening, so the unmount cleanup can cancel a start that is
+    // still in flight (PcmCapture then releases the stream the moment it arrives). Opening takes
+    // hundreds of ms (seconds with a Bluetooth headset), and hold-to-talk closes inside that
+    // window on every quick tap, ⌘⌥<key> shortcut and window blur. Adopting the capture only
+    // after `start()` resolved left exactly those takes with no owner: the mic recorded the room
+    // until the 2:30 cap, and the transcript — whisper's "Thank you." over silence, or a
+    // meeting's audio — was typed into the terminal.
     const capture = new PcmCapture()
+    captureRef.current = capture
+    let live: boolean
     try {
-      await capture.start()
+      live = await capture.start()
     } catch (err) {
+      if (captureRef.current !== capture) return
+      captureRef.current = null
       setError(err instanceof Error ? err.message : 'Could not start recording.')
       return
     }
-    captureRef.current = capture
+    // Cancelled while opening (start() already released the stream), or superseded/unmounted.
+    if (!live || captureRef.current !== capture || !mountedRef.current) {
+      capture.cancel()
+      return
+    }
 
     startedAtRef.current = Date.now()
     setElapsedMs(0)

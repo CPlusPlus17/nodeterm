@@ -15,6 +15,7 @@ class AgentLaunchInteropTest {
     @Test
     fun `real host mirror facts drive Android launch cold resume and wake exactly like desktop`() {
         val vocabularies = listOf("untrusted, on-request, never", "on-request, never", "", "never")
+        val modes = listOf("manual", "auto", "acceptEdits", "plan", "bypassPermissions")
         for ((index, values) in vocabularies.withIndex()) for (auto in listOf(false, true)) {
             val data = File(scratch, "$index-$auto").apply { mkdirs() }
             val help = if (values.isEmpty()) "unknown help" else "  -a, --ask-for-approval <APPROVAL_POLICY>\n    [possible values: $values]\n  --sandbox <SANDBOX>"
@@ -24,7 +25,12 @@ class AgentLaunchInteropTest {
                 assertEquals(auto, settings.autoSupported)
                 assertEquals(if (values.isEmpty()) emptyList() else values.split(", "), settings.codexApprovalValues)
                 val commands = fixture.ready.getValue("commands").jsonArray
-                assertEquals(30, commands.size)
+                assertEquals(Agent.entries.size * modes.size, commands.size)
+                val expectedCases = Agent.entries.flatMap { agent -> modes.map { agent.id to it } }.toSet()
+                val actualCases = commands.map { entry -> entry.jsonObject.let { row ->
+                    row.getValue("agent").jsonPrimitive.content to row.getValue("mode").jsonPrimitive.content
+                } }.toSet()
+                assertEquals(expectedCases, actualCases, "every host agent and permission mode must be covered")
                 for (entry in commands) {
                     val row = entry.jsonObject
                     val agent = Agent.of(row.getValue("agent").jsonPrimitive.content)!!

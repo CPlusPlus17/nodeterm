@@ -104,7 +104,7 @@ class PairingInteropTest {
         assertEquals("true", done["ok"]!!.jsonPrimitive.content)
         val keys = File(home, ".ssh/authorized_keys").readText()
         assertTrue(
-            keys.contains("ssh-ed25519 ${B64.encode(identity.publicKeyBlob)} nodeterm-ios-${result.deviceId}"),
+            keys.contains("ssh-ed25519 ${B64.encode(identity.publicKeyBlob)} nodeterm-mobile-${result.deviceId}"),
             "authorized_keys: $keys"
         )
         val agent = File(home, ".nodeterm/agent.json").readText()
@@ -280,7 +280,7 @@ class PairingInteropTest {
         val result = PairingClient().pair(payload, identity.authorizedKeysLine(), "Pixel", "android-device-6")
         assertEquals("true", h.awaitEvent("done")["ok"]!!.jsonPrimitive.content)
         assertTrue(
-            File(home, ".ssh/authorized_keys").readText().contains("nodeterm-ios-${result.deviceId}"),
+            File(home, ".ssh/authorized_keys").readText().contains("nodeterm-mobile-${result.deviceId}"),
             "the key must land in the scratch home's authorized_keys"
         )
     }

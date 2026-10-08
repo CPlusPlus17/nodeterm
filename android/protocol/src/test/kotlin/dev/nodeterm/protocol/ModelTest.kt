@@ -101,6 +101,11 @@ class ModelTest {
         assertEquals("codex resume abc", Launch.resumeCommand(Agent.CODEX, "abc"))
         assertEquals("copilot --resume=abc", Launch.resumeCommand(Agent.COPILOT, "abc"))
         assertEquals("opencode --session abc", Launch.resumeCommand(Agent.OPENCODE, "abc"))
+        assertEquals(Agent.ANTIGRAVITY, Agent.of("antigravity"))
+        assertEquals("Antigravity", Agent.ANTIGRAVITY.label)
+        assertEquals("#00a3a3", Agent.ANTIGRAVITY.color)
+        assertEquals("agy --conversation=abc", Launch.resumeCommand(Agent.ANTIGRAVITY, "abc"))
+        assertNull(Launch.resumeCommand(Agent.ANTIGRAVITY, "abc; echo unsafe"))
         assertNull(Launch.resumeCommand(Agent.CLAUDE, "abc; rm -rf ~"))
         assertNull(Launch.resumeCommand(Agent.CLAUDE, "-flag"))
     }

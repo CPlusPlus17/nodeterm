@@ -3,6 +3,9 @@
 // managed-pane implementation; the surrounding planner/coordinator/PtyManager are production.
 import { EventEmitter } from 'node:events'
 import { promisify } from 'node:util'
+// Preserve the actual pure env selector; the manager-only ./exec-path alias cannot match this
+// full relative path. Native process execution and executable discovery remain explicit recorders.
+export { envPathKey } from '../../../../../src/core/exec-path'
 
 interface Pane { session: string; creationId: string; paneId: string; tty: string; created: string;
   cwd: string; shell: string; projectEnv: string | null; accountDir: string | null }

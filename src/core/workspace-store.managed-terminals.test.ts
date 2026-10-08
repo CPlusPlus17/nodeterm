@@ -14,6 +14,9 @@ const node = (): CanvasNodeState => ({ id: 'term-owned-abcdef', kind: 'terminal'
   pendingLaunch: { command: 'claude --session-id owned', after: [], attempted: true, manualOnly: true, executor: 'server' } })
 const file = () => path.join(cwd, '.nodeterm/project.json')
 const read = async () => JSON.parse(await fs.readFile(file(), 'utf8'))
+const indexFile = () => path.join(root, 'workspace.json')
+const readIndex = async () => JSON.parse(await fs.readFile(indexFile(), 'utf8'))
+const held = async () => (await readIndex()).entries.find((e: { id: string }) => e.id === 'p1').localExec[node().id]?.pendingLaunch
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'nt-managed-workspace-')); cwd = path.join(root, 'project'); await fs.mkdir(cwd)
   platform = fakePlatform({ userDataDir: root }); initPlatform(platform); store = new WorkspaceStore()
@@ -40,24 +43,42 @@ describe.skipIf(process.platform === 'win32')('host-managed workspace publicatio
   })
   it('preserves guarded attempted launch until only the matching host submission completes', async () => {
     const owned = node(); expect(await store.appendManagedTerminal('p1', owned, { current: () => true })).toBe(true)
-    expect((await read()).nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch).toEqual(owned.pendingLaunch)
-    expect(await store.finishManagedTerminal('p1', owned, { current: () => true })).toBe(true)
     expect((await read()).nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch).toBeUndefined()
+    expect(await held()).toEqual(owned.pendingLaunch)
+    const sharedBefore = await fs.readFile(file(), 'utf8')
+    expect(await store.finishManagedTerminal('p1', owned, { current: () => true })).toBe(true)
+    expect(await held()).toBeUndefined()
+    expect((await readIndex()).entries[0].localExec[owned.id].shell).toBe('/bin/bash')
+    expect(await fs.readFile(file(), 'utf8')).toBe(sharedBefore)
+    expect(store.managedTerminalCurrent('p1', owned)).toBe(true)
   })
   it.each(['cwd', 'shell', 'agentId', 'accountId', 'command', 'manualOnly', 'executor', 'ssh', 'agentSessionId', 'agentModel'])('does not clear a changed %s recovery node', async (key) => {
     const owned = node(); await store.appendManagedTerminal('p1', owned, { current: () => true })
     const doc = await read(), saved = doc.nodes.find((n: CanvasNodeState) => n.id === owned.id)
-    if (key === 'command') saved.pendingLaunch.command = 'replacement'
-    else if (key === 'manualOnly') saved.pendingLaunch.manualOnly = false
-    else if (key === 'executor') delete saved.pendingLaunch.executor
-    else if (key === 'ssh') saved.ssh = { host: 'foreign', user: 'other' }
-    else if (key === 'shell') {
-      const index = JSON.parse(await fs.readFile(path.join(root, 'workspace.json'), 'utf8')); index.entries[0].localExec[owned.id].shell = '/replacement';
-      await fs.writeFile(path.join(root, 'workspace.json'), JSON.stringify(index)); await store.load({ sideline: false })
-    } else saved[key] = 'replacement'
+    if (['command', 'manualOnly', 'executor', 'shell'].includes(key)) {
+      const index = await readIndex(), local = index.entries[0].localExec[owned.id]
+      if (key === 'command') local.pendingLaunch.command = 'replacement'
+      else if (key === 'manualOnly') local.pendingLaunch.manualOnly = false
+      else if (key === 'executor') delete local.pendingLaunch.executor
+      else local.shell = '/replacement'
+      await fs.writeFile(indexFile(), JSON.stringify(index)); await store.load({ sideline: false })
+    } else if (key === 'ssh') saved.ssh = { host: 'foreign', user: 'other' }
+    else saved[key] = 'replacement'
     await fs.writeFile(file(), JSON.stringify(doc))
     expect(await store.finishManagedTerminal('p1', owned, { current: () => true })).toBe(false)
-    expect((await read()).nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch).toBeDefined()
+    expect(await held()).toBeDefined()
+  })
+  it('reopens managed recovery from the local index without trusting a shared launch', async () => {
+    const owned = node(); expect(await store.appendManagedTerminal('p1', owned, { current: () => true })).toBe(true)
+    const shared = await read()
+    shared.nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch = { command: 'foreign command', after: [] }
+    await fs.writeFile(file(), JSON.stringify(shared))
+    const reopened = new WorkspaceStore(); await reopened.load({ sideline: false })
+    expect(reopened.managedTerminalCurrent('p1', owned, true)).toBe(true)
+    expect(await reopened.finishManagedTerminal('p1', owned, { current: () => true })).toBe(true)
+    expect(await held()).toBeUndefined()
+    expect(reopened.managedTerminalCurrent('p1', owned)).toBe(true)
+    expect((await read()).nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch.command).toBe('foreign command')
   })
   it('announces the fresh machine-local shell overlay when a load replaces the index during its publication', async () => {
     const owned = node(), original = fs.writeFile.bind(fs), indexFile = path.join(root, 'workspace.json')
@@ -144,28 +165,47 @@ describe.skipIf(process.platform === 'win32')('host-managed workspace publicatio
     const original = fs.writeFile.bind(fs)
     vi.spyOn(fs, 'writeFile').mockImplementation(async (...args: any[]) => {
       const result = await original(...args as Parameters<typeof fs.writeFile>)
-      if (String(args[0]).startsWith(file() + '.') && String(args[0]).endsWith('.tmp')) {
-        const doc = await read(); doc.nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch.command = 'changed by user';
-        await original(file(), JSON.stringify(doc))
+      if (String(args[0]).startsWith(indexFile() + '.') && String(args[0]).endsWith('.tmp')) {
+        const index = await readIndex(); index.entries[0].localExec[owned.id].pendingLaunch.command = 'changed by user'
+        await original(indexFile(), JSON.stringify(index))
       }
       return result
     })
     expect(await store.finishManagedTerminal('p1', owned, { current: () => true })).toBe(false)
-    expect((await read()).nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch.command).toBe('changed by user')
+    expect((await held()).command).toBe('changed by user')
+  })
+  it('preserves a newer local intent loaded after completion renamed the index', async () => {
+    const owned = node(); await store.appendManagedTerminal('p1', owned, { current: () => true })
+    platform.sent.length = 0
+    const replacement = { ...owned.pendingLaunch!, command: 'replacement after rename' }
+    const original = fs.unlink.bind(fs); let replaced = false
+    vi.spyOn(fs, 'unlink').mockImplementation(async (...args: any[]) => {
+      if (!replaced && String(args[0]).startsWith(indexFile() + '.') && String(args[0]).endsWith('.tmp')) {
+        replaced = true
+        const index = await readIndex(); index.entries[0].localExec[owned.id].pendingLaunch = replacement
+        await fs.writeFile(indexFile(), JSON.stringify(index)); await store.load({ sideline: false })
+      }
+      return original(...args as Parameters<typeof fs.unlink>)
+    })
+    expect(await store.finishManagedTerminal('p1', owned, { current: () => true })).toBe(false)
+    expect(replaced).toBe(true)
+    expect(await held()).toEqual(replacement)
+    expect(store.managedTerminalCurrent('p1', { ...owned, pendingLaunch: replacement }, true)).toBe(true)
+    expect(platform.sent.filter((event) => event.channel === IPC.workspaceServerChange)).toHaveLength(0)
   })
   it('preserves unrelated shared metadata changed while completion was staged', async () => {
     const owned = node(); await store.appendManagedTerminal('p1', owned, { current: () => true })
     const original = fs.writeFile.bind(fs)
     vi.spyOn(fs, 'writeFile').mockImplementation(async (...args: any[]) => {
       const result = await original(...args as Parameters<typeof fs.writeFile>)
-      if (String(args[0]).startsWith(file() + '.') && String(args[0]).endsWith('.tmp')) {
+      if (String(args[0]).startsWith(indexFile() + '.') && String(args[0]).endsWith('.tmp')) {
         const doc = await read(); doc.future = { concurrentEdit: 'preserve this' }; await original(file(), JSON.stringify(doc))
       }
       return result
     })
     expect(await store.finishManagedTerminal('p1', owned, { current: () => true })).toBe(false)
     expect((await read()).future).toEqual({ concurrentEdit: 'preserve this' })
-    expect((await read()).nodes.find((n: CanvasNodeState) => n.id === owned.id).pendingLaunch).toBeDefined()
+    expect(await held()).toBeDefined()
   })
   it('publishes completion in queue order without erasing a following ordinary save', async () => {
     const owned = node(); await store.appendManagedTerminal('p1', owned, { current: () => true })

@@ -7,7 +7,7 @@ import { Button } from '@renderer/ui/Button'
 import { Switch } from '@renderer/ui/Switch'
 import { useSettings } from '@renderer/state/settings'
 import { usePhonePairing } from '../usePhonePairing'
-import { ANDROID_APP_LABEL, ANDROID_APP_URL, IOS_APP_STORE_URL } from '@renderer/lib/links'
+import { ANDROID_APP_LABEL, ANDROID_APP_URL, ANDROID_APP_PUBLISHED, mobileStoreLinks } from '@renderer/lib/links'
 import { hostOsFromNavigator, sshServerCopy } from '@shared/ssh-server'
 import {
   pairingEndedMessage,
@@ -17,6 +17,8 @@ import {
 } from '@shared/pairing-gate'
 import { thisMachine } from '../../../lib/machineName'
 import { PairingNetworkRow } from './PairingNetworkRow'
+import { isBrowserRuntime } from '@renderer/bridge/runtime'
+import { PushWebhookPanel } from './PushWebhookPanel'
 
 const ROWS = {
   remote: {
@@ -25,14 +27,22 @@ const ROWS = {
   },
   pair: {
     title: 'Pair phone',
-    keywords: ['phone', 'pair', 'qr', 'ios', 'mobile', 'ssh', 'scan', 'nodeterm', 'network', 'adapter', 'vpn', 'lan', 'wireguard']
+    keywords: ['phone', 'pair', 'qr', 'ios', 'android', 'mobile', 'ssh', 'scan', 'nodeterm', 'network', 'adapter', 'vpn', 'lan', 'wireguard']
   },
   devices: {
     title: 'Paired devices',
-    keywords: ['phone', 'device', 'devices', 'paired', 'revoke', 'ios', 'iphone', 'remove']
+    keywords: ['phone', 'device', 'devices', 'paired', 'revoke', 'ios', 'iphone', 'android', 'remove']
+  },
+  webhook: {
+    title: 'Push webhook',
+    keywords: ['webhook', 'push', 'notification', 'notify', 'ci', 'build', 'script', 'curl', 'token']
   }
 }
 const ENTRIES = Object.values(ROWS)
+// The webhook needs this machine's relay host key, which a browser tab on the Server Edition does
+// not have (its bridge answers E_UNSUPPORTED) — so the row and its search entry are desktop-only.
+// Asked at render, not at import: the boot switch marks the browser runtime after modules load.
+const BROWSER_ENTRIES = ENTRIES.filter((r) => r !== ROWS.webhook)
 
 /** Format an epoch-ms pairing time as a short local date. */
 function formatPairedAt(ms: number): string {
@@ -56,6 +66,7 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
   // in the warning colour would read as a failure.
   const [revokeNote, setRevokeNote] = useState<{ text: string; warn: boolean } | null>(null)
 
+  const showWebhook = !isBrowserRuntime()
   const phoneAccessEnabled = useSettings((s) => s.settings.phoneAccessEnabled)
   const updateSettings = useSettings((s) => s.update)
 
@@ -203,7 +214,7 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
       title="Phone"
       description="Pair the nodeterm phone app (iPhone or Android) so it can connect to this machine over your local network — no terminal commands needed."
       isActive={isActive}
-      searchEntries={ENTRIES}
+      searchEntries={showWebhook ? ENTRIES : BROWSER_ENTRIES}
     >
       <SearchableRow {...ROWS.remote}>
         <div className="space-y-3">
@@ -236,19 +247,28 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
           </p>
           <p className="text-sm text-muted">
             Don&apos;t have the app yet?{' '}
-            <button
-              className="cursor-pointer underline hover:text-text"
-              onClick={() => window.nodeTerminal.shell.openExternal(IOS_APP_STORE_URL)}
-            >
-              Get nodeterm for iOS on the App Store
-            </button>{' '}
-            ·{' '}
-            <button
-              className="cursor-pointer underline hover:text-text"
-              onClick={() => window.nodeTerminal.shell.openExternal(ANDROID_APP_URL)}
-            >
-              {ANDROID_APP_LABEL}
-            </button>
+            {mobileStoreLinks().map((store, i) => (
+              <span key={store.id}>
+                {i > 0 ? ' · ' : null}
+                <button
+                  className="cursor-pointer underline hover:text-text"
+                  onClick={() => window.nodeTerminal.shell.openExternal(store.url)}
+                >
+                  {store.label}
+                </button>
+              </span>
+            ))}
+            {!ANDROID_APP_PUBLISHED && (
+              <>
+                {' · '}
+                <button
+                  className="cursor-pointer underline hover:text-text"
+                  onClick={() => window.nodeTerminal.shell.openExternal(ANDROID_APP_URL)}
+                >
+                  {ANDROID_APP_LABEL}
+                </button>
+              </>
+            )}
           </p>
 
           {/* This row mounts only while Pair phone is visible, including global-search results. */}
@@ -433,6 +453,12 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
           ) : null}
         </div>
       </SearchableRow>
+
+      {showWebhook ? (
+        <SearchableRow {...ROWS.webhook}>
+          <PushWebhookPanel />
+        </SearchableRow>
+      ) : null}
 
       {pendingRevoke ? (
         <ConfirmDialog

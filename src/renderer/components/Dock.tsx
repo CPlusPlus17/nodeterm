@@ -30,6 +30,8 @@ interface DockProps {
   onAddDino: () => void
   onAddTrigger: () => void
   onAddFiles: () => void
+  /** A run node (a launch.json configuration) rooted in the project folder. */
+  onAddRun: () => void
   onAddAgent: (agentId: AgentId, accountId?: string) => void
   onOpenFile: () => void
   onAddRemote: () => void
@@ -80,6 +82,7 @@ export function Dock({
   onAddDino,
   onAddTrigger,
   onAddFiles,
+  onAddRun,
   onAddAgent,
   onOpenFile,
   onAddRemote,
@@ -193,6 +196,7 @@ export function Dock({
     dino: onAddDino,
     trigger: onAddTrigger,
     files: onAddFiles,
+    run: onAddRun,
     openFile: onOpenFile,
     newFile: onNewFile,
     worktree: onAddWorktree
@@ -232,7 +236,7 @@ export function Dock({
               // rows), byte-identical to before nesting existed.
               if (inheriting.length === 0) {
                 const base = (
-                  <button key={aid} onClick={pick(() => onAddAgent(aid))}>
+                  <button key={aid} title={AGENT_CONFIG[aid].notice} onClick={pick(() => onAddAgent(aid))}>
                     <AgentIcon agentId={aid} size={18} />
                     <span>{AGENT_CONFIG[aid].label}</span>
                   </button>
@@ -276,7 +280,7 @@ export function Dock({
                   onMouseEnter={() => setOpenSub(aid)}
                   onMouseLeave={() => setOpenSub((cur) => (cur === aid ? null : cur))}
                 >
-                  <button onClick={pick(() => onAddAgent(aid))}>
+                  <button title={AGENT_CONFIG[aid].notice} onClick={pick(() => onAddAgent(aid))}>
                     <AgentIcon agentId={aid} size={18} />
                     <span>{AGENT_CONFIG[aid].label}</span>
                     <span className="dock-menu__chevron">▸</span>

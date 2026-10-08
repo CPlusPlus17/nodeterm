@@ -8,6 +8,19 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
+**Upstream PR conflict integration (2026-10-08).** The Android contribution now incorporates
+upstream `main` at `adde5e85` (v0.4.2), retaining the phone's typed host verbs, managed terminal
+ownership, SSH-visible files and marker-framed v2 answers alongside upstream chat, role-scoped
+pairing and session backends. Android also recognizes upstream Antigravity and matches its
+`agy` launch/resume grammar without inventing approval flags. The merged managed hook uses revision 6: older revision-5 hooks
+are not admitted for upstream unmarked structured answers, while legacy phone answers keep
+their separate contract. The current merge has its own offline, desktop and CI checks; it does
+not change the source binding of the prepared beta23 APK or the last verified installed
+beta22/code23. Merged-source device acceptance remains pending, and the original
+**10 Pass / 22 Partial / 32 Pending** ledger is unchanged. **iOS implications for @eneskirca:**
+the upstream chat/role changes and new structured-answer revision gate are shared host behavior;
+the existing Android/iOS phone verbs and v2 framing remain compatible.
+
 **Pending Send after remount (2026-10-08, A137 — published; beta23 prepared).**
 Pending Send state and guidance belong to the retained entry, with exact button/IME admission and
 uncertainty preserved until dismissal. Source `b9e4cbc7` passes focused66/9, thirteen intended mutants,
@@ -656,6 +669,15 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Upstream PR conflict integration (2026-10-08)
+
+Merge upstream `adde5e85` into the existing contribution branch without rewriting its published
+commits. Resolve Android ownership/interop behavior alongside upstream v0.4.2 chat, pairing roles
+and session backends. Keep new structured answer support on revision 6 because both parents used
+revision 5 for different formats. Source regression and offline gates precede publication;
+merged-source device checks remain next, with beta23's earlier source binding preserved.
+No new finding or device-ledger promotion is claimed by conflict resolution.
 
 ### Pending Send outcome after remount (2026-10-08, A137)
 

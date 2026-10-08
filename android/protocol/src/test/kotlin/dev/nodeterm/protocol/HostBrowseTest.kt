@@ -260,7 +260,8 @@ class HostBrowseTest {
         // The SSH mirror's file carries the desktop's project id: what a slice is named by.
         assertTrue(text(File(repo, "src/core/workspace-files.ts")).contains("cache: projectToFile(p, revOf(p.id), savedAt, p.id)"))
         val config = text(File(repo, "src/server/config.ts"))
-        assertTrue(config.contains("pick('data-dir', 'NODETERM_DATA_DIR', path.join(os.homedir(), '.nodeterm-server'))"))
+        assertTrue(config.contains("const dataDir = resolveDataDir(env, argv)"))
+        assertTrue(config.contains("return path.join(os.homedir(), '.nodeterm-server')"))
         assertTrue(text(File(repo, "src/core/tmux-naming.ts")).contains("export const TMUX_SOCKET = '${TmuxNames.SOCKET}'"))
         val ssh = text(File(repo, "src/shared/ssh.ts"))
         assertTrue(ssh.contains("const socket = opts.socket ?? '${TmuxNames.REMOTE_SOCKET}'"))

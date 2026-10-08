@@ -18,7 +18,8 @@ class AgentPermissionTest {
             Agent.CODEX to listOf(" --ask-for-approval untrusted", " --ask-for-approval on-request", "", "", " --ask-for-approval never"),
             Agent.GEMINI to listOf("", "", " --approval-mode auto_edit", " --approval-mode plan", " --approval-mode yolo"),
             Agent.GROK to listOf("", " --permission-mode auto", " --permission-mode acceptEdits", " --permission-mode plan", " --permission-mode bypassPermissions"),
-            Agent.OPENCODE to List(5) { "" }, Agent.COPILOT to List(5) { "" }
+            Agent.OPENCODE to List(5) { "" }, Agent.COPILOT to List(5) { "" },
+            Agent.ANTIGRAVITY to List(5) { "" }
         )
         for (agent in Agent.entries) for ((index, mode) in modes.withIndex()) {
             val s = settings(mode, listOf("untrusted", "on-request", "never"))

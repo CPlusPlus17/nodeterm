@@ -83,7 +83,9 @@ esbuild
       '@shared': './src/shared',
       '@renderer': './src/renderer'
     },
-    external: ['ws', 'esbuild'],
+    // Keep the genuine SSH package at runtime: its optional native acceleration modules are
+    // allowed to be absent under the protocol fixture's npm ci --ignore-scripts contract.
+    external: ['ws', 'esbuild', 'ssh2'],
     plugins: projectLaunch || managedSession ? [launchPlugin] : serverProfile ? [serverProfilePlugin] : [],
     metafile: true,
     logLevel: 'warning'

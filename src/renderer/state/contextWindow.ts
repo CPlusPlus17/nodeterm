@@ -82,3 +82,27 @@ export const useContextWindow = create<ContextWindowState>((set) => ({
       return { bySessionId }
     })
 }))
+
+/**
+ * The ONE reader of a node's context usage — the header ContextMeter and the ⌘M composer's model /
+ * effort labels both call it, so they can never show different models for one session.
+ *
+ * A copied rollout has the same session id on two hosts: SSH Codex observations belong to the node
+ * that requested them (`scoped`), never to a local/session-only snapshot. Everything else is keyed
+ * by session id, and a value whose session id does not match is not this session's.
+ */
+export function useContextUsage({
+  sessionId,
+  nodeId,
+  scoped
+}: {
+  sessionId: string | null | undefined
+  nodeId?: string
+  scoped: boolean
+}): ContextWindowUsage | undefined {
+  return useContextWindow((s) => {
+    if (!sessionId) return undefined
+    const value = scoped ? (nodeId ? s.byNodeId[nodeId] : undefined) : s.bySessionId[sessionId]
+    return value?.sessionId === sessionId ? value : undefined
+  })
+}

@@ -129,6 +129,7 @@ beforeEach(() => {
   boundary.api = {
     pty: {
       create, kill, write, resize: vi.fn(), readScrollback: vi.fn(async () => ''), capture: vi.fn(async () => ''),
+      tmuxStatus: vi.fn(async () => ({ platform: 'linux' })),
       remoteSessionConfirmed: vi.fn(async () => true),
       onData: (id: string, cb: (data: string) => void) => { outputs.set(id, cb); return () => { outputs.delete(id) } },
       onExit: (id: string, cb: (code: number) => void) => { exits.set(id, cb); return () => { exits.delete(id) } },
@@ -138,6 +139,7 @@ beforeEach(() => {
     },
     sshProject: { connect, disconnect: vi.fn(async () => {}) },
     shell: { openExternal: vi.fn() }, clipboard: { writeText: vi.fn() },
+    onMarkdownToggle: () => () => {},
     settings: { save: vi.fn(async () => {}) }, boardLog: { list: async () => [], onChanged: () => () => {} }
   } as unknown as NodeTerminalApi
   window.nodeTerminal = boundary.api as NodeTerminalApi

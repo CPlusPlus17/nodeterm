@@ -11,6 +11,7 @@ import java.security.SecureRandom
 enum class Agent(val id: String, val label: String, val color: String, val launchCmd: String, val resumable: Boolean) {
     CLAUDE("claude", "Claude Code", "#d97757", "claude", true),
     CODEX("codex", "Codex", "#10a37f", "codex", true),
+    ANTIGRAVITY("antigravity", "Antigravity", "#00a3a3", "agy", true),
     GEMINI("gemini", "Gemini", "#4285f4", "gemini", true),
     OPENCODE("opencode", "opencode", "#a78bfa", "opencode", true),
     GROK("grok", "Grok", "#64748b", "grok", true),
@@ -35,6 +36,7 @@ object Launch {
             Agent.CODEX -> "${agent.launchCmd} resume $sid"
             Agent.OPENCODE -> "${agent.launchCmd} --session $sid"
             Agent.COPILOT -> "${agent.launchCmd} --resume=$sid"
+            Agent.ANTIGRAVITY -> "${agent.launchCmd} --conversation=$sid"
             Agent.CLAUDE, Agent.GEMINI, Agent.GROK -> "${agent.launchCmd} --resume $sid"
         }
     }
@@ -152,7 +154,7 @@ object Launch {
                     ?: listOf("on-request", "never")
                 if (wanted in vocabulary) listOf("--ask-for-approval", wanted) else emptyList()
             }
-            Agent.OPENCODE, Agent.COPILOT -> emptyList()
+            Agent.OPENCODE, Agent.COPILOT, Agent.ANTIGRAVITY -> emptyList()
         }
     }
 

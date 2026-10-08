@@ -432,8 +432,8 @@ function probeSsh(): Promise<boolean> {
 
 /**
  * Append an already-normalized public-key line to ~/.ssh/authorized_keys with the right
- * permissions. The caller stamps the attributable `nodeterm-ios-<deviceId>` comment via
- * `rewriteKeyComment` before this point.
+ * permissions. The caller stamps the attributable `nodeterm-mobile-<deviceId>` comment via
+ * `rewriteKeyComment` before this point (revoke also matches the legacy `nodeterm-ios-<id>`).
  */
 async function appendAuthorizedKey(keyLine: string): Promise<void> {
   const sshDir = path.join(os.homedir(), '.ssh')
@@ -489,6 +489,13 @@ export interface PairingServiceOptions {
   /** Where sshd's host keys (and `sshd_config`) are read from for the sealed answer's
    *  `sshHostKeyFingerprints` (audit A49-anchor). Defaults to `SSH_HOST_KEY_DIRS`. */
   sshHostKeyDirs?: readonly string[]
+  /**
+   * Revoke the phone's RELAY trust on Remove: unpin its box key from the phone store and close its
+   * live relay sessions (peer-revoke.ts `revokeAllPhones`). Without it a removed phone keeps its
+   * relay shell until the socket drops and is silently re-admitted on reconnect. Absent ⇒ no relay
+   * leg (tests, and any shell without a standing host).
+   */
+  revokePhoneRelayTrust?: () => Promise<{ persisted: boolean; killed: boolean }>
 }
 
 export function createPairingService(
@@ -865,7 +872,7 @@ export function createPairingService(
         // the agentToken is the phone's bearer for the host-agent WebSocket (stored in its Keychain).
         const deviceId = randomUUID()
         const agentToken = randomBytes(24).toString('base64url')
-        const name = normalizeDeviceName(body.deviceName)
+        const name = normalizeDeviceName(body.deviceName, publicKey)
         // The phone's OWN id — the key the relay backend stores its device row under, and the
         // only one it would recognize in a later revoke. Resolved here rather than at the mint
         // below so the registry entry can carry it; the fallback (phone sent none ⇒ our id) is
@@ -1044,7 +1051,8 @@ export function createPairingService(
 
   // One unit: agent.json and authorized_keys must not be revoked half-way by an interleaving writer.
   //
-  // authorized_keys goes FIRST, and the order is load-bearing on partial failure. That file is full
+  // Legacy unassociated relay trust goes first; a recorded key is revoked after removing its
+  // pairing below, so a late paired pin cannot resurrect it. authorized_keys is full
   // shell access; agent.json holds the host-agent bearer token and the device the UI lists. If the
   // second step fails, revoking the SSH key first leaves the BIGGER capability already gone and the
   // device still listed — visible to its owner, with the Revoke button still there to finish the
@@ -1071,7 +1079,19 @@ export function createPairingService(
       const boxKey = entry?.relayBoxKey
       const found = !!entry
       let devices: DeviceEntry[]
+      let legacyRelayRevoked = false
       try {
+        // A legacy entry has no recorded relay key to revoke precisely: use the phone-only
+        // fallback before removing it. A recorded key follows the exact-key path below, leaving
+        // other paired phones and another pairing of this same key authorized. A stale id does
+        // not invoke either revoker.
+        if (found && !boxKey && options.revokePhoneRelayTrust) {
+          const relay = await options.revokePhoneRelayTrust()
+          if (!relay.persisted || !relay.killed) {
+            throw new Error(`relay trust revoke incomplete (persisted=${relay.persisted}, killed=${relay.killed})`)
+          }
+          legacyRelayRevoked = true
+        }
         await removeAuthorizedKeysForDevice(id)
         await removeAdministratorsKeysForDevice(id)
         const obj = await readAgentJson()
@@ -1089,9 +1109,10 @@ export function createPairingService(
       if (!entry) {
         return { local: true, relayId, found, relay: undefined }
       }
-      // Older pairings did not record a relay identity. Do not guess from the approved-key store
+      // Older pairings did not record a relay identity. Without the phone-only fallback, do not
+      // guess from the approved-key store
       // or call a different peer's revoker: local removal cannot confirm remote access is gone.
-      if (!boxKey) return { local: true, relayId, found, relay: 'unconfirmed' as const }
+      if (!boxKey) return { local: true, relayId, found, relay: legacyRelayRevoked ? 'ok' as const : 'unconfirmed' as const }
       if (devices.some((d) => d.relayBoxKey === boxKey)) {
         return { local: true, relayId, found, relay: 'retained' as const }
       }

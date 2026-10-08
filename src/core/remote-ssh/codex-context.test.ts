@@ -93,6 +93,20 @@ describe('remote Codex context routing', () => {
     expect(h.run).not.toHaveBeenCalled()
   })
 
+  it('a later hook for an already-tracked path pokes the tail again without a new lookup', async () => {
+    // The tail's same-ref track() is what resets its idle poll backoff — every hook must reach it.
+    const h = harness()
+    await h.controller.hook('node', payload)
+    expect(h.tail.track).toHaveBeenCalledTimes(1)
+    const ref = h.tail.track.mock.calls[0][1]
+    await h.controller.hook('node', { ...payload, hook_event_name: 'UserPromptSubmit' })
+    expect(h.run).toHaveBeenCalledTimes(1)
+    expect(h.tail.track).toHaveBeenCalledTimes(2)
+    expect(h.tail.track).toHaveBeenLastCalledWith(JSON.stringify(['node', sid]), ref)
+    expect(h.tail.untrack).not.toHaveBeenCalled()
+    expect(h.tail.replay).not.toHaveBeenCalled()
+  })
+
   it('ignores child rollouts, rejects stale in-flight generations and clears SessionEnd', async () => {
     const h = harness()
     await h.controller.hook('node', { ...payload, agent_id: 'child' })
