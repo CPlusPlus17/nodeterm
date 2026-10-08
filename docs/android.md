@@ -5,18 +5,28 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
-**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+**Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
+retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
+checked Ctrl through one normal locally rejected Pair screen and Back. Both original Bash panes,
+server/socket, captures and desktop clients stay unchanged; the phone client reattaches under its
+same SSH parent/session/TTY. No Send or producer runs. Source `2ba0b142` passes **1054/114**, offline
+app compilation and CI37732792493 all-five/ten-step. In-place update preserves measured install
+time and full runtime-permission blocks. Owned profile/auth/reverse/fixture cleanup is verified;
+raw-input Ctrl timing, selection/IME and pending-Send checks remain unverified. The original
+**10 Pass / 22 Partial / 32 Pending** ledger and installed artifact source stay unchanged.
+
+**Retained terminal editor (2026-10-08, A136 — source fixed; bounded fixed-phone pass).**
 The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
 and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
 Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
-caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+caught. Beta22/code23 is published and installed; one retained-entry remount now passes. The
 original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
 [the scoped evidence](#retained-terminal-editor-2026-10-08-a136).
 
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
-wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
-and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Source publication
+and beta22 installation pass; a physical scheduling reproduction remains pending. See
 [the scoped evidence](#captured-ctrl-consumption-2026-10-08-a135).
 
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
@@ -779,9 +789,53 @@ Combined healthy/restored controls pass 48/seven, full candidate **1054/114** an
 pass, with all prior 1034/110 methods retained. Receipt `098162c5` and independent `fdf4cbcf` review
 qualify policy execution versus lexical wiring. A135 supplies the preceding Ctrl API dependency.
 
-Final signed-source gates/CI and beta22/code23 signing, installation and fixed-phone comparison
-remain pending. Actual cursor/IME/recreation, pending-Send remount and Ctrl scheduling still need
-physical checks. The original ledger remains **10 Pass / 22 Partial / 32 Pending**. No host/relay/SSH
+Signed source `2ba0b142` passes fresh forced 1054/114 and offline app compilation; CI
+`37732792493` passes all five jobs and ten required steps. Retained-signer beta22/code23 is installed
+from that source, APK `fa894d4b`; `beta22-phone-update-bound-c2384dzh/receipts/update-result.json`
+(SHA-256 `08d5b32b3bcfb245287c12fab00e2098582b971ea2591f68764b5916fac20992`) verifies unchanged first-install time,
+full notification flags and all measured runtime-permission blocks. Saved artifact review is
+`beta22-editor-compact-final-recipes-oov0gt3l/build/artifact-review.json`, SHA-256
+`bfff9ea6eab59735bf41e856e9b94e59c81e95d0dc0fd3c7485f3ebb5f60cdf1`; actual SDK36 verification is
+available, SDK37 verification is not claimed. The installed APK/source and immutable Desktop build
+remain `2ba0b142` even if subsequent documentation HEAD changes.
+
+**One fixed-phone comparison passes.** On the fresh `071940c8` direct-SSH terminal,
+`qa_unsent_071940c8_remount` and the checked clickable Ctrl ancestor are identical in the
+before/after XML through one normal `nodeterm://pair?code=bnVsbA` Intent, local PairHost rejection
+and Back. No Scan/Connect, terminal Send or producer runs. The original native roles, both Bash
+owners, server/socket and full captures are equal, as are both desktop client tuples. Phone tmux
+client636 is replaced by834 under the same SSH parent560, target session, TTY and argv. This
+reattachment is explicitly excluded from the unchanged-native-sections claim. Same retained entry
+follows source push/pop and the unique title; its runtime key is not directly observed. Result
+`nodeterm-new-phone-fixture-2idfmnhr/proof/root-draft-remount-fixed-result.json`, SHA-256
+`fb2a5c38e07e6daf0d952d3742c5eccd24b5b04ee9e2e9b3364dd8b3a2aa3b56`, binds case
+`71d7e2cd` and both native snapshots. A preliminary all-value equality assertion stopped before
+writing a result; the qualified comparison does not replay the physical case.
+
+The independent physical review is `beta22-remount-physical-independent-6rhn7izc/review.json`,
+SHA-256 `320af8c12084905126320b042f784a5099f3eb83f745bc10684617f0850f729b`; it rehashes
+86 records. Editor focus changes from true to false. This is accessibility-XML evidence, without
+pixel/glyph, cursor/selection, IME, activity/process-death, pending-Send or raw Ctrl timing credit.
+Existing profile/key/pin migration across the update is not established by this new-profile case.
+
+**Owned closure is verified.** Normal own-profile Forget returns Welcome; exactly the added public
+key and reverse29453 are removed and original public authorization bytes restored. Initial null-
+nonce enrollment records and the reverse-add response refusal are preserved with qualified read-
+only reconciliations; neither enrollment action is replayed. The sole 900000-to-15000 timeout restore
+has an uncertain post-write result; separate read-only `55b3f2d6` confirms the original 15000 with
+zero repeat setting writes. Installed APK/install identity and complete runtime-permission blocks
+match update-after. The original finite host exits 0 through validated intentional SIGTERM; seven
+unique original outer-host generations and both listeners are retired, private auth absent, and
+2516 source inputs, 136 outputs and 22 runtime pins held. An eighth recorded PID/birth entry aliases
+one outer generation; no global namespace scan or ordinary app-Quit acceptance is claimed.
+Canonical closure is `nodeterm-new-phone-fixture-2idfmnhr/proof/root-case-final-closure.json`,
+SHA-256 `3b379602a020dada055d973629763c604dd64bd4f2abee1b480e65bc740e1dd9`.
+Independent closure review is `beta22-remount-final-closure-independent-tm_gpcj5/review.json`,
+SHA-256 `d036ec60cde523bf57ee1c796759bd6f159a68ee7bc7b5748833f3dd708872a5`. Welcome
+XML precedes timeout restoration; the later read-only snapshot supplies package/timeout facts.
+
+Actual cursor/IME/activity recreation, pending-Send remount and raw-input Ctrl scheduling remain
+unverified; this one no-Send retained-entry case does not cover them. The original ledger remains **10 Pass / 22 Partial / 32 Pending**. No host/relay/SSH
 contract changes; iOS @eneskirca should review equivalent local retained-entry semantics.
 
 ### Captured Ctrl consumption (2026-10-08, A135)
@@ -801,9 +855,9 @@ forced offline app compilation. Ten policy and two wiring mutants were caught in
 receipt `098162c5`, root reparse and independent review `fdf4cbcf` bind those results.
 
 This is a verified source ordering defect and tested policy fix, without a phone timing
-reproduction or actual Handler execution by the JVM tests. Final signed-branch gates/push/CI and
-beta22 installation remain pending. Installed beta21/source `ef4caec2` and the 64-row ledger are
-unchanged. Pending-Send rearm/remount, native history/Live and whole-network loss remain separate
+reproduction or actual Handler execution by the JVM tests. Signed-source gates/CI and beta22
+installation now pass; physical raw-input scheduling remains pending. The original 64-row ledger
+is unchanged. Pending-Send rearm/remount, native history/Live and whole-network loss remain separate
 checks. No host or SSH-visible contract changes; iOS @eneskirca should review equivalent local Ctrl
 lifetime without an Android-to-iOS implementation claim.
 

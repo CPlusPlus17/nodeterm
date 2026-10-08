@@ -8,18 +8,28 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+**Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
+retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
+checked Ctrl through one normal locally rejected Pair screen and Back. Both original Bash panes,
+server/socket, captures and desktop clients stay unchanged; the phone client reattaches under its
+same SSH parent/session/TTY. No Send or producer runs. Source `2ba0b142` passes **1054/114**, offline
+app compilation and CI37732792493 all-five/ten-step. In-place update preserves measured install
+time and full runtime-permission blocks. Owned profile/auth/reverse/fixture cleanup is verified;
+raw-input Ctrl timing, selection/IME and pending-Send checks remain unverified. The original
+**10 Pass / 22 Partial / 32 Pending** ledger and installed artifact source stay unchanged.
+
+**Retained terminal editor (2026-10-08, A136 — source fixed; bounded fixed-phone pass).**
 The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
 and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
 Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
-caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+caught. Beta22/code23 is published and installed; one retained-entry remount now passes. The
 original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
 [the scoped evidence](android.md#retained-terminal-editor-2026-10-08-a136).
 
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
-wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
-and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Source publication
+and beta22 installation pass; a physical scheduling reproduction remains pending. See
 [the scoped evidence](android.md#captured-ctrl-consumption-2026-10-08-a135).
 
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
@@ -638,18 +648,27 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
 
 ## Progress log
 
+### Beta22 publication, update and bounded remount (2026-10-08)
+
+Source/Desktop `2ba0b142` passes fresh 1054/114/app and CI37732792493 all-five/ten-step.
+Same-signer beta22/code23 installs in place with measured install time/full runtime grants held.
+One fresh no-Send PairHost-cover/Back retains the exact draft and checked Ctrl; original native
+controls stay equal except the qualified phone-client reattach. Owned cleanup and read-only 15000
+timeout reconciliation pass, with the uncertain original restore result preserved; see
+[the canonical scope](android.md#retained-terminal-editor-2026-10-08-a136).
+
 ### Retained terminal editor (2026-10-08, A136)
 
 Original Pixel7a/beta21 draft/Ctrl loss is reproduced; own native panes/captures remain unchanged
 and the fixture/profile/auth/reverse are retired. Full entry-retention/revision/retirement source
 and mutation controls pass. [Canonical evidence](android.md#retained-terminal-editor-2026-10-08-a136);
-beta22/code23 publication, install and fixed-phone comparison remain pending.
+beta22/code23 publication/update and one bounded remount pass; broader checks remain pending.
 
 ### Captured Ctrl consumption (2026-10-08, A135)
 
 Immutable revision/viewer consumption is source fixed; policy and wiring mutation controls pass.
-[Canonical evidence](android.md#captured-ctrl-consumption-2026-10-08-a135); final gates/CI/beta and
-physical timing checks remain pending.
+[Canonical evidence](android.md#captured-ctrl-consumption-2026-10-08-a135); source gates/CI and
+beta22 installation pass; physical raw-input scheduling remains pending.
 
 ### Lost Send reply and newer draft (2026-10-08)
 
@@ -1892,11 +1911,11 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
-**A136 follow-up:** run final signed-source gates and exact CI, prepare beta22/code23 with the
-retained signer, update in place and repeat the remount check on a fresh own fixture. Verify
-selection/IME, recreation and pending-Send separately; process-death restoration is unsupported.
+**A136 follow-up:** publication, beta22/code23 update and one no-Send remount comparison pass.
+Owned cleanup is verified with the uncertain timeout result preserved and 15000 read back. Verify
+selection/IME, activity recreation and pending-Send separately; process-death restoration is unsupported.
 
-**A135 follow-up:** publish after final gates, then measure raw-input rearm and pending-Send Ctrl
+**A135 follow-up:** source publication and beta22 installation pass; measure raw-input rearm and pending-Send Ctrl
 on the phone. JVM policy/source pins do not establish real Handler scheduling.
 
 **Silent SSH peer pilot:** automatic recovery, retained draft text/glyphs and one explicit
@@ -2280,11 +2299,14 @@ of the new advertised action and receipt is owed to @eneskirca.
 
 ## What is verified, and what is not
 
-A136 original-beta draft/Ctrl failure and unchanged native owners/captures are measured; source
-policy/mutation checks and cleanup pass. Fixed-phone comparison remains pending. See
+A136 original-beta loss stays historical. Source/policy/mutation and beta22 installation pass;
+one fresh no-Send PairHost/Back retains the exact draft/checked Ctrl. Original native controls
+stay equal except the qualified phone-client reattach. Owned cleanup and read-only 15000 timeout
+reconciliation pass; cursor/IME, activity recreation and pending-Send remain unverified. See
 [canonical evidence](android.md#retained-terminal-editor-2026-10-08-a136).
 
-A135 source policy/mutation checks pass; physical timing and publication remain pending. See
+A135 source/policy/mutation, exact source gates/CI and beta22 installation pass; physical
+raw-input timing remains pending. See
 [canonical evidence](android.md#captured-ctrl-consumption-2026-10-08-a135).
 
 Verified:
@@ -2560,8 +2582,9 @@ source before editing. A100–A120 close retained history, typed read recovery, 
 agent policy, offscreen wake, held rule/question replies, SSH Git, owned Board/node actions and
 host-owned managed New over SSH, revoke reporting, dictation language, host retirement, pairing
 adapter choice, relative private-key Include exclusions and eligible legacy relay identity proof.
-Retained-signer beta 21/code22 from `ef4caec2` is installed on the separately authorized Pixel 7a.
-Fresh forced 1033/110/app/TypeScript and five-job/ten-step CI `37678829862` pass. A fresh owned
+Retained-signer beta22/code23 from `2ba0b142` is installed on the separately authorized Pixel 7a.
+Current source passes fresh forced1054/114/offlineapp and CI37732792493 all-five/ten-step.
+The earlier beta21 source passed1033/110/app/TypeScript and CI37678829862. A fresh owned
 40-ms/1200-row direct-SSH flow completes with its marker visible after Home/resume/scroll; the
 original A132 negative remains historical. A133 source is published and its bounded same-page
 retention, exact final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass.
@@ -2583,9 +2606,9 @@ At the earlier beta 17 checkpoint, `a79375c3` passed 982/102 protocol/app and af
 gates plus all-five CI. Its nine-case physical report binds 303 raw hashes for emacs/vi Send,
 transport recovery, raw Ctrl, viewer-close/manual Reattach, managed creation and exact owned
 End/cleanup. Those dated results and A128's source/configuration mutations remain historical.
-The installed beta 21 APK/runtime provenance remains `ef4caec2`, separate from later docs-only
+The installed beta22 APK/runtime provenance is `2ba0b142`, separate from later docs-only
 publication heads. Publish documentation only after fresh exact-revision offline gates and
-all-five/ten-critical-step CI, keeping those receipts private. Preserve the installed beta21 APK.
+all-five/ten-critical-step CI, keeping those receipts private. Preserve the installed beta22 APK.
 
 Use only the authorized Pixel 7a, verifying its serial and app focus before input. The user's
 current availability/wake authorization persists; do not repeatedly request unlock while the
@@ -2597,14 +2620,15 @@ and fresh original native create/visible prompt pass. A separate fresh consumer 
 capture retention and normal renderer reload/input with the same original kernel tuple and
 untouched sibling; canvas gestures and Android history remain unverified. The controlled shell
 comparison does not establish V13's child cause or whether fallback fired.
-Finish the A135/A136 final signed-source gates and exact Android CI, prepare/review beta22/code23,
-update in place and repeat A136 remount on a fresh owned fixture. Original beta21 loses draft/Ctrl;
-fixed-phone selection/IME/recreation and pending-Send/Ctrl follow-ups still need measurement.
+A135/A136 signed-source gates/CI and beta22/code23 update pass. One fresh no-Send A136 cover/Back
+retains draft/Ctrl and its fixture/profile/auth/reverse are retired. Original15000 is independently
+read back after the sole restore uncertainty without replay. Original beta21 loss stays historical.
+Selection/IME/activity recreation and pending-Send/Ctrl follow-ups still need measurement.
 Next are A129/A130 native app history/held Live-touch acceptance, whole-host/network loss,
 wider lifecycle/notification, native-route lost replies, network blackhole and remount/Ctrl during
 pending Send. The measured held- and lost-successful-receipt/newer-draft cases pass separately. A105 rule
 persistence after CLI restart, genuine production-pane-child launch and the wider question/layout/
-platform matrix remain pending. The bounded sibling CLI passes do not cover those paths. Keep beta 21 installed and preserve historical proofs and all unrelated profiles/panes.
+platform matrix remain pending. The bounded sibling CLI passes do not cover those paths. Keep beta22 installed and preserve historical proofs and all unrelated profiles/panes.
 
 Immediate FCM (A25) and fresh-different-desktop relay refusal (A93) need the hosted backend maintainers;
 the user has no backend repository to supply. A111 implements a host-owned launch API on current

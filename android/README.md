@@ -6,18 +6,28 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
-**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+**Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
+retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
+checked Ctrl through one normal locally rejected Pair screen and Back. Both original Bash panes,
+server/socket, captures and desktop clients stay unchanged; the phone client reattaches under its
+same SSH parent/session/TTY. No Send or producer runs. Source `2ba0b142` passes **1054/114**, offline
+app compilation and CI37732792493 all-five/ten-step. In-place update preserves measured install
+time and full runtime-permission blocks. Owned profile/auth/reverse/fixture cleanup is verified;
+raw-input Ctrl timing, selection/IME and pending-Send checks remain unverified. The original
+**10 Pass / 22 Partial / 32 Pending** ledger and installed artifact source stay unchanged.
+
+**Retained terminal editor (2026-10-08, A136 — source fixed; bounded fixed-phone pass).**
 The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
 and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
 Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
-caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+caught. Beta22/code23 is published and installed; one retained-entry remount now passes. The
 original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
 [the scoped evidence](../docs/android.md#retained-terminal-editor-2026-10-08-a136).
 
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
-wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
-and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Source publication
+and beta22 installation pass; a physical scheduling reproduction remains pending. See
 [the scoped evidence](../docs/android.md#captured-ctrl-consumption-2026-10-08-a135).
 
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21

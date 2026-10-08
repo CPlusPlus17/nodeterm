@@ -16,18 +16,28 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
-**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+**Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
+retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
+checked Ctrl through one normal locally rejected Pair screen and Back. Both original Bash panes,
+server/socket, captures and desktop clients stay unchanged; the phone client reattaches under its
+same SSH parent/session/TTY. No Send or producer runs. Source `2ba0b142` passes **1054/114**, offline
+app compilation and CI37732792493 all-five/ten-step. In-place update preserves measured install
+time and full runtime-permission blocks. Owned profile/auth/reverse/fixture cleanup is verified;
+raw-input Ctrl timing, selection/IME and pending-Send checks remain unverified. The original
+**10 Pass / 22 Partial / 32 Pending** ledger and installed artifact source stay unchanged.
+
+**Retained terminal editor (2026-10-08, A136 — source fixed; bounded fixed-phone pass).**
 The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
 and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
 Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
-caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+caught. Beta22/code23 is published and installed; one retained-entry remount now passes. The
 original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
 [the scoped evidence](android.md#retained-terminal-editor-2026-10-08-a136).
 
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
-wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
-and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Source publication
+and beta22 installation pass; a physical scheduling reproduction remains pending. See
 [the scoped evidence](android.md#captured-ctrl-consumption-2026-10-08-a135).
 
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
@@ -479,8 +489,8 @@ lifecycle and FPS matrix remains open.
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Original completion marker absent after all 1200 rows; fresh normal-Fedora 40-ms raw/capture discriminator passes, historical attribution pending |
 | [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
 | [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; original create/Bash prompt plus fresh native 200-marker capture/reload/input continuity verified; V13 cause/fallback and native-history phone/gesture acceptance unverified · Login-shell probe can outlive its child timeout |
-| [A135](#a135) | medium | | small | input/bug | ✅ source fixed; five policy/three wiring methods and three policy/one wiring mutants pass; publication and physical timing acceptance pending · Delayed raw-input consumption can clear newly armed Ctrl |
-| [A136](#a136) | medium | | small | phone/bug | ✅ source fixed; original beta21 loses draft/Ctrl on retained-entry remount; nine policy/three wiring methods and seven policy/one wiring mutants pass; publication/fixed-phone acceptance pending · Retained terminal entry loses its editor when composition is removed |
+| [A135](#a135) | medium | | small | input/bug | ✅ source fixed; five policy/three wiring methods and three policy/one wiring mutants pass; published/installed beta22; physical timing acceptance pending · Delayed raw-input consumption can clear newly armed Ctrl |
+| [A136](#a136) | medium | | small | phone/bug | ✅ source fixed; original beta21 loses draft/Ctrl on retained-entry remount; nine policy/three wiring methods and seven policy/one wiring mutants pass; published/installed beta22; one no-Send remount retains draft/Ctrl, broader acceptance pending · Retained terminal entry loses its editor when composition is removed |
 
 ## A01
 
@@ -5585,7 +5595,7 @@ native-history/Live, canvas gestures or full rendered payload parity. See the
 **Delayed raw-input consumption clears newly armed Ctrl**
 
 - Severity: **medium**; effort: small; area: Android input; kind: bug.
-- Status: **Source fixed; policy/wiring controls pass; publication and phone timing pending.**
+- Status: **Source fixed; policy/wiring controls and publication/install pass; phone timing pending.**
 
 The bridge captures one immutable armed/revision snapshot and consumes only it on its current
 viewer. Off/on rearm and stale-viewer callbacks preserve the newer arm. Five policy and three
@@ -5598,7 +5608,7 @@ its local modifier lifetime. [Full scope](android.md#captured-ctrl-consumption-2
 **Retained terminal navigation entry loses its editor when composition is removed**
 
 - Severity: **medium**; effort: small; area: Android navigation/editor; kind: bug.
-- Status: **Source fixed; original-beta failure and policy/wiring controls measured; fixed-phone pending.**
+- Status: **Source fixed/published and beta22 installed; one bounded fixed-phone remount pass.**
 
 The Pixel7a/beta21 composer and checked Ctrl become empty/unchecked after normal PairHost
 coverage and Back; both native panes and captures are identical. The corrected harness and
@@ -5606,6 +5616,10 @@ screen-timeout continuation are qualified in the canonical record. Full TextFiel
 Ctrl now live in process memory per actual entry, with whole-stack retention and sealed retirement.
 Send clears only its exact revision; pending Controller/speech and process-death restoration are
 not added. Nine store and three wiring methods pass; seven policy and one wiring mutant are caught.
-A135 is the source dependency. Publication/beta22/fixed-phone checks remain pending. No wire
+A135 is the source dependency. Signed-source publication and beta22 installation pass. One fresh
+no-Send PairHost/Back retains the exact draft/checked Ctrl; original native controls remain equal
+except a new phone client under the same SSH parent/session/TTY. Owned closure is verified with
+the uncertain timeout result preserved and original 15000 read back; raw Ctrl timing, selection/IME
+and pending-Send checks remain pending. No wire
 change; iOS @eneskirca should compare local editor lifetime.
 [Full scope](android.md#retained-terminal-editor-2026-10-08-a136).
