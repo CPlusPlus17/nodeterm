@@ -32,7 +32,6 @@ import type { NodeIcon } from '@shared/node-icon'
 import { columnCategory } from '@shared/kanban-category'
 import { NO_STATIONS, stationsByOpener, type TeamStation } from '../../lib/teamProgress'
 import { stationNodeFromState } from '../../state/teamStations'
-import { nodeOwner } from '../../lib/nodeOwner'
 
 /**
  * Global (Omni) Kanban overview — one swimlane per open project.
@@ -69,7 +68,7 @@ interface SwimlaneProps {
   onOpenNode: (nodeId: string, projectId: string) => void
   onCreateNode: (projectId: string, choice: KanbanCreateChoice, columnId: string | null) => void
   onDeleteNode: (projectId: string, nodeId: string) => void
-  onRenameNode: (nodeId: string, title: string) => void
+  onRenameNode: (projectId: string, nodeId: string, title: string) => void
   onEditSticky: (projectId: string, nodeId: string, text: string) => void
   onBrowserNav: (projectId: string, nodeId: string, patch: { url?: string; title?: string }) => void
   onSetIcon: (projectId: string, nodeId: string, icon: NodeIcon | undefined) => void
@@ -268,7 +267,7 @@ const Swimlane = memo(function Swimlane({
       commit,
       openCard: setModalNodeId,
       openOnCanvas: (id) => onOpenNode(id, projectId),
-      rename: onRenameNode,
+      rename: (id, title) => onRenameNode(projectId, id, title),
       aiName: onAiName ? (id) => onAiName(projectId, id) : undefined,
       nodeActions: nodeActionItems ? (id) => nodeActionItems(id, projectId) : undefined,
       remove: (id) => onDeleteNode(projectId, id)
@@ -350,12 +349,13 @@ const Swimlane = memo(function Swimlane({
           initialView={modalView}
           portsProjectId={projectId === activePortsProjectId ? projectId : undefined}
           onOpenCanvas={() => { setModalNodeId(null); onOpenNode(modalNodeId, projectId) }}
-          onRename={(t) => onRenameNode(modalNodeId, t)}
+          onRename={(t) => onRenameNode(projectId, modalNodeId, t)}
           onEditSticky={(t) => onEditSticky(projectId, modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(projectId, modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(projectId, modalNodeId, icon)}
           onSetColor={onSetColor ? (color) => onSetColor(projectId, modalNodeId, color) : undefined}
           onDelete={() => onDeleteNode(projectId, modalNodeId)}
+          onAiName={onAiName ? () => onAiName(projectId, modalNodeId) : undefined}
           team={teams.get(modalNodeId) ?? NO_STATIONS}
           onTravel={(nodeId) => { setModalNodeId(null); travel(nodeId) }}
         />
@@ -469,12 +469,11 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
     window.dispatchEvent(new CustomEvent('nodeterm:global-delete', { detail: { projectId, nodeId } }))
   }, [])
 
-  const onRenameNode = useCallback((nodeId: string, title: string) => {
-    // The board lists open projects, and `nodeOwner` prefers an open one over a closed, handed-off
-    // SSH project holding the same node id.
-    const proj = nodeOwner(useProjects.getState().projects, nodeId)
-    if (!proj) return
-    window.dispatchEvent(new CustomEvent('nodeterm:global-rename', { detail: { projectId: proj.id, nodeId, title } }))
+  const onRenameNode = useCallback((projectId: string, nodeId: string, title: string) => {
+    // The LANE's project, like every sibling here: it is known, and looking the node up in the
+    // STORED projects instead dropped a rename of a live-lane node created since the last autosave
+    // (not in the store yet) without a word — and could pick the wrong owner for a reused node id.
+    window.dispatchEvent(new CustomEvent('nodeterm:global-rename', { detail: { projectId, nodeId, title } }))
   }, [])
 
   const onEditSticky = useCallback((projectId: string, nodeId: string, text: string) => {

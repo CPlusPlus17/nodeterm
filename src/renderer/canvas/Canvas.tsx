@@ -115,7 +115,11 @@ import { Dock } from '../components/Dock'
 import { TabBar } from '../components/TabBar'
 import { ContextMenu, type MenuItem } from '../components/ContextMenu'
 import { tidySeparators } from '../lib/tidySeparators'
-import { createNodeWriteRouter, type NodeWrites } from '../lib/nodeWriteRouter'
+import {
+  createNodeWriteRouter,
+  ICON_PICKER_FAILED_MESSAGE,
+  type NodeWrites
+} from '../lib/nodeWriteRouter'
 import {
   BOARD_NODE_ACTION_IDS,
   buildNodeActionItems,
@@ -8832,7 +8836,15 @@ export function Canvas() {
         nodeId,
         title: (node.data.title as string) ?? '',
         icon: node.data.icon as NodeIcon | undefined
-      }).then((choice) => applyIconChoice(choice, (icon) => setNodeIcon(nodeId, icon)))
+      }).then(
+        (choice) => applyIconChoice(choice, (icon) => setNodeIcon(nodeId, icon)),
+        // A picker that fails to open is reported, the same sentence the off-canvas path uses —
+        // an unanswered rejection here was a click that did nothing at all.
+        () =>
+          window.dispatchEvent(
+            new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: ICON_PICKER_FAILED_MESSAGE } })
+          )
+      )
     },
     [setNodeIcon]
   )
@@ -8850,20 +8862,23 @@ export function Canvas() {
         storedNode: (nodeId) =>
           useProjects.getState().getProject(projectId)?.nodes.find((n) => n.id === nodeId),
         recolorStored: (nodeId, color) => useProjects.getState().recolorNode(projectId, nodeId, color),
-        setStoredIcon: (nodeId, icon) =>
-          useProjects.setState((s) => ({
-            projects: s.projects.map((p) =>
-              p.id === projectId
-                ? { ...p, nodes: p.nodes.map((n) => (n.id === nodeId ? ({ ...n, icon } as never) : n)) }
-                : p
-            )
-          })),
-        persist: writeDisk,
+        // Through the store's own-write path (like `recolorNode`), never a raw setState: that is
+        // what marks the write as ours and publishes it to a stored canvas with an authority (a
+        // hosted team), so a later saved overlay cannot quietly drop the icon.
+        setStoredIcon: (nodeId, icon) => {
+          const st = useProjects.getState()
+          const node = st.getProject(projectId)?.nodes.find((n) => n.id === nodeId)
+          if (node) st.applyOwnNodeMutation(projectId, { op: 'upsert', node: { ...node, icon } })
+        },
+        // `persist`, not `writeDisk`: the snapshot must carry the live canvas too. `writeDisk`
+        // alone writes the store's copy and then clears `dirty` — so a live edit still inside the
+        // autosave debounce was marked saved without ever reaching disk.
+        persist,
         iconDialog: nodeIconDialog,
         toast: (message) =>
           window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
       }),
-    [setNodesColor, setNodeIcon, pickNodeIcon, writeDisk]
+    [setNodesColor, setNodeIcon, pickNodeIcon, persist]
   )
 
   const alignToGrid = useCallback(
@@ -10401,6 +10416,12 @@ export function Canvas() {
   const setActiveCardColor = useCallback(
     (nodeId: string, color: string) => setCardColor(activeProjectId, nodeId, color),
     [setCardColor, activeProjectId]
+  )
+  // The per-project board's card-modal icon, through the same router as its card menu's icon row
+  // (a gone node or a save that fails is reported instead of silently doing nothing).
+  const setActiveCardIcon = useCallback(
+    (nodeId: string, icon: NodeIcon | undefined) => nodeWritesFor(activeProjectId).setIcon(nodeId, icon),
+    [nodeWritesFor, activeProjectId]
   )
   // Stable identity for the memoized per-project board, which only ever shows the active project.
   const activeBoardNodeActionItems = useCallback(
@@ -15796,7 +15817,10 @@ export function Canvas() {
       const agentId = (liveNode?.data.agentId as AgentId | undefined) ?? storedNode?.agentId
       const name = title.trim()
       if (agentId && canRename(agentId) && name) {
-        void pushSessionRename(api.pty, id, name, prevTitle)
+        // The NODE's core, not the active tab's: the sidebar and the Omni board rename nodes of
+        // every project, and a relay- or hosted-bound project's session lives on another core —
+        // the active tab's `api` would type `/rename` into a same-named session on the wrong one.
+        void pushSessionRename(sessionForProject(projectId).api.pty, id, name, prevTitle)
       }
     },
     [activeProjectId, setNodes, markDirty, writeDisk]
@@ -15962,7 +15986,9 @@ export function Canvas() {
             .getState()
             .projects.find((p) => p.id === projectId)
             ?.nodes.find((n) => n.id === id)?.accountId
-        const r = await api.pty.generateName(id, cwd ?? '', accountId)
+        // The node's own core (see `renameSession`): the capture must read the session where it
+        // actually runs, not a same-named one on the active tab's core.
+        const r = await sessionForProject(projectId).api.pty.generateName(id, cwd ?? '', accountId)
         if (r.ok) renameSession(projectId, id, r.message)
         else failed(r.message)
       } catch (e) {
@@ -18530,7 +18556,7 @@ export function Canvas() {
           onDeleteNode={deleteNodeFromKanban}
           onModalNodeChange={setKanbanModalNode}
           onBrowserNav={browserNavFromKanban}
-          onSetIcon={setNodeIcon}
+          onSetIcon={setActiveCardIcon}
           nodeActionItems={activeBoardNodeActionItems}
           onAiName={aiNameFromActiveKanban}
           onSetColor={setActiveCardColor}

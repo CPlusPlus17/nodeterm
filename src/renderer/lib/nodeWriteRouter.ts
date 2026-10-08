@@ -38,7 +38,7 @@ export interface NodeWriteRouterDeps {
   storedNode: (nodeId: string) => CanvasNodeState | undefined
   recolorStored: (nodeId: string, color: string) => void
   setStoredIcon: (nodeId: string, icon: NodeIcon | undefined) => void
-  /** Canvas `writeDisk`: false when the save was refused. */
+  /** Canvas `persist` (commit the live canvas, then write): false when the save was refused. */
   persist: () => Promise<boolean>
   iconDialog: (opts: { nodeId: string; title: string; icon?: NodeIcon }) => Promise<NodeIconChoice>
   toast: (message: string) => void
@@ -87,10 +87,14 @@ export function createNodeWriteRouter(d: NodeWriteRouterDeps): NodeWrites {
         d.toast(NODE_GONE_MESSAGE)
         return
       }
+      // The rejection handler covers the DIALOG only: a failure after a successful pick is not "the
+      // picker failed to open", and the write path reports its own failures (NODE_GONE / save).
       void d
         .iconDialog({ nodeId, title: node.title ?? '', icon: node.icon })
-        .then((choice) => applyIconChoice(choice, (icon) => setIcon(nodeId, icon)))
-        .catch(() => d.toast(ICON_PICKER_FAILED_MESSAGE))
+        .then(
+          (choice) => applyIconChoice(choice, (icon) => setIcon(nodeId, icon)),
+          () => d.toast(ICON_PICKER_FAILED_MESSAGE)
+        )
     }
   }
 }

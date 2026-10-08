@@ -1288,6 +1288,7 @@ export const KanbanView = memo(function KanbanView({
           onSetIcon={(icon) => onSetIcon(modalNodeId, icon)}
           onSetColor={onSetColor ? (color) => onSetColor(modalNodeId, color) : undefined}
           onDelete={() => onDeleteNode(modalNodeId)}
+          onAiName={onAiName ? () => onAiName(modalNodeId) : undefined}
           onOpenIssue={(ref) => {
             // The issue summary is its own modal: close the card, then ask for the issue (the same
             // request the session card's `#N` makes — summary if the lane has it, else GitHub).
