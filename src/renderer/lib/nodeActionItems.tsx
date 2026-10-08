@@ -49,6 +49,7 @@ import { useSystemAccount } from '../state/systemAccount'
 import { useSystemCodexAccount } from '../state/systemCodexAccount'
 import {
   addSelectionToGroup,
+  canToggleCollapse,
   selectedRootIds,
   systemAccountDisplay,
   type CanvasNode
@@ -358,9 +359,17 @@ export function buildNodeActionSections(
     },
     {
       id: 'collapse',
-      items: isHidden('collapse', hidden)
-        ? []
-        : ([
+      // Offered only when the toggle can act on at least one target (`canToggleCollapse`):
+      // collapsible kinds, plus a node an older build saved collapsed so it can still expand. Without
+      // the gate an editor, browser or group frame in the selection is squashed to the 40px bar.
+      items:
+        isHidden('collapse', hidden) ||
+        !ids.some((nid) => {
+          const n = ctx.nodes.find((nd) => nd.id === nid)
+          return !!n && canToggleCollapse(n)
+        })
+          ? []
+          : ([
             {
               label: 'Collapse / Expand',
               icon: <IconCollapse />,
