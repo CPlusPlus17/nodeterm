@@ -696,6 +696,40 @@ class SshTransportTest {
         }
     }
 
+    @Test fun `composed SSH lost Enter acknowledgement is uncertain after one real paste and Enter without retry`() = runBlocking<Unit> {
+        SshTestHost().use { host ->
+            val adoption = managedAdoption(host)
+            val bytes = composedRecorder(host, adoption.receipt.paneId, "lost-enter-ack")
+            host.connect().use { conn ->
+                val stream = conn.attach(adoption.receipt.nodeId, 80, 24, Sink())
+                val pastes = java.util.concurrent.atomic.AtomicInteger()
+                val enters = java.util.concurrent.atomic.AtomicInteger()
+                val enterCommand = AtomicReference<ShCommand>()
+                host.onCommand = { command, channel ->
+                    if (command.contains("nt-composed-delivered")) {
+                        if (command.contains("load-buffer")) pastes.incrementAndGet()
+                        else {
+                            enters.incrementAndGet()
+                            enterCommand.set(channel)
+                            // ShCommand executes the real guarded Enter and drains stdout before
+                            // closing this channel without its exit-status acknowledgement.
+                            channel.omitExitStatus = true
+                        }
+                    }
+                }
+                try {
+                    val result = stream.submitComposed(ComposedInput.Paste("one Enter Ω🧭", true))
+                    awaitComposedBytes(bytes, "\u001b[200~one Enter Ω🧭\u001b[201~\r")
+                    assertTrue(assertNotNull(enterCommand.get()).exited.await(2, TimeUnit.SECONDS), "the actual guarded Enter process exited")
+                    assertEquals(1, pastes.get(), "one acknowledged paste; no retry")
+                    assertEquals(1, enters.get(), "one executed Enter; no retry")
+                    assertFalse(conn.isConnected, "the unconfirmed Enter disconnects the transport")
+                    assertEquals(ComposedInputResult.Status.UNCERTAIN, result.status, "execution does not replace the missing second acknowledgement")
+                } finally { host.onCommand = null; stream.detach() }
+            }
+        }
+    }
+
     @Test fun `composed SSH queued behind raw IO is refused immediately on viewer retirement`() = runBlocking<Unit> {
         SshTestHost().use { host ->
             val adoption = managedAdoption(host); val bytes = composedRecorder(host, adoption.receipt.paneId, "retired")

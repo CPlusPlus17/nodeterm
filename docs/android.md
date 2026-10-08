@@ -5,6 +5,18 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
+direct-SSH case loses the original reader's successful 22-byte Enter receipt before it can return
+to userspace. The exact newer 146-character draft is observed with Send disabled before loss;
+it remains afterward while the app reconnects. One original-TTY witness/ACK stays unique at a
+late observation more than 120 seconds later, and automatic recovery attaches a new viewer to
+the original Bash/server/socket/producer with the complete sibling guard unchanged. Observed
+checkout `5a3013dd`, Desktop build `0d8594a6` and installed APK/source `ef4caec2` are distinct.
+Owned cleanup and original 15000-ms timeout restoration pass. Android's internal result is not
+observed; network blackhole, whole-host loss, remount/Ctrl during pending Send, native TLS/history
+and the full device matrix remain unverified. The original **10/22/32** ledger stays unchanged.
+See [the measured receipt loss](#lost-send-reply-and-newer-draft-2026-10-08).
+
 **Held Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/direct-SSH
 case observes the exact newer 146-character draft with Send disabled before a measured
 9.000280-second post-execution receipt hold ends; after release the same draft remains with Send
@@ -12,8 +24,9 @@ enabled. One original-TTY witness/ACK stays unique 168.735781 seconds later, wit
 Bash/server/producer/socket/guard retained. Observed checkout `50e7a876`, Desktop build `0d8594a6`
 and installed beta21/code22 APK/source `ef4caec2` are distinct; no product or APK change occurs.
 Owned phone/host cleanup completes, with original timeout 15000 ms independently confirmed after
-an uncertain restore, without replay. Lost reply, network blackhole, remount/Ctrl during pending
-Send and native TLS/history remain unverified; the original **10/22/32** ledger is unchanged.
+an uncertain restore, without replay. At that checkpoint, lost reply, network blackhole,
+remount/Ctrl during pending Send and native TLS/history remained unverified; the original
+**10/22/32** ledger is unchanged.
 See [the measured receipt hold](#held-send-reply-and-newer-draft-2026-10-08).
 
 **Earlier nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
@@ -30,8 +43,9 @@ See [the bounded follow-up](#nine-second-send-and-newer-draft-follow-up-2026-10-
 admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
 a new viewer while it is paused, preserving the original shell, producer, tmux server/socket and
 guard. The unsent draft and its saved rendered text remain; one later explicit Send executes once
-and receives a real ACK. Whole-host/network loss, cursor position and lost-reply races remain
-unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchanged. See
+and receives a real ACK. At that checkpoint, whole-host/network loss, cursor position and
+lost-reply races remained unverified. Owned cleanup passes; the original **10/22/32** ledger stays
+unchanged. See
 [the bounded receipt](#silent-ssh-peer-recovery-and-single-send-2026-10-08).
 
 **Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
@@ -715,6 +729,70 @@ iOS @eneskirca needs the additive action, durable request and attach-only receip
 
 ## What is verified, and how
 
+### Lost Send reply and newer draft (2026-10-08)
+
+Fresh `nodeterm-new-phone-fixture-8kjtzvr7` uses observed checkout `5a3013dd`, immutable
+Desktop/build `0d8594a6` and unchanged installed Pixel 7a beta21/code22 APK/source `ef4caec2`.
+One ordinary Send targets the original owned pane. The gate matches the exact production Enter
+child and its stdout FIFO to the authenticated original SSH reader, then stops at its first
+positive **22-byte read EXIT**. It verifies one real application ACK and witness from the original
+Bash/node/TTY while the reader is stopped. No payload, tracee-memory or encrypted-packet inspection
+is used.
+
+One normal suffix appends a newer draft without submitting it. Fresh XML observes its exact
+**146 characters** and disabled clickable Send control before the reader is killed, **4.998662
+seconds before** the original nine-second hold deadline. Only the admitted original reader
+receives pidfd SIGKILL from that matched syscall stop, with no detach/continuation back to
+userspace; actual wait status 9 and readable pidfd confirm its death. This loses that successful
+receipt after execution rather than simulating failure before dispatch.
+
+Post-loss XML retains the exact newer draft and disabled Send while showing
+“Disconnected. Reconnecting…” and “Reattach”. The later native snapshot records a new phone
+viewer/handler attached to the same original Bash, tmux server/socket and producer; the complete
+sibling guard remains unchanged. Native capture still contains exactly one standalone ACK and
+the journal remains initial null plus the same sole witness at a late observation **over 120
+seconds later** (conservative recorded lower bound 128.743 seconds). No suffix invocation or
+automatic replay occurs. XML proves the draft/model state; this case claims no full rendered-glyph
+equality, cursor preservation or observed Android internal `UNCERTAIN` status. A retained newer
+draft alone cannot distinguish that status from an acknowledged completion's revision guard.
+
+Private proof is under the fresh fixture's `proof/` directory:
+`ssh-composed-loss-result.json` SHA-256
+`293fa824e20bb6acc3f092ed62f179ff69518b27237a6a2c76a70ac69cfdf0e0`,
+`lost-read-exit-ui-result.json` SHA-256
+`689e347138577581039869166a0e1c8a4b6bbc7f0f81518b4679a27cd7f0c85d`
+and `lost-receipt-root-late-readback.json` SHA-256
+`8358c9d81a6874edef51287e8678ed45899dbfb47acceb4c160d25622e5504c2`.
+Independent actual review `a128-lost-receipt-actual-independent-31xxhq1x/review.json` passes,
+SHA-256 `41c9e7d36a6f29f7c7be3a87c03555b96f18376ee2508e69d54d7b2514a1bc5e`.
+
+Normal own-profile Forget, exact public authorization restoration, owned reverse removal and
+verified **15000-ms** timeout restoration complete. Separate fresh device readback confirms the
+unchanged APK, first-install time and complete notification grant. The original host session
+exits 0 with `runner-result.json` passing: 22 runtime tools and all 136 built outputs remain held,
+its listeners close and generated private authentication is removed. This is owned cleanup,
+not normal App Quit or exhaustive process absence. Independent cleanup review
+`a128-lost-receipt-final-cleanup-independent-5ats0kf2/review.json` passes within that scope,
+SHA-256 `8b2b27e02b5e66f3fdb894994bca5267cc15db4380cca7444a85d865f4dc338f`:
+seven captured outer generations are absent, 2510 immutable inputs/136 outputs and 22 runtime
+pins are held, both listener tables are clear and five generated auth paths are absent.
+The separate regression-test mutation window is excluded from its current-source comparison.
+
+The added real MINA/tmux `SshTransportTest` case loses only the second Enter exit-status
+acknowledgement after actual guarded execution. It requires exact bracketed Unicode paste plus
+CR, one paste/Enter attempt, an exited process and disconnected transport before asserting
+`UNCERTAIN`. Healthy and restored controls each pass that one registered method with zero
+skips. A mutant falsely returning `DELIVERED` after acknowledged paste fails its final status
+assertion; production source is restored exactly. Private regression summary
+`a128-lost-enter-ack-test-proof-thx73a_2/result-summary.json` SHA-256
+`4bc29eefecd8db2ff96bba8c0a52dc5c5c3c3b2f633e3c3669e814faddbf5d39`.
+This supplies JVM transport classification evidence separately from the phone's visible state.
+
+This one direct-SSH successful-receipt-loss/newer-draft case passes. Whole-host/network blackhole,
+native-route lost receipts, remount/Ctrl during pending Send, native TLS/history and wider lifecycle
+checks remain open. No new finding, production source, wire or APK change is introduced; the
+original **10 Pass / 22 Partial / 32 Pending** ledger stays unchanged.
+
 ### Silent SSH peer recovery and single Send (2026-10-08)
 
 The fresh `nodeterm-new-phone-fixture-ajwhcupk` uses signed docs-only checkout `04da9b9e`, immutable
@@ -800,9 +878,9 @@ App Quit. Separate late/cleanup review `a128-read-exit-final-cleanup-peer-1r0sd9
 passes within that scope, SHA-256
 `ac748cbaf52eea7c4362290966e82309255a7e2c24bfb83f5c2772bd6dd470ae`.
 
-This one direct-SSH retained-successful-receipt case passes. Lost reply, network blackhole,
-whole-host loss, remount/Ctrl during pending Send, native TLS/history and the wider lifecycle
-matrix remain unverified. The earlier deadline-missed partial result stays preserved, no new
+This one direct-SSH retained-successful-receipt case passes. At that checkpoint, lost reply, network
+blackhole, whole-host loss, remount/Ctrl during pending Send, native TLS/history and the wider
+lifecycle matrix remained unverified. The earlier deadline-missed partial result stays preserved, no new
 finding or source/wire/APK change is introduced, and the original **10 Pass / 22 Partial / 32 Pending**
 ledger remains unchanged.
 

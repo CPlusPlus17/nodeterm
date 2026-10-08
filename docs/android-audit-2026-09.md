@@ -16,6 +16,20 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
+direct-SSH case loses the original reader's successful 22-byte Enter receipt before it can return
+to userspace. The exact newer 146-character draft is observed with Send disabled before loss;
+it remains afterward while the app reconnects. One original-TTY witness/ACK stays unique at a
+late observation more than 120 seconds later, and automatic recovery attaches a new viewer to
+the original Bash/server/socket/producer with the complete sibling guard unchanged. Observed
+checkout `5a3013dd`, Desktop build `0d8594a6` and installed APK/source `ef4caec2` are distinct.
+Owned cleanup and original 15000-ms timeout restoration pass. Android's internal result is not
+observed; network blackhole, whole-host loss, remount/Ctrl during pending Send, native TLS/history
+and the full device matrix remain unverified. The original **10/22/32** ledger stays unchanged.
+See [the measured receipt loss](android.md#lost-send-reply-and-newer-draft-2026-10-08).
+A new real SSH/tmux second-Enter acknowledgement regression passes healthy/restored controls;
+its false-success mutant is caught. Production behavior and the installed APK are unchanged.
+
 **Held Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/direct-SSH
 case observes the exact newer 146-character draft with Send disabled before a measured
 9.000280-second post-execution receipt hold ends; after release the same draft remains with Send
@@ -23,8 +37,9 @@ enabled. One original-TTY witness/ACK stays unique 168.735781 seconds later, wit
 Bash/server/producer/socket/guard retained. Observed checkout `50e7a876`, Desktop build `0d8594a6`
 and installed beta21/code22 APK/source `ef4caec2` are distinct; no product or APK change occurs.
 Owned phone/host cleanup completes, with original timeout 15000 ms independently confirmed after
-an uncertain restore, without replay. Lost reply, network blackhole, remount/Ctrl during pending
-Send and native TLS/history remain unverified; the original **10/22/32** ledger is unchanged.
+an uncertain restore, without replay. At that checkpoint, lost reply, network blackhole,
+remount/Ctrl during pending Send and native TLS/history remained unverified; the original
+**10/22/32** ledger is unchanged.
 See [the measured receipt hold](android.md#held-send-reply-and-newer-draft-2026-10-08).
 
 **Earlier nine-second Send/newer-draft follow-up (2026-10-08 — bounded partial).** A fresh `d361ce8f`
@@ -41,8 +56,9 @@ See [the bounded follow-up](android.md#nine-second-send-and-newer-draft-follow-u
 admitted old SSH peer is stopped for 45.000 seconds on shared loopback; automatic recovery creates
 a new viewer while it is paused, preserving the original shell, producer, tmux server/socket and
 guard. The unsent draft and its saved rendered text remain; one later explicit Send executes once
-and receives a real ACK. Whole-host/network loss, cursor position and lost-reply races remain
-unverified. Owned cleanup passes; the original **10/22/32** ledger stays unchanged. See
+and receives a real ACK. At that checkpoint, whole-host/network loss, cursor position and
+lost-reply races remained unverified. Owned cleanup passes; the original **10/22/32** ledger stays
+unchanged. See
 [the bounded receipt](android.md#silent-ssh-peer-recovery-and-single-send-2026-10-08).
 
 **Native Desktop continuity (2026-10-08 — scoped verification).** A fresh private Desktop/build
@@ -441,7 +457,7 @@ lifecycle and FPS matrix remains open.
 | [A125](#a125) | medium | | small | desktop/bug | ✅ source-fixed in `415dae9b`; eight bounded Linux Desktop reconnect cases pass at `5b7286b3` with A126; historical negative, 13 new/100 affected tests and six mutants retained; one two-host inactive-global native case passes at `59e4c93e`; phone/wider scope open · Open SSH card does not replace its lost viewer after automatic reconnect and inactive cards resolve through the active owner |
 | [A126](#a126) | medium | | small | desktop/bug | ✅ source-fixed in `5b7286b3`; 16 new/294 affected tests, full TypeScript, nine assertion mutants and eight bounded native reconnect cases pass; forced950/98/app gates pass; one quiet native park/adopt + inactive-global case passes at `59e4c93e`; wider park/Server/cross-window/phone/platform open · Co-view xterms send duplicate automatic terminal replies into the retained process |
 | [A127](#a127) | medium | | small | phone/bug | ✅ source-fixed in `0d50075a`; three JVM methods/twelve callback cases/three mutants; beta 17 and beta 19 Pixel 7a neutral viewer-only exit, retained draft and same-producer manual Reattach/input verified; wider scope pending · Viewer exit falsely reports that the retained host session ended |
-| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; beta 19 copy-mode Send and controlled SSH-handler recovery reconfirmed; beta21 direct-SSH successful receipt/newer-draft hold verified (lost reply pending); exact beta-17 End and owned cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
+| [A128](#a128) | high | BLOCK | medium | input/bug | ✅ source-fixed in `7e7d2c04`; CI registration `5484ab9f`; 30 mutants, merged 982/102 protocol and app and affected 187/11/full TypeScript gates plus all-five CI pass at `a79375c3`; beta 17 emacs/vi Send exactly once, controlled vi reconnect and raw Ctrl verified; beta 19 copy-mode Send and controlled SSH-handler recovery reconfirmed; beta21 direct-SSH held and lost successful Enter receipt/newer-draft cases verified within their documented scope; exact beta-17 End and owned cleanup verified, negotiated session-host/direct-native follow-up described below, physical ConPTY and wider device scope pending · Composed Send clears a draft without submitting it while tmux history is open |
 | [A129](#a129) | medium | | medium | input/bug | ✅ source-fixed in `0818bbed` / `2d693263`, published at `1add0408`; leaf 34/3 + 20 mutants, backend 343/37 + four existing Windows-only skips + 21 mutants, root 13 + 18 mutants, cleanup 1 + 1 mutant; focused Android 99/11 + 14 variants (13 behavioral/one source pin), separate CI-reader 11 + eight config deletions; fresh 1012/105 protocol, app, 568/52 Vitest with four existing Windows skips, full TS and all-five/ten-step CI `37602046133` pass; beta 18/code 19 was ready/not installed at that earlier checkpoint; beta 19/code 20 installation was an earlier checkpoint; beta 21/code 22 is now installed, native/session-host physical acceptance pending; original `ce1121ba` finding retained · Native history swipes send wheel input to the foreground instead of browsing retained history |
 | [A130](#a130) | medium | | small | input/bug | ✅ source-fixed in `9da36320`, published in `5bda2c32`; three new JVM cases, 48/7 control/restored zero skips and three semantic assertion mutants; fresh 1015/106/app/TypeScript and five-job/ten-step CI pass, beta 19/code 20 installed with measured update preservation; original `1add0408` failure retained; actual app/WebView/physical acceptance pending · Held Live-button touch does not stop the previous fling until click |
 
@@ -5108,11 +5124,21 @@ compiled callback recipe `/tmp/nodeterm-a127-verify.py`, SHA-256
 
 ## A128
 
+**2026-10-08 lost-receipt follow-up (bounded physical pass):** The exact production Enter
+receipt reader is killed from its first positive 22-byte read EXIT after one original-shell
+execution, with real pidfd/wait-status death evidence. Fresh XML observes the exact newer draft
+and disabled Send before loss; the draft remains through automatic original-shell recovery.
+One real ACK/witness stays unique over 120 seconds later with the original terminal/producer/
+complete sibling guard held. Owned cleanup completes. Android's internal composed status,
+whole-host/network loss, native-route loss and remount/Ctrl remain unverified; no new finding,
+source/wire/APK change or original ledger promotion occurs. See
+[the measured receipt loss](android.md#lost-send-reply-and-newer-draft-2026-10-08).
+
 **2026-10-08 retained-receipt follow-up (bounded physical pass):** A fresh beta21/direct-SSH case
 observes the exact newer 146-character draft and disabled Send before a measured post-execution
 receipt hold ends. The same draft remains with Send enabled after release; one original-TTY
 witness/ACK stays unique 168.735781 seconds later with the original terminal/producer/guard held.
-Owned cleanup completes. Lost reply, blackhole, remount/Ctrl and native TLS/history stay unverified;
+Owned cleanup completes. At that checkpoint, lost reply, blackhole, remount/Ctrl and native TLS/history were unverified;
 the earlier partial wrapper and original 64-row ledger are unchanged. See
 [the measured receipt hold](android.md#held-send-reply-and-newer-draft-2026-10-08).
 
