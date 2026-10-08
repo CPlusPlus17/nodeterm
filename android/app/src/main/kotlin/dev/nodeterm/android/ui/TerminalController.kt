@@ -56,6 +56,7 @@ import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.TerminalScrollView
 import dev.nodeterm.protocol.host.ViewerSlot
 import dev.nodeterm.protocol.model.AgentState
+import dev.nodeterm.protocol.model.CtrlModifier
 import dev.nodeterm.protocol.model.ExternalLink
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.InputBar
@@ -95,7 +96,9 @@ sealed interface TermState {
 class TerminalController(
     private val graph: AppGraph,
     private val session: HostSession,
-    private val nodeId: String
+    private val nodeId: String,
+    initialCtrl: CtrlModifier = CtrlModifier(),
+    private val onCtrlChanged: (CtrlModifier) -> Unit = {}
 ) {
     var state by mutableStateOf<TermState>(TermState.Connecting)
         private set
@@ -158,11 +161,15 @@ class TerminalController(
     /** A desktop viewer sized the shared pty differently from this screen. */
     var sizedElsewhere by mutableStateOf<Pair<Int, Int>?>(null)
         private set
-    private var ctrlState by mutableStateOf(false)
-    private var ctrlRevision = 0L
+    private var ctrlModifier by mutableStateOf(initialCtrl)
+    private fun updateCtrl(modifier: CtrlModifier) {
+        if (modifier == ctrlModifier) return
+        ctrlModifier = modifier
+        onCtrlChanged(modifier)
+    }
     var ctrlArmed: Boolean
-        get() = ctrlState
-        set(value) { if (value != ctrlState) { ctrlState = value; ctrlRevision++ } }
+        get() = ctrlModifier.armed
+        set(value) { updateCtrl(ctrlModifier.withArmed(value)) }
     var submitting by mutableStateOf(false)
         private set
 
@@ -309,9 +316,13 @@ class TerminalController(
             val s = stream ?: return
             if (!page.isCurrent(gen)) return
             var out = data
-            if (ctrlArmed && data.length == 1) {
+            val modifier = ctrlModifier
+            if (modifier.armed && data.length == 1) {
                 Keys.ctrl(data)?.let { out = it }
-                main.post { if (page.isCurrent(gen) && stream === s) ctrlArmed = false }
+                main.post {
+                    val current = page.isCurrent(gen) && stream === s
+                    updateCtrl(ctrlModifier.consume(modifier, current))
+                }
             }
             writeInput(out, s)
         }
@@ -980,7 +991,8 @@ class TerminalController(
      */
     fun submit(text: String, enter: Boolean, onDelivered: () -> Unit): Boolean {
         if (submitting) return false
-        val input = when (val send = InputBar.plan(attached, ctrlArmed, text, enter)) {
+        val modifier = ctrlModifier
+        val input = when (val send = InputBar.plan(attached, modifier.armed, text, enter)) {
             InputBar.Send.NotAttached -> return false
             is InputBar.Send.Control -> ComposedInput.Control(send.bytes)
             is InputBar.Send.Paste -> ComposedInput.Paste(send.text, send.enter)
@@ -989,7 +1001,7 @@ class TerminalController(
         val actor = actions ?: return false
         val view = webView ?: return false
         if (!input.valid()) { notice = "Send is too large or invalid. The draft was kept."; return false }
-        val completionPolicy = ComposedCompletion(ctrlRevision)
+        val completionPolicy = ComposedCompletion(modifier.revision)
         submitting = true
         actor.closeScrollView()
         // Stop JS momentum before the actor discards queued scroll and awaits its in-flight call.
@@ -1008,7 +1020,7 @@ class TerminalController(
                 main.post {
                     submitting = false
                     val current = webView === view && stream === expected && actions === actor && attached
-                    completionPolicy.complete(completion, current, ctrlRevision, { ctrlArmed = false }, onDelivered)
+                    completionPolicy.complete(completion, current, ctrlModifier.revision, { ctrlArmed = false }, onDelivered)
                     if (current && completion.status != ComposedInputResult.Status.DELIVERED)
                         notice = completion.message ?: "Send could not be confirmed. Check the terminal before sending the retained draft again."
                 }

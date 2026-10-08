@@ -6,6 +6,12 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
+consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
+and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+[the scoped evidence](../docs/android.md#captured-ctrl-consumption-2026-10-08-a135).
+
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
 direct-SSH case loses the original reader's successful 22-byte Enter receipt before it can return
 to userspace. The exact newer 146-character draft is observed with Send disabled before loss;

@@ -16,6 +16,12 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
+consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
+and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+[the scoped evidence](android.md#captured-ctrl-consumption-2026-10-08-a135).
+
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
 direct-SSH case loses the original reader's successful 22-byte Enter receipt before it can return
 to userspace. The exact newer 146-character draft is observed with Send disabled before loss;
@@ -465,6 +471,7 @@ lifecycle and FPS matrix remains open.
 | [A132](#a132) | medium | | unknown | verification/gap | **OPEN** · Original completion marker absent after all 1200 rows; fresh normal-Fedora 40-ms raw/capture discriminator passes, historical attribution pending |
 | [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
 | [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; original create/Bash prompt plus fresh native 200-marker capture/reload/input continuity verified; V13 cause/fallback and native-history phone/gesture acceptance unverified · Login-shell probe can outlive its child timeout |
+| [A135](#a135) | medium | | small | input/bug | ✅ source fixed; five policy/three wiring methods and three policy/one wiring mutants pass; publication and physical timing acceptance pending · Delayed raw-input consumption can clear newly armed Ctrl |
 
 ## A01
 
@@ -5563,3 +5570,16 @@ original shell. The original daemon/state/socket/token/Bash/producer generations
 sibling capture stay unchanged; owned retirement is verified. This does not promote Android
 native-history/Live, canvas gestures or full rendered payload parity. See the
 [scoped consumer receipt](android.md#native-desktop-capture-and-renderer-reattach-2026-10-08).
+
+## A135
+
+**Delayed raw-input consumption clears newly armed Ctrl**
+
+- Severity: **medium**; effort: small; area: Android input; kind: bug.
+- Status: **Source fixed; policy/wiring controls pass; publication and phone timing pending.**
+
+The bridge captures one immutable armed/revision snapshot and consumes only it on its current
+viewer. Off/on rearm and stale-viewer callbacks preserve the newer arm. Five policy and three
+wiring methods pass; three policy and one wiring mutant are caught. This is source/policy
+verification, not a physical race reproduction. No wire change; iOS @eneskirca should compare
+its local modifier lifetime. [Full scope](android.md#captured-ctrl-consumption-2026-10-08-a135).

@@ -5,6 +5,12 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
+consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
+wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
+and a physical scheduling reproduction remain pending. Beta21/code22 is still installed; see
+[the scoped evidence](#captured-ctrl-consumption-2026-10-08-a135).
+
 **Lost Send reply/newer draft (2026-10-08 — bounded physical pass).** A fresh Pixel 7a/beta21
 direct-SSH case loses the original reader's successful 22-byte Enter receipt before it can return
 to userspace. The exact newer 146-character draft is observed with Send disabled before loss;
@@ -728,6 +734,30 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Captured Ctrl consumption (2026-10-08, A135)
+
+`TerminalController.Bridge.onInput` previously posted a Ctrl clear guarded only by page/stream
+identity. An off/on rearm before that main-thread callback could therefore be consumed by the old
+input. One immutable armed/revision snapshot now covers capture, transformation and guarded
+consumption. Raw input still enters the existing write queue immediately. Composed Send retains
+its viewer/revision completion fences; automatic terminal reports do not consume Ctrl.
+
+Five `CtrlModifierTest` behavior methods and three explicitly lexical app wiring methods pass
+inside the 48-method/seven-suite healthy and restored candidate controls. Removing captured-revision
+matching, the current-viewer guard or no-op setter semantics produces the intended assertion
+failures; removing the app stream fence is separately caught by a source pin. The complete combined
+Ctrl/draft candidate passes **1054 methods / 114 suites**, with no failures, errors or skips, and
+forced offline app compilation. Ten policy and two wiring mutants were caught in total. Saved
+receipt `098162c5`, root reparse and independent review `fdf4cbcf` bind those results.
+
+This is a verified source ordering defect and tested policy fix, without a phone timing
+reproduction or actual Handler execution by the JVM tests. Final signed-branch gates/push/CI and
+beta22 installation remain pending. Installed beta21/source `ef4caec2` and the 64-row ledger are
+unchanged. Pending-Send rearm/remount, native history/Live and whole-network loss remain separate
+checks. No host or SSH-visible contract changes; iOS @eneskirca should review equivalent local Ctrl
+lifetime without an Android-to-iOS implementation claim.
+
 
 ### Lost Send reply and newer draft (2026-10-08)
 
