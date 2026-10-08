@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.SideEffect
@@ -57,6 +58,7 @@ class Navigator(initial: BackStack<Route>) {
     private var backStack by mutableStateOf(initial)
 
     val size: Int get() = backStack.size
+    val entries: List<BackStack.Entry<Route>> get() = backStack.entries
 
     /** The showing entry: its route, and the key its saved UI state is filed under. */
     val top: BackStack.Entry<Route> get() = backStack.entries.last()
@@ -250,7 +252,14 @@ private fun AppContent(nav: Navigator) {
     // key, which the saved back stack keeps across recreation, like the holder keeps the state.
     val saved = rememberSaveableStateHolder()
     // An entry that left the stack never comes back (a new push gets a new key): drop its state.
-    SideEffect { nav.takeRetired().forEach { saved.removeState(it) } }
+    val graph = NodetermApp.graph(LocalContext.current)
+    SideEffect {
+        nav.takeRetired().forEach { saved.removeState(it) }
+        graph.terminalDrafts.retain(nav.entries.filter {
+            val route = it.value
+            route is Route.Terminal && graph.hosts.get(route.hostId) != null
+        }.mapTo(mutableSetOf()) { it.key })
+    }
     BackHandler(enabled = nav.size > 1) { nav.pop() }
     val top = nav.top
     // Keyed per ENTRY, not per route: a Host screen for another computer, or for the same one opened
@@ -262,7 +271,7 @@ private fun AppContent(nav: Navigator) {
             Route.AddSshHost -> AddSshHostScreen(nav)
             Route.Settings -> SettingsScreen(nav)
             is Route.Host -> HostScreen(nav, r.hostId, r.tab)
-            is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
+            is Route.Terminal -> TerminalScreen(nav, top.key, r.hostId, r.nodeId, r.title)
             is Route.SourceControl -> SourceControlScreen(nav, r.hostId, r.projectId)
             Route.AllComputers -> AllComputersScreen(nav)
         }

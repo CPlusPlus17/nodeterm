@@ -3,10 +3,18 @@
 Read this first if you are picking up the Android work. It records where the work stands, what has
 and has not been verified, what is known to be broken, and the plan in order. The full list of
 findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](android-audit-2026-09.md)
-(original IDs `A01`–`A77`, continuation findings `A78`–`A135`). The design notes are [`android.md`](android.md) and the user-facing readme is
+(original IDs `A01`–`A77`, continuation findings `A78`–`A136`). The design notes are [`android.md`](android.md) and the user-facing readme is
 [`../android/README.md`](../android/README.md).
 
 ## TL;DR
+
+**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
+and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
+Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
+caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
+[the scoped evidence](android.md#retained-terminal-editor-2026-10-08-a136).
 
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
@@ -629,6 +637,13 @@ verify the new touch/keyboard, multi-host freshness or included-key pairing flow
   No PR should be opened unless asked; `A68` is last.
 
 ## Progress log
+
+### Retained terminal editor (2026-10-08, A136)
+
+Original Pixel7a/beta21 draft/Ctrl loss is reproduced; own native panes/captures remain unchanged
+and the fixture/profile/auth/reverse are retired. Full entry-retention/revision/retirement source
+and mutation controls pass. [Canonical evidence](android.md#retained-terminal-editor-2026-10-08-a136);
+beta22/code23 publication, install and fixed-phone comparison remain pending.
 
 ### Captured Ctrl consumption (2026-10-08, A135)
 
@@ -1877,6 +1892,10 @@ The remaining phone cleanup and notification checks can continue when the correc
 
 ### What is still open
 
+**A136 follow-up:** run final signed-source gates and exact CI, prepare beta22/code23 with the
+retained signer, update in place and repeat the remount check on a fresh own fixture. Verify
+selection/IME, recreation and pending-Send separately; process-death restoration is unsupported.
+
 **A135 follow-up:** publish after final gates, then measure raw-input rearm and pending-Send Ctrl
 on the phone. JVM policy/source pins do not establish real Handler scheduling.
 
@@ -2261,6 +2280,10 @@ of the new advertised action and receipt is owed to @eneskirca.
 
 ## What is verified, and what is not
 
+A136 original-beta draft/Ctrl failure and unchanged native owners/captures are measured; source
+policy/mutation checks and cleanup pass. Fixed-phone comparison remains pending. See
+[canonical evidence](android.md#retained-terminal-editor-2026-10-08-a136).
+
 A135 source policy/mutation checks pass; physical timing and publication remain pending. See
 [canonical evidence](android.md#captured-ctrl-consumption-2026-10-08-a135).
 
@@ -2574,8 +2597,9 @@ and fresh original native create/visible prompt pass. A separate fresh consumer 
 capture retention and normal renderer reload/input with the same original kernel tuple and
 untouched sibling; canvas gestures and Android history remain unverified. The controlled shell
 comparison does not establish V13's child cause or whether fallback fired.
-Publish A135 after final source gates and exact Android CI; prepare the retained-signer private
-beta for physical Ctrl checks. Existing policy/source pins do not execute actual phone scheduling.
+Finish the A135/A136 final signed-source gates and exact Android CI, prepare/review beta22/code23,
+update in place and repeat A136 remount on a fresh owned fixture. Original beta21 loses draft/Ctrl;
+fixed-phone selection/IME/recreation and pending-Send/Ctrl follow-ups still need measurement.
 Next are A129/A130 native app history/held Live-touch acceptance, whole-host/network loss,
 wider lifecycle/notification, native-route lost replies, network blackhole and remount/Ctrl during
 pending Send. The measured held- and lost-successful-receipt/newer-draft cases pass separately. A105 rule

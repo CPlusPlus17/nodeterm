@@ -5,6 +5,14 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
+and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
+Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
+caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
+[the scoped evidence](#retained-terminal-editor-2026-10-08-a136).
+
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
 wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
@@ -734,6 +742,47 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Retained terminal editor (2026-10-08, A136)
+
+**Original-beta failure reproduced.** The Pixel 7a (serial `2C091JEHN03336`) runs beta21/code22,
+APK `91638d05`, Android source `ef4caec2`; the disposable host uses immutable Desktop build
+`0d8594a6` while the clean source checkpoint is `675dd519`. On the independently owned `95b2116a`
+terminal, composer `qa_unsent_95b2116a_remount` and checked Ctrl become empty/unchecked after one
+normal `nodeterm://pair?code=bnVsbA` Intent covers it with PairHost and one Back returns. The code
+encodes JSON null and is rejected locally; no Scan/Connect or terminal Send runs. The entire original
+native server/socket, both Bash pane owners and both full captures remain identical. Result
+`b0437b63` and independent review `19cb9739` bind the saved XML and native records.
+
+The first harness stopped before Intent because WebView exposes another editor. The corrected
+check selects the composer outside WebView and the clickable checked Ctrl ancestor. A 15-second
+display timeout stopped Back before dispatch; one ordinary wake and separately admitted Back
+completed that same covered entry without repeating Intent. Same-entry continuity follows the
+production push/pop code and unique title; its internal runtime key is not directly observed.
+Own profile/public-key authorization/reverse are removed, the unchanged 15000-ms timeout and
+install identity/full notification grant are read back, and the finite original fixture exits
+successfully. Captured generations/listeners are absent and all 136 held outputs remain unchanged.
+This is deliberate disposable-fixture retirement, not an ordinary app-Quit measurement.
+
+`TerminalDrafts<TextFieldValue>` now retains the full text, selection/composition, edit revision
+and Ctrl in AppGraph process memory for each real navigation entry. The complete live stack retains
+covered entries. Pop/replacement and host retirement clear values and seal stale handles. Send and
+mic starts read the latest accepted entry, and delivered clearing requires its exact sent revision;
+newer edits, including an edit away and back, survive. Controller pending work and speech sessions
+are not restored. Command text is not serialized into a Bundle or file; process-death draft recovery
+remains unsupported.
+
+Nine store behavior methods and three explicit app wiring methods pass with the updated existing
+Dictation pins. Seven draft-policy mutants (revision, exact clear, retirement sealing/value release,
+stack membership, owner retirement/replacement) and one whole-stack wiring mutant are caught.
+Combined healthy/restored controls pass 48/seven, full candidate **1054/114** and offline app compile
+pass, with all prior 1034/110 methods retained. Receipt `098162c5` and independent `fdf4cbcf` review
+qualify policy execution versus lexical wiring. A135 supplies the preceding Ctrl API dependency.
+
+Final signed-source gates/CI and beta22/code23 signing, installation and fixed-phone comparison
+remain pending. Actual cursor/IME/recreation, pending-Send remount and Ctrl scheduling still need
+physical checks. The original ledger remains **10 Pass / 22 Partial / 32 Pending**. No host/relay/SSH
+contract changes; iOS @eneskirca should review equivalent local retained-entry semantics.
 
 ### Captured Ctrl consumption (2026-10-08, A135)
 

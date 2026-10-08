@@ -2,6 +2,8 @@ package dev.nodeterm.android
 
 import android.app.Application
 import android.content.Context
+import androidx.compose.ui.text.input.TextFieldValue
+import dev.nodeterm.protocol.model.TerminalDrafts
 import dev.nodeterm.android.conn.ConnectionManager
 import dev.nodeterm.android.data.HostStore
 import dev.nodeterm.android.data.SecureStore
@@ -30,6 +32,7 @@ class AppGraph(context: Context) {
     val identity: PhoneIdentity = secure.phoneIdentity(hosts.identityStorage)
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val terminalDrafts = TerminalDrafts(TextFieldValue())
     val connections = ConnectionManager(this)
 
     /** Who may dial a computer's relay, and when (never a dialog-raising first handshake from the background). */

@@ -16,6 +16,14 @@ full-suite and phone verification are tracked in the handover. The private APKs 
 local builds; each requested push requires green Android workflow verification. Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
+**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
+and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
+Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
+caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
+[the scoped evidence](android.md#retained-terminal-editor-2026-10-08-a136).
+
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
 wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
@@ -472,6 +480,7 @@ lifecycle and FPS matrix remains open.
 | [A133](#a133) | medium | | small | phone/bug | ✅ source-fixed in `94c8d2c4`, refined/published at `ef4caec2`; 27 renderer cases, prior semantic/pin mutants plus the delayed-Enter follow-up mutation; full 1033/110/app/TS and CI five/ten pass, beta 21/code 22 installed; bounded same-page retention, final-marker/Unicode clipboard paste and post-font OSC8/plain link offers pass; normal browser/Share pilot measured as separately scoped; wider matrix unverified · Closed SSH/tmux exit erases the last visible pane |
 | [A134](#a134) | medium | | small | desktop/bug | ✅ source/caller checkpoints `3f382367`/`0d8594a6` published; seven caught mutants, full 1033/110/app/TS, affected 161/nine files/five Windows skips and CI five/ten pass; original create/Bash prompt plus fresh native 200-marker capture/reload/input continuity verified; V13 cause/fallback and native-history phone/gesture acceptance unverified · Login-shell probe can outlive its child timeout |
 | [A135](#a135) | medium | | small | input/bug | ✅ source fixed; five policy/three wiring methods and three policy/one wiring mutants pass; publication and physical timing acceptance pending · Delayed raw-input consumption can clear newly armed Ctrl |
+| [A136](#a136) | medium | | small | phone/bug | ✅ source fixed; original beta21 loses draft/Ctrl on retained-entry remount; nine policy/three wiring methods and seven policy/one wiring mutants pass; publication/fixed-phone acceptance pending · Retained terminal entry loses its editor when composition is removed |
 
 ## A01
 
@@ -5583,3 +5592,20 @@ viewer. Off/on rearm and stale-viewer callbacks preserve the newer arm. Five pol
 wiring methods pass; three policy and one wiring mutant are caught. This is source/policy
 verification, not a physical race reproduction. No wire change; iOS @eneskirca should compare
 its local modifier lifetime. [Full scope](android.md#captured-ctrl-consumption-2026-10-08-a135).
+
+## A136
+
+**Retained terminal navigation entry loses its editor when composition is removed**
+
+- Severity: **medium**; effort: small; area: Android navigation/editor; kind: bug.
+- Status: **Source fixed; original-beta failure and policy/wiring controls measured; fixed-phone pending.**
+
+The Pixel7a/beta21 composer and checked Ctrl become empty/unchecked after normal PairHost
+coverage and Back; both native panes and captures are identical. The corrected harness and
+screen-timeout continuation are qualified in the canonical record. Full TextFieldValue/revision/
+Ctrl now live in process memory per actual entry, with whole-stack retention and sealed retirement.
+Send clears only its exact revision; pending Controller/speech and process-death restoration are
+not added. Nine store and three wiring methods pass; seven policy and one wiring mutant are caught.
+A135 is the source dependency. Publication/beta22/fixed-phone checks remain pending. No wire
+change; iOS @eneskirca should compare local editor lifetime.
+[Full scope](android.md#retained-terminal-editor-2026-10-08-a136).

@@ -745,6 +745,7 @@ class ConnectionManager(private val graph: AppGraph) {
         retire = { hostId, session ->
             session?.retire()
             graph.relayGate.forget(hostId)
+            graph.terminalDrafts.retireOwner(hostId)
         },
     )
 

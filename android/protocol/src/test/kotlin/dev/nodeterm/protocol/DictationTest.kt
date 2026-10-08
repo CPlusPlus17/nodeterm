@@ -275,7 +275,7 @@ class DictationTest {
             "Dictation.step(state, event)", "state = step.state", "step.draft?.let(setDraft)")
         // The screen hands it the draft's setter and nothing else.
         val setter = AppSourcePins.blockAfter(screen, "DictationController(context.applicationContext)")
-        assertTrue("draft = cursorAtEnd(it)" in setter, setter)
+        assertTrue("entry.edit(cursorAtEnd(it))" in setter, setter)
         for (send in listOf("submit(", ".write(", "raw(", "key(", "js("))
             assertFalse(send in setter, "Dictation's setter must not send: $setter")
         assertEquals(1, Regex("""DictationController\(""").findAll(screen).count())
@@ -313,18 +313,18 @@ class DictationTest {
     fun `the screen asks for the microphone on the first tap, hides the mic without a recognizer, and cancels on stop`() {
         AppSourcePins.assertInOrder(screen,
             "rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->",
-            "if (granted) dictation.start(draft.text) else dictation.denied()")
+            "if (granted) dictation.start(entry.state.value.value.text) else dictation.denied()")
         val mic = AppSourcePins.blockAfter(screen, "if (dictation.available) {")
         AppSourcePins.assertInOrder(mic,
             "dictation.active -> dictation.stop()",
             "ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)",
-            "PackageManager.PERMISSION_GRANTED -> dictation.start(draft.text)",
+            "PackageManager.PERMISSION_GRANTED -> dictation.start(entry.state.value.value.text)",
             "else -> askMic.launch(Manifest.permission.RECORD_AUDIO)")
         assertFalse("submit" in mic, "the mic sends nothing:\n$mic")
         // Any other change to the draft ends a dictation: typing, and Send's clear.
-        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "onValueChange = {"), "draft = it", "dictation.edited()")
+        AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "onValueChange = {"), "entry.edit(it)", "dictation.edited()")
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "val send: () -> Unit = {"),
-            "controller.submit(draft.text, enter = true)", "draft = TextFieldValue()", "dictation.edited()")
+            "controller.submit(sent.value.text, enter = true)", "entry.clearUnchangedDraft(sent.revision)", "dictation.edited()")
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "LifecycleStartEffect(dictation)"), "onStopOrDispose { dictation.cancel() }")
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "DisposableEffect(dictation)"), "onDispose { dictation.dispose() }")
         AppSourcePins.assertInOrder(screen, "dictation.state.message?.let { msg ->", "dictation.dismiss()")
@@ -343,7 +343,7 @@ class DictationTest {
     fun `a dictated draft puts the cursor at its end, and only a change to the text ends a dictation`() {
         val code = code(screen)
         // The field gets the draft with its cursor, so the TextFieldValue overload, not the String one.
-        assertTrue("var draft by remember { mutableStateOf(TextFieldValue()) }" in code, screen)
+        AppSourcePins.assertInOrder(code, "entry.state.collectAsState()", "val draft = editor.value")
         AppSourcePins.assertInOrder(screen, "OutlinedTextField(", "value = draft,", "onValueChange = {")
         // Where dictation's words go (Dictation.join appends them), the cursor goes: after the last
         // character, with nothing selected or composing.
@@ -351,13 +351,13 @@ class DictationTest {
         // Every write of the draft is one of these: dictation's (cursor at the end), Send's clear, or
         // the field's own report (the user's cursor). A write that keeps an old cursor, such as
         // `draft.copy(text = …)`, would bring the bug back.
-        val writes = Regex("""\bdraft = ([^\n}]+)""").findAll(code).map { it.groupValues[1].trim() }.toList()
-        assertEquals(listOf("cursorAtEnd(it)", "TextFieldValue()", "it"), writes, code)
+        val writes = Regex("""\bentry\.(edit|clearUnchangedDraft)\(([^\n]+)""").findAll(code).map { it.groupValues[0].trim() }.toList()
+        assertEquals(listOf("entry.edit(cursorAtEnd(it))", "entry.clearUnchangedDraft(sent.revision)) dictation.edited()", "entry.edit(it)"), writes, code)
         // The TextFieldValue overload also reports changes that only move the cursor or mark the word
         // the keyboard composes; those change no text and must not end a dictation (the String overload
         // reported text changes only). The comparison is with the draft before this change.
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "onValueChange = {"),
-            "val typed = it.text != draft.text", "draft = it", "if (typed) dictation.edited()")
+            "val typed = it.text != entry.state.value.value.text", "entry.edit(it)", "if (typed) dictation.edited()")
         assertEquals(2, Regex("""dictation\.edited\(\)""").findAll(code).count(), "only typing and Send's clear end a dictation")
     }
 

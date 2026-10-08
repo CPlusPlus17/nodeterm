@@ -6,6 +6,14 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Retained terminal editor (2026-10-08, A136 — source fixed; original-beta failure measured).**
+The Pixel 7a/beta21 loses its unsent draft and armed Ctrl after another screen covers the terminal
+and Back returns. The fix keeps the full editor and Ctrl state with that live navigation entry.
+Nine store and three wiring regressions pass; seven policy mutants and one wiring mutant are
+caught. Beta22/code23 publication, installation and fixed-phone comparison remain pending. The
+original **10 Pass / 22 Partial / 32 Pending** ledger is unchanged; see
+[the scoped evidence](../docs/android.md#retained-terminal-editor-2026-10-08-a136).
+
 **Captured Ctrl consumption (2026-10-08, A135 — source fixed).** Delayed raw-keyboard
 consumption now checks the captured Ctrl revision as well as its viewer. Five policy and three
 wiring regressions pass; three policy mutants and one wiring mutant are caught. Publication gates
