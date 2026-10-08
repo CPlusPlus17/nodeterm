@@ -989,18 +989,22 @@ class TerminalController(
      * viewer confirms the explicit composed action. Refusal, stale views and uncertain writes keep
      * it, and no delivery is retried. Raw keys, emulator replies and wheels use their original path.
      */
-    fun submit(text: String, enter: Boolean, onDelivered: () -> Unit): Boolean {
-        if (submitting) return false
-        val modifier = ctrlModifier
+    fun submit(text: String, enter: Boolean, modifier: CtrlModifier,
+        onCompleted: (ComposedInputResult, Boolean) -> Boolean, onDelivered: () -> Unit): Boolean {
+        fun refuse(message: String = "This terminal changed before Send. The draft was kept."): Boolean {
+            onCompleted(ComposedInputResult.refused(message), false)
+            return false
+        }
+        if (submitting) return refuse("Send is already pending. The draft was kept.")
         val input = when (val send = InputBar.plan(attached, modifier.armed, text, enter)) {
-            InputBar.Send.NotAttached -> return false
+            InputBar.Send.NotAttached -> return refuse()
             is InputBar.Send.Control -> ComposedInput.Control(send.bytes)
             is InputBar.Send.Paste -> ComposedInput.Paste(send.text, send.enter)
         }
-        val expected = stream ?: return false
-        val actor = actions ?: return false
-        val view = webView ?: return false
-        if (!input.valid()) { notice = "Send is too large or invalid. The draft was kept."; return false }
+        val expected = stream ?: return refuse()
+        val actor = actions ?: return refuse()
+        val view = webView ?: return refuse()
+        if (!input.valid()) return refuse("Send is too large or invalid. The draft was kept.")
         val completionPolicy = ComposedCompletion(modifier.revision)
         submitting = true
         actor.closeScrollView()
@@ -1020,9 +1024,10 @@ class TerminalController(
                 main.post {
                     submitting = false
                     val current = webView === view && stream === expected && actions === actor && attached
-                    completionPolicy.complete(completion, current, ctrlModifier.revision, { ctrlArmed = false }, onDelivered)
-                    if (current && completion.status != ComposedInputResult.Status.DELIVERED)
-                        notice = completion.message ?: "Send could not be confirmed. Check the terminal before sending the retained draft again."
+                    // Settle the captured entry even after disposal; never clear through a stale viewer
+                    // or through an already retired/completed entry attempt.
+                    if (onCompleted(completion, current))
+                        completionPolicy.complete(completion, current, ctrlModifier.revision, { ctrlArmed = false }, onDelivered)
                 }
             }
         }

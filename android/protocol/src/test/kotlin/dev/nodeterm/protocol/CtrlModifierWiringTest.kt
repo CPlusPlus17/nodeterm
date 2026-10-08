@@ -46,8 +46,8 @@ class CtrlModifierWiringTest {
     @Test
     fun `composed Send plans from its snapshot and completes against the latest revision`() {
         val submit = AppSourcePins.blockAfter(controller(), "fun submit(text:")
-        AppSourcePins.assertInOrder(submit, "val modifier = ctrlModifier",
-            "InputBar.plan(attached, modifier.armed, text, enter)", "ComposedCompletion(modifier.revision)")
+        assertTrue(controller().contains("modifier: CtrlModifier"))
+        AppSourcePins.assertInOrder(submit, "InputBar.plan(attached, modifier.armed, text, enter)", "ComposedCompletion(modifier.revision)")
         val posted = AppSourcePins.blockAfter(submit, "main.post")
         AppSourcePins.assertInOrder(posted,
             "val current = webView === view && stream === expected && actions === actor && attached",

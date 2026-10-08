@@ -5,6 +5,14 @@ It speaks the protocol the desktop serves to phones, with additive typed host ve
 fields and an owned SSH actions service documented below. This doc records what the app relies on,
 where each fact comes from, and what is not done.
 
+**Pending Send after remount (2026-10-08, A137 — source fixed; local checks pass).**
+Pending Send state and outcome guidance now belong to the retained terminal entry. Button and IME
+share exact-attempt admission; earlier uncertainty survives remount and a later known refusal until
+explicit dismissal. Focused66/9, full1069/116 and offline app compilation pass; thirteen intended
+mutants are caught. Publication, a new APK and the controlled pending-Send phone case remain pending.
+Installed beta22/code23 remains source `2ba0b142`; the original **10 Pass / 22 Partial / 32 Pending**
+ledger is unchanged. See [the scoped finding](#pending-send-outcome-after-remount-2026-10-08-a137).
+
 **Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
 retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
 checked Ctrl through one normal locally rejected Pair screen and Back. Both original Bash panes,
@@ -752,6 +760,44 @@ Actual isolated native-PTY/tmux tests use a fixture CLI and do not claim real Cl
 iOS @eneskirca needs the additive action, durable request and attach-only receipt in the same update.
 
 ## What is verified, and how
+
+### Pending Send outcome after remount (2026-10-08, A137)
+
+**Source fixed; local checks pass.** Before this change, at observed checkout `bb519eac`, installed
+beta22/code23 and the archived Desktop build both used source `2ba0b142`. `TerminalDrafts.State` retains the
+editor/revision/Ctrl, while `TerminalController` owns only local `submitting` and `notice`. A normal
+PairHost cover disposes that controller. `TerminalActions` resolves queued input as REFUSED or
+already-dispatched input as UNCERTAIN, but the old controller's current-view fence suppresses its
+notice. Back creates a controller with no pending/outcome state. Once attached, it can offer Send
+for the retained draft without the earlier guidance. This is a source-demonstrated visibility gap;
+no physical duplicate or automatic retry is established. A136's measured no-Send pass is separate.
+
+The fix reserves one immutable attempt from the accepted editor/Ctrl revisions before JS
+preparation through the shared button/IME path. Pending state belongs to the surviving entry and
+blocks another admission. Only its exact attempt can settle; retired or different-owner handles
+cannot adopt it. A stale positive becomes uncertainty. Original view/stream/actor and editor/Ctrl
+revision fences still govern positive clearing, so a newer draft or rearmed Ctrl survives.
+Uncertainty guidance survives edits, remount and later DELIVERED or REFUSED results until its exact
+notice is dismissed; newer uncertainty gets a new notice identity. No command job, controller or
+stream is restored, and nothing is persisted across process death or added to the host wire.
+
+**Local validation passes:** twelve entry/actor behavior methods and three explicitly lexical
+Android wiring methods, focused healthy/restored **66 methods / 9 suites**, full restored
+**1069 methods / 116 suites**, and forced offline app compilation. All original 1054 method names
+remain. The thirteen final variants catch their intended assertions: ten behavior and three wiring
+mutants, with no errors or skips. Source/Android delegation review passes; this grants no physical
+WebView/Handler/Compose timing credit. The whole suite includes the existing isolated SSH/tmux/desktop
+interop; new A137 cases execute entry/actor policy and lexical Android checks. Signed-source gates/CI,
+a new APK/update and the fresh
+controlled pending-Send cover/Back comparison remain pending. The original 64-item ledger is unchanged.
+The final mutation receipt is `pending-send-entry-candidate-6pciadbm/proof-final/mutation-receipt.json`,
+SHA-256 `2b72eb43ef1b467d4367f8a7725fc22bc1efc062c0ae090c03fdfd93ea1944c3`.
+iOS @eneskirca should compare local entry-owned attempt/guidance lifetimes and stale clearing.
+
+Private source report: `pending-send-retained-entry-source-review-5gsfw1r5/REPORT.txt`, SHA-256
+`639ac6c616077500c803dcf37fcd5d3eab9f6298aa34528f841034e5dd14c0c7`. The corrected candidate's
+independent source review is `pending-send-entry-source-independent-c8sg0jmo/review.json`, SHA-256
+`3f1916ade664815f47bd1cfe54d6c81bed3092f2fb2704a3e8c7d98f17c9b4cf`; it grants no test or phone credit.
 
 ### Retained terminal editor (2026-10-08, A136)
 

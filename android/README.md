@@ -6,6 +6,14 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+**Pending Send after remount (2026-10-08, A137 — source fixed; local checks pass).**
+Pending Send state and outcome guidance now belong to the retained terminal entry. Button and IME
+share exact-attempt admission; earlier uncertainty survives remount and a later known refusal until
+explicit dismissal. Focused66/9, full1069/116 and offline app compilation pass; thirteen intended
+mutants are caught. Publication, a new APK and the controlled pending-Send phone case remain pending.
+Installed beta22/code23 remains source `2ba0b142`; the original **10 Pass / 22 Partial / 32 Pending**
+ledger is unchanged. See [the scoped finding](../docs/android.md#pending-send-outcome-after-remount-2026-10-08-a137).
+
 **Beta22 remount follow-up (2026-10-08 — bounded physical pass).** On the Pixel 7a,
 retained-signer beta22/code23 (`fa894d4b`, source `2ba0b142`) keeps the exact unsent draft and
 checked Ctrl through one normal locally rejected Pair screen and Back. Both original Bash panes,

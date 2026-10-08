@@ -22,7 +22,7 @@ class TerminalDraftsWiringTest {
 
     @Test fun `Send captures the current accepted editor and clears through its entry revision`() {
         val send = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalScreen.kt"), "val send: () -> Unit = {")
-        AppSourcePins.assertInOrder(send, "val sent = entry.state.value", "controller.submit(sent.value.text, enter = true)",
+        AppSourcePins.assertInOrder(send, "val sent = entry.beginSend()", "controller.submit(sent.value.text, enter = true,",
             "entry.clearUnchangedDraft(sent.revision)", "dictation.edited()")
         assertFalse(send.contains("controller.submit(draft.text"), "a collected UI value can lag a just accepted edit")
     }

@@ -324,7 +324,7 @@ class DictationTest {
         // Any other change to the draft ends a dictation: typing, and Send's clear.
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "onValueChange = {"), "entry.edit(it)", "dictation.edited()")
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "val send: () -> Unit = {"),
-            "controller.submit(sent.value.text, enter = true)", "entry.clearUnchangedDraft(sent.revision)", "dictation.edited()")
+            "controller.submit(sent.value.text, enter = true,", "entry.clearUnchangedDraft(sent.revision)", "dictation.edited()")
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "LifecycleStartEffect(dictation)"), "onStopOrDispose { dictation.cancel() }")
         AppSourcePins.assertInOrder(AppSourcePins.blockAfter(screen, "DisposableEffect(dictation)"), "onDispose { dictation.dispose() }")
         AppSourcePins.assertInOrder(screen, "dictation.state.message?.let { msg ->", "dictation.dismiss()")

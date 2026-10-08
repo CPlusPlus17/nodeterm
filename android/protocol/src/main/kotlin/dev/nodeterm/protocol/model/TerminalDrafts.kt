@@ -1,6 +1,7 @@
 package dev.nodeterm.protocol.model
 
 import dev.nodeterm.protocol.host.ComposedCompletion
+import dev.nodeterm.protocol.host.ComposedInputResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,7 +12,16 @@ import kotlinx.coroutines.flow.asStateFlow
  * entry, forgetting its host, or starting a different stack retires it and releases its value.
  */
 class TerminalDrafts<V>(private val empty: V) {
-    data class State<V>(val value: V, val revision: Long = 0, val ctrl: CtrlModifier = CtrlModifier())
+    data class State<V>(val value: V, val revision: Long = 0, val ctrl: CtrlModifier = CtrlModifier(),
+        val pendingSend: SendAttempt? = null, val sendNotice: SendNotice? = null)
+
+    /** Identity, not a reusable counter: an old entry or callback cannot settle another attempt. */
+    class SendAttempt internal constructor(val revision: Long, val ctrl: CtrlModifier)
+    class SendNotice internal constructor(val status: ComposedInputResult.Status, val message: String)
+    class Submission<V> internal constructor(val value: V, val attempt: SendAttempt) {
+        val revision: Long get() = attempt.revision
+        val ctrl: CtrlModifier get() = attempt.ctrl
+    }
 
     class Entry<V> internal constructor(val owner: String, private val empty: V) {
         private val lock = Any()
@@ -29,6 +39,39 @@ class TerminalDrafts<V>(private val empty: V) {
         fun setCtrl(value: CtrlModifier): Boolean = synchronized(lock) {
             if (retired) return false
             current.value = current.value.copy(ctrl = value)
+            true
+        }
+
+        /** Reserve before JS preparation, from the accepted editor rather than a collected UI value. */
+        fun beginSend(): Submission<V>? = synchronized(lock) {
+            if (retired || current.value.pendingSend != null) return null
+            val before = current.value
+            val attempt = SendAttempt(before.revision, before.ctrl)
+            current.value = before.copy(pendingSend = attempt)
+            Submission(before.value, attempt)
+        }
+
+        /** Outcome survives coverage; delivery-side clearing still needs the original current viewer. */
+        fun completeSend(attempt: SendAttempt, result: ComposedInputResult, currentViewer: Boolean): Boolean = synchronized(lock) {
+            if (retired || current.value.pendingSend !== attempt) return false
+            val outcome = if (!currentViewer && result.status == ComposedInputResult.Status.DELIVERED)
+                ComposedInputResult.uncertain() else result
+            val notice = when (outcome.status) {
+                ComposedInputResult.Status.DELIVERED -> current.value.sendNotice
+                ComposedInputResult.Status.REFUSED -> current.value.sendNotice?.takeIf {
+                    it.status == ComposedInputResult.Status.UNCERTAIN
+                } ?: SendNotice(outcome.status, outcome.message ?: "Send was not sent. The draft was kept.")
+                ComposedInputResult.Status.UNCERTAIN -> SendNotice(outcome.status,
+                    outcome.message ?: "Send could not be confirmed. Check the terminal before sending the retained draft again.")
+            }
+            current.value = current.value.copy(pendingSend = null, sendNotice = notice)
+            true
+        }
+
+        /** A delayed dismissal cannot hide guidance from a newer attempt. */
+        fun dismissSendNotice(notice: SendNotice): Boolean = synchronized(lock) {
+            if (retired || current.value.sendNotice !== notice) return false
+            current.value = current.value.copy(sendNotice = null)
             true
         }
 

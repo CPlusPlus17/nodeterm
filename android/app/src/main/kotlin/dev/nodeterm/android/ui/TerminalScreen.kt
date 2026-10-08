@@ -223,13 +223,17 @@ fun TerminalScreen(nav: Navigator, entryKey: String, hostId: String, nodeId: Str
                             }
                         }
                     }
-                    controller.notice?.let { msg ->
+                    val sendNotice = editor.sendNotice
+                    (sendNotice?.message ?: controller.notice)?.let { msg ->
                         Row(
                             Modifier.align(Alignment.TopCenter).blockTouchesBelow().fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { controller.notice = null }) { Text("OK") }
+                            TextButton(onClick = {
+                                if (sendNotice != null) entry.dismissSendNotice(sendNotice)
+                                else controller.notice = null
+                            }) { Text("OK") }
                         }
                     }
                     Column(Modifier.align(Alignment.BottomCenter).blockTouchesBelow().fillMaxWidth()) {
@@ -265,9 +269,12 @@ fun TerminalScreen(nav: Navigator, entryKey: String, hostId: String, nodeId: Str
                 // keyboard marking the word it composes, changes no text and ends nothing: the field
                 // reports those too, which its String overload did not.
                 val send: () -> Unit = {
-                    val sent = entry.state.value
-                    controller.submit(sent.value.text, enter = true) {
-                        if (entry.clearUnchangedDraft(sent.revision)) dictation.edited()
+                    if (controller.attached) {
+                        val sent = entry.beginSend()
+                        if (sent != null) controller.submit(sent.value.text, enter = true, modifier = sent.ctrl,
+                            onCompleted = { result, current -> entry.completeSend(sent.attempt, result, current) }) {
+                            if (entry.clearUnchangedDraft(sent.revision)) dictation.edited()
+                        }
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -304,7 +311,7 @@ fun TerminalScreen(nav: Navigator, entryKey: String, hostId: String, nodeId: Str
                             )
                         }
                     }
-                    IconButton(onClick = send, enabled = controller.attached && !controller.submitting) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
+                    IconButton(onClick = send, enabled = controller.attached && editor.pendingSend == null && !controller.submitting) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
                 }
             }
             // Over the whole body, key row and input bar included: they have nothing to do while copying,
